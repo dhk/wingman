@@ -22,7 +22,7 @@ These instructions apply to all work in this repository unless a more specific n
 10. **Usable vertical slices — every phase ends in something useful.**
 11. **Evaluation precedes increased autonomy.**
 
-This list is mirrored verbatim in [`VISION.md`](VISION.md); change both together.
+This list is mirrored in [`VISION.md`](VISION.md) — same items, same order; change both together.
 
 ## Working Method
 

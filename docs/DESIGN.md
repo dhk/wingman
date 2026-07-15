@@ -69,7 +69,7 @@ Agents call approved application tools; they do not bypass the application layer
 
 Entities:
 
-- **SourceRecord** — an imported artifact (resume, job description, exported contacts, saved page): raw content, content hash, source type and locator, source timestamp when known, ingestion timestamp. Source records are immutable once ingested; corrections create new records.
+- **SourceRecord** — an imported artifact (resume, job description, exported contacts, saved page): content hash, source type, a locator for the raw artifact (the bytes themselves stay on disk under `data/`, not in the database), source timestamp when known, ingestion timestamp. Source records are immutable once ingested; corrections create new records.
 - **CareerProfile** — the canonical profile: achievements, skills, roles, each carrying evidence references to source records.
 - **Company** — researched company facts and signals, each labeled fact / inference / hypothesis.
 - **Opportunity** — a role under consideration: extracted requirements, fit assessment, status, next action.
@@ -135,6 +135,6 @@ Deliberately undecided; each gets designed (and, where durable, an ADR) in the p
 
 - **Failure and recovery model** — partial ingestion failures, corrupted records, interrupted runs (Phase 1, first real ingestion).
 - **Backup and migration** — schema versioning and user data portability (Phase 1–2, once the schema stabilizes).
-- **Scoring internals** — component set and weights for opportunity and action scores (Phase 2 and 5; the decomposability contract is already fixed in AGENTS.md §Scoring).
+- **Scoring internals** — component set and weights for opportunity and action scores (Phase 2 and 5; the decomposability contract is already fixed in AGENTS.md §Scoring and Recommendations).
 - **Connector architecture** — auth, scope grants, and sync model for read-only connectors (Phase 8; ADR required).
 - **Write-capable connectors and approval UX** — separate architecture decision, explicitly out of scope until after Phase 8.

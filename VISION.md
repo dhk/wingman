@@ -58,7 +58,7 @@ Wingman is not:
 10. Usable vertical slices — every phase ends in something useful.
 11. Evaluation precedes increased autonomy.
 
-This list is mirrored verbatim in [`AGENTS.md`](AGENTS.md); change both together.
+This list is mirrored in [`AGENTS.md`](AGENTS.md) — same items, same order; change both together.
 
 ## Long-Term Outcome
 
