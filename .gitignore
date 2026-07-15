@@ -1,0 +1,25 @@
+.DS_Store
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Private and generated Wingman data
+data/*
+!data/inbox/.gitkeep
+!data/canonical/.gitkeep
+!data/opportunities/.gitkeep
+!data/companies/.gitkeep
+!data/interactions/.gitkeep
+reports/*
+!reports/.gitkeep
+
+# Local model traces and credentials
+traces/
+secrets/
