@@ -1,0 +1,63 @@
+# Wingman
+
+Wingman is a local-first, AI-assisted career intelligence system.
+
+It helps a human:
+
+- build a canonical, evidence-backed professional profile;
+- assess opportunities against real experience;
+- research companies and hiring signals;
+- identify credible warm introduction paths;
+- prepare differentiated outreach and interviews;
+- decide which actions deserve attention next.
+
+Wingman is **not** an autonomous job application bot. It is a human-in-the-loop decision-support system. No message, application, calendar invitation, or external write occurs without explicit approval.
+
+## Status
+
+This repository is at **Phase 0: Foundation**.
+
+The first product proof is:
+
+```text
+resume.md
+   ↓
+validated ingestion
+   ↓
+career.json
+   ↓
+career.md with evidence references
+```
+
+## Repository Guide
+
+- [`VISION.md`](VISION.md): why Wingman exists and what good looks like
+- [`ROADMAP.md`](ROADMAP.md): phased delivery plan
+- [`AGENTS.md`](AGENTS.md): engineering and agent instructions
+- [`docs/`](docs/): architecture decisions, product notes, and runbooks
+
+## Quick Start
+
+```bash
+uv sync
+uv run wingman --help
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+```
+
+## Design Principles
+
+- local-first
+- human-controlled
+- evidence-backed
+- deterministic where possible
+- provider-neutral
+- inspectable
+- least privilege
+- useful at the end of every phase
+
+## License
+
+Add a license before publishing publicly.
