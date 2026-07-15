@@ -34,7 +34,11 @@ career.md with evidence references
 - [`VISION.md`](VISION.md): why Wingman exists and what good looks like
 - [`ROADMAP.md`](ROADMAP.md): phased delivery plan
 - [`AGENTS.md`](AGENTS.md): engineering and agent instructions
-- [`docs/`](docs/): architecture decisions, product notes, and runbooks
+- [`docs/DESIGN.md`](docs/DESIGN.md): overall architecture — what the system is
+- [`docs/RFC.md`](docs/RFC.md): engineering decisions and rationale
+- [`docs/EVALUATION.md`](docs/EVALUATION.md): how we measure that Wingman is getting better
+- [`docs/adr/`](docs/adr/): architecture decision records
+- [`docs/`](docs/): product notes and runbooks
 
 ## Quick Start
 
