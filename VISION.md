@@ -53,9 +53,12 @@ Wingman is not:
 5. Deterministic controls for permissions and validation.
 6. Inspectable outputs and provenance.
 7. Provider-neutral architecture.
-8. Partial truth over polished fiction.
-9. Every phase ends in something useful.
-10. Evaluation precedes increased autonomy.
+8. No invented familiarity.
+9. Partial truth over polished fiction.
+10. Usable vertical slices — every phase ends in something useful.
+11. Evaluation precedes increased autonomy.
+
+This list is mirrored in [`AGENTS.md`](AGENTS.md) — same items, same order; change both together.
 
 ## Long-Term Outcome
 

@@ -12,7 +12,7 @@ Append a numbered section with: the decision, the alternatives considered, the r
 
 ## RFC-001: Layered architecture with inward dependencies
 
-**Decision.** Code is organized as `domain` → `application` → `infrastructure`, with `agents`, `providers`, `policies`, `evaluation`, `reporting`, and `cli` as peers that depend inward. The domain layer imports no model SDKs, databases, web clients, or frameworks.
+**Decision.** Code is organized as `domain` → `application` → `infrastructure`, with `agents`, `tools`, `providers`, `policies`, `evaluation`, `reporting`, and `cli` as peers that depend inward. The domain layer imports no model SDKs, databases, web clients, or frameworks.
 
 **Alternatives.** A flat package (faster to start, degrades quickly as connectors and providers accumulate); a plugin architecture (premature for a single-user local tool).
 
@@ -43,6 +43,19 @@ Append a numbered section with: the decision, the alternatives considered, the r
 ## RFC-004: Model routing through capability classes
 
 **Decision.** Application code requests a capability class — `extract_fast`, `synthesize_balanced`, `reason_frontier`, `critic_independent` — and configuration maps each class to a concrete provider and model. Model IDs never appear in domain or application code.
+
+This entry is the single home for runtime model-routing policy; other documents point here. The mapping from workload to approach:
+
+| Workload | Approach |
+|---|---|
+| Parsing, validation, deterministic scoring | No model (RFC-003) |
+| High-volume extraction and classification | `extract_fast` |
+| Routine synthesis and drafting | `synthesize_balanced` |
+| Difficult synthesis, high-consequence reasoning | `reason_frontier` |
+| Independent critique of candidate artifacts | `critic_independent` |
+| External-action policy checks | No model, deterministic policy engine (RFC-006) |
+
+Build-time tooling (which model writes the code) is a separate concern, owned by [`product/BUILD_PLAN.md`](product/BUILD_PLAN.md) — the one place a concrete build-model name may appear.
 
 **Alternatives.** Direct model IDs at call sites (simple, but every provider change is a code change scattered across the tree); a routing service (overkill locally).
 

@@ -28,7 +28,10 @@ packages = ["src/wingman"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not evaluation_live'"
+markers = [
+  "evaluation_live: evaluation tests that call live model providers; excluded from the default suite (see docs/EVALUATION.md)",
+]
 
 [tool.ruff]
 line-length = 100
