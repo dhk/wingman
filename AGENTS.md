@@ -13,13 +13,16 @@ These instructions apply to all work in this repository unless a more specific n
 1. **Human approval before external action.**
 2. **Evidence before assertion.**
 3. **Local-first private data.**
-4. **Least privilege.**
-5. **Deterministic controls.**
-6. **Inspectable outputs.**
-7. **Provider neutrality.**
+4. **Least-privilege tools and connectors.**
+5. **Deterministic controls for permissions and validation.**
+6. **Inspectable outputs and provenance.**
+7. **Provider-neutral architecture.**
 8. **No invented familiarity.**
 9. **Partial truth over polished fiction.**
-10. **Usable vertical slices.**
+10. **Usable vertical slices — every phase ends in something useful.**
+11. **Evaluation precedes increased autonomy.**
+
+This list is mirrored verbatim in [`VISION.md`](VISION.md); change both together.
 
 ## Working Method
 
@@ -118,18 +121,9 @@ Do not use a model for:
 - approval decisions;
 - secrets handling.
 
-Keep model aliases in configuration.
+Keep model aliases in configuration. Runtime routing goes through capability classes (`extract_fast`, `synthesize_balanced`, `reason_frontier`, `critic_independent`); the routing policy lives in `docs/RFC.md` (RFC-004). Support interchangeable OpenAI and Anthropic adapters.
 
-Suggested capability classes:
-
-```text
-extract_fast
-synthesize_balanced
-reason_frontier
-critic_independent
-```
-
-For Codex implementation work, use the current recommended Codex model. For runtime, support interchangeable OpenAI and Anthropic adapters.
+Build-time model guidance lives in `docs/product/BUILD_PLAN.md`.
 
 Record provider, model, settings, prompt version, tool-policy version, token use, latency, and validation result.
 

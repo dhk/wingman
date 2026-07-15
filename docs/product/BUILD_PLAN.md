@@ -1,6 +1,8 @@
 # Wingman Agentic Build Plan
 
-Wingman is built with Codex as the primary engineering harness while remaining independent of any coding assistant at runtime.
+This document covers **build-time process**: how Wingman gets engineered, and which models do the engineering. It is the single home for concrete build-model recommendations. Runtime model routing is a different concern, owned by [`../RFC.md`](../RFC.md) (RFC-004).
+
+Wingman is built with coding agents as the primary engineering harness while remaining independent of any coding assistant at runtime.
 
 ## Build-Time Model Guidance
 
@@ -22,15 +24,7 @@ Use an independent second review for changes affecting:
 
 ## Runtime Model Guidance
 
-| Workload | Preferred approach |
-|---|---|
-| Parsing, validation, deterministic scoring | No model |
-| High-volume extraction and classification | Small/fast model |
-| Routine synthesis and drafting | Balanced model |
-| Difficult synthesis and critique | Frontier reasoning model |
-| External-action policy checks | Deterministic policy engine |
-
-Model names change. Store aliases in configuration and route by capability.
+Runtime model access goes through capability classes mapped in configuration; the workload-to-class table and rationale live in RFC-004. Model names change — never scatter them through the codebase.
 
 ## Immediate Starting Point
 
