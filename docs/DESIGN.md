@@ -54,14 +54,7 @@ The diagram maps onto the package layout under `src/wingman/`: `domain`, `applic
 
 ## Agent Contracts
 
-Each agent defines:
-- Mission
-- Inputs
-- Outputs
-- Allowed tools
-- Forbidden actions
-- Validation
-- Evaluation fixtures
+Each agent defines the contract checklist in [`../AGENTS.md`](../AGENTS.md) §Agent Contracts — that list is the single source of truth.
 
 Agents call approved application tools; they do not bypass the application layer, and no agent has unrestricted connector access.
 
@@ -101,6 +94,7 @@ The pattern is fixed: deterministic ingestion and validation bracket every model
 - A single SQLite database file under the user's data directory (`WINGMAN_DATA_DIR`, default `./data`) holds entities and source records. One file on the user's disk is the local-first promise made concrete (ADR 0001, RFC-002).
 - Generated artifacts (`career.md`, fit briefs, dossiers, daily briefs) are written as Markdown under `reports/` and reference the structured records they were produced from.
 - Raw imported artifacts are kept under `data/` subdirectories and referenced by SourceRecords.
+- Prompt templates live as versioned files under `prompts/`; every score and generated artifact is attributable to an exact prompt version ([`EVALUATION.md`](EVALUATION.md)). Schemas have no separate directory — the Pydantic models in code are the schema source of truth.
 - No remote persistence, no telemetry. Backup and migration design is deferred (see Open Questions).
 
 ## Approval Flow

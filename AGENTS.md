@@ -237,15 +237,6 @@ A change is done only when:
 
 ## Current Build Order
 
-1. repository and quality foundation;
-2. provenance-aware local storage;
-3. resume-to-canonical-profile;
-4. job-description-to-fit-report;
-5. company dossier;
-6. relationship imports;
-7. daily operator;
-8. drafting;
-9. interview preparation;
-10. controlled read-only connectors.
+Build order lives in [`ROADMAP.md`](ROADMAP.md): follow its phases and the "Initial Vertical-Slice Backlog".
 
 Do not start with a dashboard, graph database, embeddings, continuous monitoring, or autonomous outreach.

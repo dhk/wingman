@@ -38,13 +38,14 @@ career.md with evidence references
 - [`docs/RFC.md`](docs/RFC.md): engineering decisions and rationale
 - [`docs/EVALUATION.md`](docs/EVALUATION.md): how we measure that Wingman is getting better
 - [`docs/adr/`](docs/adr/): architecture decision records
-- [`docs/`](docs/): product notes and runbooks
+- [`docs/`](docs/): product notes
 
 ## Quick Start
 
 ```bash
 uv sync
 uv run wingman --help
+uv run wingman status
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
@@ -53,14 +54,7 @@ uv run mypy src
 
 ## Design Principles
 
-- local-first
-- human-controlled
-- evidence-backed
-- deterministic where possible
-- provider-neutral
-- inspectable
-- least privilege
-- useful at the end of every phase
+The binding list is the Product Invariants in [`VISION.md`](VISION.md#product-invariants).
 
 ## License
 
