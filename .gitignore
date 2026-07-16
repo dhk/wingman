@@ -13,10 +13,6 @@ build/
 # Private and generated Wingman data
 data/*
 !data/inbox/.gitkeep
-!data/canonical/.gitkeep
-!data/opportunities/.gitkeep
-!data/companies/.gitkeep
-!data/interactions/.gitkeep
 reports/*
 !reports/.gitkeep
 
