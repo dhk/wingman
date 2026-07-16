@@ -6,9 +6,9 @@ Wingman is built with coding agents as the primary engineering harness while rem
 
 ## Build-Time Model Guidance
 
-Use the current recommended Codex model for routine implementation, testing, refactoring, and repository work.
+Use Claude Sonnet (current generation) for routine implementation, testing, refactoring, and repository work.
 
-Escalate to a frontier reasoning model for:
+Escalate to the current frontier Claude reasoning model (Opus-class or above) for:
 
 - architecture;
 - difficult debugging;

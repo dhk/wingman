@@ -37,7 +37,6 @@ career.md with evidence references
 - [`docs/DESIGN.md`](docs/DESIGN.md): overall architecture — what the system is
 - [`docs/RFC.md`](docs/RFC.md): engineering decisions and rationale
 - [`docs/EVALUATION.md`](docs/EVALUATION.md): how we measure that Wingman is getting better
-- [`docs/adr/`](docs/adr/): architecture decision records
 - [`docs/`](docs/): product notes
 
 ## Quick Start
@@ -58,4 +57,4 @@ The binding list is the Product Invariants in [`VISION.md`](VISION.md#product-in
 
 ## License
 
-Add a license before publishing publicly.
+MIT — see [`LICENSE`](LICENSE).

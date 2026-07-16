@@ -208,7 +208,7 @@ Do not present a model-generated score as mathematically objective.
 
 Update docs in the same change as behavior.
 
-Add ADRs under `docs/adr/` for durable architectural choices.
+Durable architectural choices get an RFC entry marked **Durable decision** in `docs/RFC.md`.
 
 Do not claim a capability is supported until implemented and tested.
 

@@ -26,7 +26,7 @@ This document describes what the system is. Rationale for engineering decisions 
 ## Architecture
 
 ```text
-Presentation (CLI; any additional surface requires an ADR)
+Presentation (CLI; any additional surface requires a durable RFC entry)
     |
 Application Services
     |
@@ -91,9 +91,9 @@ The pattern is fixed: deterministic ingestion and validation bracket every model
 
 ## Storage
 
-- A single SQLite database file under the user's data directory (`WINGMAN_DATA_DIR`, default `./data`) holds entities and source records. One file on the user's disk is the local-first promise made concrete (ADR 0001, RFC-002).
+- A single SQLite database file under the user's data directory (`WINGMAN_DATA_DIR`, default `./data`) holds entities and source records. One file on the user's disk is the local-first promise made concrete (RFC-002).
 - Generated artifacts (`career.md`, fit briefs, dossiers, daily briefs) are written as Markdown under `reports/` and reference the structured records they were produced from.
-- Raw imported artifacts are kept under `data/` subdirectories and referenced by SourceRecords.
+- Raw imported artifacts land in `data/inbox/` before ingestion and are referenced by SourceRecords.
 - Prompt templates live as versioned files under `prompts/`; every score and generated artifact is attributable to an exact prompt version ([`EVALUATION.md`](EVALUATION.md)). Schemas have no separate directory — the Pydantic models in code are the schema source of truth.
 - No remote persistence, no telemetry. Backup and migration design is deferred (see Open Questions).
 
@@ -125,10 +125,10 @@ Delivery order and per-phase deliverables live in [`../ROADMAP.md`](../ROADMAP.m
 
 ## Open Questions
 
-Deliberately undecided; each gets designed (and, where durable, an ADR) in the phase that needs it:
+Deliberately undecided; each gets designed (and, where durable, an RFC entry marked Durable) in the phase that needs it:
 
 - **Failure and recovery model** — partial ingestion failures, corrupted records, interrupted runs (Phase 1, first real ingestion).
 - **Backup and migration** — schema versioning and user data portability (Phase 1–2, once the schema stabilizes).
 - **Scoring internals** — component set and weights for opportunity and action scores (Phase 2 and 5; the decomposability contract is already fixed in AGENTS.md §Scoring and Recommendations).
-- **Connector architecture** — auth, scope grants, and sync model for read-only connectors (Phase 8; ADR required).
+- **Connector architecture** — auth, scope grants, and sync model for read-only connectors (Phase 8; durable RFC entry required).
 - **Write-capable connectors and approval UX** — separate architecture decision, explicitly out of scope until after Phase 8.

@@ -2,7 +2,7 @@
 
 This document records engineering decisions and the reasoning behind them. It answers "why is the codebase built this way," while [`DESIGN.md`](DESIGN.md) answers "what is the system" and [`../ROADMAP.md`](../ROADMAP.md) answers "in what order."
 
-Decisions with durable architectural consequences also get an ADR under [`adr/`](adr/). An RFC entry explains the current engineering position and its trade-offs; an ADR records a decision point we do not expect to revisit casually.
+An RFC entry explains the current engineering position and its trade-offs. Entries with durable architectural consequences carry a **Durable decision** marker — a decision point we do not expect to revisit casually.
 
 ## How to add an entry
 
@@ -16,7 +16,7 @@ Append a numbered section with: the decision, the alternatives considered, the r
 
 **Alternatives.** A flat package (faster to start, degrades quickly as connectors and providers accumulate); a plugin architecture (premature for a single-user local tool).
 
-**Rationale.** Wingman's riskiest dependencies — model providers, connectors, persistence — are the ones most likely to change. Keeping them at the edge means the career-domain logic stays testable without network access and survives provider churn. See ADR 0002.
+**Rationale.** Wingman's riskiest dependencies — model providers, connectors, persistence — are the ones most likely to change. Keeping them at the edge means the career-domain logic stays testable without network access and survives provider churn. See RFC-004.
 
 **Revisit if.** The domain layer stays so thin that the layering is pure ceremony after Phase 2.
 
@@ -24,9 +24,11 @@ Append a numbered section with: the decision, the alternatives considered, the r
 
 **Decision.** Python 3.12+, `uv` for dependencies and task running, Typer for the CLI, Pydantic for schemas, SQLite for persistence, pytest for tests, Ruff for lint/format, mypy in strict mode.
 
+**Durable decision** — not expected to be revisited casually: private user data is stored locally by default; remote persistence and telemetry require separate explicit decisions. Accepted consequences: local setup is slightly more involved; privacy boundaries are easier to understand; connectors begin read-only; backups and migration need deliberate design. (Folded from former ADR 0001.)
+
 **Alternatives.** Poetry/pip-tools (slower, more lockfile friction than uv); Click or argparse (more boilerplate than Typer for the same result); Postgres or a document store (operational weight a local-first single-user tool does not need).
 
-**Rationale.** Every choice favors a tool that is fast, boring, and widely understood. SQLite in particular keeps the local-first promise trivially true: the user's data is one file on their disk. See ADR 0001.
+**Rationale.** Every choice favors a tool that is fast, boring, and widely understood. SQLite in particular keeps the local-first promise trivially true: the user's data is one file on their disk.
 
 **Revisit if.** Multi-device sync becomes a real requirement (storage), or the CLI grows subcommand complexity Typer handles poorly.
 
@@ -44,6 +46,8 @@ Append a numbered section with: the decision, the alternatives considered, the r
 
 **Decision.** Application code requests a capability class — `extract_fast`, `synthesize_balanced`, `reason_frontier`, `critic_independent` — and configuration maps each class to a concrete provider and model. Model IDs never appear in domain or application code.
 
+**Durable decision** — not expected to be revisited casually: domain and application code depend on internal interfaces, never provider SDKs; provider-specific implementations live under `src/wingman/providers/`. Accepted consequences: tests can use fakes; provider-specific features require explicit adapters; a small abstraction layer is the up-front cost. (Folded from former ADR 0002.)
+
 This entry is the single home for runtime model-routing policy; other documents point here. The mapping from workload to approach:
 
 | Workload | Approach |
@@ -59,7 +63,7 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 
 **Alternatives.** Direct model IDs at call sites (simple, but every provider change is a code change scattered across the tree); a routing service (overkill locally).
 
-**Rationale.** Model names, prices, and relative strengths change monthly. Capability classes make "swap the extraction model" a one-line config change and make model-comparison benchmarks (see [`EVALUATION.md`](EVALUATION.md)) possible without code churn. See ADR 0002.
+**Rationale.** Model names, prices, and relative strengths change monthly. Capability classes make "swap the extraction model" a one-line config change and make model-comparison benchmarks (see [`EVALUATION.md`](EVALUATION.md)) possible without code churn.
 
 **Revisit if.** The four classes prove to be the wrong granularity in practice.
 
