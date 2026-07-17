@@ -126,6 +126,41 @@ def test_attach_rejects_duplicate_source(workspace: Path) -> None:
         person, _ = add_person("Jane", storage, substack_url="https://jane.substack.com")
         with pytest.raises(IngestError, match="already has"):
             attach_feed(person, FeedSource(url="https://jane.substack.com/feed"), storage)
+        # duplicates are caught up to trailing-slash normalization too
+        with pytest.raises(IngestError, match="already has"):
+            attach_feed(person, FeedSource(url="https://jane.substack.com/feed/"), storage)
+
+
+def test_attach_enforces_invariants(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Jane", storage)
+        with pytest.raises(IngestError, match="https"):
+            attach_feed(person, FeedSource(url="http://insecure.example.com/feed"), storage)
+        with pytest.raises(IngestError, match="organization name"):
+            attach_feed(
+                person,
+                FeedSource(
+                    url="https://firm.example.com/insights",
+                    kind=FeedKind.INDEX_PAGE,
+                    attribution=FeedAttribution.ORGANIZATION,
+                ),
+                storage,
+            )
+
+
+def test_custom_domain_substack_is_labeled_substack(workspace: Path) -> None:
+    substack = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Custom</title>
+<item><title>A Post</title><link>https://www.custom-domain.blog/p/a-post</link>
+<description>&lt;p&gt;custom domain content&lt;/p&gt;</description></item></channel></rss>"""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Custom", storage, substack_url="https://www.custom-domain.blog")
+        report = fetch_person_feed(person, config, storage, fetcher=lambda url: substack)
+        assert report.added == 1
+        document = storage.list_external_documents(person.person_id)[0]
+        assert document.source_type == "substack_feed"
 
 
 def test_index_page_source_with_org_attribution(workspace: Path) -> None:

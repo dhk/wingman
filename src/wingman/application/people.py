@@ -412,9 +412,12 @@ def fetch_person_feed(
             feed_bytes = fetch(source.url)
             items = _parse_feed_items(feed_bytes, source.url)
             tally.items += len(items)
-            source_type = (
-                "substack_feed" if source.url.endswith("substack.com/feed") else "rss_feed"
+            # The Substack-derived source is the one synthesized from
+            # substack_url — reliable even for custom-domain publications.
+            substack_feed = (
+                person.substack_url.rstrip("/") + "/feed" if person.substack_url else None
             )
+            source_type = "substack_feed" if source.url == substack_feed else "rss_feed"
             for item in items:
                 _ingest_post(
                     person,
@@ -542,10 +545,21 @@ def discover_feed(url: str, fetcher: Callable[[str], bytes] | None = None) -> Fe
 
 
 def attach_feed(person: Person, source: FeedSource, storage: Storage) -> Person:
-    """Attach a confirmed feed source to a person; duplicate URLs are rejected."""
-    existing_urls = {feed.url for feed in person.sources}
-    if source.url in existing_urls:
-        raise IngestError(f"{person.name} already has the source {source.url}.")
+    """Attach a confirmed feed source to a person, enforcing the RFC-009/011 invariants.
+
+    URLs are normalized (trailing slash stripped) and must be HTTPS even when
+    this is called programmatically; organization attribution requires an
+    org_name; duplicates (up to normalization) are rejected.
+    """
+    normalized = source.url.rstrip("/")
+    if not normalized.startswith("https://"):
+        raise IngestError(f"only https:// sources are supported (RFC-009); got {source.url!r}")
+    if source.attribution == FeedAttribution.ORGANIZATION and not (source.org_name or "").strip():
+        raise IngestError("organization-attributed sources need an organization name; pass --org.")
+    source = source.model_copy(update={"url": normalized})
+    existing_urls = {feed.url.rstrip("/") for feed in person.sources}
+    if normalized in existing_urls:
+        raise IngestError(f"{person.name} already has the source {normalized}.")
     updated = person.model_copy(update={"feeds": [*person.feeds, source]})
     storage.update_person(updated)
     return updated

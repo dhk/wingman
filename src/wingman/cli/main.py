@@ -502,7 +502,7 @@ def people_add(
 @people_app.command("list")
 def people_list(
     watched: bool = typer.Option(
-        False, "--watched", help="Only people with a Substack feed configured."
+        False, "--watched", help="Only people with at least one source configured."
     ),
 ) -> None:
     """List people on the watchlist."""
