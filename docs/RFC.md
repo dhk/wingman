@@ -143,3 +143,18 @@ Boundaries that make this admissible:
 **Rationale.** Similarity between bodies of writing is exactly what embeddings are for, and the deterministic-controls rule (RFC-003) is preserved: the model call produces data (vectors) once per document, while every ranking computed from them is auditable arithmetic. Voyage AI is the default provider per Anthropic's embeddings guidance; provider choice lives in `models.toml` like every other model name (RFC-004).
 
 **Revisit if.** The watchlist grows to where brute force is slow (tens of thousands of embedded documents — then an ANN index becomes a documented decision), or drafting/assessment later wants semantic *retrieval* (that is RFC-007's own revisit trigger, decided on its own terms).
+
+## RFC-011: General feeds and index-page sources (amends RFC-009)
+
+**Decision.** A person may have multiple typed sources, not just a Substack URL: `rss` (RSS 2.0 or Atom — Substack, Medium, WordPress, Ghost, …) and `index_page` (a blog index on a site with no feed — common for VC firms and startup marketing sites, where the "CxO thinking via company blog" content lives). Sources are attributed to the `person` or, honestly, to an `organization` (a company blog post is presented as "via <org>", never as a fabricated personal byline). Two modest widenings of RFC-009, both bounded and user-configured:
+
+- **Add-time discovery.** `wingman people add-feed` does one GET of the pasted URL, then follows HTML feed autodiscovery (`<link rel="alternate">`) or probes a short enumerable list of conventional feed paths — never a crawl. Discovery **never attaches without confirmation**: the same name can belong to different humans, and a discovered feed can be the wrong one, so the user gets the final say.
+- **Index-page fetching.** For a configured `index_page` source, each fetch reads that one page, extracts post links living under the index path, and ingests at most a bounded number of not-yet-seen pages through the ordinary provenance pipeline (content-hashed SourceRecords, inbox archive, dedup).
+
+Everything else RFC-009 established holds unchanged: explicit invocation only, read-only HTTPS to public endpoints (including across redirects), visible failures.
+
+**Alternatives.** Substack-only forever (excludes exactly the investor/executive persona whose firms publish on feed-less Webflow sites); third-party feed-generation services (proxy the user's reading through another party); headless-browser scraping (fails the auditability and ToS bar); auto-attaching discovered feeds (see the wrong-human risk above).
+
+**Rationale.** Public writing is the raw material of relationship intelligence, and it lives behind exactly two shapes: feeds (near-universal on personal-blog platforms) and feed-less marketing sites. Covering both with one confirm-gated command keeps the watchlist honest about attribution and keeps every fetched byte inside the existing provenance rules.
+
+**Revisit if.** Index-page extraction proves too brittle against redesigns (then sitemap.xml `lastmod`-driven fetching becomes the refinement, still within these invariants), or per-author attribution on company blogs is wanted (post-page metadata reading — a further widening that gets its own look).

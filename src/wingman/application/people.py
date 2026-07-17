@@ -9,9 +9,12 @@ Entirely deterministic — no model calls. Three operations:
   a Person, and the CSV itself is not copied into the workspace — the
   SourceRecord's locator points at the export zip on the user's disk, and its
   content hash proves which bytes were consumed.
-- fetch_person_feed: read a person's public Substack RSS feed (the one
-  network read in Wingman, RFC-009) and store each post as an immutable
+- fetch_person_feed: read a person's public sources — Substack, any RSS 2.0
+  or Atom feed (Medium, WordPress, Ghost), or a configured blog index page
+  on a feed-less site (RFC-009/RFC-011) — storing each post as an immutable
   SourceRecord plus an ExternalDocument indexed for full-text search.
+- discover_feed / attach_feed: add-time feed discovery (direct URL, HTML
+  autodiscovery, conventional paths), always confirm-gated by the caller.
 """
 
 from __future__ import annotations
@@ -25,14 +28,24 @@ import zipfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel, Field
 
 from wingman.application.corpus import extract_document
 from wingman.application.ingest import IngestError
 from wingman.domain import SourceRecord
-from wingman.domain.person import ExternalDocument, ExternalEvidenceHit, Person, PersonOrigin
+from wingman.domain.person import (
+    ExternalDocument,
+    ExternalEvidenceHit,
+    FeedAttribution,
+    FeedKind,
+    FeedSource,
+    Person,
+    PersonOrigin,
+)
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.fetch import FetchError, fetch_url
 from wingman.infrastructure.logs import get_logger
@@ -42,6 +55,7 @@ _logger = get_logger("application.people")
 
 CONNECTIONS_CSV = "Connections.csv"
 _CONTENT_NS = "{http://purl.org/rss/1.0/modules/content/}"
+_ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 
 class ConnectionsSeedReport(BaseModel):
@@ -190,14 +204,39 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
 
 
 def _parse_feed_items(feed_bytes: bytes, feed_url: str) -> list[dict[str, str]]:
-    """Extract (title, link, published, html) for each RSS item, deterministically."""
+    """Extract (title, link, published, html) per entry from RSS 2.0 or Atom."""
     try:
         root = ET.fromstring(feed_bytes)
     except ET.ParseError as exc:
         raise IngestError(
-            f"feed at {feed_url} is not parseable RSS ({exc}). Nothing was added."
+            f"feed at {feed_url} is not parseable RSS/Atom ({exc}). Nothing was added."
         ) from exc
     items: list[dict[str, str]] = []
+    if root.tag == f"{_ATOM_NS}feed":
+        for entry in root.iter(f"{_ATOM_NS}entry"):
+            link = ""
+            for anchor in entry.iter(f"{_ATOM_NS}link"):
+                rel = anchor.get("rel", "alternate")
+                if rel == "alternate":
+                    link = (anchor.get("href") or "").strip()
+                    break
+            items.append(
+                {
+                    "title": (entry.findtext(f"{_ATOM_NS}title") or "").strip(),
+                    "link": link,
+                    "published": (
+                        entry.findtext(f"{_ATOM_NS}published")
+                        or entry.findtext(f"{_ATOM_NS}updated")
+                        or ""
+                    ).strip(),
+                    "html": (
+                        entry.findtext(f"{_ATOM_NS}content")
+                        or entry.findtext(f"{_ATOM_NS}summary")
+                        or ""
+                    ).strip(),
+                }
+            )
+        return items
     for item in root.iter("item"):
         items.append(
             {
@@ -218,6 +257,10 @@ def _published_at(raw: str) -> datetime | None:
     try:
         return parsedate_to_datetime(raw)
     except (TypeError, ValueError):
+        pass
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
         return None
 
 
@@ -226,86 +269,286 @@ def _slug(title: str) -> str:
     return slug[:60] or "post"
 
 
+class _Tally(BaseModel):
+    items: int = 0
+    added: int = 0
+    skipped_duplicates: int = 0
+    skipped_empty: int = 0
+    titles: list[str] = Field(default_factory=list)
+
+
+def _ingest_post(
+    person: Person,
+    source: FeedSource,
+    title: str,
+    link: str,
+    published: str,
+    raw_html: str,
+    source_type: str,
+    config: Config,
+    storage: Storage,
+    tally: _Tally,
+) -> None:
+    """Validate, archive, and index one post through the provenance pipeline."""
+    # Extract and validate before persisting, so a skipped item leaves
+    # no orphaned SourceRecord or inbox artifact behind.
+    extracted_title, body = extract_document(raw_html, title or link or "untitled post", ".html")
+    title = title or extracted_title
+    if not body.strip():
+        tally.skipped_empty += 1
+        return
+    content_hash = hashlib.sha256(raw_html.encode("utf-8")).hexdigest()
+    record = storage.get_source_record_by_hash(content_hash)
+    if record is not None and storage.find_external_document_by_source(record.record_id):
+        tally.skipped_duplicates += 1
+        return
+    if record is None:
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+        stored = config.inbox_dir / f"{stamp}-{content_hash[:8]}-{_slug(title)}.html"
+        stored.write_text(raw_html, encoding="utf-8")
+        record = SourceRecord(
+            source_type=source_type,
+            source_locator=str(stored.relative_to(config.data_dir.resolve()))
+            if stored.is_relative_to(config.data_dir.resolve())
+            else str(stored),
+            content_hash=content_hash,
+        )
+        storage.add_source_record(record)
+    organization = source.org_name if source.attribution == FeedAttribution.ORGANIZATION else None
+    document = ExternalDocument(
+        source_record_id=record.record_id,
+        person_id=person.person_id,
+        source_type=source_type,
+        title=title,
+        url=link or None,
+        organization=organization,
+        published_at=_published_at(published),
+        word_count=len(body.split()),
+    )
+    storage.add_external_document(document, body)
+    tally.added += 1
+    tally.titles.append(title)
+
+
+class _IndexLinkParser(HTMLParser):
+    """Collect anchor hrefs from a blog index page, deterministically."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hrefs: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a":
+            return
+        for name, value in attrs:
+            if name == "href" and value:
+                self.hrefs.append(value)
+
+
+def _index_post_links(page_bytes: bytes, index_url: str) -> list[str]:
+    """Links on the index page that live under the index path itself."""
+    parser = _IndexLinkParser()
+    parser.feed(page_bytes.decode("utf-8", errors="replace"))
+    index = urlsplit(index_url.rstrip("/"))
+    links: list[str] = []
+    for href in parser.hrefs:
+        absolute = urljoin(index_url.rstrip("/") + "/", href)
+        parts = urlsplit(absolute)
+        cleaned = parts._replace(query="", fragment="").geturl().rstrip("/")
+        if parts.scheme != "https" or parts.netloc != index.netloc:
+            continue
+        if not cleaned.startswith(index.geturl() + "/") or cleaned == index.geturl():
+            continue
+        if cleaned not in links:
+            links.append(cleaned)
+    return links
+
+
+INDEX_PAGE_LIMIT = 10  # newest-first pages fetched per run; bounded, never a crawl
+
+
+def _fetch_index_source(
+    person: Person,
+    source: FeedSource,
+    config: Config,
+    storage: Storage,
+    fetch: Callable[[str], bytes],
+    tally: _Tally,
+) -> None:
+    page_bytes = fetch(source.url)
+    fetched = 0
+    for link in _index_post_links(page_bytes, source.url):
+        if fetched >= INDEX_PAGE_LIMIT:
+            break
+        if storage.has_external_url(link):
+            continue
+        fetched += 1
+        tally.items += 1
+        raw_html = fetch(link).decode("utf-8", errors="replace")
+        _ingest_post(person, source, "", link, "", raw_html, "web_page", config, storage, tally)
+
+
 def fetch_person_feed(
     person: Person,
     config: Config,
     storage: Storage,
     fetcher: Callable[[str], bytes] | None = None,
 ) -> FeedFetchReport:
-    """Fetch a person's public Substack feed and index new posts."""
-    if not person.substack_url:
+    """Fetch every configured source for a person and index new posts (RFC-009/011)."""
+    sources = person.sources
+    if not sources:
         raise IngestError(
-            f"{person.name} has no Substack URL. Nothing was fetched; set one with "
-            f"'wingman people add \"{person.name}\" --substack <url>'."
+            f"{person.name} has no sources. Nothing was fetched; add one with "
+            f"'wingman people add \"{person.name}\" --substack <url>' or "
+            f"'wingman people add-feed \"{person.name}\" <url>'."
         )
-    feed_url = person.substack_url.rstrip("/") + "/feed"
     fetch = fetcher if fetcher is not None else fetch_url
-    try:
-        feed_bytes = fetch(feed_url)
-    except FetchError as exc:
-        raise IngestError(f"{exc}. Nothing was added.") from exc
-
-    items = _parse_feed_items(feed_bytes, feed_url)
-    added = 0
-    skipped_duplicates = 0
-    skipped_empty = 0
-    titles: list[str] = []
-    for item in items:
-        title = item["title"] or item["link"] or "untitled post"
-        # Extract and validate before persisting, so a skipped item leaves
-        # no orphaned SourceRecord or inbox artifact behind.
-        _, body = extract_document(item["html"], title, ".html")
-        if not body.strip():
-            skipped_empty += 1
-            continue
-        raw = item["html"]
-        content_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-        record = storage.get_source_record_by_hash(content_hash)
-        if record is not None and storage.find_external_document_by_source(record.record_id):
-            skipped_duplicates += 1
-            continue
-        if record is None:
-            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
-            stored = config.inbox_dir / f"{stamp}-{content_hash[:8]}-{_slug(title)}.html"
-            stored.write_text(raw, encoding="utf-8")
-            record = SourceRecord(
-                source_type="substack_feed",
-                source_locator=str(stored.relative_to(config.data_dir.resolve()))
-                if stored.is_relative_to(config.data_dir.resolve())
-                else str(stored),
-                content_hash=content_hash,
+    tally = _Tally()
+    for source in sources:
+        try:
+            if source.kind == FeedKind.INDEX_PAGE:
+                _fetch_index_source(person, source, config, storage, fetch, tally)
+                continue
+            feed_bytes = fetch(source.url)
+            items = _parse_feed_items(feed_bytes, source.url)
+            tally.items += len(items)
+            source_type = (
+                "substack_feed" if source.url.endswith("substack.com/feed") else "rss_feed"
             )
-            storage.add_source_record(record)
-        document = ExternalDocument(
-            source_record_id=record.record_id,
-            person_id=person.person_id,
-            source_type="substack_feed",
-            title=title,
-            url=item["link"] or None,
-            published_at=_published_at(item["published"]),
-            word_count=len(body.split()),
-        )
-        storage.add_external_document(document, body)
-        added += 1
-        titles.append(title)
+            for item in items:
+                _ingest_post(
+                    person,
+                    source,
+                    item["title"],
+                    item["link"],
+                    item["published"],
+                    item["html"],
+                    source_type,
+                    config,
+                    storage,
+                    tally,
+                )
+        except FetchError as exc:
+            raise IngestError(f"{exc}. Nothing further was added for this source.") from exc
     _logger.info(
-        "feed_fetch person=%s feed=%s items=%d added=%d skipped_dup=%d skipped_empty=%d",
+        "feed_fetch person=%s sources=%d items=%d added=%d skipped_dup=%d skipped_empty=%d",
         person.name,
-        feed_url,
-        len(items),
-        added,
-        skipped_duplicates,
-        skipped_empty,
+        len(sources),
+        tally.items,
+        tally.added,
+        tally.skipped_duplicates,
+        tally.skipped_empty,
     )
     return FeedFetchReport(
         person_name=person.name,
-        feed_url=feed_url,
-        items=len(items),
-        added=added,
-        skipped_duplicates=skipped_duplicates,
-        skipped_empty=skipped_empty,
-        titles=titles,
+        feed_url=", ".join(source.url for source in sources),
+        items=tally.items,
+        added=tally.added,
+        skipped_duplicates=tally.skipped_duplicates,
+        skipped_empty=tally.skipped_empty,
+        titles=tally.titles,
     )
+
+
+class FeedDiscovery(BaseModel):
+    """What one add-time discovery pass found (RFC-011): a feed, or nothing."""
+
+    feed_url: str | None = None
+    feed_title: str | None = None
+    probed: list[str] = Field(default_factory=list)
+
+
+# Bounded conventional probe list — an enumerable set of GETs, never a crawl.
+CONVENTIONAL_FEED_PATHS = ["/feed", "/rss", "/rss.xml", "/atom.xml", "/index.xml", "/feed.xml"]
+
+
+def _feed_title(data: bytes) -> str | None:
+    """The feed's own title if data parses as RSS 2.0 or Atom, else None."""
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return None
+    if root.tag == "rss":
+        return (root.findtext("channel/title") or "").strip() or "untitled feed"
+    if root.tag == f"{_ATOM_NS}feed":
+        return (root.findtext(f"{_ATOM_NS}title") or "").strip() or "untitled feed"
+    return None
+
+
+class _AlternateLinkParser(HTMLParser):
+    """Find <link rel="alternate" type="application/rss+xml|atom+xml"> in page HTML."""
+
+    _FEED_TYPES = {"application/rss+xml", "application/atom+xml"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.feed_hrefs: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "link":
+            return
+        by_name = {name: (value or "") for name, value in attrs}
+        if "alternate" in by_name.get("rel", "").lower().split() and (
+            by_name.get("type", "").lower() in self._FEED_TYPES
+        ):
+            href = by_name.get("href", "").strip()
+            if href:
+                self.feed_hrefs.append(href)
+
+
+def discover_feed(url: str, fetcher: Callable[[str], bytes] | None = None) -> FeedDiscovery:
+    """Find a feed for a URL: direct feed, HTML autodiscovery, then conventional paths.
+
+    A bounded add-time operation: one GET of the given URL, plus at most one
+    GET per conventional path if autodiscovery finds nothing. Never attaches
+    anything — the caller confirms with the user first (the same name can
+    belong to different people; discovery can succeed on the wrong human).
+    """
+    if not url.startswith("https://"):
+        raise IngestError(f"only https:// URLs are supported (RFC-009); got {url!r}")
+    fetch = fetcher if fetcher is not None else fetch_url
+    probed = [url]
+    try:
+        data = fetch(url)
+    except FetchError as exc:
+        raise IngestError(f"{exc}. Nothing was attached.") from exc
+    title = _feed_title(data)
+    if title is not None:
+        return FeedDiscovery(feed_url=url, feed_title=title, probed=probed)
+    parser = _AlternateLinkParser()
+    parser.feed(data.decode("utf-8", errors="replace"))
+    for href in parser.feed_hrefs:
+        candidate = urljoin(url, href)
+        if not candidate.startswith("https://"):
+            continue
+        probed.append(candidate)
+        try:
+            candidate_title = _feed_title(fetch(candidate))
+        except FetchError:
+            continue
+        if candidate_title is not None:
+            return FeedDiscovery(feed_url=candidate, feed_title=candidate_title, probed=probed)
+    base = url.rstrip("/")
+    for path in CONVENTIONAL_FEED_PATHS:
+        candidate = base + path
+        probed.append(candidate)
+        try:
+            candidate_title = _feed_title(fetch(candidate))
+        except FetchError:
+            continue
+        if candidate_title is not None:
+            return FeedDiscovery(feed_url=candidate, feed_title=candidate_title, probed=probed)
+    return FeedDiscovery(probed=probed)
+
+
+def attach_feed(person: Person, source: FeedSource, storage: Storage) -> Person:
+    """Attach a confirmed feed source to a person; duplicate URLs are rejected."""
+    existing_urls = {feed.url for feed in person.sources}
+    if source.url in existing_urls:
+        raise IngestError(f"{person.name} already has the source {source.url}.")
+    updated = person.model_copy(update={"feeds": [*person.feeds, source]})
+    storage.update_person(updated)
+    return updated
 
 
 def find_people_evidence(

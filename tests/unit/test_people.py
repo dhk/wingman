@@ -167,7 +167,7 @@ def test_fetch_requires_feed_url_and_valid_xml(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
         person, _ = add_person("No Feed", storage)
-        with pytest.raises(IngestError, match="no Substack URL"):
+        with pytest.raises(IngestError, match="no sources"):
             fetch_person_feed(person, config, storage, fetcher=lambda url: b"")
         watched, _ = add_person("Bad Feed", storage, substack_url="https://bad.substack.com")
         with pytest.raises(IngestError, match="not parseable"):

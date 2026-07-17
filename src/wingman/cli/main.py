@@ -16,6 +16,8 @@ from wingman.application.ingest import IngestError, ingest_resume
 from wingman.application.linkedin import import_linkedin
 from wingman.application.people import (
     add_person,
+    attach_feed,
+    discover_feed,
     fetch_person_feed,
     find_people_evidence,
     seed_from_connections,
@@ -510,7 +512,7 @@ def people_list(
     with Storage(config.db_path) as storage:
         people = storage.list_people()
     if watched:
-        people = [person for person in people if person.substack_url]
+        people = [person for person in people if person.sources]
     if not people:
         typer.echo(
             "No people yet — add one with 'wingman people add' or seed from a LinkedIn "
@@ -519,10 +521,85 @@ def people_list(
         return
     for person in people:
         where = ", ".join(part for part in (person.position, person.company) if part)
-        feed = f"  [{person.substack_url}]" if person.substack_url else ""
+        sources = person.sources
+        feed = f"  [{', '.join(source.url for source in sources)}]" if sources else ""
         detail = f"  ({where})" if where else ""
         typer.echo(f"{person.name}{detail}{feed}")
     typer.echo(f"{len(people)} people.")
+
+
+@people_app.command("add-feed")
+def people_add_feed(
+    name: str = typer.Argument(..., help="Person on the watchlist to attach the source to."),
+    url: str = typer.Argument(..., help="A feed URL or a blog homepage/index page (https)."),
+    org: str | None = typer.Option(
+        None,
+        "--org",
+        help="Attribute posts to this organization (e.g. a company blog) instead of the person.",
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Attach without the confirmation prompt."),
+) -> None:
+    """Attach any public feed to a person: RSS/Atom, Medium, or a feed-less blog index.
+
+    Paste a feed URL or a homepage — Wingman fetches it once, autodiscovers
+    the feed (or offers the page as an index source when no feed exists), and
+    attaches only after you confirm (RFC-011): discovery can succeed on the
+    wrong person's feed, so you get the final say.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "attached")
+    from wingman.domain.person import FeedAttribution, FeedKind, FeedSource
+
+    attribution = FeedAttribution.ORGANIZATION if org else FeedAttribution.PERSON
+    with Storage(config.db_path) as storage:
+        name_key = " ".join(name.lower().split())
+        person = storage.find_person_by_name_key(name_key)
+        if person is None:
+            typer.echo(
+                f"No person named {name!r}. Nothing was attached; add them first with "
+                "'wingman people add'.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        try:
+            discovery = discover_feed(url)
+        except IngestError as exc:
+            typer.echo(f"add-feed failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        if discovery.feed_url:
+            typer.echo(f"Found feed: {discovery.feed_url}  (titled {discovery.feed_title!r})")
+            if not yes and not typer.confirm(f"Attach this feed to {person.name}?"):
+                typer.echo("Nothing was attached.")
+                raise typer.Exit(code=0)
+            source = FeedSource(
+                url=discovery.feed_url,
+                kind=FeedKind.RSS,
+                attribution=attribution,
+                org_name=org,
+            )
+        else:
+            typer.echo(
+                f"No feed found at or near {url} (probed {len(discovery.probed)} URLs). "
+                "The page can be watched as an index source instead: on each fetch, "
+                "Wingman reads this one page and ingests new posts linked under it."
+            )
+            if not yes and not typer.confirm(f"Watch {url} as an index page for {person.name}?"):
+                typer.echo("Nothing was attached.")
+                raise typer.Exit(code=0)
+            source = FeedSource(
+                url=url.rstrip("/"),
+                kind=FeedKind.INDEX_PAGE,
+                attribution=attribution,
+                org_name=org,
+            )
+        try:
+            attach_feed(person, source, storage)
+        except IngestError as exc:
+            typer.echo(f"add-feed failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+    label = f" (attributed to {org})" if org else ""
+    typer.echo(f"Attached {source.kind.value} source to {person.name}: {source.url}{label}")
 
 
 @people_app.command("import-connections")
@@ -549,18 +626,18 @@ def people_import_connections(
 def people_fetch(
     name: str | None = typer.Argument(None, help="Person to fetch; omit with --all."),
     fetch_all: bool = typer.Option(
-        False, "--all", help="Fetch every person with a Substack feed configured."
+        False, "--all", help="Fetch every person with at least one source configured."
     ),
 ) -> None:
-    """Fetch new posts from a person's public Substack feed (explicit, read-only)."""
+    """Fetch new posts from a person's public sources (explicit, read-only)."""
     configure_logging()
     config = load_config()
     _require_workspace(config, "fetched")
     with Storage(config.db_path) as storage:
         if fetch_all:
-            targets = [person for person in storage.list_people() if person.substack_url]
+            targets = [person for person in storage.list_people() if person.sources]
             if not targets:
-                typer.echo("No people have a Substack feed configured. Nothing was fetched.")
+                typer.echo("No people have any sources configured. Nothing was fetched.")
                 return
         elif name is None:
             typer.echo("Name a person or pass --all. Nothing was fetched.", err=True)
@@ -703,7 +780,8 @@ def people_evidence(
         when = (
             hit.document.published_at.date().isoformat() if hit.document.published_at else "undated"
         )
-        typer.echo(f"{number}. {hit.person_name} — {hit.document.title} [{when}]")
+        via = f" (via {hit.document.organization})" if hit.document.organization else ""
+        typer.echo(f"{number}. {hit.person_name}{via} — {hit.document.title} [{when}]")
         typer.echo(f"   {hit.snippet}")
         typer.echo(f"   source: {hit.document.url or hit.document.source_record_id}")
 

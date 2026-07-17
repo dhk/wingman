@@ -370,6 +370,13 @@ class Storage:
             )
         return [ExternalDocument.model_validate_json(row[0]) for row in cursor.fetchall()]
 
+    def has_external_url(self, url: str) -> bool:
+        cursor = self._conn.execute(
+            "SELECT 1 FROM external_documents WHERE json_extract(payload, '$.url') = ? LIMIT 1",
+            (url,),
+        )
+        return cursor.fetchone() is not None
+
     def count_external_documents(self) -> int:
         cursor = self._conn.execute("SELECT COUNT(*) FROM external_documents")
         count: int = cursor.fetchone()[0]
