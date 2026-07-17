@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from array import array
+from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Self
@@ -62,6 +63,15 @@ CREATE TABLE IF NOT EXISTS external_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_external_documents_person ON external_documents (person_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS external_fts USING fts5(doc_id UNINDEXED, title, body);
+CREATE TABLE IF NOT EXISTS embeddings (
+    doc_id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dim INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -364,6 +374,60 @@ class Storage:
         cursor = self._conn.execute("SELECT COUNT(*) FROM external_documents")
         count: int = cursor.fetchone()[0]
         return count
+
+    def get_corpus_body(self, doc_id: str) -> str | None:
+        cursor = self._conn.execute("SELECT body FROM corpus_fts WHERE doc_id = ?", (doc_id,))
+        row: tuple[str] | None = cursor.fetchone()
+        return row[0] if row else None
+
+    def get_external_body(self, doc_id: str) -> str | None:
+        cursor = self._conn.execute("SELECT body FROM external_fts WHERE doc_id = ?", (doc_id,))
+        row: tuple[str] | None = cursor.fetchone()
+        return row[0] if row else None
+
+    def upsert_embedding(
+        self, doc_id: str, scope: str, provider: str, model: str, vector: list[float]
+    ) -> None:
+        """Store a document's vector; re-embedding replaces the previous vector."""
+        blob = array("f", vector).tobytes()
+        self._conn.execute(
+            "INSERT INTO embeddings (doc_id, scope, provider, model, dim, vector, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(doc_id) DO UPDATE SET scope = excluded.scope,"
+            " provider = excluded.provider, model = excluded.model, dim = excluded.dim,"
+            " vector = excluded.vector, created_at = excluded.created_at",
+            (
+                doc_id,
+                scope,
+                provider,
+                model,
+                len(vector),
+                blob,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def get_embedding(self, doc_id: str) -> tuple[list[float], str, str] | None:
+        """Return (vector, provider, model) for a document, if embedded."""
+        cursor = self._conn.execute(
+            "SELECT vector, provider, model FROM embeddings WHERE doc_id = ?", (doc_id,)
+        )
+        row: tuple[bytes, str, str] | None = cursor.fetchone()
+        if row is None:
+            return None
+        vector = array("f")
+        vector.frombytes(row[0])
+        return list(vector), row[1], row[2]
+
+    def count_embeddings(self) -> int:
+        cursor = self._conn.execute("SELECT COUNT(*) FROM embeddings")
+        count: int = cursor.fetchone()[0]
+        return count
+
+    def embedding_models_in_use(self) -> set[tuple[str, str]]:
+        cursor = self._conn.execute("SELECT DISTINCT provider, model FROM embeddings")
+        return {(row[0], row[1]) for row in cursor.fetchall()}
 
     def search_external(self, query: str, limit: int = 10) -> list[tuple[ExternalDocument, str]]:
         """Full-text search over people's writing; returns (document, snippet) by rank."""
