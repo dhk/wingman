@@ -121,26 +121,34 @@ class _Candidate(BaseModel):
 
 def _parse_posts_manifest(
     archive: zipfile.ZipFile,
-) -> dict[str, tuple[str | None, datetime | None]]:
-    """Read a Substack-style posts.csv: post_id -> (title, publish date)."""
-    manifest: dict[str, tuple[str | None, datetime | None]] = {}
+) -> dict[str, tuple[str | None, datetime | None]] | None:
+    """Read a root-level Substack-style posts.csv: post_id -> (title, publish date).
+
+    Returns None when no root posts.csv exists or it cannot be parsed — the
+    archive is then ingested without metadata rather than failing outright.
+    """
     if "posts.csv" not in archive.namelist():
-        return manifest
-    with archive.open("posts.csv") as handle:
-        reader = csv.DictReader(io.TextIOWrapper(handle, encoding="utf-8"))
-        for row in reader:
-            post_id = (row.get("post_id") or "").strip()
-            if not post_id:
-                continue
-            title = (row.get("title") or "").strip() or None
-            published: datetime | None = None
-            raw_date = (row.get("post_date") or "").strip()
-            if raw_date:
-                try:
-                    published = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
-                except ValueError:
-                    published = None
-            manifest[post_id] = (title, published)
+        return None
+    manifest: dict[str, tuple[str | None, datetime | None]] = {}
+    try:
+        with archive.open("posts.csv") as handle:
+            reader = csv.DictReader(io.TextIOWrapper(handle, encoding="utf-8"))
+            for row in reader:
+                post_id = (row.get("post_id") or "").strip()
+                if not post_id:
+                    continue
+                title = (row.get("title") or "").strip() or None
+                published: datetime | None = None
+                raw_date = (row.get("post_date") or "").strip()
+                if raw_date:
+                    try:
+                        published = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+                    except ValueError:
+                        published = None
+                manifest[post_id] = (title, published)
+    except (UnicodeDecodeError, csv.Error) as exc:
+        _logger.warning("posts.csv manifest could not be parsed (%s); ingesting without it", exc)
+        return None
     return manifest
 
 
@@ -172,8 +180,8 @@ def _iter_inputs(path: Path) -> tuple[list[_Candidate], list[str], list[FileFail
                     entry_name = Path(entry).name
                     if not entry_name or entry.endswith("/"):
                         continue
-                    if entry_name == "posts.csv" and manifest:
-                        continue  # consumed as metadata, not content
+                    if entry == "posts.csv" and manifest is not None:
+                        continue  # the root manifest is consumed as metadata, not content
                     if Path(entry_name).suffix.lower() not in SUPPORTED_SUFFIXES:
                         unsupported.append(entry_name)
                         continue
@@ -182,7 +190,7 @@ def _iter_inputs(path: Path) -> tuple[list[_Candidate], list[str], list[FileFail
                     except UnicodeDecodeError as exc:
                         failures.append(FileFailure(name=entry_name, reason=str(exc)))
                         continue
-                    title, published = manifest.get(Path(entry_name).stem, (None, None))
+                    title, published = (manifest or {}).get(Path(entry_name).stem, (None, None))
                     supported.append(
                         _Candidate(
                             name=entry_name,

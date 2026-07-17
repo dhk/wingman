@@ -88,6 +88,32 @@ def test_add_substack_style_zip(workspace: Config, tmp_path: Path) -> None:
     assert "Not In Manifest" in report.titles
 
 
+def test_headers_only_manifest_is_consumed_and_nested_one_is_not(
+    workspace: Config, tmp_path: Path
+) -> None:
+    archive = tmp_path / "export.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("posts.csv", "post_id,post_date,is_published,title,subtitle\n")
+        zf.writestr("posts/posts.csv", "not,a,manifest\n")
+        zf.writestr("posts/1.hello.html", "<p>Hello there world.</p>")
+    with Storage(workspace.db_path) as storage:
+        report = add_to_corpus(archive, "substack_post", workspace, storage)
+    assert report.added == 1
+    # only the nested, non-manifest posts.csv is reported as unsupported
+    assert report.skipped_unsupported == ["posts.csv"]
+
+
+def test_corrupt_manifest_does_not_crash_ingestion(workspace: Config, tmp_path: Path) -> None:
+    archive = tmp_path / "export.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("posts.csv", b"\xff\xfe\x00 not utf-8")
+        zf.writestr("posts/1.hello.html", "<p>Hello there world.</p>")
+    with Storage(workspace.db_path) as storage:
+        report = add_to_corpus(archive, "substack_post", workspace, storage)
+    assert report.added == 1
+    assert "posts.csv" in report.skipped_unsupported  # unparseable manifest falls back
+
+
 def test_missing_path_fails_visibly(workspace: Config, tmp_path: Path) -> None:
     with Storage(workspace.db_path) as storage:
         with pytest.raises(IngestError, match="does not exist"):
