@@ -11,6 +11,7 @@ from typing import Self
 from wingman.domain import SourceRecord
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.opportunity import Opportunity
+from wingman.domain.person import ExternalDocument, Person
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 
 _SCHEMA = """
@@ -46,6 +47,21 @@ CREATE TABLE IF NOT EXISTS corpus_documents (
     created_at TEXT NOT NULL
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS corpus_fts USING fts5(doc_id UNINDEXED, title, body);
+CREATE TABLE IF NOT EXISTS people (
+    person_id TEXT PRIMARY KEY,
+    name_key TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS external_documents (
+    doc_id TEXT PRIMARY KEY,
+    source_record_id TEXT NOT NULL UNIQUE,
+    person_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_external_documents_person ON external_documents (person_id);
+CREATE VIRTUAL TABLE IF NOT EXISTS external_fts USING fts5(doc_id UNINDEXED, title, body);
 """
 
 
@@ -255,6 +271,118 @@ class Storage:
         cursor = self._conn.execute("SELECT COUNT(*) FROM corpus_documents")
         count: int = cursor.fetchone()[0]
         return count
+
+    def add_person(self, person: Person) -> None:
+        try:
+            self._conn.execute(
+                "INSERT INTO people (person_id, name_key, payload, created_at) VALUES (?, ?, ?, ?)",
+                (
+                    person.person_id,
+                    person.name_key,
+                    person.model_dump_json(),
+                    person.created_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRecordError(f"a person named {person.name!r} already exists") from exc
+        self._conn.commit()
+
+    def update_person(self, person: Person) -> None:
+        cursor = self._conn.execute(
+            "UPDATE people SET name_key = ?, payload = ? WHERE person_id = ?",
+            (person.name_key, person.model_dump_json(), person.person_id),
+        )
+        if cursor.rowcount == 0:
+            raise KeyError(f"person {person.person_id} does not exist")
+        self._conn.commit()
+
+    def find_person_by_name_key(self, name_key: str) -> Person | None:
+        cursor = self._conn.execute("SELECT payload FROM people WHERE name_key = ?", (name_key,))
+        row: tuple[str] | None = cursor.fetchone()
+        return Person.model_validate_json(row[0]) if row else None
+
+    def get_person(self, person_id: str) -> Person | None:
+        cursor = self._conn.execute("SELECT payload FROM people WHERE person_id = ?", (person_id,))
+        row: tuple[str] | None = cursor.fetchone()
+        return Person.model_validate_json(row[0]) if row else None
+
+    def list_people(self) -> list[Person]:
+        cursor = self._conn.execute("SELECT payload FROM people ORDER BY name_key")
+        return [Person.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def count_people(self) -> int:
+        cursor = self._conn.execute("SELECT COUNT(*) FROM people")
+        count: int = cursor.fetchone()[0]
+        return count
+
+    def add_external_document(self, document: ExternalDocument, body: str) -> None:
+        try:
+            self._conn.execute(
+                "INSERT INTO external_documents"
+                " (doc_id, source_record_id, person_id, payload, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    document.doc_id,
+                    document.source_record_id,
+                    document.person_id,
+                    document.model_dump_json(),
+                    document.added_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRecordError(
+                f"external document for source {document.source_record_id} already exists"
+            ) from exc
+        self._conn.execute(
+            "INSERT INTO external_fts (doc_id, title, body) VALUES (?, ?, ?)",
+            (document.doc_id, document.title, body),
+        )
+        self._conn.commit()
+
+    def find_external_document_by_source(self, source_record_id: str) -> ExternalDocument | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM external_documents WHERE source_record_id = ?",
+            (source_record_id,),
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return ExternalDocument.model_validate_json(row[0]) if row else None
+
+    def list_external_documents(self, person_id: str | None = None) -> list[ExternalDocument]:
+        if person_id is None:
+            cursor = self._conn.execute(
+                "SELECT payload FROM external_documents ORDER BY created_at, doc_id"
+            )
+        else:
+            cursor = self._conn.execute(
+                "SELECT payload FROM external_documents WHERE person_id = ?"
+                " ORDER BY created_at, doc_id",
+                (person_id,),
+            )
+        return [ExternalDocument.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def count_external_documents(self) -> int:
+        cursor = self._conn.execute("SELECT COUNT(*) FROM external_documents")
+        count: int = cursor.fetchone()[0]
+        return count
+
+    def search_external(self, query: str, limit: int = 10) -> list[tuple[ExternalDocument, str]]:
+        """Full-text search over people's writing; returns (document, snippet) by rank."""
+        try:
+            cursor = self._conn.execute(
+                "SELECT e.payload, snippet(external_fts, 2, '[', ']', ' … ', 20)"
+                " FROM external_fts JOIN external_documents e ON e.doc_id = external_fts.doc_id"
+                " WHERE external_fts MATCH ? ORDER BY rank LIMIT ?",
+                (query, limit),
+            )
+            rows: list[tuple[str, str]] = cursor.fetchall()
+        except sqlite3.OperationalError as exc:
+            raise CorpusSearchError(
+                f"search query {query!r} could not be parsed ({exc}). "
+                "Use plain words, quoted phrases, or AND/OR/NOT."
+            ) from exc
+        return [
+            (ExternalDocument.model_validate_json(payload), snippet) for payload, snippet in rows
+        ]
 
     def search_corpus(self, query: str, limit: int = 10) -> list[tuple[CorpusDocument, str]]:
         """Full-text search; returns (document, snippet) ranked by relevance."""

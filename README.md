@@ -44,6 +44,18 @@ wingman corpus add substack-export.zip --source-type substack_post
 wingman evidence "kafka migration"
 ```
 
+Build a watchlist of interesting people and follow their public writing —
+seeded from your own LinkedIn connections export (names and roles only, never
+emails), fed by their public Substack RSS feeds (fetched only when you ask,
+RFC-009):
+
+```bash
+wingman people import-connections linkedin-export.zip
+wingman people add "Jane Author" --substack https://example.substack.com
+wingman people fetch --all
+wingman people evidence "developer tools"
+```
+
 The Phase 1 product proof works end to end:
 
 ```text

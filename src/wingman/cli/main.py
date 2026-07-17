@@ -13,6 +13,12 @@ from wingman.application.assess import assess_job
 from wingman.application.corpus import add_to_corpus, find_evidence
 from wingman.application.ingest import IngestError, ingest_resume
 from wingman.application.linkedin import import_linkedin
+from wingman.application.people import (
+    add_person,
+    fetch_person_feed,
+    find_people_evidence,
+    seed_from_connections,
+)
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.storage import CorpusSearchError, Storage
@@ -22,6 +28,8 @@ from wingman.providers.router import DEFAULT_MODELS_TOML, ModelConfigError, get_
 app = typer.Typer(help="Wingman: local-first career intelligence.")
 corpus_app = typer.Typer(help="Manage the corpus: your writing as citable evidence.")
 app.add_typer(corpus_app, name="corpus")
+people_app = typer.Typer(help="Watchlist of people and their public writing.")
+app.add_typer(people_app, name="people")
 
 MIN_PYTHON = (3, 12)
 
@@ -130,11 +138,15 @@ def status() -> None:
         items = storage.count_profile_items()
         opportunities = storage.count_opportunities()
         documents = storage.count_corpus_documents()
+        people = storage.count_people()
+        external = storage.count_external_documents()
     typer.echo(f"Database: {config.db_path}")
     typer.echo(f"Source records: {sources}")
     typer.echo(f"Profile items: {items}")
     typer.echo(f"Opportunities: {opportunities}")
     typer.echo(f"Corpus documents: {documents}")
+    typer.echo(f"People: {people}")
+    typer.echo(f"External documents: {external}")
 
 
 @app.command()
@@ -308,6 +320,156 @@ def corpus_list() -> None:
             f"{document.doc_id}  [{document.source_type}]  {when}  {document.title}"
             f"  ({document.word_count} words)"
         )
+
+
+@people_app.command("add")
+def people_add(
+    name: str = typer.Argument(..., help="The person's name."),
+    substack: str | None = typer.Option(
+        None, "--substack", help="Their public Substack URL, e.g. https://example.substack.com"
+    ),
+    company: str | None = typer.Option(None, "--company", help="Where they work."),
+    position: str | None = typer.Option(None, "--position", help="What they do."),
+) -> None:
+    """Add a person to the watchlist (or update them if already known)."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "added")
+    try:
+        with Storage(config.db_path) as storage:
+            person, created = add_person(
+                name, storage, substack_url=substack, company=company, position=position
+            )
+    except IngestError as exc:
+        typer.echo(f"people add failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    verb = "Added" if created else "Updated"
+    feed = f"  substack: {person.substack_url}" if person.substack_url else ""
+    typer.echo(f"{verb} {person.name} ({person.person_id}){feed}")
+
+
+@people_app.command("list")
+def people_list(
+    watched: bool = typer.Option(
+        False, "--watched", help="Only people with a Substack feed configured."
+    ),
+) -> None:
+    """List people on the watchlist."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        people = storage.list_people()
+    if watched:
+        people = [person for person in people if person.substack_url]
+    if not people:
+        typer.echo(
+            "No people yet — add one with 'wingman people add' or seed from a LinkedIn "
+            "export with 'wingman people import-connections'."
+        )
+        return
+    for person in people:
+        where = ", ".join(part for part in (person.position, person.company) if part)
+        feed = f"  [{person.substack_url}]" if person.substack_url else ""
+        detail = f"  ({where})" if where else ""
+        typer.echo(f"{person.name}{detail}{feed}")
+    typer.echo(f"{len(people)} people.")
+
+
+@people_app.command("import-connections")
+def people_import_connections(
+    export: Path = typer.Argument(..., help="Path to a LinkedIn data-export zip."),
+) -> None:
+    """Seed Person records from Connections.csv (names and roles only — never emails)."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "seeded")
+    try:
+        with Storage(config.db_path) as storage:
+            report = seed_from_connections(export, storage)
+    except IngestError as exc:
+        typer.echo(f"import-connections failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"Created: {report.created}  Already known: {report.skipped_existing}  "
+        f"Incomplete rows skipped: {report.skipped_incomplete}"
+    )
+
+
+@people_app.command("fetch")
+def people_fetch(
+    name: str | None = typer.Argument(None, help="Person to fetch; omit with --all."),
+    fetch_all: bool = typer.Option(
+        False, "--all", help="Fetch every person with a Substack feed configured."
+    ),
+) -> None:
+    """Fetch new posts from a person's public Substack feed (explicit, read-only)."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "fetched")
+    with Storage(config.db_path) as storage:
+        if fetch_all:
+            targets = [person for person in storage.list_people() if person.substack_url]
+            if not targets:
+                typer.echo("No people have a Substack feed configured. Nothing was fetched.")
+                return
+        elif name is None:
+            typer.echo("Name a person or pass --all. Nothing was fetched.", err=True)
+            raise typer.Exit(code=1)
+        else:
+            name_key = " ".join(name.lower().split())
+            person = storage.find_person_by_name_key(name_key)
+            if person is None:
+                typer.echo(
+                    f"No person named {name!r}. Nothing was fetched; see 'wingman people list'.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            targets = [person]
+        failures = 0
+        for person in targets:
+            try:
+                report = fetch_person_feed(person, config, storage)
+            except IngestError as exc:
+                failures += 1
+                typer.echo(f"  {person.name}: fetch failed: {exc}", err=True)
+                continue
+            typer.echo(
+                f"{report.person_name}: {report.items} posts in feed  "
+                f"added: {report.added}  duplicates: {report.skipped_duplicates}  "
+                f"empty: {report.skipped_empty}"
+            )
+            for title in report.titles:
+                typer.echo(f"  + {title}")
+    if failures:
+        raise typer.Exit(code=1)
+
+
+@people_app.command("evidence")
+def people_evidence(
+    query: str = typer.Argument(..., help="Words or a quoted phrase to search for."),
+    limit: int = typer.Option(10, "--limit", help="Maximum number of excerpts."),
+) -> None:
+    """Search people's writing: who has said what about this topic."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "searched")
+    try:
+        with Storage(config.db_path) as storage:
+            hits = find_people_evidence(query, storage, limit=limit)
+    except CorpusSearchError as exc:
+        typer.echo(f"people evidence search failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not hits:
+        typer.echo(f"No evidence found in people's writing for {query!r}.")
+        return
+    for number, hit in enumerate(hits, start=1):
+        when = (
+            hit.document.published_at.date().isoformat() if hit.document.published_at else "undated"
+        )
+        typer.echo(f"{number}. {hit.person_name} — {hit.document.title} [{when}]")
+        typer.echo(f"   {hit.snippet}")
+        typer.echo(f"   source: {hit.document.url or hit.document.source_record_id}")
 
 
 @app.command()
