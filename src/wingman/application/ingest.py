@@ -105,8 +105,10 @@ def _persist_source(
 def _validate_evidence(
     proposed: ProposedItem, source_text: str, record: SourceRecord
 ) -> ProfileItem | RejectedItem:
-    """Deterministic check: every quote must appear verbatim in the source."""
+    """Deterministic check: every quote must be non-blank and appear verbatim in the source."""
     for quote in proposed.quotes:
+        if not quote.strip():
+            return RejectedItem(name=proposed.name, reason="empty evidence quote")
         if quote not in source_text:
             return RejectedItem(
                 name=proposed.name,

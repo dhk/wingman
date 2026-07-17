@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 from wingman.domain.opportunity import FitVerdict, Opportunity
@@ -30,10 +31,12 @@ def render_fit_brief(
     models: dict[str, str],
 ) -> tuple[Path, Path]:
     items_by_id = {item.item_id: item for item in items}
-    slug = _slug(opportunity.title)
+    # Stable ID suffix: distinct opportunities with similar titles must not
+    # overwrite each other, while re-assessments keep the same filenames.
+    slug = f"{_slug(opportunity.title)}-{opportunity.opportunity_id[:8]}"
 
     payload = {
-        "metadata": {"models": models, "generated_at": opportunity.created_at.isoformat()},
+        "metadata": {"models": models, "generated_at": datetime.now(UTC).isoformat()},
         "opportunity": opportunity.model_dump(mode="json"),
     }
     brief_json = config.reports_dir / f"fit-brief-{slug}.json"

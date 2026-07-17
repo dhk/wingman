@@ -72,13 +72,11 @@ def test_assess_produces_cited_fit_brief(workspace: Config) -> None:
     assert "Next action:" in markdown
 
     payload = json.loads(report.brief_json_path.read_text(encoding="utf-8"))
-    assessments = payload["opportunity"]["assessments"]
-    assert all(
-        a["verdict"] in {"met", "partial"}
-        and a["evidence_item_ids"]
-        or a["verdict"] in {"gap", "unknown"}
-        for a in assessments
-    )
+    for assessment in payload["opportunity"]["assessments"]:
+        if assessment["verdict"] in {"met", "partial"}:
+            assert assessment["evidence_item_ids"], assessment
+        else:
+            assert assessment["verdict"] in {"gap", "unknown"}, assessment
 
 
 def test_reassess_updates_existing_opportunity(workspace: Config) -> None:
@@ -90,6 +88,41 @@ def test_reassess_updates_existing_opportunity(workspace: Config) -> None:
         assert storage.count_opportunities() == 1
         assert second.opportunity_id == first.opportunity_id
         assert second.source_reused is True
+
+
+def test_blank_evidence_quote_is_rejected(workspace: Config) -> None:
+    extract = TemplatedRecordedProvider(
+        '{"requirements": [{"name": "Sneaky", "kind": "required", "quotes": ["  "]},'
+        ' {"name": "Python data pipelines", "kind": "required",'
+        ' "quotes": ["5+ years building data pipelines in Python."]}]}'
+    )
+    assess = TemplatedRecordedProvider(
+        '{"assessments": [{"requirement_id": "__REQ_0__", "verdict": "gap",'
+        ' "rationale": "", "confidence": 0.5}]}'
+    )
+    with Storage(workspace.db_path) as storage:
+        _seed_profile(storage)
+        report = assess_job(FIXTURE / "job.md", workspace, storage, extract, assess)
+    assert report.requirements == 1
+    assert [r.reason for r in report.rejected_requirements] == ["empty evidence quote"]
+
+
+def test_duplicate_assessment_is_reported_not_silent(workspace: Config) -> None:
+    extract, _ = _providers()
+    assess = TemplatedRecordedProvider(
+        '{"assessments": ['
+        '{"requirement_id": "__REQ_0__", "verdict": "gap", "rationale": "first", "confidence": 0.5},'
+        '{"requirement_id": "__REQ_0__", "verdict": "met", "rationale": "second",'
+        ' "evidence_item_ids": ["item-python"], "confidence": 0.9}]}'
+    )
+    with Storage(workspace.db_path) as storage:
+        _seed_profile(storage)
+        report = assess_job(FIXTURE / "job.md", workspace, storage, extract, assess)
+        opportunity = storage.find_opportunity_by_source(report.source_record_id)
+    assert any("duplicate assessment" in note for note in report.downgraded)
+    assert opportunity is not None
+    first = next(a for a in opportunity.assessments if a.rationale.startswith("first"))
+    assert first.verdict.value == "gap"  # the first assessment wins; the duplicate is dropped
 
 
 def test_assess_requires_profile(workspace: Config) -> None:

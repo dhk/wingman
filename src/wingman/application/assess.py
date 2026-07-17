@@ -119,14 +119,15 @@ def _extract_requirements(
     requirements: list[Requirement] = []
     rejected: list[RejectedItem] = []
     for proposed in proposal.requirements:
-        missing = [quote for quote in proposed.quotes if quote not in text]
-        if missing:
-            rejected.append(
-                RejectedItem(
-                    name=proposed.name,
-                    reason=f"evidence quote not found verbatim in source: {missing[0][:80]!r}",
-                )
+        blank = any(not quote.strip() for quote in proposed.quotes)
+        missing = [quote for quote in proposed.quotes if quote.strip() and quote not in text]
+        if blank or missing:
+            reason = (
+                "empty evidence quote"
+                if blank
+                else f"evidence quote not found verbatim in source: {missing[0][:80]!r}"
             )
+            rejected.append(RejectedItem(name=proposed.name, reason=reason))
             continue
         requirements.append(
             Requirement(
@@ -156,6 +157,12 @@ def _validate_assessments(
         if proposed.requirement_id not in known_requirements:
             adjustments.append(
                 f"dropped assessment for unknown requirement_id {proposed.requirement_id!r}"
+            )
+            continue
+        if proposed.requirement_id in by_requirement:
+            adjustments.append(
+                f"dropped duplicate assessment for requirement {proposed.requirement_id}; "
+                "kept the first"
             )
             continue
         valid_ids = [i for i in proposed.evidence_item_ids if i in known_items]
