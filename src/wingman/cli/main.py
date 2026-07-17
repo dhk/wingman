@@ -275,8 +275,9 @@ def corpus_list() -> None:
         typer.echo("Corpus is empty — add writing with 'wingman corpus add <path>'.")
         return
     for document in documents:
+        when = document.published_at.date().isoformat() if document.published_at else "unknown"
         typer.echo(
-            f"{document.doc_id}  [{document.source_type}]  {document.title}"
+            f"{document.doc_id}  [{document.source_type}]  {when}  {document.title}"
             f"  ({document.word_count} words)"
         )
 
