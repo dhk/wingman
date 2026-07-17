@@ -93,6 +93,7 @@ Model routing is configured in the workspace `models.toml` (written by
 
 ## Repository Guide
 
+- [`docs/SETUP.md`](docs/SETUP.md): standing up your own instance, with graceful degradation
 - [`VISION.md`](VISION.md): why Wingman exists and what good looks like
 - [`ROADMAP.md`](ROADMAP.md): phased delivery plan
 - [`AGENTS.md`](AGENTS.md): engineering and agent instructions
