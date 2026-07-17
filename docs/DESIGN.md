@@ -91,9 +91,10 @@ The pattern is fixed: deterministic ingestion and validation bracket every model
 
 ## Storage
 
-- A single SQLite database file under the user's data directory (`WINGMAN_DATA_DIR`, default `./data`) holds entities and source records. One file on the user's disk is the local-first promise made concrete (RFC-002).
-- Generated artifacts (`career.md`, fit briefs, dossiers, daily briefs) are written as Markdown under `reports/` and reference the structured records they were produced from.
-- Raw imported artifacts land in `data/inbox/` before ingestion and are referenced by SourceRecords.
+- The workspace is the user's data directory: `WINGMAN_DATA_DIR` when set, otherwise the platform user data directory (e.g. `~/.local/share/wingman` on Linux). It is never resolved relative to the invoking directory; development checkouts set `WINGMAN_DATA_DIR=./data` to keep the workspace inside the repo.
+- A single SQLite database file (`wingman.db`) in the workspace holds entities and source records. One file on the user's disk is the local-first promise made concrete (RFC-002).
+- Generated artifacts (`career.md`, fit briefs, dossiers, daily briefs) are written as Markdown under the workspace's `reports/` directory and reference the structured records they were produced from.
+- Raw imported artifacts land in the workspace's `inbox/` directory before ingestion and are referenced by SourceRecords.
 - Prompt templates live as versioned files under `prompts/`; every score and generated artifact is attributable to an exact prompt version ([`EVALUATION.md`](EVALUATION.md)). Schemas have no separate directory — the Pydantic models in code are the schema source of truth.
 - No remote persistence, no telemetry. Backup and migration design is deferred (see Open Questions).
 
