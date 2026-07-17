@@ -59,7 +59,12 @@ class DemoSeedReport(BaseModel):
 
 
 def seed_demo_watchlist(storage: Storage) -> tuple[DemoSeedReport, list[Person]]:
-    """Add the demo publications to the watchlist; existing people are left alone."""
+    """Add the demo publications to the watchlist.
+
+    Intended for the isolated demo workspace: re-seeding upserts the demo
+    entries in place (add_person updates a person whose name already exists),
+    which is why the demo never runs against the user's real workspace.
+    """
     added = 0
     already = 0
     people: list[Person] = []

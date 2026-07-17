@@ -113,8 +113,9 @@ wingman doctor
 New here? `wingman demo` runs a guided tour on real public data — it seeds a
 watchlist of real Substack publications, fetches their feeds, and shows
 evidence search and similarity, with no API keys required (similarity falls
-back to the local `hashed` provider). Then make it yours: see
-[`docs/SETUP.md`](docs/SETUP.md).
+back to the local `hashed` provider). It runs in its own isolated workspace,
+so your data is never touched; delete the demo folder to remove every trace.
+Then make it yours: see [`docs/SETUP.md`](docs/SETUP.md).
 
 The workspace lives in `$WINGMAN_DATA_DIR` if set, otherwise the platform user
 data directory (e.g. `~/.local/share/wingman` on Linux).

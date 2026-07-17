@@ -152,19 +152,29 @@ def doctor() -> None:
 
 @app.command()
 def demo() -> None:
-    """A guided tour on real data: seed a public watchlist, fetch, search, compare.
+    """A guided tour on real data, in an isolated demo workspace.
 
-    Seeds real public Substack publications (no synthetic fixtures), fetches
-    their feeds (explicit network reads, RFC-009), and shows evidence search
-    and similarity. Degrades gracefully: without VOYAGE_API_KEY, similarity
-    runs on the local 'hashed' provider. Re-running is safe — everything
-    deduplicates. Your own data is never touched; add it afterwards.
+    Runs entirely inside its own workspace (a 'demo' folder next to your
+    real one) — your workspace, corpus, and watchlist are never read,
+    written, or sent anywhere. Network behavior, stated exactly: public
+    Substack feeds are fetched (RFC-009), and if a Voyage key is configured
+    those fetched public posts are sent to the embeddings provider
+    (RFC-010); without a key, similarity runs on the local 'hashed'
+    provider and nothing leaves the machine. Re-running is safe; delete
+    the demo folder to remove every trace.
     """
     configure_logging()
-    config = load_config()
-    if not config.db_path.exists():
-        init()
-    typer.echo("\n=== Wingman demo: a real watchlist, real public writing ===\n")
+    real_config = load_config()
+    config = Config(
+        data_dir=real_config.data_dir / "demo",
+        data_dir_source=f"demo workspace inside {real_config.data_dir}",
+    )
+    for directory in _workspace_dirs(config):
+        directory.mkdir(parents=True, exist_ok=True)
+    if not config.models_config_path.exists():
+        config.models_config_path.write_text(DEFAULT_MODELS_TOML, encoding="utf-8")
+    typer.echo("\n=== Wingman demo: a real watchlist, real public writing ===")
+    typer.echo(f"    (isolated workspace: {config.data_dir} — your data is untouched)\n")
 
     with Storage(config.db_path) as storage:
         seed, _ = seed_demo_watchlist(storage)
@@ -173,7 +183,7 @@ def demo() -> None:
             f"{seed.already_present} already present."
         )
 
-        typer.echo("[2/4] Fetching public feeds (this is the demo's only network access)...")
+        typer.echo("[2/4] Fetching public feeds (explicit read-only HTTPS, RFC-009)...")
         fetched = 0
         failed = 0
         new_posts = 0
@@ -227,10 +237,16 @@ def demo() -> None:
 
             typer.echo(
                 "      VOYAGE_API_KEY is not set — using the local 'hashed' provider "
-                "(keyword-level, no network). Set the key and re-run 'wingman embed' "
-                "for real semantic quality."
+                "(keyword-level, no network). Set the key and re-run the demo for "
+                "real semantic quality."
             )
             embedder = HashedEmbeddingProvider()
+        elif embedder is not None and embedder.provider_name == "voyage":
+            typer.echo(
+                f"      Sending the fetched public posts to {embedder.provider_name}/"
+                f"{embedder.model} for embedding (RFC-010 — demo posts only, "
+                "never your own data)."
+            )
         if embedder is not None:
             try:
                 embed_report = embed_missing(storage, embedder)
@@ -247,12 +263,13 @@ def demo() -> None:
 
     typer.echo(
         "\n=== Demo complete. Make it yours ===\n"
+        "  wingman init                                   # your real workspace\n"
         "  wingman ingest-linkedin <your-export.zip>      # your cited profile\n"
         "  wingman people import-connections <export.zip> # your network\n"
         "  wingman corpus add <your-writing>              # your evidence\n"
         "  wingman people add / fetch / similar           # your watchlist\n"
-        "Full guide: docs/SETUP.md. Remove demo people anytime — they are "
-        "ordinary watchlist entries."
+        f"Full guide: docs/SETUP.md. The demo lived in {config.data_dir} — "
+        "delete that folder to remove every trace."
     )
 
 

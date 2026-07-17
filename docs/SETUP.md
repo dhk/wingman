@@ -26,7 +26,9 @@ it reports what will and won't work.
 it seeds a watchlist of real public Substack publications, fetches their
 feeds, and demonstrates evidence search and similarity end to end — no API
 keys needed (similarity uses the local `hashed` provider until you configure
-Voyage). Demo people are ordinary watchlist entries; keep or remove them.
+Voyage). The demo runs in its own isolated workspace (a `demo` folder next
+to your real one): your data is never read, written, or sent anywhere, and
+deleting that folder removes every trace.
 
 ## 2. Credentials — all optional, each unlocking one capability
 

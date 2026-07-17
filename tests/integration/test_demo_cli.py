@@ -60,9 +60,24 @@ def test_demo_end_to_end_without_any_keys(workspace: Path) -> None:
     assert "hashed" in result.output
     assert "Closest to Dave Holmes-Kinsella:" in result.output
     assert "Demo complete" in result.output
+    # everything lives in the isolated demo workspace, not the real one
+    assert (workspace / "demo" / "wingman.db").is_file()
+    assert not (workspace / "wingman.db").exists()
 
+
+def test_demo_never_touches_the_real_workspace(workspace: Path) -> None:
+    runner.invoke(app, ["init"])
+    runner.invoke(
+        app, ["people", "add", "My Person", "--substack", "https://myperson.substack.com"]
+    )
+    result = runner.invoke(app, ["demo"])
+    assert result.exit_code == 0, result.output
+    # the real workspace still has exactly the one person, with nothing fetched
     status = runner.invoke(app, ["status"])
-    assert f"People: {len(DEMO_WATCHLIST)}" in status.output
+    assert "People: 1" in status.output
+    assert "External documents: 0" in status.output
+    # and the demo never fetched the real person's feed
+    assert "My Person" not in result.output
 
 
 def test_demo_is_idempotent(workspace: Path) -> None:
