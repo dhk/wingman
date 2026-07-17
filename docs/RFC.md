@@ -126,3 +126,20 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 **Rationale.** Relationship intelligence needs other people's public writing, and an RSS feed is that writing in its author-published, terms-of-service-clean form. Confining network access to one function with hard invariants keeps the local-first promise auditable: the workspace never talks to the network unless the user just asked it to, and everything fetched is traceable to the command that fetched it.
 
 **Revisit if.** Feed refresh becomes tedious enough that the user wants scheduled sync — that is Phase 8's connector architecture decision, not a quiet relaxation of this entry.
+
+## RFC-010: Semantic similarity via embeddings, stored in SQLite
+
+**Decision.** People similarity ("who thinks about what I think about", "if you like A and B, talk to C") is computed from text embeddings: a new `embed_semantic` capability class in `models.toml` maps to an embeddings provider (default `voyage`/`voyage-4`; `hashed` is a local, network-free fallback). Vectors are unit-length, stored as float32 blobs in `wingman.db`, and compared with a dot product (equal to cosine similarity for unit vectors) in plain Python. A person's vector is the normalized mean of their documents' vectors; the user's vector is the normalized mean of their corpus.
+
+Boundaries that make this admissible:
+
+- **Embedding is explicit data egress.** Document text is sent to the provider only by `wingman embed` — never as a side effect of ingesting, fetching, or searching. The command is the consent.
+- **RFC-007 stands.** Evidence retrieval (`wingman evidence`, `wingman people evidence`) stays on deterministic FTS5. Embeddings serve *similarity*, a question keyword search cannot answer at all; they do not replace the retrieval path, whose revisit trigger has not fired.
+- **No vector database.** One person's watchlist is hundreds of documents; brute-force dot products over in-memory vectors are instant. The vectors live in the same single SQLite file as everything else (RFC-002).
+- **One model at a time.** Vectors from different embedding models are incomparable; similarity refuses to run over mixed-model vectors rather than returning garbage.
+
+**Alternatives.** A vector database (operational weight without a workload that needs approximate search); model-judged similarity (an LLM ranking people per query — expensive, non-deterministic, unauditable as a ranking function; models are used later to *explain* a match with cited quotes, not to compute it); TF-IDF locally (the `hashed` provider is that floor, kept as the offline option).
+
+**Rationale.** Similarity between bodies of writing is exactly what embeddings are for, and the deterministic-controls rule (RFC-003) is preserved: the model call produces data (vectors) once per document, while every ranking computed from them is auditable arithmetic. Voyage AI is the default provider per Anthropic's embeddings guidance; provider choice lives in `models.toml` like every other model name (RFC-004).
+
+**Revisit if.** The watchlist grows to where brute force is slow (tens of thousands of embedded documents — then an ANN index becomes a documented decision), or drafting/assessment later wants semantic *retrieval* (that is RFC-007's own revisit trigger, decided on its own terms).

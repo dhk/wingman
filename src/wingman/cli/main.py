@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -19,11 +20,18 @@ from wingman.application.people import (
     find_people_evidence,
     seed_from_connections,
 )
+from wingman.application.similarity import embed_missing, people_like, similar_people
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.providers.base import CapabilityClass, ProviderError
-from wingman.providers.router import DEFAULT_MODELS_TOML, ModelConfigError, get_provider
+from wingman.providers.embeddings import EmbeddingError
+from wingman.providers.router import (
+    DEFAULT_MODELS_TOML,
+    ModelConfigError,
+    get_embedding_provider,
+    get_provider,
+)
 
 app = typer.Typer(help="Wingman: local-first career intelligence.")
 corpus_app = typer.Typer(help="Manage the corpus: your writing as citable evidence.")
@@ -117,6 +125,23 @@ def doctor() -> None:
             report("database", False, f"{config.db_path} could not be opened ({exc})")
     else:
         report("database", False, f"{config.db_path} does not exist; run 'wingman init'")
+    if config.models_config_path.exists():
+        try:
+            embedder = get_embedding_provider(config)
+        except ModelConfigError as exc:
+            report("embeddings", False, str(exc))
+        else:
+            key_note = ""
+            if (
+                embedder.provider_name == "voyage"
+                and not os.environ.get("VOYAGE_API_KEY", "").strip()
+            ):
+                key_note = " — VOYAGE_API_KEY is not set, so 'wingman embed' will fail until it is"
+            report(
+                "embeddings",
+                True,
+                f"{embedder.provider_name}/{embedder.model}{key_note}",
+            )
 
     if failures:
         typer.echo(f"{failures} check(s) failed.", err=True)
@@ -443,6 +468,93 @@ def people_fetch(
                 typer.echo(f"  + {title}")
     if failures:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def embed() -> None:
+    """Embed corpus and people's writing for semantic similarity (RFC-010).
+
+    The one explicit data-egress step: document text is sent to the configured
+    embeddings provider, once per new document.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "embedded")
+    try:
+        provider = get_embedding_provider(config)
+        with Storage(config.db_path) as storage:
+            report = embed_missing(storage, provider)
+    except (ModelConfigError, EmbeddingError) as exc:
+        typer.echo(f"embed failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Provider: {report.provider}/{report.model}")
+    typer.echo(
+        f"Embedded: {report.corpus_embedded} corpus + {report.external_embedded} external  "
+        f"(re-embedded after model change: {report.reembedded})  "
+        f"Already embedded: {report.already_embedded}  Empty skipped: {report.skipped_empty}"
+    )
+
+
+@people_app.command("similar")
+def people_similar(
+    name: str | None = typer.Argument(
+        None, help="Person to compare against; omit to compare against your own corpus."
+    ),
+    limit: int = typer.Option(10, "--limit", help="How many people to show."),
+) -> None:
+    """Who thinks about the same things — as this person, or as you."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "compared")
+    try:
+        with Storage(config.db_path) as storage:
+            report = similar_people(storage, name=name, limit=limit)
+    except IngestError as exc:
+        typer.echo(f"people similar failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not report.people:
+        typer.echo(
+            "No other people have embedded writing yet — fetch feeds and run 'wingman embed'."
+        )
+        return
+    typer.echo(f"Closest to {report.reference}:")
+    for number, entry in enumerate(report.people, start=1):
+        where = ", ".join(part for part in (entry.position, entry.company) if part)
+        detail = f"  ({where})" if where else ""
+        typer.echo(
+            f"{number}. {entry.name}{detail}  score {entry.score:.3f}  [{entry.documents} docs]"
+        )
+
+
+@people_app.command("like")
+def people_like_cmd(
+    names: list[str] = typer.Argument(
+        ..., help="Two or more people you find interesting, e.g. 'Mario Rossi' 'Brian Chen'."
+    ),
+    limit: int = typer.Option(10, "--limit", help="How many people to show."),
+) -> None:
+    """'If you like these people, you should be talking to…'"""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "compared")
+    try:
+        with Storage(config.db_path) as storage:
+            report = people_like(storage, names=names, limit=limit)
+    except IngestError as exc:
+        typer.echo(f"people like failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not report.people:
+        typer.echo(
+            "No other people have embedded writing yet — fetch feeds and run 'wingman embed'."
+        )
+        return
+    typer.echo(f"Closest to {report.reference}:")
+    for number, entry in enumerate(report.people, start=1):
+        where = ", ".join(part for part in (entry.position, entry.company) if part)
+        detail = f"  ({where})" if where else ""
+        typer.echo(
+            f"{number}. {entry.name}{detail}  score {entry.score:.3f}  [{entry.documents} docs]"
+        )
 
 
 @people_app.command("evidence")

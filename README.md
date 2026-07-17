@@ -56,6 +56,18 @@ wingman people fetch --all
 wingman people evidence "developer tools"
 ```
 
+Find people who think about what you think about — embeddings-backed
+similarity over their writing and yours (RFC-010). `wingman embed` is the one
+explicit step that sends document text to the configured embeddings provider
+(default Voyage AI, `VOYAGE_API_KEY`; a local `hashed` provider needs no key):
+
+```bash
+wingman embed
+wingman people similar                       # closest to your own corpus
+wingman people similar "Jane Author"         # closest to Jane
+wingman people like "Mario Rossi" "Brian Chen"   # near the centroid of both
+```
+
 The Phase 1 product proof works end to end:
 
 ```text
