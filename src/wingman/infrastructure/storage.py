@@ -136,11 +136,20 @@ class Storage:
     def find_active_item(self, kind: ProfileItemKind, name_key: str) -> ProfileItem | None:
         cursor = self._conn.execute(
             "SELECT payload FROM profile_items WHERE kind = ? AND name_key = ? AND status = ?"
-            " ORDER BY created_at LIMIT 1",
+            " ORDER BY created_at DESC LIMIT 1",
             (kind.value, name_key, ItemStatus.ACTIVE.value),
         )
         row: tuple[str] | None = cursor.fetchone()
         return ProfileItem.model_validate_json(row[0]) if row else None
+
+    def update_profile_item(self, item: ProfileItem) -> None:
+        cursor = self._conn.execute(
+            "UPDATE profile_items SET status = ?, payload = ? WHERE item_id = ?",
+            (item.status.value, item.model_dump_json(), item.item_id),
+        )
+        if cursor.rowcount == 0:
+            raise KeyError(f"profile item {item.item_id} does not exist")
+        self._conn.commit()
 
     def list_profile_items(self) -> list[ProfileItem]:
         cursor = self._conn.execute(

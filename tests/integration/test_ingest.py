@@ -64,7 +64,7 @@ def test_full_slice_produces_cited_artifacts(workspace: Config, tmp_path: Path) 
 
     markdown = report.career_md_path.read_text(encoding="utf-8")
     assert "Search rewrite" in markdown
-    assert '"Shipped the search rewrite."' in markdown
+    assert "> Shipped the search rewrite." in markdown
     assert "[^1]" in markdown
 
 
@@ -94,12 +94,47 @@ def test_conflicting_value_is_preserved_and_surfaced(workspace: Config, tmp_path
             storage,
             RecordedProvider(json.dumps(conflicting)),
         )
-        # identical achievement skipped; conflicting skill stored side by side
+        # identical achievement from a new source merges evidence; conflicting
+        # skill is stored side by side
         assert report.conflicts == 1
-        assert report.skipped_duplicates == 1
+        assert report.evidence_merged == 1
         assert storage.count_profile_items() == 3
     markdown = report.career_md_path.read_text(encoding="utf-8")
     assert "Conflicts (need your resolution)" in markdown
+
+
+def test_same_value_new_evidence_is_merged_not_dropped(workspace: Config, tmp_path: Path) -> None:
+    second_resume = "# Jo again\n\n- Shipped the search rewrite.\n\nExpert in Python daily.\n"
+    second_response = json.loads(RESPONSE)
+    second_response["items"] = [
+        {
+            "kind": "skill",
+            "name": "Python",
+            "detail": "",
+            "classification": "fact",
+            "confidence": 0.95,
+            "quotes": ["Expert in Python daily."],
+        }
+    ]
+    v2_dir = tmp_path / "v2"
+    v2_dir.mkdir()
+    with Storage(workspace.db_path) as storage:
+        ingest_resume(_resume_file(tmp_path), workspace, storage, RecordedProvider(RESPONSE))
+        report = ingest_resume(
+            _resume_file(v2_dir, text=second_resume),
+            workspace,
+            storage,
+            RecordedProvider(json.dumps(second_response)),
+        )
+        assert report.evidence_merged == 1
+        assert report.accepted == 0
+        assert storage.count_profile_items() == 2  # no duplicate item created
+        python_items = [i for i in storage.list_profile_items() if i.name == "Python"]
+        assert len(python_items) == 1
+        assert {span.quote for span in python_items[0].evidence} == {
+            "Skills: Python.",
+            "Expert in Python daily.",
+        }
 
 
 def test_empty_resume_fails_visibly(workspace: Config, tmp_path: Path) -> None:

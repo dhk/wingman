@@ -65,7 +65,11 @@ def render_career(storage: Storage, config: Config, run_meta: dict[str, str]) ->
         lines.extend(["", "## Evidence", ""])
         for key, number in sorted(footnotes.items(), key=lambda kv: kv[1]):
             record_id, quote = key.split(":", 1)
-            lines.append(f'[^{number}]: source record `{record_id}`: "{quote}"')
+            # Quotes are untrusted source text and may span lines: render each
+            # line as an indented blockquote so verbatim text cannot break the
+            # footnote or inject block-level Markdown structure.
+            lines.append(f"[^{number}]: source record `{record_id}`:")
+            lines.extend(f"    > {line}" for line in quote.splitlines() or [quote])
     lines.append("")
     career_md = config.reports_dir / "career.md"
     career_md.write_text("\n".join(lines), encoding="utf-8")

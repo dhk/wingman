@@ -46,6 +46,7 @@ class IngestReport(BaseModel):
     source_reused: bool
     accepted: int
     skipped_duplicates: int
+    evidence_merged: int
     conflicts: int
     rejected: list[RejectedItem]
     career_json_path: Path
@@ -88,7 +89,7 @@ def _persist_source(
         stored = resolved
     else:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
-        stored = config.inbox_dir / f"{stamp}-{resume_path.name}"
+        stored = config.inbox_dir / f"{stamp}-{content_hash[:8]}-{resume_path.name}"
         shutil.copy2(resolved, stored)
     record = SourceRecord(
         source_type="resume",
@@ -137,6 +138,7 @@ def ingest_resume(
 
     accepted = 0
     skipped = 0
+    merged = 0
     conflicts = 0
     rejected: list[RejectedItem] = []
     for proposed in proposal.items:
@@ -148,7 +150,15 @@ def ingest_resume(
         existing = storage.find_active_item(item.kind, item.name_key)
         if existing is not None:
             if existing.detail == item.detail and existing.classification == item.classification:
-                skipped += 1
+                new_spans = [span for span in item.evidence if span not in existing.evidence]
+                if new_spans:
+                    # Same value, new provenance: append the evidence, never drop it.
+                    storage.update_profile_item(
+                        existing.model_copy(update={"evidence": existing.evidence + new_spans})
+                    )
+                    merged += 1
+                else:
+                    skipped += 1
                 continue
             item = item.model_copy(
                 update={"status": ItemStatus.CONFLICT, "conflicts_with": existing.item_id}
@@ -170,7 +180,7 @@ def ingest_resume(
     )
     _logger.info(
         "ingest source=%s reused=%s provider=%s model=%s prompt=%s accepted=%d skipped=%d"
-        " conflicts=%d rejected=%d latency_ms=%d input_tokens=%s output_tokens=%s",
+        " merged=%d conflicts=%d rejected=%d latency_ms=%d input_tokens=%s output_tokens=%s",
         record.record_id,
         reused,
         response.provider,
@@ -178,6 +188,7 @@ def ingest_resume(
         PROMPT_VERSION,
         accepted,
         skipped,
+        merged,
         conflicts,
         len(rejected),
         response.latency_ms,
@@ -189,6 +200,7 @@ def ingest_resume(
         source_reused=reused,
         accepted=accepted,
         skipped_duplicates=skipped,
+        evidence_merged=merged,
         conflicts=conflicts,
         rejected=rejected,
         career_json_path=career_json,

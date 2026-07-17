@@ -162,7 +162,8 @@ def ingest(
     )
     typer.echo(
         f"Accepted: {report.accepted}  Duplicates skipped: {report.skipped_duplicates}  "
-        f"Conflicts: {report.conflicts}  Rejected: {len(report.rejected)}"
+        f"Evidence merged: {report.evidence_merged}  Conflicts: {report.conflicts}  "
+        f"Rejected: {len(report.rejected)}"
     )
     for rejected in report.rejected:
         typer.echo(f"  rejected {rejected.name!r}: {rejected.reason}")
