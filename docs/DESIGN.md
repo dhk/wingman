@@ -66,6 +66,7 @@ Entities:
 - **CareerProfile** — the canonical profile: achievements, skills, roles, each carrying evidence references to source records.
 - **Company** — researched company facts and signals, each labeled fact / inference / hypothesis.
 - **Opportunity** — a role under consideration: extracted requirements, fit assessment, status, next action.
+- **CorpusDocument** — one document of the user's own writing (essay, README, export entry), backed by a SourceRecord and indexed for full-text search (RFC-007); the unit of quotation for drafting and evidence lookup.
 - **Person** and **Interaction** — relationship records built from explicit imports.
 - **Recommendation** — a proposed action with its decomposed score, evidence references, and outcome feedback.
 

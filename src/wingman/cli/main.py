@@ -10,14 +10,17 @@ import typer
 
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job
+from wingman.application.corpus import add_to_corpus, find_evidence
 from wingman.application.ingest import IngestError, ingest_resume
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.logs import configure_logging
-from wingman.infrastructure.storage import Storage
+from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.providers.base import CapabilityClass, ProviderError
 from wingman.providers.router import DEFAULT_MODELS_TOML, ModelConfigError, get_provider
 
 app = typer.Typer(help="Wingman: local-first career intelligence.")
+corpus_app = typer.Typer(help="Manage the corpus: your writing as citable evidence.")
+app.add_typer(corpus_app, name="corpus")
 
 MIN_PYTHON = (3, 12)
 
@@ -125,10 +128,12 @@ def status() -> None:
         sources = storage.count_source_records()
         items = storage.count_profile_items()
         opportunities = storage.count_opportunities()
+        documents = storage.count_corpus_documents()
     typer.echo(f"Database: {config.db_path}")
     typer.echo(f"Source records: {sources}")
     typer.echo(f"Profile items: {items}")
     typer.echo(f"Opportunities: {opportunities}")
+    typer.echo(f"Corpus documents: {documents}")
 
 
 @app.command()
@@ -215,6 +220,89 @@ def assess(
     typer.echo(f"Next action: {report.next_action}")
     typer.echo(f"Wrote {report.brief_json_path}")
     typer.echo(f"Wrote {report.brief_md_path}")
+
+
+def _require_workspace(config: Config, action: str) -> None:
+    if not config.db_path.exists():
+        typer.echo(
+            f"Workspace at {config.data_dir} is not initialized. Nothing was {action}; "
+            "run 'wingman init' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@corpus_app.command("add")
+def corpus_add(
+    path: Path = typer.Argument(
+        ..., help="A file, a directory, or a zip export (e.g. a Substack export)."
+    ),
+    source_type: str = typer.Option(
+        "writing",
+        "--source-type",
+        help="Provenance label, e.g. substack_post, github_readme, linkedin_export.",
+    ),
+) -> None:
+    """Add writing to the corpus: Markdown, plain text, HTML, or a zip of them."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "added")
+    try:
+        with Storage(config.db_path) as storage:
+            report = add_to_corpus(path, source_type, config, storage)
+    except IngestError as exc:
+        typer.echo(f"corpus add failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"Added: {report.added}  Duplicates skipped: {report.skipped_duplicates}  "
+        f"Unsupported: {len(report.skipped_unsupported)}  Failures: {len(report.failures)}"
+    )
+    for title in report.titles:
+        typer.echo(f"  + {title}")
+    for failure in report.failures:
+        typer.echo(f"  failed {failure.name!r}: {failure.reason}", err=True)
+
+
+@corpus_app.command("list")
+def corpus_list() -> None:
+    """List corpus documents."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        documents = storage.list_corpus_documents()
+    if not documents:
+        typer.echo("Corpus is empty — add writing with 'wingman corpus add <path>'.")
+        return
+    for document in documents:
+        typer.echo(
+            f"{document.doc_id}  [{document.source_type}]  {document.title}"
+            f"  ({document.word_count} words)"
+        )
+
+
+@app.command()
+def evidence(
+    query: str = typer.Argument(..., help="Words or a quoted phrase to search for."),
+    limit: int = typer.Option(10, "--limit", help="Maximum number of excerpts."),
+) -> None:
+    """Search the corpus: 'you have this evidence, here'."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "searched")
+    try:
+        with Storage(config.db_path) as storage:
+            hits = find_evidence(query, storage, limit=limit)
+    except CorpusSearchError as exc:
+        typer.echo(f"evidence search failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not hits:
+        typer.echo(f"No corpus evidence found for {query!r}.")
+        return
+    for number, hit in enumerate(hits, start=1):
+        typer.echo(f"{number}. {hit.document.title} [{hit.document.source_type}]")
+        typer.echo(f"   {hit.snippet}")
+        typer.echo(f"   source: {hit.source_locator} (doc {hit.document.doc_id})")
 
 
 if __name__ == "__main__":

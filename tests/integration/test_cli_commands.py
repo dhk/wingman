@@ -93,3 +93,33 @@ def test_ingest_with_recorded_provider(workspace: Path, tmp_path: Path) -> None:
     assert (workspace / "reports" / "career.md").exists()
     status = runner.invoke(app, ["status"])
     assert "Profile items: 1" in status.stdout
+
+
+def test_corpus_add_and_evidence_cli(workspace: Path, tmp_path: Path) -> None:
+    runner.invoke(app, ["init"])
+    essay = tmp_path / "essay.md"
+    essay.write_text(
+        "# Streaming migration\n\nWe moved billing to Apache Kafka streaming.\n",
+        encoding="utf-8",
+    )
+    added = runner.invoke(app, ["corpus", "add", str(essay)])
+    assert added.exit_code == 0, added.output
+    assert "Added: 1" in added.output
+
+    listing = runner.invoke(app, ["corpus", "list"])
+    assert "Streaming migration" in listing.output
+
+    found = runner.invoke(app, ["evidence", "kafka"])
+    assert found.exit_code == 0, found.output
+    assert "Streaming migration" in found.output
+    assert "source: inbox/" in found.output
+
+    status = runner.invoke(app, ["status"])
+    assert "Corpus documents: 1" in status.stdout
+
+
+def test_evidence_no_results(workspace: Path) -> None:
+    runner.invoke(app, ["init"])
+    result = runner.invoke(app, ["evidence", "flamingo"])
+    assert result.exit_code == 0
+    assert "No corpus evidence found" in result.output

@@ -86,3 +86,13 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 **Rationale.** The product boundary — decision support, not autonomous action — is Wingman's defining constraint. Enforcing it structurally, rather than by convention, means no future feature can cross it by accident.
 
 **Revisit if.** Never. This is a product invariant, not an engineering preference.
+
+## RFC-007: Corpus retrieval via SQLite FTS5, embeddings deferred
+
+**Decision.** The corpus — the user's writing (Substack posts, READMEs, LinkedIn exports, other documents) — is stored as ordinary SourceRecords plus CorpusDocuments and searched with SQLite's built-in FTS5 full-text index. Ingestion is explicit imports (files, directories, export zips), never live connectors. No vector database and no embedding model in this phase.
+
+**Alternatives.** Embeddings + vector search (semantically stronger, but adds a model dependency to a retrieval path that should be deterministic, plus an index to keep consistent — and AGENTS.md requires a demonstrated need before adding a vector database); a separate search service (operational weight a local single-user tool does not need).
+
+**Rationale.** One person's writing is hundreds of documents, not millions; FTS5 is deterministic, ships inside the stdlib's SQLite, keeps the local-first promise (the index lives in the same wingman.db file), and its failure mode is "no results", never a fabricated match. Retrieval feeds model steps (drafting, assessment) that already validate quotes verbatim, so a keyword-recall index is the right floor.
+
+**Revisit if.** Drafting or assessment measurably misses relevant corpus evidence that semantic search would find — then embeddings become a documented decision with the storage and provider trade-offs written down.
