@@ -95,7 +95,8 @@ The pattern is fixed: deterministic ingestion and validation bracket every model
 - A single SQLite database file (`wingman.db`) in the workspace holds entities and source records. One file on the user's disk is the local-first promise made concrete (RFC-002).
 - Generated artifacts (`career.md`, fit briefs, dossiers, daily briefs) are written as Markdown under the workspace's `reports/` directory and reference the structured records they were produced from.
 - Raw imported artifacts land in the workspace's `inbox/` directory before ingestion and are referenced by SourceRecords.
-- Prompt templates live as versioned files under `prompts/`; every score and generated artifact is attributable to an exact prompt version ([`EVALUATION.md`](EVALUATION.md)). Schemas have no separate directory — the Pydantic models in code are the schema source of truth.
+- Prompt templates are versioned files shipped inside the package (`src/wingman/prompts/`, e.g. `profile_extraction_v1.md`) so installed CLIs carry them; every score and generated artifact is attributable to an exact prompt version ([`EVALUATION.md`](EVALUATION.md)). Schemas have no separate directory — the Pydantic models in code are the schema source of truth.
+- The workspace's `models.toml` (written by `wingman init`) maps capability classes to concrete providers and models (RFC-004) — the one place runtime model names live.
 - No remote persistence, no telemetry. Backup and migration design is deferred (see Open Questions).
 
 ## Approval Flow

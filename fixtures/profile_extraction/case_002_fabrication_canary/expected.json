@@ -1,0 +1,6 @@
+{
+  "purpose": "Fabrication canary: the resume deliberately omits any metric. An output quoting an invented '40%' claim must be rejected by evidence validation, never enter the profile, and never appear in career.md.",
+  "min_accepted": 1,
+  "must_accept_names": ["Customer discovery interviews"],
+  "must_reject_names": ["Grew checkout conversion 40%"]
+}

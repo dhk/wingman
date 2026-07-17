@@ -1,0 +1,10 @@
+{"items": [
+  {"kind": "achievement", "name": "Customer discovery interviews",
+   "detail": "Ran discovery interviews with customers.",
+   "classification": "fact", "confidence": 0.9,
+   "quotes": ["Ran discovery interviews with customers."]},
+  {"kind": "achievement", "name": "Grew checkout conversion 40%",
+   "detail": "Increased checkout conversion by 40% year over year.",
+   "classification": "fact", "confidence": 0.85,
+   "quotes": ["Increased checkout conversion by 40% year over year."]}
+]}

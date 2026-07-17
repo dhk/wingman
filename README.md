@@ -15,19 +15,30 @@ Wingman is **not** an autonomous job application bot. It is a human-in-the-loop 
 
 ## Status
 
-This repository is at **Phase 0: Foundation**.
+This repository is at **Phase 1: Career Brain** (first slice).
 
-The first product proof is:
+The first product proof works end to end:
 
 ```text
 resume.md
    ↓
-validated ingestion
+validated ingestion (SourceRecord, content-hashed, deduplicated)
+   ↓
+model extraction (extract_fast capability class) + deterministic evidence validation
    ↓
 career.json
    ↓
 career.md with evidence references
 ```
+
+```bash
+wingman ingest path/to/resume.md
+```
+
+Every accepted claim carries verbatim quotes from the source; claims whose
+quotes do not appear in the source are rejected and reported, never stored.
+Model routing is configured in the workspace `models.toml` (written by
+`wingman init`; set `ANTHROPIC_API_KEY` to use the default mapping).
 
 ## Repository Guide
 
