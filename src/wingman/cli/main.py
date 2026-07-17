@@ -490,6 +490,7 @@ def embed() -> None:
     typer.echo(f"Provider: {report.provider}/{report.model}")
     typer.echo(
         f"Embedded: {report.corpus_embedded} corpus + {report.external_embedded} external  "
+        f"(re-embedded after model change: {report.reembedded})  "
         f"Already embedded: {report.already_embedded}  Empty skipped: {report.skipped_empty}"
     )
 

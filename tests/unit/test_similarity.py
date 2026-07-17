@@ -141,6 +141,44 @@ def test_similarity_fails_visibly_without_embeddings(workspace: Path) -> None:
             similar_people(storage)
 
 
+def test_switching_models_reembeds_instead_of_stranding(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_writer(storage, config, "Jane Author", "jane", "kafka streaming pipelines")
+        first = embed_missing(storage, HashedEmbeddingProvider(model="hashed-a"))
+        assert first.external_embedded == 1 and first.reembedded == 0
+        # switching the configured model re-embeds rather than leaving a mixed workspace
+        second = embed_missing(storage, HashedEmbeddingProvider(model="hashed-b"))
+        assert second.external_embedded == 1 and second.reembedded == 1
+        assert storage.embedding_models_in_use() == {("hashed", "hashed-b")}
+        # and similarity runs instead of refusing
+        similar_people(storage, name="Jane Author")
+
+
+def test_people_like_requires_two_names(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_writer(storage, config, "Jane Author", "jane", "kafka streaming")
+        embed_missing(storage, HashedEmbeddingProvider())
+        with pytest.raises(IngestError, match="at least two"):
+            people_like(storage, names=["Jane Author"])
+        with pytest.raises(IngestError, match="at least two"):
+            people_like(storage, names=[])
+
+
+def test_mismatched_dimensions_fail_with_guidance(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_writer(storage, config, "Jane Author", "jane", "kafka streaming")
+        add_writer(storage, config, "Gardener", "garden", "roses tulips")
+        documents = storage.list_external_documents()
+        # same provider/model but different dimensions (e.g. a partial manual re-embed)
+        storage.upsert_embedding(documents[0].doc_id, "external", "hashed", "h", [1.0, 0.0])
+        storage.upsert_embedding(documents[1].doc_id, "external", "hashed", "h", [1.0, 0.0, 0.0])
+        with pytest.raises(IngestError, match="mismatched dimensions"):
+            similar_people(storage, name="Jane Author")
+
+
 def test_mixed_models_refuse_to_compare(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:

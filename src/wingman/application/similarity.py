@@ -27,6 +27,7 @@ class EmbedReport(BaseModel):
     model: str
     corpus_embedded: int
     external_embedded: int
+    reembedded: int
     already_embedded: int
     skipped_empty: int
 
@@ -51,12 +52,22 @@ def _normalize(vector: list[float]) -> list[float]:
     return [value / norm for value in vector]
 
 
+_DIMENSION_GUIDANCE = (
+    "stored embeddings have mismatched dimensions; re-run 'wingman embed' after a "
+    "provider or model change so every document is re-embedded consistently."
+)
+
+
 def _dot(a: list[float], b: list[float]) -> float:
+    if len(a) != len(b):
+        raise IngestError(_DIMENSION_GUIDANCE)
     return sum(x * y for x, y in zip(a, b, strict=True))
 
 
 def _mean(vectors: list[list[float]]) -> list[float]:
     dim = len(vectors[0])
+    if any(len(vector) != dim for vector in vectors):
+        raise IngestError(_DIMENSION_GUIDANCE)
     total = [0.0] * dim
     for vector in vectors:
         for index, value in enumerate(vector):
@@ -68,28 +79,43 @@ def embed_missing(storage: Storage, provider: EmbeddingProvider) -> EmbedReport:
     """Embed every corpus and external document that lacks a vector.
 
     This is the explicit data-egress step: document text goes to the
-    configured embeddings provider, once per document.
+    configured embeddings provider, once per document. Documents embedded by a
+    different provider or model are re-embedded, so switching in models.toml
+    can never strand the workspace with incomparable mixed-model vectors.
     """
     pending: list[tuple[str, str, str]] = []  # (doc_id, scope, body)
     already = 0
+    reembedded = 0
     skipped_empty = 0
+
+    def matches_active(doc_id: str) -> bool | None:
+        """True if embedded by the active model, False if by another, None if missing."""
+        embedded = storage.get_embedding(doc_id)
+        if embedded is None:
+            return None
+        return embedded[1] == provider.provider_name and embedded[2] == provider.model
+
     for document in storage.list_corpus_documents():
-        if storage.get_embedding(document.doc_id) is not None:
+        current = matches_active(document.doc_id)
+        if current is True:
             already += 1
             continue
         body = storage.get_corpus_body(document.doc_id)
         if not body or not body.strip():
             skipped_empty += 1
             continue
+        reembedded += int(current is False)
         pending.append((document.doc_id, "corpus", body))
     for external in storage.list_external_documents():
-        if storage.get_embedding(external.doc_id) is not None:
+        current = matches_active(external.doc_id)
+        if current is True:
             already += 1
             continue
         body = storage.get_external_body(external.doc_id)
         if not body or not body.strip():
             skipped_empty += 1
             continue
+        reembedded += int(current is False)
         pending.append((external.doc_id, "external", body))
 
     counts = {"corpus": 0, "external": 0}
@@ -102,11 +128,12 @@ def embed_missing(storage: Storage, provider: EmbeddingProvider) -> EmbedReport:
             )
             counts[scope] += 1
     _logger.info(
-        "embed provider=%s model=%s corpus=%d external=%d already=%d empty=%d",
+        "embed provider=%s model=%s corpus=%d external=%d reembedded=%d already=%d empty=%d",
         provider.provider_name,
         provider.model,
         counts["corpus"],
         counts["external"],
+        reembedded,
         already,
         skipped_empty,
     )
@@ -115,6 +142,7 @@ def embed_missing(storage: Storage, provider: EmbeddingProvider) -> EmbedReport:
         model=provider.model,
         corpus_embedded=counts["corpus"],
         external_embedded=counts["external"],
+        reembedded=reembedded,
         already_embedded=already,
         skipped_empty=skipped_empty,
     )
@@ -209,6 +237,11 @@ def similar_people(storage: Storage, name: str | None = None, limit: int = 10) -
 
 def people_like(storage: Storage, names: list[str], limit: int = 10) -> SimilarityReport:
     """'If you like A and B, talk to…': rank people near the centroid of the named ones."""
+    if len(names) < 2:
+        raise IngestError(
+            "name at least two people to blend — for a single person, "
+            "use 'wingman people similar <name>'."
+        )
     _require_one_model(storage)
     vectors = _person_vectors(storage)
     references: list[list[float]] = []
