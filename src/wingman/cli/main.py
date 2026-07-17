@@ -12,6 +12,7 @@ from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job
 from wingman.application.corpus import add_to_corpus, find_evidence
 from wingman.application.ingest import IngestError, ingest_resume
+from wingman.application.linkedin import import_linkedin
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.storage import CorpusSearchError, Storage
@@ -220,6 +221,33 @@ def assess(
     typer.echo(f"Next action: {report.next_action}")
     typer.echo(f"Wrote {report.brief_json_path}")
     typer.echo(f"Wrote {report.brief_md_path}")
+
+
+@app.command("ingest-linkedin")
+def ingest_linkedin(
+    export: Path = typer.Argument(..., help="Path to a LinkedIn data-export zip."),
+) -> None:
+    """Import positions, skills, and recommendations from a LinkedIn export."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "imported")
+    try:
+        with Storage(config.db_path) as storage:
+            report = import_linkedin(export, config, storage)
+    except IngestError as exc:
+        typer.echo(f"ingest-linkedin failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"Found: {report.positions} positions, {report.skills} skills, "
+        f"{report.recommendations} recommendations"
+    )
+    counts = report.counts
+    typer.echo(
+        f"Accepted: {counts.accepted}  Duplicates skipped: {counts.skipped_duplicates}  "
+        f"Evidence merged: {counts.evidence_merged}  Conflicts: {counts.conflicts}"
+    )
+    typer.echo(f"Wrote {report.career_json_path}")
+    typer.echo(f"Wrote {report.career_md_path}")
 
 
 def _require_workspace(config: Config, action: str) -> None:

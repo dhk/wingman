@@ -14,6 +14,8 @@ from wingman.domain.provenance import ClaimClassification
 class ProfileItemKind(StrEnum):
     ACHIEVEMENT = "achievement"
     SKILL = "skill"
+    ROLE = "role"
+    TESTIMONIAL = "testimonial"
 
 
 class ItemStatus(StrEnum):

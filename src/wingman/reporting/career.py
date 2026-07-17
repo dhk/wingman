@@ -33,10 +33,14 @@ def render_career(storage: Storage, config: Config, run_meta: dict[str, str]) ->
 
     payload = {
         "metadata": run_meta,
+        "roles": [i.model_dump(mode="json") for i in active if i.kind is ProfileItemKind.ROLE],
         "achievements": [
             i.model_dump(mode="json") for i in active if i.kind is ProfileItemKind.ACHIEVEMENT
         ],
         "skills": [i.model_dump(mode="json") for i in active if i.kind is ProfileItemKind.SKILL],
+        "testimonials": [
+            i.model_dump(mode="json") for i in active if i.kind is ProfileItemKind.TESTIMONIAL
+        ],
         "conflicts": [i.model_dump(mode="json") for i in conflicted],
     }
     career_json = config.reports_dir / "career.json"
@@ -45,8 +49,10 @@ def render_career(storage: Storage, config: Config, run_meta: dict[str, str]) ->
     footnotes: dict[str, int] = {}
     lines = ["# Career Profile", ""]
     for heading, kind in (
+        ("## Roles", ProfileItemKind.ROLE),
         ("## Achievements", ProfileItemKind.ACHIEVEMENT),
         ("## Skills", ProfileItemKind.SKILL),
+        ("## Testimonials", ProfileItemKind.TESTIMONIAL),
     ):
         section = [i for i in active if i.kind is kind]
         lines.extend([heading, ""])
