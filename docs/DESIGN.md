@@ -26,7 +26,7 @@ This document describes what the system is. Rationale for engineering decisions 
 ## Architecture
 
 ```text
-Presentation (CLI; any additional surface requires a durable RFC entry)
+Presentation (CLI + local MCP server, RFC-008; further surfaces need a durable RFC entry)
     |
 Application Services
     |
