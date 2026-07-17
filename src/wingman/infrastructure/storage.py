@@ -9,6 +9,7 @@ from types import TracebackType
 from typing import Self
 
 from wingman.domain import SourceRecord
+from wingman.domain.corpus import CorpusDocument
 from wingman.domain.opportunity import Opportunity
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 
@@ -38,11 +39,22 @@ CREATE TABLE IF NOT EXISTS opportunities (
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS corpus_documents (
+    doc_id TEXT PRIMARY KEY,
+    source_record_id TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS corpus_fts USING fts5(doc_id UNINDEXED, title, body);
 """
 
 
 class DuplicateRecordError(Exception):
     """Raised when inserting a record whose ID already exists (records are immutable)."""
+
+
+class CorpusSearchError(Exception):
+    """The search query could not be parsed by the full-text index."""
 
 
 class Storage:
@@ -202,3 +214,61 @@ class Storage:
         cursor = self._conn.execute("SELECT COUNT(*) FROM opportunities")
         count: int = cursor.fetchone()[0]
         return count
+
+    def add_corpus_document(self, document: CorpusDocument, body: str) -> None:
+        try:
+            self._conn.execute(
+                "INSERT INTO corpus_documents (doc_id, source_record_id, payload, created_at)"
+                " VALUES (?, ?, ?, ?)",
+                (
+                    document.doc_id,
+                    document.source_record_id,
+                    document.model_dump_json(),
+                    document.added_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRecordError(
+                f"corpus document for source {document.source_record_id} already exists"
+            ) from exc
+        self._conn.execute(
+            "INSERT INTO corpus_fts (doc_id, title, body) VALUES (?, ?, ?)",
+            (document.doc_id, document.title, body),
+        )
+        self._conn.commit()
+
+    def find_corpus_document_by_source(self, source_record_id: str) -> CorpusDocument | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM corpus_documents WHERE source_record_id = ?",
+            (source_record_id,),
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return CorpusDocument.model_validate_json(row[0]) if row else None
+
+    def list_corpus_documents(self) -> list[CorpusDocument]:
+        cursor = self._conn.execute(
+            "SELECT payload FROM corpus_documents ORDER BY created_at, doc_id"
+        )
+        return [CorpusDocument.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def count_corpus_documents(self) -> int:
+        cursor = self._conn.execute("SELECT COUNT(*) FROM corpus_documents")
+        count: int = cursor.fetchone()[0]
+        return count
+
+    def search_corpus(self, query: str, limit: int = 10) -> list[tuple[CorpusDocument, str]]:
+        """Full-text search; returns (document, snippet) ranked by relevance."""
+        try:
+            cursor = self._conn.execute(
+                "SELECT c.payload, snippet(corpus_fts, 2, '[', ']', ' … ', 20)"
+                " FROM corpus_fts JOIN corpus_documents c ON c.doc_id = corpus_fts.doc_id"
+                " WHERE corpus_fts MATCH ? ORDER BY rank LIMIT ?",
+                (query, limit),
+            )
+            rows: list[tuple[str, str]] = cursor.fetchall()
+        except sqlite3.OperationalError as exc:
+            raise CorpusSearchError(
+                f"search query {query!r} could not be parsed ({exc}). "
+                "Use plain words, quoted phrases, or AND/OR/NOT."
+            ) from exc
+        return [(CorpusDocument.model_validate_json(payload), snippet) for payload, snippet in rows]
