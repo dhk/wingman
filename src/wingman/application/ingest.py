@@ -20,9 +20,10 @@ from wingman.agents.profile_curator import (
     build_prompt,
     parse_proposal,
 )
+from wingman.application.profile_store import persist_items
 from wingman.domain import SourceRecord
 from wingman.domain.extraction import ProposedItem
-from wingman.domain.profile import EvidenceSpan, ItemStatus, ProfileItem
+from wingman.domain.profile import EvidenceSpan, ProfileItem
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -138,37 +139,21 @@ def ingest_resume(
     response = provider.complete(ModelRequest(system=SYSTEM_PROMPT, prompt=build_prompt(text)))
     proposal = parse_proposal(response.text)
 
-    accepted = 0
-    skipped = 0
-    merged = 0
-    conflicts = 0
+    validated: list[ProfileItem] = []
     rejected: list[RejectedItem] = []
     for proposed in proposal.items:
         result = _validate_evidence(proposed, text, record)
         if isinstance(result, RejectedItem):
             rejected.append(result)
             continue
-        item = result.model_copy(update={"extracted_by": f"{response.provider}/{response.model}"})
-        existing = storage.find_active_item(item.kind, item.name_key)
-        if existing is not None:
-            if existing.detail == item.detail and existing.classification == item.classification:
-                new_spans = [span for span in item.evidence if span not in existing.evidence]
-                if new_spans:
-                    # Same value, new provenance: append the evidence, never drop it.
-                    storage.update_profile_item(
-                        existing.model_copy(update={"evidence": existing.evidence + new_spans})
-                    )
-                    merged += 1
-                else:
-                    skipped += 1
-                continue
-            item = item.model_copy(
-                update={"status": ItemStatus.CONFLICT, "conflicts_with": existing.item_id}
-            )
-            conflicts += 1
-        else:
-            accepted += 1
-        storage.add_profile_item(item)
+        validated.append(
+            result.model_copy(update={"extracted_by": f"{response.provider}/{response.model}"})
+        )
+    counts = persist_items(validated, storage)
+    accepted = counts.accepted
+    skipped = counts.skipped_duplicates
+    merged = counts.evidence_merged
+    conflicts = counts.conflicts
 
     career_json, career_md = render_career(
         storage,

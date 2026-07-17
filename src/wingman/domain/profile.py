@@ -1,4 +1,4 @@
-"""Career profile entities: achievements and skills with evidence references."""
+"""Career profile entities: achievements, skills, roles, and testimonials with evidence."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from wingman.domain.provenance import ClaimClassification
 class ProfileItemKind(StrEnum):
     ACHIEVEMENT = "achievement"
     SKILL = "skill"
+    ROLE = "role"
+    TESTIMONIAL = "testimonial"
 
 
 class ItemStatus(StrEnum):
@@ -29,7 +31,7 @@ class EvidenceSpan(BaseModel):
 
 
 class ProfileItem(BaseModel):
-    """One achievement or skill in the canonical profile.
+    """One item in the canonical profile: an achievement, skill, role, or testimonial.
 
     Every item carries at least one evidence span; nothing enters the profile
     without a resolvable evidence reference.

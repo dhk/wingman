@@ -28,6 +28,13 @@ assessed against your profile as met / partial / gap / unknown, citing only
 real profile items — an unsupported "met" is downgraded to "unknown" by
 deterministic validation. The brief lands in the workspace `reports/`.
 
+Import your LinkedIn data export — positions, skills, and recommendations
+become cited profile items, deterministically (no model involved):
+
+```bash
+wingman ingest-linkedin linkedin-export.zip
+```
+
 Build a searchable corpus from your own writing (Substack export zips,
 READMEs, LinkedIn exports, any Markdown/text/HTML) and pull cited evidence
 from it:
