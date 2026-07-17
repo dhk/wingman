@@ -123,26 +123,30 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
                 raise IngestError(
                     f"no {CONNECTIONS_CSV} found in {export_path}. Nothing was seeded."
                 )
-            raw = archive.read(entry_name).decode("utf-8-sig")
+            raw_bytes = archive.read(entry_name)
     except (OSError, zipfile.BadZipFile) as exc:
         raise IngestError(
             f"could not read {export_path} ({exc}). Nothing was seeded; "
             "check the path and re-run 'wingman people import-connections'."
         ) from exc
+    try:
+        raw = raw_bytes.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise IngestError(
             f"{CONNECTIONS_CSV} in the export could not be decoded ({exc}). Nothing was seeded."
         ) from exc
 
     rows = _connections_rows(raw)
-    content_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    # Hash the exact bytes read from the archive (not the decoded text), so the
+    # hash identifies the exported artifact itself.
+    content_hash = hashlib.sha256(raw_bytes).hexdigest()
     record = storage.get_source_record_by_hash(content_hash)
     if record is None:
         # The CSV holds contact emails, so the bytes stay in the user's export
         # zip — only the locator and hash are recorded (PII minimization).
         record = SourceRecord(
             source_type="linkedin_connections",
-            source_locator=f"{export_path}!{CONNECTIONS_CSV}",
+            source_locator=f"{export_path}!{entry_name}",
             content_hash=content_hash,
         )
         storage.add_source_record(record)

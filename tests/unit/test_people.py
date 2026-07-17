@@ -1,5 +1,6 @@
 """People: watchlist, connections seeding, and feed ingestion are deterministic."""
 
+import hashlib
 import zipfile
 from pathlib import Path
 
@@ -59,7 +60,8 @@ def connections_zip(tmp_path: Path, rows: str) -> Path:
         "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n" + rows
     )
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("Connections.csv", raw)
+        # nested entry with a BOM, the way real exports arrive
+        archive.writestr("Export/Connections.csv", b"\xef\xbb\xbf" + raw.encode("utf-8"))
     return path
 
 
@@ -105,6 +107,12 @@ def test_seed_from_connections_keeps_names_never_emails(workspace: Path, tmp_pat
         assert "mario@example.com" not in mario.model_dump_json()
         record = storage.get_source_record(mario.source_record_id)
         assert record is not None and record.source_type == "linkedin_connections"
+        # the locator names the actual (nested) entry that was consumed, and
+        # the hash is of the exact bytes in the archive, BOM included
+        assert record.source_locator.endswith("!Export/Connections.csv")
+        with zipfile.ZipFile(export) as archive:
+            raw_bytes = archive.read("Export/Connections.csv")
+        assert record.content_hash == hashlib.sha256(raw_bytes).hexdigest()
         # the CSV bytes stay in the export zip, not the inbox
         assert list(config.inbox_dir.iterdir()) == []
 
