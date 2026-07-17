@@ -1,0 +1,13 @@
+[
+  {
+    "item_id": "item-python",
+    "kind": "skill",
+    "name": "Python",
+    "detail": "",
+    "classification": "fact",
+    "confidence": 0.95,
+    "evidence": [{"source_record_id": "seed-resume", "quote": "Python, SQL."}],
+    "prompt_version": "profile_extraction_v1",
+    "extracted_by": "recorded/seed"
+  }
+]

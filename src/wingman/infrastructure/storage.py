@@ -9,6 +9,7 @@ from types import TracebackType
 from typing import Self
 
 from wingman.domain import SourceRecord
+from wingman.domain.opportunity import Opportunity
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 
 _SCHEMA = """
@@ -29,6 +30,14 @@ CREATE TABLE IF NOT EXISTS profile_items (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_profile_items_key ON profile_items (kind, name_key);
+CREATE TABLE IF NOT EXISTS opportunities (
+    opportunity_id TEXT PRIMARY KEY,
+    source_record_id TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -159,5 +168,37 @@ class Storage:
 
     def count_profile_items(self) -> int:
         cursor = self._conn.execute("SELECT COUNT(*) FROM profile_items")
+        count: int = cursor.fetchone()[0]
+        return count
+
+    def save_opportunity(self, opportunity: Opportunity) -> None:
+        """Insert or replace the opportunity for its source record (assessments evolve)."""
+        self._conn.execute(
+            "INSERT INTO opportunities"
+            " (opportunity_id, source_record_id, title, status, payload, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(source_record_id) DO UPDATE SET"
+            " title = excluded.title, status = excluded.status, payload = excluded.payload",
+            (
+                opportunity.opportunity_id,
+                opportunity.source_record_id,
+                opportunity.title,
+                opportunity.status.value,
+                opportunity.model_dump_json(),
+                opportunity.created_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def find_opportunity_by_source(self, source_record_id: str) -> Opportunity | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM opportunities WHERE source_record_id = ?",
+            (source_record_id,),
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return Opportunity.model_validate_json(row[0]) if row else None
+
+    def count_opportunities(self) -> int:
+        cursor = self._conn.execute("SELECT COUNT(*) FROM opportunities")
         count: int = cursor.fetchone()[0]
         return count

@@ -15,9 +15,20 @@ Wingman is **not** an autonomous job application bot. It is a human-in-the-loop 
 
 ## Status
 
-This repository is at **Phase 1: Career Brain** (first slice).
+This repository is at **Phase 2: Opportunity Inbox** (first slice).
 
-The first product proof works end to end:
+Assess a job description against your profile and get a cited fit brief:
+
+```bash
+wingman assess path/to/job.md
+```
+
+Requirements are extracted with verbatim quotes from the posting; each is
+assessed against your profile as met / partial / gap / unknown, citing only
+real profile items — an unsupported "met" is downgraded to "unknown" by
+deterministic validation. The brief lands in the workspace `reports/`.
+
+The Phase 1 product proof works end to end:
 
 ```text
 resume.md

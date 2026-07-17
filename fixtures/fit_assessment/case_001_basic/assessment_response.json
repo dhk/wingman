@@ -1,0 +1,6 @@
+{"assessments": [
+  {"requirement_id": "__REQ_0__", "verdict": "partial", "rationale": "Python is evidenced as a skill, but years of pipeline experience are not stated.", "evidence_item_ids": ["item-python"], "confidence": 0.7},
+  {"requirement_id": "__REQ_1__", "verdict": "met", "rationale": "Kafka appears in the skills evidence.", "evidence_item_ids": ["item-kafka"], "confidence": 0.8},
+  {"requirement_id": "__REQ_2__", "verdict": "met", "rationale": "Led the billing pipeline streaming migration.", "evidence_item_ids": ["item-migration"], "confidence": 0.9},
+  {"requirement_id": "__REQ_3__", "verdict": "unknown", "rationale": "dbt appears in a skills list but familiarity depth is unclear.", "evidence_item_ids": [], "confidence": 0.4}
+]}
