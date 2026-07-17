@@ -20,6 +20,7 @@ from wingman.application.people import (
     find_people_evidence,
     seed_from_connections,
 )
+from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
 from wingman.application.similarity import embed_missing, people_like, similar_people
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.logs import configure_logging
@@ -147,6 +148,112 @@ def doctor() -> None:
         typer.echo(f"{failures} check(s) failed.", err=True)
         raise typer.Exit(code=1)
     typer.echo("All checks passed.")
+
+
+@app.command()
+def demo() -> None:
+    """A guided tour on real data: seed a public watchlist, fetch, search, compare.
+
+    Seeds real public Substack publications (no synthetic fixtures), fetches
+    their feeds (explicit network reads, RFC-009), and shows evidence search
+    and similarity. Degrades gracefully: without VOYAGE_API_KEY, similarity
+    runs on the local 'hashed' provider. Re-running is safe — everything
+    deduplicates. Your own data is never touched; add it afterwards.
+    """
+    configure_logging()
+    config = load_config()
+    if not config.db_path.exists():
+        init()
+    typer.echo("\n=== Wingman demo: a real watchlist, real public writing ===\n")
+
+    with Storage(config.db_path) as storage:
+        seed, _ = seed_demo_watchlist(storage)
+        typer.echo(
+            f"[1/4] Watchlist seeded: {seed.added} publications added, "
+            f"{seed.already_present} already present."
+        )
+
+        typer.echo("[2/4] Fetching public feeds (this is the demo's only network access)...")
+        fetched = 0
+        failed = 0
+        new_posts = 0
+        for person in storage.list_people():
+            if not person.substack_url:
+                continue
+            try:
+                report = fetch_person_feed(person, config, storage)
+            except IngestError as exc:
+                failed += 1
+                typer.echo(f"      {person.name}: {exc}", err=True)
+                continue
+            fetched += 1
+            new_posts += report.added
+        typer.echo(
+            f"      {fetched} feeds fetched, {new_posts} new posts archived"
+            + (f", {failed} feeds unreachable (shown above)" if failed else "")
+        )
+        if fetched == 0:
+            typer.echo(
+                "\nNo feeds could be fetched — the demo needs network access to public "
+                "Substack feeds. Everything already stored remains usable.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        typer.echo('[3/4] Evidence search — who has said what about "AI":')
+        try:
+            hits = find_people_evidence("AI", storage, limit=3)
+        except CorpusSearchError as exc:
+            typer.echo(f"      search failed: {exc}", err=True)
+            hits = []
+        for hit in hits:
+            typer.echo(f"      {hit.person_name} — {hit.document.title}")
+            typer.echo(f"        {hit.snippet}")
+        if not hits:
+            typer.echo("      (no matches in the fetched posts — try 'wingman people evidence')")
+
+        typer.echo("[4/4] Similarity — embedding the fetched writing...")
+        try:
+            embedder = get_embedding_provider(config)
+        except ModelConfigError as exc:
+            typer.echo(f"      embed skipped: {exc}", err=True)
+            embedder = None
+        if (
+            embedder is not None
+            and embedder.provider_name == "voyage"
+            and not os.environ.get("VOYAGE_API_KEY", "").strip()
+        ):
+            from wingman.providers.embeddings import HashedEmbeddingProvider
+
+            typer.echo(
+                "      VOYAGE_API_KEY is not set — using the local 'hashed' provider "
+                "(keyword-level, no network). Set the key and re-run 'wingman embed' "
+                "for real semantic quality."
+            )
+            embedder = HashedEmbeddingProvider()
+        if embedder is not None:
+            try:
+                embed_report = embed_missing(storage, embedder)
+                typer.echo(
+                    f"      embedded {embed_report.external_embedded} posts "
+                    f"({embed_report.provider}/{embed_report.model})"
+                )
+                similar = similar_people(storage, name=DEMO_REFERENCE_PERSON, limit=5)
+                typer.echo(f"      Closest to {similar.reference}:")
+                for number, entry in enumerate(similar.people, start=1):
+                    typer.echo(f"      {number}. {entry.name}  score {entry.score:.3f}")
+            except (IngestError, EmbeddingError) as exc:
+                typer.echo(f"      similarity skipped: {exc}", err=True)
+
+    typer.echo(
+        "\n=== Demo complete. Make it yours ===\n"
+        "  wingman ingest-linkedin <your-export.zip>      # your cited profile\n"
+        "  wingman people import-connections <export.zip> # your network\n"
+        "  wingman corpus add <your-writing>              # your evidence\n"
+        "  wingman people add / fetch / similar           # your watchlist\n"
+        "Full guide: docs/SETUP.md. Remove demo people anytime — they are "
+        "ordinary watchlist entries."
+    )
 
 
 @app.command()

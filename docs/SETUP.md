@@ -22,6 +22,12 @@ The workspace lives in your platform user-data directory (macOS:
 points. `wingman doctor` never fails you for a missing optional credential —
 it reports what will and won't work.
 
+**Want to see it working before feeding it your data?** Run `wingman demo`:
+it seeds a watchlist of real public Substack publications, fetches their
+feeds, and demonstrates evidence search and similarity end to end — no API
+keys needed (similarity uses the local `hashed` provider until you configure
+Voyage). Demo people are ordinary watchlist entries; keep or remove them.
+
 ## 2. Credentials — all optional, each unlocking one capability
 
 | Credential | Unlocks | Without it |
