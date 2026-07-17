@@ -1,0 +1,37 @@
+[
+  {
+    "item_id": "item-python",
+    "kind": "skill",
+    "name": "Python",
+    "detail": "",
+    "classification": "fact",
+    "confidence": 0.95,
+    "evidence": [{"source_record_id": "seed-resume", "quote": "Python, SQL, Apache Kafka, dbt."}],
+    "prompt_version": "profile_extraction_v1",
+    "extracted_by": "recorded/seed"
+  },
+  {
+    "item_id": "item-kafka",
+    "kind": "skill",
+    "name": "Apache Kafka",
+    "detail": "",
+    "classification": "fact",
+    "confidence": 0.9,
+    "evidence": [{"source_record_id": "seed-resume", "quote": "Python, SQL, Apache Kafka, dbt."}],
+    "prompt_version": "profile_extraction_v1",
+    "extracted_by": "recorded/seed"
+  },
+  {
+    "item_id": "item-migration",
+    "kind": "achievement",
+    "name": "Billing pipeline streaming migration",
+    "detail": "Cut report latency from 24 hours to 20 minutes.",
+    "classification": "fact",
+    "confidence": 0.95,
+    "evidence": [
+      {"source_record_id": "seed-resume", "quote": "Led the migration of the billing pipeline to a streaming architecture"}
+    ],
+    "prompt_version": "profile_extraction_v1",
+    "extracted_by": "recorded/seed"
+  }
+]

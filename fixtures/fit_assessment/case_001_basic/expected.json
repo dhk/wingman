@@ -1,0 +1,7 @@
+{
+  "purpose": "Happy path: cited requirements, evidence-mapped verdicts, abstention on the unclear preferred requirement.",
+  "expected_requirements": 4,
+  "expected_rejected_requirements": [],
+  "expected_verdicts": {"met": 2, "partial": 1, "unknown": 1},
+  "min_adjustments": 0
+}

@@ -1,0 +1,4 @@
+{"assessments": [
+  {"requirement_id": "__REQ_0__", "verdict": "met", "rationale": "Extensive Kubernetes experience.", "evidence_item_ids": ["item-kubernetes-invented"], "confidence": 0.9},
+  {"requirement_id": "__REQ_1__", "verdict": "gap", "rationale": "No language evidence in the profile.", "evidence_item_ids": [], "confidence": 0.7}
+]}

@@ -9,6 +9,7 @@ from pathlib import Path
 import typer
 
 from wingman.agents.profile_curator import ProposalParseError
+from wingman.application.assess import assess_job
 from wingman.application.ingest import IngestError, ingest_resume
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.logs import configure_logging
@@ -123,9 +124,11 @@ def status() -> None:
     with Storage(config.db_path) as storage:
         sources = storage.count_source_records()
         items = storage.count_profile_items()
+        opportunities = storage.count_opportunities()
     typer.echo(f"Database: {config.db_path}")
     typer.echo(f"Source records: {sources}")
     typer.echo(f"Profile items: {items}")
+    typer.echo(f"Opportunities: {opportunities}")
 
 
 @app.command()
@@ -170,6 +173,48 @@ def ingest(
     typer.echo(f"Model: {report.provider}/{report.model} (prompt {report.prompt_version})")
     typer.echo(f"Wrote {report.career_json_path}")
     typer.echo(f"Wrote {report.career_md_path}")
+
+
+@app.command()
+def assess(
+    job: Path = typer.Argument(..., help="Path to a job description in Markdown or plain text."),
+) -> None:
+    """Assess a job description against the profile and write a cited fit brief."""
+    configure_logging()
+    config = load_config()
+    if not config.db_path.exists():
+        typer.echo(
+            f"Workspace at {config.data_dir} is not initialized. Nothing was assessed; "
+            "run 'wingman init' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        extract_provider = get_provider(CapabilityClass.EXTRACT_FAST, config)
+        assess_provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+        with Storage(config.db_path) as storage:
+            report = assess_job(job, config, storage, extract_provider, assess_provider)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        typer.echo(f"assess failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except ProposalParseError as exc:
+        typer.echo(
+            f"assess failed: {exc}. The source record was preserved; no opportunity was "
+            "created or changed. Re-run 'wingman assess' to retry.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"Opportunity: {report.title} ({report.opportunity_id})")
+    verdicts = "  ".join(f"{name}: {count}" for name, count in sorted(report.verdicts.items()))
+    typer.echo(f"Requirements: {report.requirements}  {verdicts}")
+    for rejected in report.rejected_requirements:
+        typer.echo(f"  rejected requirement {rejected.name!r}: {rejected.reason}")
+    for note in report.downgraded:
+        typer.echo(f"  validation: {note}")
+    typer.echo(f"Next action: {report.next_action}")
+    typer.echo(f"Wrote {report.brief_json_path}")
+    typer.echo(f"Wrote {report.brief_md_path}")
 
 
 if __name__ == "__main__":

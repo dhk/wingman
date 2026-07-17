@@ -1,0 +1,8 @@
+{"requirements": [
+  {"name": "Kubernetes operations", "detail": "",
+   "kind": "required", "quotes": ["Kubernetes platform operations at scale."]},
+  {"name": "German fluency", "detail": "",
+   "kind": "required", "quotes": ["Fluent written German."]},
+  {"name": "Willing to relocate to Mars", "detail": "",
+   "kind": "required", "quotes": ["Relocation to our Mars office is required."]}
+]}

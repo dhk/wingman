@@ -1,0 +1,7 @@
+{
+  "purpose": "Canaries: (1) a requirement quoting text absent from the JD must be rejected; (2) a 'met' verdict citing an invented profile item ID must lose the ID and be downgraded to 'unknown'; (3) an unassessed requirement is recorded as 'unknown', never silently dropped.",
+  "expected_requirements": 2,
+  "expected_rejected_requirements": ["Willing to relocate to Mars"],
+  "expected_verdicts": {"unknown": 1, "gap": 1},
+  "min_adjustments": 2
+}

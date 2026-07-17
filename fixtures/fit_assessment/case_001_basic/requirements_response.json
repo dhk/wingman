@@ -1,0 +1,10 @@
+{"requirements": [
+  {"name": "Python data pipelines", "detail": "5+ years building data pipelines in Python.",
+   "kind": "required", "quotes": ["5+ years building data pipelines in Python."]},
+  {"name": "Apache Kafka in production", "detail": "",
+   "kind": "required", "quotes": ["Production experience with Apache Kafka."]},
+  {"name": "Leading critical migrations", "detail": "",
+   "kind": "required", "quotes": ["Experience leading migrations of critical systems."]},
+  {"name": "dbt familiarity", "detail": "",
+   "kind": "preferred", "quotes": ["Familiarity with dbt."]}
+]}
