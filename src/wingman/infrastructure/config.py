@@ -31,6 +31,10 @@ class Config(BaseModel):
     def reports_dir(self) -> Path:
         return self.data_dir / "reports"
 
+    @property
+    def models_config_path(self) -> Path:
+        return self.data_dir / "models.toml"
+
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
     """Resolve the data directory: WINGMAN_DATA_DIR if set, else the platform user data dir.

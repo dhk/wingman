@@ -8,9 +8,13 @@ from pathlib import Path
 
 import typer
 
+from wingman.agents.profile_curator import ProposalParseError
+from wingman.application.ingest import IngestError, ingest_resume
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.storage import Storage
+from wingman.providers.base import CapabilityClass, ProviderError
+from wingman.providers.router import DEFAULT_MODELS_TOML, ModelConfigError, get_provider
 
 app = typer.Typer(help="Wingman: local-first career intelligence.")
 
@@ -55,6 +59,8 @@ def init() -> None:
             err=True,
         )
         raise typer.Exit(code=1) from exc
+    if not config.models_config_path.exists():
+        config.models_config_path.write_text(DEFAULT_MODELS_TOML, encoding="utf-8")
     typer.echo(f"Workspace ready at {config.data_dir} (from {config.data_dir_source}).")
 
 
@@ -115,9 +121,54 @@ def status() -> None:
         typer.echo("Database: not initialized — run 'wingman init'.")
         return
     with Storage(config.db_path) as storage:
-        count = storage.count_source_records()
+        sources = storage.count_source_records()
+        items = storage.count_profile_items()
     typer.echo(f"Database: {config.db_path}")
-    typer.echo(f"Source records: {count}")
+    typer.echo(f"Source records: {sources}")
+    typer.echo(f"Profile items: {items}")
+
+
+@app.command()
+def ingest(
+    resume: Path = typer.Argument(..., help="Path to a resume in Markdown or plain text."),
+) -> None:
+    """Ingest a resume into the canonical profile and write career.json / career.md."""
+    configure_logging()
+    config = load_config()
+    if not config.db_path.exists():
+        typer.echo(
+            f"Workspace at {config.data_dir} is not initialized. Nothing was ingested; "
+            "run 'wingman init' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        provider = get_provider(CapabilityClass.EXTRACT_FAST, config)
+        with Storage(config.db_path) as storage:
+            report = ingest_resume(resume, config, storage, provider)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        typer.echo(f"ingest failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except ProposalParseError as exc:
+        typer.echo(
+            f"ingest failed: {exc}. The source record was preserved; the profile was not "
+            "changed. Re-run 'wingman ingest' to retry the extraction.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"Source record: {report.source_record_id}" + (" (reused)" if report.source_reused else "")
+    )
+    typer.echo(
+        f"Accepted: {report.accepted}  Duplicates skipped: {report.skipped_duplicates}  "
+        f"Conflicts: {report.conflicts}  Rejected: {len(report.rejected)}"
+    )
+    for rejected in report.rejected:
+        typer.echo(f"  rejected {rejected.name!r}: {rejected.reason}")
+    typer.echo(f"Model: {report.provider}/{report.model} (prompt {report.prompt_version})")
+    typer.echo(f"Wrote {report.career_json_path}")
+    typer.echo(f"Wrote {report.career_md_path}")
 
 
 if __name__ == "__main__":
