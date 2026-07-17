@@ -7,7 +7,9 @@ plus CorpusDocuments indexed for full-text search (RFC-007).
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import zipfile
 from datetime import UTC, datetime
 from html.parser import HTMLParser
@@ -108,9 +110,51 @@ def extract_document(raw: str, name: str, suffix: str) -> tuple[str, str]:
     return _title_from_text(raw, name), raw
 
 
-def _iter_inputs(path: Path) -> tuple[list[tuple[str, str]], list[str], list[FileFailure]]:
-    """Collect (name, raw text) for every supported input; report the rest."""
-    supported: list[tuple[str, str]] = []
+class _Candidate(BaseModel):
+    """One supported input file, with optional metadata from an export manifest."""
+
+    name: str
+    raw: str
+    title_override: str | None = None
+    published_at: datetime | None = None
+
+
+def _parse_posts_manifest(
+    archive: zipfile.ZipFile,
+) -> dict[str, tuple[str | None, datetime | None]] | None:
+    """Read a root-level Substack-style posts.csv: post_id -> (title, publish date).
+
+    Returns None when no root posts.csv exists or it cannot be parsed — the
+    archive is then ingested without metadata rather than failing outright.
+    """
+    if "posts.csv" not in archive.namelist():
+        return None
+    manifest: dict[str, tuple[str | None, datetime | None]] = {}
+    try:
+        with archive.open("posts.csv") as handle:
+            reader = csv.DictReader(io.TextIOWrapper(handle, encoding="utf-8"))
+            for row in reader:
+                post_id = (row.get("post_id") or "").strip()
+                if not post_id:
+                    continue
+                title = (row.get("title") or "").strip() or None
+                published: datetime | None = None
+                raw_date = (row.get("post_date") or "").strip()
+                if raw_date:
+                    try:
+                        published = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+                    except ValueError:
+                        published = None
+                manifest[post_id] = (title, published)
+    except (UnicodeDecodeError, csv.Error) as exc:
+        _logger.warning("posts.csv manifest could not be parsed (%s); ingesting without it", exc)
+        return None
+    return manifest
+
+
+def _iter_inputs(path: Path) -> tuple[list[_Candidate], list[str], list[FileFailure]]:
+    """Collect every supported input file; report the rest."""
+    supported: list[_Candidate] = []
     unsupported: list[str] = []
     failures: list[FileFailure] = []
 
@@ -119,7 +163,9 @@ def _iter_inputs(path: Path) -> tuple[list[tuple[str, str]], list[str], list[Fil
             unsupported.append(file_path.name)
             return
         try:
-            supported.append((file_path.name, file_path.read_text(encoding="utf-8")))
+            supported.append(
+                _Candidate(name=file_path.name, raw=file_path.read_text(encoding="utf-8"))
+            )
         except (OSError, UnicodeDecodeError) as exc:
             failures.append(FileFailure(name=file_path.name, reason=str(exc)))
 
@@ -129,17 +175,30 @@ def _iter_inputs(path: Path) -> tuple[list[tuple[str, str]], list[str], list[Fil
     elif path.suffix.lower() == ".zip":
         try:
             with zipfile.ZipFile(path) as archive:
+                manifest = _parse_posts_manifest(archive)
                 for entry in sorted(archive.namelist()):
                     entry_name = Path(entry).name
                     if not entry_name or entry.endswith("/"):
                         continue
+                    if entry == "posts.csv" and manifest is not None:
+                        continue  # the root manifest is consumed as metadata, not content
                     if Path(entry_name).suffix.lower() not in SUPPORTED_SUFFIXES:
                         unsupported.append(entry_name)
                         continue
                     try:
-                        supported.append((entry_name, archive.read(entry).decode("utf-8")))
+                        raw = archive.read(entry).decode("utf-8")
                     except UnicodeDecodeError as exc:
                         failures.append(FileFailure(name=entry_name, reason=str(exc)))
+                        continue
+                    title, published = (manifest or {}).get(Path(entry_name).stem, (None, None))
+                    supported.append(
+                        _Candidate(
+                            name=entry_name,
+                            raw=raw,
+                            title_override=title,
+                            published_at=published,
+                        )
+                    )
         except (OSError, zipfile.BadZipFile) as exc:
             raise IngestError(
                 f"could not read archive {path} ({exc}). Nothing was added; "
@@ -159,13 +218,16 @@ def add_to_corpus(
     added = 0
     skipped = 0
     titles: list[str] = []
-    for name, raw in supported:
+    for candidate in supported:
+        name, raw = candidate.name, candidate.raw
         if not raw.strip():
             failures.append(FileFailure(name=name, reason="file is empty"))
             continue
         # Extract and validate before persisting anything, so a failed add
         # leaves no orphaned SourceRecord or inbox artifact behind.
         title, body = extract_document(raw, name, Path(name).suffix.lower())
+        if candidate.title_override:
+            title = candidate.title_override
         if not body.strip():
             failures.append(FileFailure(name=name, reason="no text could be extracted"))
             continue
@@ -190,6 +252,7 @@ def add_to_corpus(
             source_record_id=record.record_id,
             source_type=source_type,
             title=title,
+            published_at=candidate.published_at,
             word_count=len(body.split()),
         )
         storage.add_corpus_document(document, body)

@@ -60,22 +60,58 @@ def test_re_add_is_idempotent(workspace: Config, tmp_path: Path) -> None:
 
 
 def test_add_substack_style_zip(workspace: Config, tmp_path: Path) -> None:
+    """Real Substack exports: body-only HTML fragments plus a posts.csv manifest."""
     archive = tmp_path / "substack-export.zip"
-    post = (
-        "<html><head><title>On Career Leverage</title></head>"
-        "<body><p>Warm introductions beat cold applications.</p></body></html>"
+    post = "<div><p>Warm introductions beat cold applications.</p></div>"
+    unlisted = "<html><head><title>Not In Manifest</title></head><body><p>Text.</p></body></html>"
+    manifest = (
+        "post_id,post_date,is_published,title,subtitle\n"
+        "123.on-career-leverage,2024-11-05T10:00:00.000Z,true,On Career Leverage,How to ask\n"
     )
     with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("posts.csv", manifest)
         zf.writestr("posts/123.on-career-leverage.html", post)
-        zf.writestr("posts/posts.csv", "id,title\n123,On Career Leverage\n")
+        zf.writestr("posts/999.unlisted.html", unlisted)
+        zf.writestr("email_list.example.csv", "email\nsubscriber@example.com\n")
     with Storage(workspace.db_path) as storage:
         report = add_to_corpus(archive, "substack_post", workspace, storage)
-        assert report.added == 1
-        assert report.skipped_unsupported == ["posts.csv"]
+        # posts.csv is consumed as metadata; the subscriber list stays unsupported
+        assert report.added == 2
+        assert report.skipped_unsupported == ["email_list.example.csv"]
         hits = find_evidence('"warm introductions"', storage)
     assert len(hits) == 1
-    assert hits[0].document.title == "On Career Leverage"
-    assert hits[0].document.source_type == "substack_post"
+    document = hits[0].document
+    assert document.title == "On Career Leverage"
+    assert document.source_type == "substack_post"
+    assert document.published_at is not None
+    assert document.published_at.date().isoformat() == "2024-11-05"
+    assert "Not In Manifest" in report.titles
+
+
+def test_headers_only_manifest_is_consumed_and_nested_one_is_not(
+    workspace: Config, tmp_path: Path
+) -> None:
+    archive = tmp_path / "export.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("posts.csv", "post_id,post_date,is_published,title,subtitle\n")
+        zf.writestr("posts/posts.csv", "not,a,manifest\n")
+        zf.writestr("posts/1.hello.html", "<p>Hello there world.</p>")
+    with Storage(workspace.db_path) as storage:
+        report = add_to_corpus(archive, "substack_post", workspace, storage)
+    assert report.added == 1
+    # only the nested, non-manifest posts.csv is reported as unsupported
+    assert report.skipped_unsupported == ["posts.csv"]
+
+
+def test_corrupt_manifest_does_not_crash_ingestion(workspace: Config, tmp_path: Path) -> None:
+    archive = tmp_path / "export.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("posts.csv", b"\xff\xfe\x00 not utf-8")
+        zf.writestr("posts/1.hello.html", "<p>Hello there world.</p>")
+    with Storage(workspace.db_path) as storage:
+        report = add_to_corpus(archive, "substack_post", workspace, storage)
+    assert report.added == 1
+    assert "posts.csv" in report.skipped_unsupported  # unparseable manifest falls back
 
 
 def test_missing_path_fails_visibly(workspace: Config, tmp_path: Path) -> None:
