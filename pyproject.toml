@@ -5,6 +5,7 @@ description = "Local-first career intelligence and job-search support."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "platformdirs>=4.0",
   "pydantic>=2.8",
   "typer>=0.12",
 ]

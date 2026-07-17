@@ -39,11 +39,24 @@ career.md with evidence references
 - [`docs/EVALUATION.md`](docs/EVALUATION.md): how we measure that Wingman is getting better
 - [`docs/`](docs/): product notes
 
-## Quick Start
+## Install
+
+```bash
+uv tool install git+https://github.com/dhk/wingman
+wingman init
+wingman doctor
+```
+
+The workspace lives in `$WINGMAN_DATA_DIR` if set, otherwise the platform user
+data directory (e.g. `~/.local/share/wingman` on Linux).
+
+## Quick Start (development checkout)
 
 ```bash
 uv sync
+export WINGMAN_DATA_DIR=./data   # keep workspace data inside the repo checkout
 uv run wingman --help
+uv run wingman init
 uv run wingman status
 uv run pytest
 uv run ruff check .

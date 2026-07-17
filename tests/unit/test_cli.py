@@ -5,7 +5,8 @@ from wingman.cli.main import app
 runner = CliRunner()
 
 
-def test_status_command() -> None:
-    result = runner.invoke(app, ["status"])
+def test_help_lists_commands() -> None:
+    result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    assert "Phase 0 scaffold" in result.stdout
+    for command in ("init", "doctor", "status"):
+        assert command in result.stdout
