@@ -3,7 +3,8 @@
 A stdio server for Claude Desktop / Claude Code on the same machine. The
 workspace never leaves the machine; every tool runs the same deterministic
 validation pipelines as the CLI, so the connected model can request work but
-cannot bypass evidence rules. No external actions exist — nothing to approve.
+cannot bypass evidence rules. Tools read and write the local workspace only —
+no network or external-system actions exist, so there is nothing to approve.
 """
 
 from __future__ import annotations
@@ -62,6 +63,7 @@ def evidence(query: str, limit: int = 10) -> str:
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
+    limit = max(1, min(limit, 25))
     try:
         with Storage(config.db_path) as storage:
             hits = find_evidence(query, storage, limit=limit)
@@ -135,8 +137,10 @@ def ingest_resume_text(resume_markdown: str, filename: str = "resume.md") -> str
         return _NOT_INITIALIZED
     if not resume_markdown.strip():
         return "The resume text is empty; nothing was ingested."
+    # Untrusted input: strip any path components so the write stays in the inbox.
+    safe_name = Path(filename).name or "resume.md"
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
-    resume_path = config.inbox_dir / f"{stamp}-{filename}"
+    resume_path = config.inbox_dir / f"{stamp}-{safe_name}"
     resume_path.write_text(resume_markdown, encoding="utf-8")
     try:
         with Storage(config.db_path) as storage:

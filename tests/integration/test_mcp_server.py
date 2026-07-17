@@ -94,3 +94,34 @@ def test_assess_requires_profile_and_fails_visibly(workspace: Path) -> None:
 def test_empty_inputs_do_nothing(workspace: Path) -> None:
     assert "nothing was assessed" in assess_job("   ")
     assert "nothing was ingested" in ingest_resume_text("   ")
+
+
+def test_filename_traversal_is_neutralized(workspace: Path) -> None:
+    config = load_config()
+    response = FIXTURES / "profile_extraction" / "case_001_basic" / "response.json"
+    config.models_config_path.write_text(
+        f'[models.extract_fast]\nprovider = "recorded"\npath = "{response}"\n',
+        encoding="utf-8",
+    )
+    resume = (FIXTURES / "profile_extraction" / "case_001_basic" / "resume.md").read_text(
+        encoding="utf-8"
+    )
+    ingest_resume_text(resume, filename="../../../escape.md")
+    # nothing escaped the inbox: the write landed inside it, basename only
+    assert not (config.data_dir.parent / "escape.md").exists()
+    inbox_names = [p.name for p in config.inbox_dir.iterdir()]
+    assert any(name.endswith("-escape.md") for name in inbox_names)
+    assert all("/" not in name for name in inbox_names)
+
+
+def test_evidence_limit_is_clamped(workspace: Path, tmp_path: Path) -> None:
+    from wingman.application.corpus import add_to_corpus
+    from wingman.infrastructure.storage import Storage
+
+    essay = tmp_path / "essay.md"
+    essay.write_text("# Streaming\n\nApache Kafka everywhere.\n", encoding="utf-8")
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_to_corpus(essay, "writing", config, storage)
+    # a negative limit must not mean "unlimited" — it clamps to a sane floor
+    assert "Streaming" in evidence("kafka", limit=-1)
