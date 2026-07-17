@@ -30,7 +30,9 @@ Append a numbered section with: the decision, the alternatives considered, the r
 
 **Rationale.** Every choice favors a tool that is fast, boring, and widely understood. SQLite in particular keeps the local-first promise trivially true: the user's data is one file on their disk.
 
-**Revisit if.** Multi-device sync becomes a real requirement (storage), or the CLI grows subcommand complexity Typer handles poorly.
+**Note — DuckDB evaluated (2026-07), not adopted.** Wingman's workload is transactional (small inserts, point lookups, single-row evidence merges over thousands of rows), the corpus search depends on SQLite FTS5's incremental indexing and `snippet()` (RFC-007), the stdlib dependency footprint is a stated feature, and career data is a decades-horizon archive where SQLite's format stability is the conservative pick — so DuckDB offers no realizable advantage as the system of record. It remains the intended **analytical attachment** if a genuinely columnar workload arrives (the EVALUATION.md model-comparison matrix, Phase 5 prioritization/funnel analytics): DuckDB's `sqlite` scanner queries `wingman.db` in place, so adoption then is a read-side query engine over the existing store, not a migration.
+
+**Revisit if.** Multi-device sync becomes a real requirement (storage), or the CLI grows subcommand complexity Typer handles poorly; for the analytical DuckDB attachment specifically, when a columnar workload (evaluation matrices, Phase 5 analytics) measurably outgrows SQLite queries.
 
 ## RFC-003: Deterministic controls, not model judgment
 
