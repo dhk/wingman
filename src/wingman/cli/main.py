@@ -276,6 +276,66 @@ def demo() -> None:
 
 
 @app.command()
+def sync() -> None:
+    """Fetch every watched source and embed whatever is new — one command.
+
+    The maintenance loop as a single explicit invocation (RFC-009 holds:
+    running this command is the consent). Per-source failures are reported
+    and skipped, never silently hidden. Embedding degrades per RFC-010: with
+    no VOYAGE_API_KEY, either configure the local 'hashed' provider in
+    models.toml or expect the embed step to fail visibly (exit 1) while the
+    fetched posts are kept.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "synced")
+    exit_code = 0
+    with Storage(config.db_path) as storage:
+        targets = [person for person in storage.list_people() if person.sources]
+        if not targets:
+            typer.echo("No people have sources configured — nothing to sync.")
+            return
+        fetched = 0
+        failed = 0
+        new_posts = 0
+        for person in targets:
+            try:
+                report = fetch_person_feed(person, config, storage)
+            except IngestError as exc:
+                failed += 1
+                typer.echo(f"  {person.name}: fetch failed: {exc}", err=True)
+                continue
+            fetched += 1
+            new_posts += report.added
+            if report.added:
+                typer.echo(f"  {person.name}: +{report.added} new")
+        typer.echo(
+            f"Fetched {fetched}/{len(targets)} sources  new posts: {new_posts}"
+            + (f"  failures: {failed}" if failed else "")
+        )
+        if fetched == 0:
+            typer.echo("Every fetch failed; embedding was not attempted.", err=True)
+            raise typer.Exit(code=1)
+        try:
+            provider = get_embedding_provider(config)
+            embed_report = embed_missing(storage, provider)
+            typer.echo(
+                f"Embedded {embed_report.corpus_embedded + embed_report.external_embedded} "
+                f"new documents ({embed_report.provider}/{embed_report.model})"
+            )
+        except (ModelConfigError, EmbeddingError) as exc:
+            typer.echo(
+                f"Embedding skipped: {exc}\nFetched posts were kept; keyword search works. "
+                "Fix the embeddings configuration and re-run 'wingman sync' or 'wingman embed'.",
+                err=True,
+            )
+            exit_code = 1
+    if exit_code:
+        raise typer.Exit(code=exit_code)
+    typer.echo("Sync complete.")
+
+
+@app.command()
 def status() -> None:
     """Show the current Wingman workspace status."""
     configure_logging()
