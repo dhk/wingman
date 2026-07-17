@@ -108,3 +108,21 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 **Rationale.** The primary way this product is actually used is through a Claude conversation. An MCP server turns that from copy-paste into typed tool calls while keeping Wingman's guarantees in Wingman's code. Stdio-local is the smallest server that delivers this, and adds no credentials, ports, or tenancy.
 
 **Revisit if.** A non-MCP consumer appears (REST/web UI), or remote access from claude.ai web/mobile is wanted (remote MCP with auth — a separate durable decision).
+
+## RFC-009: Read-only public-feed fetching, explicitly invoked
+
+**Decision.** Wingman's first network access: `wingman people fetch` reads the public, unauthenticated RSS feed of a person the user has explicitly put on their watchlist. The rules, enforced in one place (`infrastructure/fetch.py`):
+
+- **Explicit invocation only.** A fetch happens when the user runs the command — never scheduled, never in the background, never as a side effect of another operation.
+- **Read-only, HTTPS-only, unauthenticated.** GET requests to public endpoints; no credentials exist to attach, and non-HTTPS URLs are rejected.
+- **Public content only, from declared sources.** Feeds belong to people the user added by hand or seeded from their own LinkedIn connections export. No crawling, no discovery beyond what the user configured. Scraping authenticated surfaces (LinkedIn itself) is explicitly out — exports only.
+- **Fetched bytes enter the normal provenance pipeline.** Each post becomes a content-hashed immutable SourceRecord with the raw HTML archived in the inbox, deduplicated by hash, indexed as an ExternalDocument — separate from the user's own corpus so "my evidence" and "their point of view" never mix.
+- **Failures are visible.** A feed that cannot be fetched or parsed reports an error; it never degrades silently into an empty result.
+
+**Durable decision** — the *invariants* above (explicit, read-only, public, provenance-tracked) are the durable part; the set of supported feed types may grow.
+
+**Alternatives.** Live connectors with scheduled sync (background network activity in a local-first privacy tool — deferred to Phase 8's connector architecture, which requires its own durable entry); scraping profile pages (violates platform terms and the least-privilege invariant); requiring manual downloads for everything (fails the reality that public writing is the product's raw material for relationship intelligence).
+
+**Rationale.** Relationship intelligence needs other people's public writing, and an RSS feed is that writing in its author-published, terms-of-service-clean form. Confining network access to one function with hard invariants keeps the local-first promise auditable: the workspace never talks to the network unless the user just asked it to, and everything fetched is traceable to the command that fetched it.
+
+**Revisit if.** Feed refresh becomes tedious enough that the user wants scheduled sync — that is Phase 8's connector architecture decision, not a quiet relaxation of this entry.
