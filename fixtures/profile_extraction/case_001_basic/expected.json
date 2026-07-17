@@ -1,0 +1,6 @@
+{
+  "purpose": "Happy path: well-evidenced items are accepted and fully cited.",
+  "min_accepted": 4,
+  "must_accept_names": ["Python", "Apache Kafka"],
+  "must_reject_names": []
+}

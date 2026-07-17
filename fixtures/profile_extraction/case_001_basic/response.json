@@ -1,0 +1,16 @@
+{"items": [
+  {"kind": "achievement", "name": "Billing pipeline streaming migration",
+   "detail": "Cut report latency from 24 hours to 20 minutes.",
+   "classification": "fact", "confidence": 0.95,
+   "quotes": ["Led the migration of the billing pipeline to a streaming architecture, cutting\n  report latency from 24 hours to 20 minutes."]},
+  {"kind": "achievement", "name": "Python ETL services at 2 TB/day",
+   "detail": "Built and maintained ETL services processing 2 TB per day.",
+   "classification": "fact", "confidence": 0.9,
+   "quotes": ["Built and maintained Python ETL services processing 2 TB per day."]},
+  {"kind": "skill", "name": "Python", "detail": "",
+   "classification": "fact", "confidence": 0.95,
+   "quotes": ["Python, SQL, Apache Kafka, dbt."]},
+  {"kind": "skill", "name": "Apache Kafka", "detail": "",
+   "classification": "fact", "confidence": 0.9,
+   "quotes": ["Python, SQL, Apache Kafka, dbt."]}
+]}

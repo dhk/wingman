@@ -57,3 +57,39 @@ def test_doctor_after_init_passes(workspace: Path) -> None:
     assert result.exit_code == 0
     assert "All checks passed." in result.stdout
     assert "[ok] database" in result.stdout
+
+
+def test_init_writes_models_config(workspace: Path) -> None:
+    runner.invoke(app, ["init"])
+    models = (workspace / "models.toml").read_text(encoding="utf-8")
+    assert "[models.extract_fast]" in models
+
+
+def test_ingest_before_init_fails_with_guidance(workspace: Path, tmp_path: Path) -> None:
+    resume = tmp_path / "resume.md"
+    resume.write_text("Skills: Python.\n", encoding="utf-8")
+    result = runner.invoke(app, ["ingest", str(resume)])
+    assert result.exit_code == 1
+    assert "wingman init" in result.output
+
+
+def test_ingest_with_recorded_provider(workspace: Path, tmp_path: Path) -> None:
+    runner.invoke(app, ["init"])
+    response = tmp_path / "response.json"
+    response.write_text(
+        '{"items": [{"kind": "skill", "name": "Python", "detail": "",'
+        ' "classification": "fact", "confidence": 0.9, "quotes": ["Skills: Python."]}]}',
+        encoding="utf-8",
+    )
+    (workspace / "models.toml").write_text(
+        f'[models.extract_fast]\nprovider = "recorded"\npath = "{response}"\n',
+        encoding="utf-8",
+    )
+    resume = tmp_path / "resume.md"
+    resume.write_text("# Jo\n\nSkills: Python.\n", encoding="utf-8")
+    result = runner.invoke(app, ["ingest", str(resume)])
+    assert result.exit_code == 0, result.output
+    assert "Accepted: 1" in result.output
+    assert (workspace / "reports" / "career.md").exists()
+    status = runner.invoke(app, ["status"])
+    assert "Profile items: 1" in status.stdout
