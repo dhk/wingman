@@ -2,8 +2,10 @@
 
 Entirely deterministic — the export CSVs are structured data, so no model is
 involved (RFC-003). Each consumed CSV becomes an immutable SourceRecord; every
-profile item carries verbatim cell text as evidence. Connections, messages,
-and other relationship or tracking files are deliberately not touched here.
+profile item carries verbatim cell text as evidence — the Description cell for
+positions (falling back to the Title cell for description-less positions), the
+skill name, or the recommendation text. Connections, messages, and other
+relationship or tracking files are deliberately not touched here.
 """
 
 from __future__ import annotations
@@ -142,10 +144,11 @@ def _recommendation_items(rows: list[dict[str, str]], record: SourceRecord) -> l
         job_title = (row.get("Job Title") or "").strip()
         company = (row.get("Company") or "").strip()
         byline = ", ".join(part for part in (job_title, company) if part)
+        recommender = " ".join(part for part in (first, last) if part)
         items.append(
             _item(
                 ProfileItemKind.TESTIMONIAL,
-                f"Recommendation from {first} {last}".strip(),
+                f"Recommendation from {recommender}",
                 byline,
                 text,
                 record,
