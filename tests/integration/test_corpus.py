@@ -94,6 +94,17 @@ def test_bad_search_query_fails_visibly(workspace: Config, tmp_path: Path) -> No
             find_evidence('"unbalanced', storage)
 
 
+def test_textless_html_leaves_no_orphaned_source_record(workspace: Config, tmp_path: Path) -> None:
+    page = tmp_path / "empty.html"
+    page.write_text("<html><head><script>let x = 1;</script></head><body></body></html>")
+    with Storage(workspace.db_path) as storage:
+        report = add_to_corpus(page, "writing", workspace, storage)
+        assert report.added == 0
+        assert [f.reason for f in report.failures] == ["no text could be extracted"]
+        assert storage.count_source_records() == 0
+    assert list(workspace.inbox_dir.iterdir()) == []
+
+
 def test_empty_file_reported_not_stored(workspace: Config, tmp_path: Path) -> None:
     blank = tmp_path / "blank.md"
     blank.write_text("   \n", encoding="utf-8")

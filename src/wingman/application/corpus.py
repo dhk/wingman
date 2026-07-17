@@ -109,7 +109,7 @@ def extract_document(raw: str, name: str, suffix: str) -> tuple[str, str]:
 
 
 def _iter_inputs(path: Path) -> tuple[list[tuple[str, str]], list[str], list[FileFailure]]:
-    """Yield (name, raw text) for every supported input; report the rest."""
+    """Collect (name, raw text) for every supported input; report the rest."""
     supported: list[tuple[str, str]] = []
     unsupported: list[str] = []
     failures: list[FileFailure] = []
@@ -163,6 +163,12 @@ def add_to_corpus(
         if not raw.strip():
             failures.append(FileFailure(name=name, reason="file is empty"))
             continue
+        # Extract and validate before persisting anything, so a failed add
+        # leaves no orphaned SourceRecord or inbox artifact behind.
+        title, body = extract_document(raw, name, Path(name).suffix.lower())
+        if not body.strip():
+            failures.append(FileFailure(name=name, reason="no text could be extracted"))
+            continue
         content_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
         record = storage.get_source_record_by_hash(content_hash)
         if record is not None and storage.find_corpus_document_by_source(record.record_id):
@@ -180,10 +186,6 @@ def add_to_corpus(
                 content_hash=content_hash,
             )
             storage.add_source_record(record)
-        title, body = extract_document(raw, name, Path(name).suffix.lower())
-        if not body.strip():
-            failures.append(FileFailure(name=name, reason="no text could be extracted"))
-            continue
         document = CorpusDocument(
             source_record_id=record.record_id,
             source_type=source_type,
