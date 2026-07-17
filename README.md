@@ -52,9 +52,17 @@ RFC-009):
 ```bash
 wingman people import-connections linkedin-export.zip
 wingman people add "Jane Author" --substack https://example.substack.com
+wingman people add-feed "Jane Author" https://medium.com/@jane   # any RSS/Atom, autodiscovered
+wingman people add-feed "Scott Brady" https://firm.example.com/insights --org "Firm"  # feed-less blogs too
 wingman people fetch --all
 wingman people evidence "developer tools"
 ```
+
+Beyond Substack: `add-feed` takes any public feed or blog homepage — it
+autodiscovers RSS/Atom (Medium, WordPress, Ghost) and, for feed-less sites
+(most VC and startup blogs), watches the blog index page instead, honestly
+attributing those posts to the organization (RFC-011). Attachment always
+requires your confirmation.
 
 Find people who think about what you think about — embeddings-backed
 similarity over their writing and yours (RFC-010). `wingman embed` is the one

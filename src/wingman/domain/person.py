@@ -21,6 +21,30 @@ class PersonOrigin(StrEnum):
     LINKEDIN_CONNECTIONS = "linkedin_connections"
 
 
+class FeedKind(StrEnum):
+    RSS = "rss"  # RSS 2.0 or Atom — parsed by format, one name for both
+    INDEX_PAGE = "index_page"  # a blog index page on a site with no feed (RFC-011)
+
+
+class FeedAttribution(StrEnum):
+    PERSON = "person"
+    ORGANIZATION = "organization"
+
+
+class FeedSource(BaseModel):
+    """One public source of a person's writing (RFC-011).
+
+    attribution=organization marks sources like a company blog, where posts
+    are honestly attributed to the organization (org_name) rather than
+    presented as the person's own byline.
+    """
+
+    url: str
+    kind: FeedKind = FeedKind.RSS
+    attribution: FeedAttribution = FeedAttribution.PERSON
+    org_name: str | None = None
+
+
 class Person(BaseModel):
     """One watched or known person; identified by a normalized name key."""
 
@@ -28,6 +52,7 @@ class Person(BaseModel):
     name: str = Field(min_length=1)
     origin: PersonOrigin
     substack_url: str | None = None
+    feeds: list[FeedSource] = Field(default_factory=list)
     linkedin_url: str | None = None
     company: str | None = None
     position: str | None = None
@@ -39,9 +64,23 @@ class Person(BaseModel):
     def name_key(self) -> str:
         return " ".join(self.name.lower().split())
 
+    @property
+    def sources(self) -> list[FeedSource]:
+        """Every configured source: the Substack URL (as a feed) plus added feeds."""
+        configured: list[FeedSource] = []
+        if self.substack_url:
+            configured.append(FeedSource(url=self.substack_url.rstrip("/") + "/feed"))
+        configured.extend(self.feeds)
+        return configured
+
 
 class ExternalDocument(BaseModel):
-    """One public document by a watched person, backed by a SourceRecord."""
+    """One public document by a watched person, backed by a SourceRecord.
+
+    organization is set when the document is honestly attributed to an
+    organization's outlet (a company blog) rather than the person's own
+    byline (RFC-011).
+    """
 
     doc_id: str = Field(default_factory=lambda: str(uuid4()))
     source_record_id: str
@@ -49,6 +88,7 @@ class ExternalDocument(BaseModel):
     source_type: str
     title: str
     url: str | None = None
+    organization: str | None = None
     published_at: datetime | None = None
     word_count: int
     added_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
