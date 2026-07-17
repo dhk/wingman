@@ -96,3 +96,13 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 **Rationale.** One person's writing is hundreds of documents, not millions; FTS5 is deterministic, ships inside the stdlib's SQLite, keeps the local-first promise (the index lives in the same wingman.db file), and its failure mode is "no results", never a fabricated match. Retrieval feeds model steps (drafting, assessment) that already validate quotes verbatim, so a keyword-recall index is the right floor.
 
 **Revisit if.** Drafting or assessment measurably misses relevant corpus evidence that semantic search would find — then embeddings become a documented decision with the storage and provider trade-offs written down.
+
+## RFC-008: A local MCP server as the second presentation surface
+
+**Decision.** Wingman exposes its use cases (status, evidence search, career profile, job assessment, resume ingestion) as a stdio MCP server (`wingman-mcp`) for MCP clients running on the same machine — Claude Desktop and Claude Code. The server is a thin presentation layer over the application layer: every tool runs the same deterministic validation pipelines as the CLI, and the connected model cannot bypass evidence rules. The workspace stays on the user's machine (stdio, no network listener), so the local-first invariant is untouched.
+
+**Alternatives.** A REST API + web UI (a bigger surface with auth/TLS obligations, and no consumer today); a remote/hosted MCP server for claude.ai web and mobile (requires a network listener and auth — deferred until wanted, and then it gets its own entry); driving the CLI through a generic shell tool (works, but loses typed inputs and puts the workspace behind an unrestricted shell rather than five narrow tools).
+
+**Rationale.** The primary way this product is actually used is through a Claude conversation. An MCP server turns that from copy-paste into typed tool calls while keeping Wingman's guarantees in Wingman's code. Stdio-local is the smallest server that delivers this, and adds no credentials, ports, or tenancy.
+
+**Revisit if.** A non-MCP consumer appears (REST/web UI), or remote access from claude.ai web/mobile is wanted (remote MCP with auth — a separate durable decision).

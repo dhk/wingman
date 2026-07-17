@@ -88,6 +88,36 @@ wingman doctor
 The workspace lives in `$WINGMAN_DATA_DIR` if set, otherwise the platform user
 data directory (e.g. `~/.local/share/wingman` on Linux).
 
+## Use from Claude (MCP)
+
+`wingman-mcp` exposes the workspace as MCP tools — status, evidence search,
+the cited career profile, job assessment, and resume ingestion — running the
+same deterministic validation as the CLI (RFC-008). Stdio only: nothing
+listens on the network and the workspace stays on this machine.
+
+Claude Code:
+
+```bash
+claude mcp add wingman -- wingman-mcp
+```
+
+Claude Desktop — add to `claude_desktop_config.json` (macOS:
+`~/Library/Application Support/Claude/claude_desktop_config.json`), using the
+absolute path from `which wingman-mcp` because the app does not inherit your
+shell PATH:
+
+```json
+{
+  "mcpServers": {
+    "wingman": { "command": "/Users/you/.local/bin/wingman-mcp" }
+  }
+}
+```
+
+Model-backed tools (assess, ingest) need `ANTHROPIC_API_KEY` in the server's
+environment; add `"env": {"ANTHROPIC_API_KEY": "..."}` to the entry if your
+key is not set system-wide.
+
 ## Quick Start (development checkout)
 
 ```bash
