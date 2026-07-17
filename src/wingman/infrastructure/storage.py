@@ -51,7 +51,10 @@ class Storage:
     def add_source_record(self, record: SourceRecord) -> None:
         try:
             self._conn.execute(
-                "INSERT INTO source_records VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO source_records"
+                " (record_id, source_type, source_locator, content_hash,"
+                " source_timestamp, ingested_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     record.record_id,
                     record.source_type,
