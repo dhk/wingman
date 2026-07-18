@@ -206,6 +206,26 @@ def _company_vectors(storage: Storage) -> dict[str, _CompanySignal]:
     return signals
 
 
+def company_alignment(storage: Storage, name: str) -> float | None:
+    """Cosine of a company's aggregate vector against the user's corpus, as enrichment.
+
+    Returns None whenever the comparison is unavailable (no embeddings on
+    either side, or mixed models) — callers use this to annotate, never to
+    gate, so it degrades silently instead of raising.
+    """
+    try:
+        _require_one_model(storage)
+        reference = _corpus_vector(storage)
+        if reference is None:
+            return None
+        signal = _company_vectors(storage).get(_company_key(name))
+        if signal is None:
+            return None
+        return _dot(reference, _mean(signal.vectors))
+    except IngestError:
+        return None
+
+
 def _rank_companies(
     reference: list[float],
     signals: dict[str, _CompanySignal],
