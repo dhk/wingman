@@ -57,6 +57,7 @@ def test_all_tools_are_registered() -> None:
         "company_similar",
         "company_like",
         "company_dossier",
+        "export_pdf",
     }
 
 

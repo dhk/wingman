@@ -94,6 +94,13 @@ wingman company like "DataCo" "StreamCorp"   # near the centroid of both compani
 wingman company dossier "DataCo"             # dated snapshot → reports/companies/
 ```
 
+Print-ready exports (US Letter, styled by the site design system, rendered
+with your own `md-to-pdf` — wingman writes Markdown + CSS, never runs a
+browser): `wingman export career` (portrait one-pager, every claim cited),
+`wingman export company "DataCo"`, and `wingman export person "Jane Author"`
+— a landscape three-column sheet (outreach brief | point of view | related)
+with clickable source links. Files land in `reports/pdf/`.
+
 Company signals come from the people you watch: each embedded post counts
 toward the author's `--company` and, for organization-attributed feeds (a
 firm blog), toward that organization. The dossier composes what the
