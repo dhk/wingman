@@ -11,14 +11,21 @@ and company dossiers — CLI and MCP in lockstep — on top of the existing
 profile/corpus/assessment core.
 
 ## Where Things Stand
-PRs #13–#26 are all merged; the agreed queue is done. The pipeline now runs
-end to end: LinkedIn-seeded watchlist → feeds (Substack/Medium/RSS/Atom/index
-pages, RFC-011) → FTS evidence → Voyage embeddings + cosine similarity
-(RFC-010, people AND companies) → recommendations-graph discovery →
-evidence-validated POV cards → outreach briefs (talking points + draft intro,
-never sent, RFC-006) → dated company dossiers (deterministic composition,
-RFC-012). MCP server has full CLI parity at 22 tools (RFC-008 parity
-principle). 169 tests; checks = pytest, ruff check/format, mypy strict.
+PRs #13–#40 are all merged. Everything runs end to end and is orchestrated:
+resume imports (PDF/DOCX/LaTeX/Google URLs, RFC-013), feeds incl. smarter
+discovery (anchors + root paths), news snapshots via Google News RSS
+(RFC-014), embeddings/similarity (people + companies), POV cards with
+dimensions (values/attitude/technical/strategy), own-corpus POV
+('wingman pov'), outreach briefs with purposes + intro bullets, company
+dossiers (RFC-012), Letter exports styled by the DHK design system
+(career portrait, company, person 2x2 briefing dock: brief|POV|
+background|news; --html tabbed page that prints as the 2x2),
+'wingman make-it-so' (alias miso — the easy daily command, fetch→news→
+embed→pov→brief→both exports with honest per-step results), and
+watchlists ('watchlist add|remove|list|show|run' cycling miso). MCP
+parity at 29 tools. 210 tests; checks = pytest, ruff check/format,
+mypy strict. Copilot review quota exhausted mid-day — later PRs merged
+on green CI + local suite per precedent.
 
 ## Technical Decisions (durable ones live in docs/RFC.md — the authoritative record)
 
@@ -72,9 +79,12 @@ compose validated artifacts with [fact]/[inference] labels.
   push is branch-scoped (tags 403).
 
 ## Next Actions
-- [ ] User-side payoff loop: pull + reinstall → seed script → add the 3
-      investor targets → `wingman sync` → similar/discover/pov/brief/dossier
-      on real data
+- [ ] User-side daily loop: pull + reinstall → 'wingman watchlist add
+      investors ...' → 'wingman watchlist run investors --out ~/Downloads'
+- [ ] Marko outreach: interview done in-session (lead: democratize-the-doing/
+      centralize-the-meaning symmetry; ask: where does semantic-layer
+      authority live when agents query; purpose: advice/idea-exchange) —
+      user still to compose + send
 - [ ] Backlog, in no committed order: `wingman backup` command; remote MCP
       for claude.ai web/mobile (needs its own RFC); Phase 3 continuation
       (approved-source research plan — the network-scope decision RFC-012
