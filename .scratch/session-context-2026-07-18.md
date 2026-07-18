@@ -43,6 +43,13 @@ cite a card stance exactly AND quote the user's corpus verbatim; zero
 survivors stores nothing. Company dossiers skip the model entirely and
 compose validated artifacts with [fact]/[inference] labels.
 
+## User Environment
+- All repos live at ~/Documents/dev — wingman is ~/Documents/dev/wingman.
+  Never write 'cd ~/wingman' in instructions.
+- Workspace: ~/Library/Application Support/wingman (path contains a space —
+  always quote it in shell commands).
+- Renders PDFs with 'npx md-to-pdf'; wants exports in custom folders (--out).
+
 ## Authoritative Inputs
 - User's Substack: dhkondata (export zip workflow kept, per user decision)
 - Subscriptions: 29 publications mined from Gmail (seed-subscriptions.sh sent
