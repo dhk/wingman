@@ -129,16 +129,16 @@ def test_person_export_is_landscape_three_columns_with_links(workspace: Path) ->
         watcher, _ = add_person("Scott Watcher", storage)
         from wingman.application.people import attach_feed
 
-        attach_feed(
-            watcher,
-            FeedSource(
-                url="https://explainco.com/blog",
-                kind=FeedKind.INDEX_PAGE,
-                attribution=FeedAttribution.ORGANIZATION,
-                org_name="ExplainCo",
-            ),
-            storage,
+        org_feed = FeedSource(
+            url="https://explainco.com/blog",
+            kind=FeedKind.INDEX_PAGE,
+            attribution=FeedAttribution.ORGANIZATION,
+            org_name="ExplainCo",
         )
+        attach_feed(watcher, org_feed, storage)
+        # Jane carries the same org feed herself — the Related column must not
+        # list the URL twice (company link + feed row)
+        person = attach_feed(person, org_feed, storage)
         fetch_person_feed(person, config, storage, fetcher=lambda url: FEED.encode())
         doc_id = storage.list_external_documents(person.person_id)[0].doc_id
         build_pov_card(
@@ -193,6 +193,10 @@ def test_person_export_is_landscape_three_columns_with_links(workspace: Path) ->
     assert 'href="https://linkedin.com/in/janeauthor"' in text
     assert 'href="mailto:jane@explainco.com"' in text
     assert 'href="https://explainco.com/blog">ExplainCo (company)</a>' in text
+    # deduped: the same URL appears once even though Jane also carries the feed
+    assert text.count('href="https://explainco.com/blog"') == 1
+    # landscape density wrapper is present
+    assert '<div class="sheet-page">' in text
     # in common: the user's LinkedIn connection at the same company
     assert "in common — your connections at ExplainCo" in text
     assert "Carol Colleague" in text and "Scott Watcher" not in text.split("in common")[1]

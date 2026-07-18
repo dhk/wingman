@@ -128,6 +128,22 @@ code {
 .tag-attitude { background: rgba(124, 92, 224, 0.10); color: var(--accent-purple); }
 .tag-technical { background: rgba(41, 112, 214, 0.10); color: var(--accent-blue); }
 .tag-strategy { background: rgba(217, 79, 42, 0.10); color: var(--accent-orange); }
+/* landscape density: one page, three columns — every rule below tightens */
+.sheet-page h1 { font-size: 32px; margin: 0 0 2px; }
+.sheet-page > .meta { margin: 0 0 14px; }
+.sheet { font-size: 12.5px; line-height: 1.5; }
+.sheet h2 { font-size: 19px; margin: 0 0 8px; padding-bottom: 5px; }
+.sheet p { margin: 0 0 8px; }
+.sheet ul { margin: 0 0 8px; padding-left: 16px; }
+.sheet li { margin-bottom: 3px; }
+.sheet .meta { margin: 0 0 8px; }
+.sheet .stance { margin: 0 0 12px; }
+.sheet blockquote { padding: 1px 0 1px 12px; margin: 5px 0 8px; }
+.sheet .their, .sheet .yours { margin: 0 0 5px; padding: 1px 0 1px 11px; }
+.sheet .point { margin: 0 0 12px; }
+.sheet .draft-panel { padding: 12px 14px; margin-top: 10px; }
+.sheet .tag { font-size: 8px; padding: 1px 6px; }
+.sheet .warmth { margin: 0 0 4px; }
 """
 
 
@@ -426,7 +442,13 @@ def export_person(name: str, config: Config, storage: Storage, out_dir: Path | N
             if company_url
             else f"<li>{_e(company_label)}</li>"
         )
+    # One row per URL: the company link and an org feed often share an address
+    # (a person's own firm blog), and a repeated link is noise on paper.
+    seen_urls = {url for url in (person.substack_url, company_url) if url}
     for feed in person.feeds:
+        if feed.url in seen_urls:
+            continue
+        seen_urls.add(feed.url)
         label = feed.org_name or feed.url
         links.append(
             f"<li>{_link(feed.url, label)} <span class='dim'>({feed.kind.value})</span></li>"
@@ -468,12 +490,16 @@ def export_person(name: str, config: Config, storage: Storage, out_dir: Path | N
     markdown = "\n".join(
         [
             _frontmatter(person.name, directory, landscape=True),
+            '<div class="sheet-page">',
+            "",
             f"# {_e(person.name)}",
             f'<div class="meta">{_e(meta)}</div>',
             '<div class="sheet">',
             "<div>" + "\n".join(left) + "</div>",
             "<div>" + "\n".join(middle) + "</div>",
             "<div>" + "\n".join(right) + "</div>",
+            "</div>",
+            "",
             "</div>",
             "",
         ]
