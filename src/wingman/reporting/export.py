@@ -11,8 +11,8 @@ fetched at render time (RFC-009).
 Three artifacts:
 - career: portrait one-pager from the canonical profile, every claim cited.
 - company: the company dossier, labels upgraded to styled tags.
-- person: a landscape three-column sheet — outreach brief | point of view |
-  related links — with clickable URLs wherever the data has one.
+- person: a landscape 2x2 briefing dock — outreach brief | point of view |
+  background | news — with clickable URLs wherever the data has one.
 """
 
 from __future__ import annotations
@@ -104,7 +104,7 @@ code {
 .dim { color: var(--text-dim); }
 .meta-link { color: var(--accent-blue); }
 /* person sheet: landscape three-column grid */
-.sheet { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 32px; align-items: start; }
+.sheet { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 32px; align-items: start; }
 .sheet h2 { margin-top: 0; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .sheet ul { padding-left: 18px; }
 .their { border-left: 3px solid var(--accent-purple); padding: 2px 0 2px 14px; margin: 0 0 8px; }
@@ -344,10 +344,12 @@ _TABS_CSS = """
 .panel { display: none; padding-top: 20px; max-width: 780px; }
 #tab-brief:checked ~ .panel-brief,
 #tab-pov:checked ~ .panel-pov,
-#tab-related:checked ~ .panel-related { display: block; }
+#tab-background:checked ~ .panel-background,
+#tab-news:checked ~ .panel-news { display: block; }
 #tab-brief:checked ~ .tabbar label[for="tab-brief"],
 #tab-pov:checked ~ .tabbar label[for="tab-pov"],
-#tab-related:checked ~ .tabbar label[for="tab-related"] {
+#tab-background:checked ~ .tabbar label[for="tab-background"],
+#tab-news:checked ~ .tabbar label[for="tab-news"] {
   color: var(--text); border-bottom-color: var(--accent);
 }
 /* on screen the tab label is the heading; in print the h2 comes back */
@@ -359,7 +361,7 @@ _TABS_CSS = """
   .tab-page h1 { font-size: 32px; margin: 0 0 2px; }
   .tabs input, .tabbar { display: none; }
   .tabs {
-    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 26px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px 26px;
     align-items: start; font-size: 12.5px; line-height: 1.5;
   }
   .panel { display: block; max-width: none; padding-top: 8px; }
@@ -382,13 +384,19 @@ _TABS_CSS = """
 
 
 def _person_html(
-    person: Person, meta: str, left: list[str], middle: list[str], right: list[str]
+    person: Person,
+    meta: str,
+    left: list[str],
+    middle: list[str],
+    right: list[str],
+    news_col: list[str],
 ) -> str:
-    """Self-contained tabbed HTML: brief | pov | related, one panel at a time."""
+    """Self-contained tabbed HTML: brief | pov | background | news, one panel at a time."""
     panels = (
         ("brief", "Outreach Brief", left),
         ("pov", "Point of View", middle),
-        ("related", "Related", right),
+        ("background", "Background", right),
+        ("news", "News & Updates", news_col),
     )
     inputs = "\n".join(
         f'<input type="radio" name="tab" id="tab-{key}"{" checked" if key == "brief" else ""}>'
@@ -425,7 +433,7 @@ def export_person(
     out_dir: Path | None = None,
     as_html: bool = False,
 ) -> Path:
-    """Landscape three-column sheet: outreach brief | point of view | related.
+    """Landscape 2x2 briefing dock: brief | point of view | background | news.
 
     as_html=True writes a tabbed, self-contained HTML page instead — easier
     to read on screen; the dense PDF sheet remains the print artifact.
@@ -527,7 +535,7 @@ def export_person(
             and company_key(other.company or "") == key
         ]
 
-    right: list[str] = ["<h2>Related</h2>"]
+    right: list[str] = ["<h2>Background</h2>"]
     score, warmth_label, warmth_signals = _warmth(person, len(common))
     dots = "●" * min(score, 4) + "○" * (4 - min(score, 4))
     right.append(f'<div class="warmth warmth-{warmth_label}">{dots} {warmth_label}</div>')
@@ -611,8 +619,27 @@ def export_person(
         )
         right.append(f"<ul>{similar_rows}</ul>")
 
+    news = storage.list_person_news(person.person_id)
+    news_col: list[str] = ["<h2>News &amp; Updates</h2>"]
+    if news:
+        fetched = max(item.fetched_at for item in news)
+        age_days = (datetime.now(UTC) - fetched).days
+        stale = " · ⚠ stale — refresh" if age_days > 7 else ""
+        news_col.append(f'<div class="meta">fetched {fetched.date().isoformat()}{stale}</div>')
+        rows = []
+        for item in news:
+            when = item.published_at.date().isoformat() if item.published_at else ""
+            date_note = f" <span class='dim'>{when}</span>" if when else ""
+            rows.append(f"<li>{_link(item.url, item.title)}{date_note}</li>")
+        news_col.append("<ul>" + "".join(rows) + "</ul>")
+    else:
+        news_col.append(
+            f'<p class="dim">No news snapshot yet — fetch one with '
+            f'<code>wingman people news "{_e(person.name)}"</code>.</p>'
+        )
+
     if as_html:
-        html_page = _person_html(person, meta, left, middle, right)
+        html_page = _person_html(person, meta, left, middle, right, news_col)
         return _write(directory, f"{_slug(person.name)}-{today}.html", html_page)
 
     markdown = "\n".join(
@@ -626,6 +653,7 @@ def export_person(
             "<div>" + "\n".join(left) + "</div>",
             "<div>" + "\n".join(middle) + "</div>",
             "<div>" + "\n".join(right) + "</div>",
+            "<div>" + "\n".join(news_col) + "</div>",
             "</div>",
             "",
             "</div>",

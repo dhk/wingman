@@ -60,6 +60,7 @@ def test_all_tools_are_registered() -> None:
         "export_pdf",
         "my_pov",
         "people_docs",
+        "people_news",
     }
 
 
