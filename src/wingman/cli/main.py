@@ -621,6 +621,10 @@ def people_add(
     ),
     company: str | None = typer.Option(None, "--company", help="Where they work."),
     position: str | None = typer.Option(None, "--position", help="What they do."),
+    linkedin: str | None = typer.Option(None, "--linkedin", help="Their LinkedIn profile URL."),
+    email: str | None = typer.Option(
+        None, "--email", help="Their email (manual entry only — imports never read emails)."
+    ),
 ) -> None:
     """Add a person to the watchlist (or update them if already known)."""
     configure_logging()
@@ -629,7 +633,13 @@ def people_add(
     try:
         with Storage(config.db_path) as storage:
             person, created = add_person(
-                name, storage, substack_url=substack, company=company, position=position
+                name,
+                storage,
+                substack_url=substack,
+                company=company,
+                position=position,
+                linkedin_url=linkedin,
+                email=email,
             )
     except IngestError as exc:
         typer.echo(f"people add failed: {exc}", err=True)

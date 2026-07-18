@@ -105,6 +105,39 @@ def test_person_export_is_landscape_three_columns_with_links(workspace: Path) ->
             substack_url="https://jane.substack.com",
             company="ExplainCo",
             position="Head of Data",
+            linkedin_url="https://linkedin.com/in/janeauthor",
+            email="jane@explainco.com",
+        )
+        # a colleague from the LinkedIn import and the firm's org-attributed
+        # blog on another watcher — both feed the Related column
+        from wingman.domain.person import (
+            FeedAttribution,
+            FeedKind,
+            FeedSource,
+            Person,
+            PersonOrigin,
+        )
+
+        storage.add_person(
+            Person(
+                name="Carol Colleague",
+                origin=PersonOrigin.LINKEDIN_CONNECTIONS,
+                company="ExplainCo",
+                position="CTO",
+            )
+        )
+        watcher, _ = add_person("Scott Watcher", storage)
+        from wingman.application.people import attach_feed
+
+        attach_feed(
+            watcher,
+            FeedSource(
+                url="https://explainco.com/blog",
+                kind=FeedKind.INDEX_PAGE,
+                attribution=FeedAttribution.ORGANIZATION,
+                org_name="ExplainCo",
+            ),
+            storage,
         )
         fetch_person_feed(person, config, storage, fetcher=lambda url: FEED.encode())
         doc_id = storage.list_external_documents(person.person_id)[0].doc_id
@@ -155,6 +188,16 @@ def test_person_export_is_landscape_three_columns_with_links(workspace: Path) ->
     # clickable links: the stance's source post and the Substack itself
     assert 'href="https://jane.substack.com/p/explainable"' in text
     assert 'href="https://jane.substack.com"' in text
+    # related column: LinkedIn, mailto, and the company URL via the org feed
+    assert 'href="https://linkedin.com/in/janeauthor"' in text
+    assert 'href="mailto:jane@explainco.com"' in text
+    assert 'href="https://explainco.com/blog">ExplainCo (company)</a>' in text
+    # in common: the user's LinkedIn connection at the same company
+    assert "in common — your connections at ExplainCo" in text
+    assert "Carol Colleague" in text and "Scott Watcher" not in text.split("in common")[1]
+    # warmth: email (+1) and one shared-company connection (+1) → warm, transparent signals
+    assert 'class="warmth warmth-warm">●●○○ warm</div>' in text
+    assert "email on file; 1 shared-company connection" in text
     # two-voice talking point and the never-sends panel
     assert "they argue" in text and "you wrote" in text
     assert "wingman never sends (RFC-006)" in text

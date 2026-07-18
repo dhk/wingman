@@ -257,8 +257,16 @@ def _similarity_lines(reference: str, people: list[SimilarPerson]) -> str:
 
 
 @server.tool()
-def people_add(name: str, substack_url: str = "", company: str = "", position: str = "") -> str:
-    """Add a person to the watchlist (or update them), optionally with their Substack URL."""
+def people_add(
+    name: str,
+    substack_url: str = "",
+    company: str = "",
+    position: str = "",
+    linkedin_url: str = "",
+    email: str = "",
+) -> str:
+    """Add a person to the watchlist (or update them), optionally with their Substack URL,
+    LinkedIn URL, and email (manual entry only — imports never read emails)."""
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
@@ -270,6 +278,8 @@ def people_add(name: str, substack_url: str = "", company: str = "", position: s
                 substack_url=substack_url or None,
                 company=company or None,
                 position=position or None,
+                linkedin_url=linkedin_url or None,
+                email=email or None,
             )
     except IngestError as exc:
         return f"people add failed: {exc}"
