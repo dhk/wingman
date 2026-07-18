@@ -205,3 +205,25 @@ def test_match_people_resolves_partial_names(workspace: Path) -> None:
         # no match and blank input
         assert match_people(storage, "nobody") == []
         assert match_people(storage, "   ") == []
+
+
+def test_add_person_email_and_linkedin_are_validated_and_upserted(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person(
+            "Jo Contact",
+            storage,
+            linkedin_url="https://linkedin.com/in/jo/",
+            email=" jo@example.com ",
+        )
+        assert person.linkedin_url == "https://linkedin.com/in/jo"  # trailing slash normalized
+        assert person.email == "jo@example.com"  # whitespace stripped
+        # None on update preserves the stored values
+        person, created = add_person("Jo Contact", storage, company="NewCo")
+        assert not created
+        assert person.email == "jo@example.com" and person.linkedin_url is not None
+
+        with pytest.raises(IngestError, match="does not look like an email"):
+            add_person("Bad Email", storage, email="not-an-email")
+        with pytest.raises(IngestError, match="https"):
+            add_person("Bad Link", storage, linkedin_url="http://linkedin.com/in/x")

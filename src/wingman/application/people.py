@@ -80,10 +80,14 @@ def add_person(
     substack_url: str | None = None,
     company: str | None = None,
     position: str | None = None,
+    linkedin_url: str | None = None,
+    email: str | None = None,
 ) -> tuple[Person, bool]:
     """Add a person to the watchlist; updates the existing record if the name is known.
 
-    Returns (person, created) — created is False when an existing person was updated.
+    Returns (person, created) — created is False when an existing person was
+    updated. email is a manual-entry field only: imports never read email
+    addresses.
     """
     if substack_url is not None:
         substack_url = substack_url.rstrip("/")
@@ -91,12 +95,22 @@ def add_person(
             raise IngestError(
                 f"Substack URL must start with https:// (RFC-009); got {substack_url!r}"
             )
+    if linkedin_url is not None:
+        linkedin_url = linkedin_url.rstrip("/")
+        if not linkedin_url.startswith("https://"):
+            raise IngestError(
+                f"LinkedIn URL must start with https:// (RFC-009); got {linkedin_url!r}"
+            )
+    if email is not None and ("@" not in email or " " in email.strip()):
+        raise IngestError(f"{email!r} does not look like an email address.")
     candidate = Person(
         name=name,
         origin=PersonOrigin.MANUAL,
         substack_url=substack_url,
         company=company,
         position=position,
+        linkedin_url=linkedin_url,
+        email=email.strip() if email else None,
     )
     existing = storage.find_person_by_name_key(candidate.name_key)
     if existing is None:
@@ -107,6 +121,8 @@ def add_person(
             "substack_url": substack_url or existing.substack_url,
             "company": company or existing.company,
             "position": position or existing.position,
+            "linkedin_url": linkedin_url or existing.linkedin_url,
+            "email": (email.strip() if email else None) or existing.email,
         }
     )
     storage.update_person(updated)

@@ -24,7 +24,8 @@ from pathlib import Path
 
 from wingman.application.dossier import build_company_dossier
 from wingman.application.ingest import IngestError
-from wingman.application.similarity import similar_people
+from wingman.application.similarity import company_key, similar_people
+from wingman.domain.person import FeedAttribution, Person, PersonOrigin
 from wingman.domain.profile import ItemStatus, ProfileItemKind
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
@@ -115,6 +116,13 @@ code {
 }
 .draft-panel .meta { margin-bottom: 12px; }
 .stance { margin: 0 0 24px; }
+.warmth {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em;
+  text-transform: uppercase; margin: 0 0 6px;
+}
+.warmth-hot, .warmth-warm { color: var(--accent); }
+.warmth-cool { color: var(--accent-blue); }
+.warmth-cold { color: var(--text-dim); }
 """
 
 
@@ -154,6 +162,32 @@ def _e(text: str) -> str:
 
 def _link(url: str, label: str | None = None) -> str:
     return f'<a class="meta-link" href="{_e(url)}">{_e(label or url)}</a>'
+
+
+def _warmth(person: Person, common_count: int) -> tuple[int, str, list[str]]:
+    """A transparent warmth score: every point names the signal behind it.
+
+    Deterministic arithmetic over what the workspace actually knows — a
+    direct LinkedIn connection, an email on file, shared-company
+    connections. No model call, no guessing.
+    """
+    score = 0
+    signals: list[str] = []
+    if person.connected_on or person.origin is PersonOrigin.LINKEDIN_CONNECTIONS:
+        score += 2
+        since = f" since {person.connected_on}" if person.connected_on else ""
+        signals.append(f"direct connection{since}")
+    if person.email:
+        score += 1
+        signals.append("email on file")
+    if common_count:
+        score += 2 if common_count >= 3 else 1
+        plural = "s" if common_count != 1 else ""
+        signals.append(f"{common_count} shared-company connection{plural}")
+    if not signals:
+        signals.append("no direct path known — warm it up through the writing")
+    label = "cold" if score == 0 else "cool" if score == 1 else "warm" if score <= 3 else "hot"
+    return score, label, signals
 
 
 def _write(config: Config, filename: str, markdown: str) -> Path:
@@ -325,12 +359,51 @@ def export_person(name: str, config: Config, storage: Storage) -> Path:
             f'<code>wingman people pov "{_e(person.name)}"</code>.</p>'
         )
 
+    common: list[Person] = []
+    if person.company:
+        key = company_key(person.company)
+        common = [
+            other
+            for other in storage.list_people()
+            if other.person_id != person.person_id
+            and other.origin is PersonOrigin.LINKEDIN_CONNECTIONS
+            and company_key(other.company or "") == key
+        ]
+
     right: list[str] = ["<h2>Related</h2>"]
+    score, warmth_label, warmth_signals = _warmth(person, len(common))
+    dots = "●" * min(score, 4) + "○" * (4 - min(score, 4))
+    right.append(f'<div class="warmth warmth-{warmth_label}">{dots} {warmth_label}</div>')
+    right.append(f'<p class="dim">{_e("; ".join(warmth_signals))}</p>')
     links: list[str] = []
-    if person.substack_url:
-        links.append(f"<li>{_link(person.substack_url, 'Substack')}</li>")
     if person.linkedin_url:
         links.append(f"<li>{_link(person.linkedin_url, 'LinkedIn')}</li>")
+    if person.email:
+        links.append(f"<li>{_link(f'mailto:{person.email}', person.email)}</li>")
+    if person.substack_url:
+        links.append(f"<li>{_link(person.substack_url, 'Substack')}</li>")
+    # The company link: any watched person's org-attributed feed for this
+    # company is the best URL the workspace honestly knows for it.
+    company_url = None
+    if person.company:
+        key = company_key(person.company)
+        company_url = next(
+            (
+                feed.url
+                for other in storage.list_people()
+                for feed in other.sources
+                if feed.attribution is FeedAttribution.ORGANIZATION
+                and company_key(feed.org_name or "") == key
+            ),
+            None,
+        )
+    if person.company:
+        company_label = f"{person.company} (company)"
+        links.append(
+            f"<li>{_link(company_url, company_label)}</li>"
+            if company_url
+            else f"<li>{_e(company_label)}</li>"
+        )
     for feed in person.feeds:
         label = feed.org_name or feed.url
         links.append(
@@ -339,6 +412,20 @@ def export_person(name: str, config: Config, storage: Storage) -> Path:
     if links:
         right.append('<div class="meta">links</div>')
         right.append("<ul>" + "".join(links) + "</ul>")
+    # "In common": this workspace knows the user's own LinkedIn connections,
+    # so the honest mutual signal is: your connections at their company.
+    if common and person.company:
+        right.append(
+            f'<div class="meta">in common — your connections at {_e(person.company)}</div>'
+        )
+        rows = []
+        for other in sorted(common, key=lambda entry: entry.name)[:6]:
+            position = f" <span class='dim'>{_e(other.position)}</span>" if other.position else ""
+            rows.append(f"<li>{_e(other.name)}{position}</li>")
+        more = len(common) - 6
+        if more > 0:
+            rows.append(f"<li><span class='dim'>+{more} more</span></li>")
+        right.append("<ul>" + "".join(rows) + "</ul>")
     dated = [d.published_at for d in documents if d.published_at is not None]
     stats = f"{len(documents)} documents stored"
     if dated:
@@ -350,11 +437,11 @@ def export_person(name: str, config: Config, storage: Storage) -> Path:
         similar = None
     if similar is not None and similar.people:
         right.append('<div class="meta">thinks like</div>')
-        rows = "".join(
+        similar_rows = "".join(
             f"<li>{_e(entry.name)} <span class='dim'>{entry.score:.3f}</span></li>"
             for entry in similar.people
         )
-        right.append(f"<ul>{rows}</ul>")
+        right.append(f"<ul>{similar_rows}</ul>")
 
     markdown = "\n".join(
         [

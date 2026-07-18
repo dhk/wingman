@@ -54,6 +54,9 @@ class Person(BaseModel):
     substack_url: str | None = None
     feeds: list[FeedSource] = Field(default_factory=list)
     linkedin_url: str | None = None
+    # Only ever set manually ('wingman people add --email'): imports never
+    # read email addresses (the Connections.csv privacy decision stands).
+    email: str | None = None
     company: str | None = None
     position: str | None = None
     connected_on: str | None = None
