@@ -17,6 +17,7 @@ from wingman.application.corpus import add_to_corpus, find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
 from wingman.application.news import fetch_person_news
+from wingman.application.focus import follow_company, overnight_run, render_follow_report
 from wingman.application.pipeline import MisoReport, make_it_so
 from wingman.application.people import (
     add_person,
@@ -1567,6 +1568,67 @@ def company_dossier(
         raise typer.Exit(code=1) from exc
     typer.echo(report.markdown)
     typer.echo(f"(written to {report.path})")
+
+
+@company_app.command("follow")
+def company_follow_cmd(
+    name: str = typer.Argument(..., help="Company to follow, e.g. 'Anthropic'."),
+    url: str = typer.Option(
+        "",
+        "--url",
+        help="The company's https:// domain — its conventional pages (careers, blog, "
+        "newsroom) are probed once and live ones approved as research sources.",
+    ),
+) -> None:
+    """Turn a company name into a standing focus, in one act (RFC-018).
+
+    Enrolls the company — and everyone you know there who has writing
+    attached — on the reserved 'overnight' watchlist, and (with --url)
+    approves the domain's live conventional pages as research sources.
+    'wingman overnight' then deep-refreshes everything enrolled.
+    Enrollment is the consent record: enumerable via 'wingman watchlist
+    show overnight', revocable via 'wingman watchlist remove'.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "followed")
+    try:
+        with Storage(config.db_path) as storage:
+            report = follow_company(name, storage, url=url or None)
+    except IngestError as exc:
+        typer.echo(f"follow failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_follow_report(report))
+
+
+@app.command()
+def overnight() -> None:
+    """Deep-refresh every followed company and person; write the dated digest (RFC-018).
+
+    The explicit spend-the-tokens command — deliberately expensive: research
+    diffs, feed fetches, news queries (each enrolled name+company goes to the
+    news provider), embeddings, fresh POV cards, company themes, briefs, and
+    exports for everything on the 'overnight' watchlist. Ends in a digest
+    under reports/digests/ — what changed, what failed, what to consider
+    following next. Schedule it yourself (launchd/cron — see README);
+    wingman runs no daemon.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "refreshed")
+    try:
+        with Storage(config.db_path) as storage:
+            report = overnight_run(config, storage)
+    except IngestError as exc:
+        typer.echo(f"overnight failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for target in report.targets:
+        marker = "✓" if target.status == "ok" else "✗"
+        typer.echo(f"{marker} {target.name} ({target.kind})")
+    typer.echo(f"{report.processed} targets, {report.failed} with failures.")
+    typer.echo(f"Digest: {report.digest_path}")
+    if report.failed:
+        raise typer.Exit(code=1)
 
 
 @company_app.command("pov")

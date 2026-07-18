@@ -103,6 +103,8 @@ wingman company dossier "DataCo"             # dated snapshot → reports/compan
 wingman company pov "DataCo"                 # synthesized themes, validated quote-by-quote
 wingman company add-source "DataCo" https://dataco.example.com/careers --label careers
 wingman company research "DataCo"            # fetch approved pages; new links = hiring signal
+wingman company follow "DataCo" --url https://dataco.example.com  # one act: enroll + sources
+wingman overnight                            # deep-refresh everything followed → dated digest
 ```
 
 Print-ready exports (US Letter, styled by the site design system, rendered
@@ -243,6 +245,45 @@ The URL is a capability: anyone holding it can use the workspace, so treat
 it like a password and rotate on any doubt. Wingman never opens a public
 listener itself — binding a non-loopback `--host` requires saying so
 explicitly and prints a warning.
+
+## Overnight runs (RFC-018)
+
+`wingman company follow "X" --url https://their-domain` turns a company into
+a standing focus: the company and everyone you know there with writing
+attached go onto the `overnight` watchlist, and the domain's live
+conventional pages (careers, blog, newsroom) become approved research
+sources. `wingman overnight` deep-refreshes everything enrolled — research
+diffs, feeds, news, embeddings, fresh POV cards, company themes, briefs,
+exports — and writes a dated digest to `reports/digests/`.
+
+Enrollment is the consent record (`wingman watchlist show overnight` lists
+every target whose feeds, news queries, and research pages a run touches;
+`wingman watchlist remove` revokes). Wingman runs no daemon — schedule the
+command yourself. macOS launchd, running at 5:30am daily
+(`~/Library/LaunchAgents/com.wingman.overnight.plist`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.wingman.overnight</string>
+  <key>ProgramArguments</key>
+  <array><string>/Users/you/.local/bin/wingman</string><string>overnight</string></array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>5</integer><key>Minute</key><integer>30</integer></dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ANTHROPIC_API_KEY</key><string>sk-ant-...</string>
+    <key>VOYAGE_API_KEY</key><string>pa-...</string>
+  </dict>
+  <key>StandardOutPath</key><string>/tmp/wingman-overnight.log</string>
+  <key>StandardErrorPath</key><string>/tmp/wingman-overnight.log</string>
+</dict></plist>
+```
+
+Load it with `launchctl load ~/Library/LaunchAgents/com.wingman.overnight.plist`;
+unloading it is the schedule's off-switch.
 
 ## Quick Start (development checkout)
 
