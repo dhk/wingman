@@ -132,10 +132,15 @@ data directory (e.g. `~/.local/share/wingman` on Linux).
 
 ## Use from Claude (MCP)
 
-`wingman-mcp` exposes the workspace as MCP tools — status, evidence search,
-the cited career profile, job assessment, and resume ingestion — running the
-same deterministic validation as the CLI (RFC-008). Stdio only: nothing
-listens on the network and the workspace stays on this machine.
+`wingman-mcp` exposes the workspace as MCP tools running the same
+deterministic validation as the CLI (RFC-008), and tracks the CLI's full
+surface: status, evidence search, the cited career profile, job assessment,
+resume ingestion, and the entire people surface — add, list, fetch, sync,
+embed, similar, like, discover, connections import, and feed attachment
+(feed_attach runs only after you confirm feed_discover's finding in
+conversation). Stdio only: nothing listens on the network, and network reads
+happen exactly as in the CLI — explicit public-feed fetches (RFC-009/011)
+and embedding egress (RFC-010).
 
 Claude Code:
 

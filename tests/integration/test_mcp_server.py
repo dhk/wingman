@@ -33,7 +33,25 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def test_all_tools_are_registered() -> None:
     tools = {tool.name for tool in asyncio.run(server.list_tools())}
-    assert tools == {"status", "evidence", "career_profile", "assess_job", "ingest_resume_text"}
+    assert tools == {
+        "status",
+        "evidence",
+        "career_profile",
+        "assess_job",
+        "ingest_resume_text",
+        "people_add",
+        "people_list",
+        "people_fetch",
+        "sync",
+        "embed",
+        "people_evidence",
+        "people_similar",
+        "people_like",
+        "people_discover",
+        "feed_discover",
+        "feed_attach",
+        "people_import_connections",
+    }
 
 
 def test_tools_report_uninitialized_workspace(
@@ -112,6 +130,80 @@ def test_filename_traversal_is_neutralized(workspace: Path) -> None:
     inbox_names = [p.name for p in config.inbox_dir.iterdir()]
     assert any(name.endswith("-escape.md") for name in inbox_names)
     assert all("/" not in name for name in inbox_names)
+
+
+RSS_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel><item>
+    <title>On Kafka</title>
+    <link>https://jane.substack.com/p/on-kafka</link>
+    <content:encoded><![CDATA[<p>Kafka streaming pipelines everywhere.</p>]]></content:encoded>
+  </item></channel></rss>
+"""
+
+
+def test_people_watchlist_flow_via_mcp(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Parity flow: add → fetch → evidence → sync → similar, all through MCP tools."""
+    import wingman.application.people as people_module
+    from wingman.mcp_server import (
+        people_add,
+        people_evidence,
+        people_fetch,
+        people_list,
+        people_similar,
+        sync,
+    )
+
+    config = load_config()
+    config.models_config_path.write_text(
+        '[models.embed_semantic]\nprovider = "hashed"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
+
+    assert "Added Jane Author" in people_add(
+        "Jane Author", substack_url="https://jane.substack.com"
+    )
+    assert "Jane Author" in people_list(watched_only=True)
+    fetched = people_fetch("Jane Author")
+    assert "added: 1" in fetched
+    found = people_evidence("kafka")
+    assert "Jane Author — On Kafka" in found
+    synced = sync()
+    assert "Embedded" in synced and "hashed" in synced
+    # only one person has writing, so similar-to-them yields nobody else
+    assert "No other people" in people_similar("Jane Author")
+
+
+def test_feed_attach_is_a_two_step_confirmation(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import wingman.application.people as people_module
+    from wingman.mcp_server import feed_attach, feed_discover, people_add, people_list
+
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
+    people_add("Marko Klopets")
+    discovery = feed_discover("Marko Klopets", "https://medium.com/feed/@marko")
+    # discovery reports but never attaches, and tells the model to get consent
+    assert "Found feed" in discovery
+    assert "explicit yes" in discovery or "confirm" in discovery
+    assert "medium.com" not in people_list()
+
+    attached = feed_attach("Marko Klopets", "https://medium.com/feed/@marko")
+    assert "Attached rss source" in attached
+    assert "medium.com" in people_list()
+    # invalid kind is rejected
+    assert "kind must be" in feed_attach("Marko Klopets", "https://x.example.com", kind="weird")
+
+
+def test_new_tools_report_uninitialized_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.mcp_server import people_add, people_discover, sync
+
+    monkeypatch.setenv(ENV_DATA_DIR, str(tmp_path / "nowhere"))
+    assert "not initialized" in people_add("Anyone")
+    assert "not initialized" in sync()
+    assert "not initialized" in people_discover()
 
 
 def test_evidence_limit_is_clamped(workspace: Path, tmp_path: Path) -> None:
