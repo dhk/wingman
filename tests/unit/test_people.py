@@ -183,3 +183,25 @@ def test_people_evidence_attributes_authors(workspace: Path) -> None:
         assert hits and hits[0].person_name == "Jane Author"
         assert "Kafka" in hits[0].document.title
         assert find_people_evidence("flamingo", storage) == []
+
+
+def test_match_people_resolves_partial_names(workspace: Path) -> None:
+    from wingman.application.people import match_people
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_person("Marko Klopets", storage)
+        add_person("Mark Otero", storage)
+        add_person("Scott Brady", storage)
+
+        # exact normalized match wins outright, even when a substring of others
+        assert [p.name for p in match_people(storage, "  MARKO   KLOPETS ")] == ["Marko Klopets"]
+        # unique partial resolves
+        assert [p.name for p in match_people(storage, "klopets")] == ["Marko Klopets"]
+        # token order does not matter
+        assert [p.name for p in match_people(storage, "klopets marko")] == ["Marko Klopets"]
+        # ambiguous prefix returns all candidates, sorted
+        assert [p.name for p in match_people(storage, "mark")] == ["Mark Otero", "Marko Klopets"]
+        # no match and blank input
+        assert match_people(storage, "nobody") == []
+        assert match_people(storage, "   ") == []

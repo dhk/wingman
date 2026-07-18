@@ -33,6 +33,7 @@ from wingman.application.people import (
     discover_recommendations,
     fetch_person_feed,
     find_people_evidence,
+    match_people,
     seed_from_connections,
 )
 from wingman.application.dossier import build_company_dossier
@@ -47,7 +48,7 @@ from wingman.application.similarity import (
     similar_people,
 )
 from wingman.application.similarity import people_like as people_like_use_case
-from wingman.domain.person import FeedAttribution, FeedKind, FeedSource
+from wingman.domain.person import FeedAttribution, FeedKind, FeedSource, Person
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.storage import CorpusSearchError, Storage
@@ -227,6 +228,22 @@ def _name_key(name: str) -> str:
     return " ".join(name.lower().split())
 
 
+def _find_person(storage: Storage, name: str) -> Person | str:
+    """Resolve a possibly-partial name; a string result is the error/did-you-mean reply.
+
+    MCP has no interactive picker, so a unique match resolves silently and an
+    ambiguous one lists the candidates for the caller to re-ask with.
+    """
+    candidates = match_people(storage, name)
+    if len(candidates) == 1:
+        return candidates[0]
+    if candidates:
+        options = "; ".join(person.name for person in candidates[:5])
+        more = "" if len(candidates) <= 5 else f" (+{len(candidates) - 5} more)"
+        return f"{name!r} matches several people: {options}{more}. Call again with the full name."
+    return f"No person named {name!r}; see people_list."
+
+
 def _similarity_lines(reference: str, people: list[SimilarPerson]) -> str:
     lines = [f"Closest to {reference}:"]
     for number, entry in enumerate(people, start=1):
@@ -293,10 +310,10 @@ def people_fetch(name: str = "") -> str:
         return _NOT_INITIALIZED
     with Storage(config.db_path) as storage:
         if name.strip():
-            person = storage.find_person_by_name_key(_name_key(name))
-            if person is None:
-                return f"No person named {name!r}; see people_list."
-            targets = [person]
+            found = _find_person(storage, name)
+            if isinstance(found, str):
+                return found
+            targets = [found]
         else:
             targets = [person for person in storage.list_people() if person.sources]
             if not targets:
@@ -511,16 +528,17 @@ def people_pov(name: str, refresh: bool = False) -> str:
     if config is None:
         return _NOT_INITIALIZED
     with Storage(config.db_path) as storage:
-        person = storage.find_person_by_name_key(_name_key(name))
-        if person is None:
-            return f"No person named {name!r}; see people_list."
+        found = _find_person(storage, name)
+        if isinstance(found, str):
+            return found
+        person = found
         if not refresh:
             stored = storage.get_pov_card(person.person_id)
             if stored is not None:
                 return render_pov_card(stored) + "\n\n(stored card — rebuild with refresh=True)"
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
-            report = build_pov_card(name, storage, provider)
+            report = build_pov_card(person.name, storage, provider)
         except ProposalParseError as exc:
             return f"people pov failed: {exc}. Nothing was stored; call again to retry."
         except (IngestError, ModelConfigError, ProviderError) as exc:
@@ -545,9 +563,10 @@ def people_brief(name: str, refresh: bool = False) -> str:
     if config is None:
         return _NOT_INITIALIZED
     with Storage(config.db_path) as storage:
-        person = storage.find_person_by_name_key(_name_key(name))
-        if person is None:
-            return f"No person named {name!r}; see people_list."
+        found = _find_person(storage, name)
+        if isinstance(found, str):
+            return found
+        person = found
         if not refresh:
             stored = storage.get_outreach_brief(person.person_id)
             if stored is not None:
@@ -556,7 +575,7 @@ def people_brief(name: str, refresh: bool = False) -> str:
                 )
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
-            report = build_outreach_brief(name, storage, provider)
+            report = build_outreach_brief(person.name, storage, provider)
         except ProposalParseError as exc:
             return f"people brief failed: {exc}. Nothing was stored; call again to retry."
         except (IngestError, ModelConfigError, ProviderError) as exc:
@@ -609,9 +628,10 @@ def feed_discover(person_name: str, url: str) -> str:
     if config is None:
         return _NOT_INITIALIZED
     with Storage(config.db_path) as storage:
-        person = storage.find_person_by_name_key(_name_key(person_name))
-    if person is None:
-        return f"No person named {person_name!r}; add them with people_add first."
+        found = _find_person(storage, person_name)
+    if isinstance(found, str):
+        return found
+    person = found
     try:
         discovery = discover_feed(url)
     except IngestError as exc:
@@ -644,9 +664,10 @@ def feed_attach(person_name: str, url: str, kind: str = "rss", organization: str
         return f"kind must be 'rss' or 'index_page'; got {kind!r}."
     url = url.rstrip("/")  # match attach_feed's stored normalization in the echoed message
     with Storage(config.db_path) as storage:
-        person = storage.find_person_by_name_key(_name_key(person_name))
-        if person is None:
-            return f"No person named {person_name!r}; add them with people_add first."
+        found = _find_person(storage, person_name)
+        if isinstance(found, str):
+            return found
+        person = found
         source = FeedSource(
             url=url,
             kind=FeedKind(kind),

@@ -113,6 +113,29 @@ def add_person(
     return updated, False
 
 
+def match_people(storage: Storage, query: str) -> list[Person]:
+    """People whose names match a possibly-partial query, exact key first.
+
+    An exact normalized-name match wins outright. Otherwise a person matches
+    when the query is a substring of their normalized name or every query
+    token appears among their name's tokens ('Marko' finds 'Marko Klopets';
+    'klopets marko' does too). Deterministic and ordered by name.
+    """
+    query_key = " ".join(query.lower().split())
+    if not query_key:
+        return []
+    exact = storage.find_person_by_name_key(query_key)
+    if exact is not None:
+        return [exact]
+    tokens = set(query_key.split())
+    matches = [
+        person
+        for person in storage.list_people()
+        if query_key in person.name_key or tokens <= set(person.name_key.split())
+    ]
+    return sorted(matches, key=lambda person: person.name)
+
+
 def _connections_rows(raw: str) -> list[dict[str, str]]:
     """Parse Connections.csv, skipping LinkedIn's free-text 'Notes:' preamble."""
     lines = raw.splitlines()

@@ -272,3 +272,21 @@ def test_evidence_limit_is_clamped(workspace: Path, tmp_path: Path) -> None:
         add_to_corpus(essay, "writing", config, storage)
     # a negative limit must not mean "unlimited" — it clamps to a sane floor
     assert "Streaming" in evidence("kafka", limit=-1)
+
+
+def test_partial_names_resolve_with_did_you_mean(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import wingman.application.people as people_module
+    from wingman.mcp_server import people_add, people_fetch
+
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
+    people_add("Marko Klopets", substack_url="https://m.substack.com")
+    people_add("Mark Otero", substack_url="https://o.substack.com")
+
+    # unique partial resolves silently
+    assert "Marko Klopets:" in people_fetch("klopets")
+    # ambiguity lists candidates instead of guessing
+    ambiguous = people_fetch("mark")
+    assert "matches several people" in ambiguous
+    assert "Mark Otero" in ambiguous and "Marko Klopets" in ambiguous

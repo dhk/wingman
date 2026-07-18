@@ -63,7 +63,7 @@ def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovR
     if not documents:
         raise IngestError(
             f"{person.name} has no stored writing yet. Fetch their sources first "
-            "('wingman people fetch'), then build the card."
+            f"('wingman people fetch \"{person.name}\"'), then build the card."
         )
     documents.sort(key=lambda d: (d.published_at is not None, d.published_at), reverse=True)
     documents = documents[:MAX_DOCUMENTS]
