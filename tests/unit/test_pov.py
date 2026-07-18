@@ -64,18 +64,30 @@ def test_valid_stances_are_stored_with_provenance(workspace: Path) -> None:
                         "statement": "Believes analytics answers must be explainable.",
                         "quote": "Every answer should show its work",
                         "doc_id": doc_id,
-                    }
+                        "dimension": "technical",
+                    },
+                    {
+                        "statement": "Values analysts over dashboards.",
+                        "quote": "the way an analyst would",
+                        "doc_id": doc_id,
+                        "dimension": "vibes",  # not in the taxonomy
+                    },
                 ],
                 "topics": ["explainable AI", "analytics"],
             }
         )
         report = build_pov_card("Jane Author", storage, provider)
         assert provider.last_prompt is not None and doc_id in provider.last_prompt
-        assert len(report.card.stances) == 1
+        assert len(report.card.stances) == 2
         stance = report.card.stances[0]
         assert stance.doc_title == "Explainable Analytics"
         assert storage.get_source_record(stance.source_record_id) is not None
         assert report.card.topics == ["explainable AI", "analytics"]
+        # a valid dimension is kept; an invalid one is stored uncategorized, never guessed
+        from wingman.domain.pov import StanceDimension
+
+        assert stance.dimension is StanceDimension.TECHNICAL
+        assert report.card.stances[1].dimension is None
 
         # the card is stored and retrievable
         person = storage.find_person_by_name_key("jane author")
@@ -84,6 +96,8 @@ def test_valid_stances_are_stored_with_provenance(workspace: Path) -> None:
         assert stored is not None and stored.stances[0].statement == stance.statement
         rendered = render_pov_card(stored)
         assert "Jane Author" in rendered and "show its work" in rendered
+        assert "- [technical] Believes analytics" in rendered
+        assert "[vibes]" not in rendered  # uncategorized renders without a label
 
 
 def test_fabricated_quotes_and_unknown_docs_are_rejected(workspace: Path) -> None:

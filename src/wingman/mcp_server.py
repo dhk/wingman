@@ -38,6 +38,7 @@ from wingman.application.people import (
 )
 from wingman.application.dossier import build_company_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
+from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import build_pov_card, render_pov_card
 from wingman.reporting.export import export_career, export_company, export_person
 from wingman.application.similarity import (
@@ -527,7 +528,7 @@ def company_dossier(name: str) -> str:
 
 
 @server.tool()
-def export_pdf(target: str, name: str = "") -> str:
+def export_pdf(target: str, name: str = "", out_dir: str = "") -> str:
     """Write a print-ready, design-system-styled Letter export under reports/pdf/.
 
     target is 'career' (portrait profile one-pager), 'company' (dossier,
@@ -539,21 +540,22 @@ def export_pdf(target: str, name: str = "") -> str:
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
+    destination = Path(out_dir).expanduser() if out_dir.strip() else None
     try:
         with Storage(config.db_path) as storage:
             if target == "career":
-                path = export_career(config, storage)
+                path = export_career(config, storage, out_dir=destination)
             elif target == "company":
                 if not name.strip():
                     return "export company needs a company name."
-                path = export_company(name, config, storage)
+                path = export_company(name, config, storage, out_dir=destination)
             elif target == "person":
                 if not name.strip():
                     return "export person needs a person's name."
                 found = _find_person(storage, name)
                 if isinstance(found, str):
                     return found
-                path = export_person(found.name, config, storage)
+                path = export_person(found.name, config, storage, out_dir=destination)
             else:
                 return f"unknown export target {target!r}; use career, company, or person."
     except IngestError as exc:
@@ -596,9 +598,11 @@ def people_pov(name: str, refresh: bool = False) -> str:
 
 
 @server.tool()
-def people_brief(name: str, refresh: bool = False) -> str:
-    """Draft outreach talking points and an intro connecting a person's POV to the user's writing.
+def people_brief(name: str, purpose: str = "introduction", refresh: bool = False) -> str:
+    """Draft outreach talking points and intro bullets connecting a person's POV to the user's writing.
 
+    purpose is why the user is reaching out: introduction, reconnection,
+    job, or advice — it shapes the point selection and intro material.
     Returns the stored brief when one exists; refresh=True rebuilds it (a
     model call — the person's POV card plus excerpts of the user's corpus go
     to the synthesize_balanced provider, and a talking point is kept only if
@@ -608,6 +612,11 @@ def people_brief(name: str, refresh: bool = False) -> str:
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
+    try:
+        outreach_purpose = OutreachPurpose(purpose.strip().lower())
+    except ValueError:
+        valid = ", ".join(entry.value for entry in OutreachPurpose)
+        return f"unknown purpose {purpose!r}; use one of: {valid}."
     with Storage(config.db_path) as storage:
         found = _find_person(storage, name)
         if isinstance(found, str):
@@ -616,12 +625,13 @@ def people_brief(name: str, refresh: bool = False) -> str:
         if not refresh:
             stored = storage.get_outreach_brief(person.person_id)
             if stored is not None:
-                return (
-                    render_outreach_brief(stored) + "\n\n(stored brief — rebuild with refresh=True)"
-                )
+                hint = "rebuild with refresh=True"
+                if stored.purpose is not outreach_purpose:
+                    hint = f"stored purpose is {stored.purpose.value!r} — rebuild with refresh=True"
+                return render_outreach_brief(stored) + f"\n\n(stored brief — {hint})"
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
-            report = build_outreach_brief(person.name, storage, provider)
+            report = build_outreach_brief(person.name, storage, provider, purpose=outreach_purpose)
         except ProposalParseError as exc:
             return f"people brief failed: {exc}. Nothing was stored; call again to retry."
         except (IngestError, ModelConfigError, ProviderError) as exc:

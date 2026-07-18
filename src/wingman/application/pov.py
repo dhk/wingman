@@ -19,7 +19,7 @@ from wingman.agents.pov_analyst import (
 )
 from wingman.application.ingest import IngestError
 from wingman.domain.person import ExternalDocument
-from wingman.domain.pov import PovCard, Stance
+from wingman.domain.pov import PovCard, Stance, StanceDimension
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
 from wingman.providers.base import ModelProvider, ModelRequest
@@ -112,6 +112,12 @@ def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovR
                 )
             )
             continue
+        # An invalid dimension never sinks a good stance — it is stored
+        # uncategorized rather than guessed.
+        try:
+            dimension: StanceDimension | None = StanceDimension(proposed.dimension.strip().lower())
+        except ValueError:
+            dimension = None
         stances.append(
             Stance(
                 statement=statement,
@@ -120,6 +126,7 @@ def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovR
                 doc_title=document.title,
                 source_record_id=document.source_record_id,
                 organization=document.organization,
+                dimension=dimension,
             )
         )
     if not stances:
@@ -162,7 +169,8 @@ def render_pov_card(card: PovCard) -> str:
     ]
     for stance in card.stances:
         via = f" — via {stance.organization}" if stance.organization else ""
-        lines.append(f"- {stance.statement}")
+        label = f"[{stance.dimension.value}] " if stance.dimension else ""
+        lines.append(f"- {label}{stance.statement}")
         lines.append(f'    "{stance.quote}" ({stance.doc_title}{via})')
     if card.topics:
         lines.append("")
