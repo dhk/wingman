@@ -95,7 +95,27 @@ deterministic composition/diffs, no model call.
 - [ ] Marko outreach: interview material ready (lead: democratize-the-doing/
       centralize-the-meaning symmetry; ask: where does semantic-layer
       authority live when agents query) — user still to compose + send
-- [ ] Backlog is empty; next work arrives from field usage
+
+## Backlog (user-ordered, 2026-07-18 evening)
+1. [ ] **Search utility improvement** — favored next build: unified ranked
+       search across corpus/people/companies/news/research (today: FTS5 and
+       embeddings live in separate commands). Scope may be sharpened by the
+       competitive memo.
+2. [ ] **Competitive research** — briefing written: docs/RESEARCH-BRIEFING.md
+       (manifesto, feature inventory, comparator set, rubric, verdict
+       buckets: build vs keep-thin vs integrate/drop). Needs a web-enabled
+       session to execute; deliverable lands as
+       docs/product/competitive-landscape-YYYY-MM-DD.md and feeds v0.3–v0.5
+       shaping.
+3. [ ] **Hosted deployment** — backlogged behind the above. Assessment on
+       record in-session: path A self-host Dockerfile (~days, invariants
+       intact), path B managed single-tenant (~weeks, mostly ops), path C
+       multi-tenant SaaS (product pivot; DB-per-tenant preserves the
+       application layer; OAuth becomes mandatory; fetch surface becomes
+       SSRF surface; RFC-009 consent model needs redesign). RFC-018
+       candidate when picked up.
+- Note: v0.2.0 tag exists on the remote but points at 06e5b8b (post-PR #27),
+  ~20 PRs behind; suggested cutting v0.3.0 at current main from the Mac.
 
 ---
 *Resume:* load this file in your next session.
