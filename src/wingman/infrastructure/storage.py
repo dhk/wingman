@@ -15,6 +15,7 @@ from wingman.domain.opportunity import Opportunity
 from wingman.domain.outreach import OutreachBrief
 from wingman.domain.person import ExternalDocument, NewsItem, Person
 from wingman.domain.pov import PovCard
+from wingman.domain.research import CompanySource, ResearchSnapshot
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 
 _SCHEMA = """
@@ -91,6 +92,20 @@ CREATE TABLE IF NOT EXISTS outreach_briefs (
     person_id TEXT NOT NULL UNIQUE,
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS company_sources (
+    company_key TEXT NOT NULL,
+    url TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (company_key, url)
+);
+CREATE TABLE IF NOT EXISTS research_snapshots (
+    company_key TEXT NOT NULL,
+    url TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (company_key, url)
 );
 CREATE TABLE IF NOT EXISTS embeddings (
     doc_id TEXT PRIMARY KEY,
@@ -512,6 +527,67 @@ class Storage:
         )
         row: tuple[str] | None = cursor.fetchone()
         return OutreachBrief.model_validate_json(row[0]) if row else None
+
+    def add_company_source(self, source: CompanySource) -> bool:
+        """Record a user-approved research URL; False if it was already approved."""
+        try:
+            self._conn.execute(
+                "INSERT INTO company_sources (company_key, url, payload, added_at)"
+                " VALUES (?, ?, ?, ?)",
+                (
+                    source.company_key,
+                    source.url,
+                    source.model_dump_json(),
+                    source.added_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError:
+            return False
+        self._conn.commit()
+        return True
+
+    def remove_company_source(self, company_key: str, url: str) -> bool:
+        cursor = self._conn.execute(
+            "DELETE FROM company_sources WHERE company_key = ? AND url = ?",
+            (company_key, url),
+        )
+        self._conn.execute(
+            "DELETE FROM research_snapshots WHERE company_key = ? AND url = ?",
+            (company_key, url),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def list_company_sources(self, company_key: str) -> list[CompanySource]:
+        cursor = self._conn.execute(
+            "SELECT payload FROM company_sources WHERE company_key = ? ORDER BY added_at, url",
+            (company_key,),
+        )
+        return [CompanySource.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def save_research_snapshot(self, snapshot: ResearchSnapshot) -> None:
+        """One snapshot per (company, url): refreshed, not archived."""
+        self._conn.execute(
+            "INSERT INTO research_snapshots (company_key, url, payload, fetched_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(company_key, url) DO UPDATE SET"
+            " payload = excluded.payload, fetched_at = excluded.fetched_at",
+            (
+                snapshot.company_key,
+                snapshot.url,
+                snapshot.model_dump_json(),
+                snapshot.fetched_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def get_research_snapshot(self, company_key: str, url: str) -> ResearchSnapshot | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM research_snapshots WHERE company_key = ? AND url = ?",
+            (company_key, url),
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return ResearchSnapshot.model_validate_json(row[0]) if row else None
 
     def has_external_url(self, url: str) -> bool:
         cursor = self._conn.execute(

@@ -40,6 +40,13 @@ from wingman.application.pov import (
     build_pov_card,
     render_pov_card,
 )
+from wingman.application.research import (
+    add_company_source,
+    list_company_sources,
+    remove_company_source,
+    render_research_report,
+    research_company,
+)
 from wingman.application.similarity import (
     companies_like,
     embed_missing,
@@ -1557,6 +1564,115 @@ def company_dossier(
         raise typer.Exit(code=1) from exc
     typer.echo(report.markdown)
     typer.echo(f"(written to {report.path})")
+
+
+@company_app.command("add-source")
+def company_add_source(
+    name: str = typer.Argument(..., help="Company the source belongs to."),
+    url: str = typer.Argument(..., help="https:// page to watch (careers page, newsroom)."),
+    label: str = typer.Option("", "--label", help="Optional short label, e.g. 'careers'."),
+) -> None:
+    """Approve one research URL for a company — adding it IS the approval (RFC-015).
+
+    'wingman company research' will fetch exactly the pages approved here,
+    nothing else.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "added")
+    try:
+        with Storage(config.db_path) as storage:
+            source, created = add_company_source(name, url, storage, label=label or None)
+    except IngestError as exc:
+        typer.echo(f"add-source failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if created:
+        typer.echo(f"Approved for {source.company_name}: {source.url}")
+        typer.echo(f'Fetch it with: wingman company research "{source.company_name}"')
+    else:
+        typer.echo(f"Already approved for {source.company_name}: {source.url}")
+
+
+@company_app.command("remove-source")
+def company_remove_source(
+    name: str = typer.Argument(..., help="Company the source belongs to."),
+    url: str = typer.Argument(..., help="The approved URL to withdraw."),
+) -> None:
+    """Withdraw an approved research source (its stored snapshot goes too)."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "removed")
+    try:
+        with Storage(config.db_path) as storage:
+            removed = remove_company_source(name, url, storage)
+    except IngestError as exc:
+        typer.echo(f"remove-source failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if removed:
+        typer.echo(f"Withdrawn: {url}")
+    else:
+        typer.echo(f"{url} was not an approved source for {name!r}; nothing was removed.")
+
+
+@company_app.command("sources")
+def company_sources_cmd(
+    name: str = typer.Argument(..., help="Company whose approved sources to list."),
+) -> None:
+    """List the approved research sources for a company."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "listed")
+    try:
+        with Storage(config.db_path) as storage:
+            sources = list_company_sources(name, storage)
+            snapshots = {
+                source.url: storage.get_research_snapshot(source.company_key, source.url)
+                for source in sources
+            }
+    except IngestError as exc:
+        typer.echo(f"sources failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not sources:
+        typer.echo(
+            f"No approved research sources for {name!r}. Approve one with "
+            f"'wingman company add-source \"{name}\" <https-url>'."
+        )
+        return
+    typer.echo(f"Approved sources for {name} ({len(sources)}):")
+    for source in sources:
+        label = f" ({source.label})" if source.label else ""
+        snapshot = snapshots[source.url]
+        state = (
+            f"snapshot {snapshot.fetched_at.date().isoformat()}, {len(snapshot.links)} links"
+            if snapshot
+            else "no snapshot yet"
+        )
+        typer.echo(f"- {source.url}{label} — {state}")
+
+
+@company_app.command("research")
+def company_research_cmd(
+    name: str = typer.Argument(..., help="Company to research across its approved sources."),
+) -> None:
+    """Fetch every approved source once and report what changed (RFC-015).
+
+    One read-only HTTPS GET per approved URL — the pages you named, nothing
+    else. Findings are deterministic diffs against the previous snapshot:
+    new links (the hiring/announcement signal) and changed page text. A
+    failed source keeps its previous snapshot and is reported, never fatal.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "researched")
+    try:
+        with Storage(config.db_path) as storage:
+            report = research_company(name, storage)
+    except IngestError as exc:
+        typer.echo(f"research failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_research_report(report))
+    if report.failed and not report.fetched:
+        raise typer.Exit(code=1)
 
 
 @company_app.command("like")
