@@ -39,6 +39,7 @@ from wingman.application.people import (
 from wingman.application.dossier import build_company_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pov import build_pov_card, render_pov_card
+from wingman.reporting.export import export_career, export_company, export_person
 from wingman.application.similarity import (
     CompanySimilarityReport,
     SimilarPerson,
@@ -513,6 +514,41 @@ def company_dossier(name: str) -> str:
     except IngestError as exc:
         return f"company dossier failed: {exc}"
     return report.markdown + f"\n(written to {report.path})"
+
+
+@server.tool()
+def export_pdf(target: str, name: str = "") -> str:
+    """Write a print-ready, design-system-styled Letter export under reports/pdf/.
+
+    target is 'career' (portrait profile one-pager), 'company' (dossier,
+    requires name), or 'person' (landscape three-column sheet — outreach
+    brief | point of view | related links — requires name). Returns the
+    written path; the user renders it with md-to-pdf or any Markdown
+    previewer. No model call, no network.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if target == "career":
+                path = export_career(config, storage)
+            elif target == "company":
+                if not name.strip():
+                    return "export company needs a company name."
+                path = export_company(name, config, storage)
+            elif target == "person":
+                if not name.strip():
+                    return "export person needs a person's name."
+                found = _find_person(storage, name)
+                if isinstance(found, str):
+                    return found
+                path = export_person(found.name, config, storage)
+            else:
+                return f"unknown export target {target!r}; use career, company, or person."
+    except IngestError as exc:
+        return f"export failed: {exc}"
+    return f"Wrote {path}\nRender: md-to-pdf {path} (or open in any Markdown previewer)"
 
 
 @server.tool()

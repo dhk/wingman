@@ -26,6 +26,7 @@ from wingman.application.people import (
     seed_from_connections,
 )
 from wingman.domain.person import Person
+from wingman.reporting.export import export_career, export_company, export_person
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
 from wingman.application.dossier import build_company_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
@@ -56,6 +57,8 @@ people_app = typer.Typer(help="Watchlist of people and their public writing.")
 app.add_typer(people_app, name="people")
 company_app = typer.Typer(help="Companies, seen through the writing of their people and blogs.")
 app.add_typer(company_app, name="company")
+export_app = typer.Typer(help="Print-ready Letter-format exports (render with md-to-pdf).")
+app.add_typer(export_app, name="export")
 
 MIN_PYTHON = (3, 12)
 
@@ -1088,6 +1091,62 @@ def company_similar(
             f"{number}. {entry.name}  score {entry.score:.3f}  "
             f"[{entry.people} people, {entry.documents} docs]"
         )
+
+
+_RENDER_HINT = "Render: md-to-pdf {path}  (or open in any Markdown previewer)"
+
+
+@export_app.command("career")
+def export_career_cmd() -> None:
+    """Portrait one-pager of the canonical profile — every claim cited, design-system styled."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "exported")
+    try:
+        with Storage(config.db_path) as storage:
+            path = export_career(config, storage)
+    except IngestError as exc:
+        typer.echo(f"export failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Wrote {path}")
+    typer.echo(_RENDER_HINT.format(path=path))
+
+
+@export_app.command("company")
+def export_company_cmd(
+    name: str = typer.Argument(..., help="Company to export a dossier for."),
+) -> None:
+    """The company dossier as a print-ready page, fact/inference labels styled."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "exported")
+    try:
+        with Storage(config.db_path) as storage:
+            path = export_company(name, config, storage)
+    except IngestError as exc:
+        typer.echo(f"export failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Wrote {path}")
+    typer.echo(_RENDER_HINT.format(path=path))
+
+
+@export_app.command("person")
+def export_person_cmd(
+    name: str = typer.Argument(..., help="Person to export the landscape sheet for."),
+) -> None:
+    """Landscape three-column sheet: outreach brief | point of view | related links."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "exported")
+    try:
+        with Storage(config.db_path) as storage:
+            person = _resolve_person(storage, name, "exported")
+            path = export_person(person.name, config, storage)
+    except IngestError as exc:
+        typer.echo(f"export failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Wrote {path}")
+    typer.echo(_RENDER_HINT.format(path=path))
 
 
 @company_app.command("dossier")
