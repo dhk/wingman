@@ -9,6 +9,12 @@ Rules:
 - Every stance MUST include a verbatim quote copied exactly from one of the
   documents below, and the doc_id of the document it came from. Quotes that
   do not appear character-for-character in that document will be rejected.
+- Every stance MUST carry a dimension — exactly one of:
+  - "values": what they hold as right or important (ethics, mission, people)
+  - "attitude": outlook and disposition (optimism, skepticism, contrarianism)
+  - "technical": methods, architecture, craft — how the work should be done
+  - "strategy": where markets, products, or organizations should go
+  Any other label is discarded and the stance is stored uncategorized.
 - Only claim stances the documents actually support. Fewer, well-evidenced
   stances beat many weak ones. Propose at most 6 stances.
 - Statements are one sentence, in the third person, describing what the
@@ -22,7 +28,7 @@ Respond with JSON only, matching exactly:
 ```json
 {
   "stances": [
-    {"statement": "...", "quote": "...", "doc_id": "..."}
+    {"statement": "...", "quote": "...", "doc_id": "...", "dimension": "..."}
   ],
   "topics": ["..."]
 }

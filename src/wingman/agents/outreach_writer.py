@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.domain.outreach import OutreachProposal
 
-PROMPT_VERSION = "outreach_brief_v1"
+PROMPT_VERSION = "outreach_brief_v2"
 
 SYSTEM_PROMPT = (
     "You draft outreach talking points for a local-first career intelligence "
@@ -31,7 +31,13 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_prompt(person_name: str, stances_block: str, corpus_block: str) -> str:
+def build_prompt(
+    person_name: str,
+    stances_block: str,
+    corpus_block: str,
+    purpose: str,
+    purpose_guidance: str,
+) -> str:
     template = (
         files("wingman").joinpath("prompts", f"{PROMPT_VERSION}.md").read_text(encoding="utf-8")
     )
@@ -39,6 +45,8 @@ def build_prompt(person_name: str, stances_block: str, corpus_block: str) -> str
         template.replace("__PERSON_NAME__", person_name)
         .replace("__STANCES__", stances_block)
         .replace("__CORPUS__", corpus_block)
+        .replace("__PURPOSE__", purpose)
+        .replace("__PURPOSE_GUIDANCE__", purpose_guidance)
     )
 
 

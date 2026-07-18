@@ -59,7 +59,7 @@ wingman people evidence "developer tools"
 wingman sync             # fetch everything + embed what's new, in one command
 wingman people discover  # who your watched Substacks recommend (suggestions only)
 wingman people pov "Jane Author"    # what she thinks — stances with verbatim quotes
-wingman people brief "Jane Author"  # draft talking points + intro; you send, never Wingman
+wingman people brief "Jane Author" --purpose advice  # talking points + intro bullets; you send, never Wingman
 ```
 
 POV cards summarize what a person believes, from their own writing: the
@@ -69,8 +69,11 @@ resume ingestion, applied to other people's words.
 
 Outreach briefs build on the card: talking points connecting their stances
 to your own corpus (each one must cite a card stance exactly and quote your
-writing verbatim) plus a draft intro. Wingman drafts; it never sends
-anything (RFC-006).
+writing verbatim), labeled by the kind of concordance they offer — values,
+attitude, technical, strategy — plus intro bullets you compose into your
+own voice. `--purpose` (introduction, reconnection, job, advice) shapes the
+material. Wingman drafts raw material; it never writes your message for
+you and never sends anything (RFC-006).
 
 Beyond Substack: `add-feed` takes any public feed or blog homepage — it
 autodiscovers RSS/Atom (Medium, WordPress, Ghost) and, for feed-less sites

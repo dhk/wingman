@@ -9,9 +9,25 @@ stance carries its source record.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from enum import StrEnum
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+
+
+class StanceDimension(StrEnum):
+    """What kind of concordance a stance offers for outreach.
+
+    A fixed taxonomy so the model must choose, never invent: values (what
+    they hold as right or important), attitude (outlook and disposition —
+    optimism, skepticism, contrarianism), technical (methods, architecture,
+    craft), strategy (where markets, products, or organizations should go).
+    """
+
+    VALUES = "values"
+    ATTITUDE = "attitude"
+    TECHNICAL = "technical"
+    STRATEGY = "strategy"
 
 
 class Stance(BaseModel):
@@ -23,6 +39,9 @@ class Stance(BaseModel):
     doc_title: str
     source_record_id: str
     organization: str | None = None
+    # None = uncategorized (pre-taxonomy cards, or the model proposed an
+    # invalid label and deterministic validation refused to guess).
+    dimension: StanceDimension | None = None
 
 
 class PovCard(BaseModel):
@@ -46,6 +65,7 @@ class ProposedStance(BaseModel):
     statement: str
     quote: str
     doc_id: str
+    dimension: str = ""
 
 
 class PovProposal(BaseModel):

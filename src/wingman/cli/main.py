@@ -30,6 +30,7 @@ from wingman.reporting.export import export_career, export_company, export_perso
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
 from wingman.application.dossier import build_company_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
+from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import build_pov_card, render_pov_card
 from wingman.application.similarity import (
     companies_like,
@@ -955,6 +956,11 @@ def people_pov(
 @people_app.command("brief")
 def people_brief(
     name: str = typer.Argument(..., help="Person to draft outreach material for."),
+    purpose: str = typer.Option(
+        "introduction",
+        "--purpose",
+        help="Why you're reaching out: introduction, reconnection, job, or advice.",
+    ),
     refresh: bool = typer.Option(
         False, "--refresh", help="Rebuild the brief (a model call) even if one is stored."
     ),
@@ -971,17 +977,26 @@ def people_brief(
     configure_logging()
     config = load_config()
     _require_workspace(config, "drafted")
+    try:
+        outreach_purpose = OutreachPurpose(purpose.strip().lower())
+    except ValueError:
+        valid = ", ".join(entry.value for entry in OutreachPurpose)
+        typer.echo(f"unknown purpose {purpose!r}; use one of: {valid}.", err=True)
+        raise typer.Exit(code=1) from None
     with Storage(config.db_path) as storage:
         person = _resolve_person(storage, name, "drafted")
         if not refresh:
             stored = storage.get_outreach_brief(person.person_id)
             if stored is not None:
                 typer.echo(render_outreach_brief(stored))
-                typer.echo("\n(stored brief — rebuild with --refresh)")
+                hint = "rebuild with --refresh"
+                if stored.purpose is not outreach_purpose:
+                    hint = f"stored purpose is {stored.purpose.value!r} — rebuild with --refresh"
+                typer.echo(f"\n(stored brief — {hint})")
                 return
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
-            report = build_outreach_brief(person.name, storage, provider)
+            report = build_outreach_brief(person.name, storage, provider, purpose=outreach_purpose)
         except (IngestError, ModelConfigError, ProviderError) as exc:
             typer.echo(f"people brief failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
@@ -1106,15 +1121,20 @@ def company_similar(
 _RENDER_HINT = "Render: md-to-pdf {path}  (or open in any Markdown previewer)"
 
 
+_OUT_HELP = "Destination folder (default: the workspace's reports/pdf/)."
+
+
 @export_app.command("career")
-def export_career_cmd() -> None:
+def export_career_cmd(
+    out: Path | None = typer.Option(None, "--out", help=_OUT_HELP),
+) -> None:
     """Portrait one-pager of the canonical profile — every claim cited, design-system styled."""
     configure_logging()
     config = load_config()
     _require_workspace(config, "exported")
     try:
         with Storage(config.db_path) as storage:
-            path = export_career(config, storage)
+            path = export_career(config, storage, out_dir=out)
     except IngestError as exc:
         typer.echo(f"export failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -1125,6 +1145,7 @@ def export_career_cmd() -> None:
 @export_app.command("company")
 def export_company_cmd(
     name: str = typer.Argument(..., help="Company to export a dossier for."),
+    out: Path | None = typer.Option(None, "--out", help=_OUT_HELP),
 ) -> None:
     """The company dossier as a print-ready page, fact/inference labels styled."""
     configure_logging()
@@ -1132,7 +1153,7 @@ def export_company_cmd(
     _require_workspace(config, "exported")
     try:
         with Storage(config.db_path) as storage:
-            path = export_company(name, config, storage)
+            path = export_company(name, config, storage, out_dir=out)
     except IngestError as exc:
         typer.echo(f"export failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -1143,6 +1164,7 @@ def export_company_cmd(
 @export_app.command("person")
 def export_person_cmd(
     name: str = typer.Argument(..., help="Person to export the landscape sheet for."),
+    out: Path | None = typer.Option(None, "--out", help=_OUT_HELP),
 ) -> None:
     """Landscape three-column sheet: outreach brief | point of view | related links."""
     configure_logging()
@@ -1151,7 +1173,7 @@ def export_person_cmd(
     try:
         with Storage(config.db_path) as storage:
             person = _resolve_person(storage, name, "exported")
-            path = export_person(person.name, config, storage)
+            path = export_person(person.name, config, storage, out_dir=out)
     except IngestError as exc:
         typer.echo(f"export failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc

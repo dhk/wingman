@@ -11,7 +11,20 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from enum import StrEnum
+
 from pydantic import BaseModel, Field
+
+from wingman.domain.pov import StanceDimension
+
+
+class OutreachPurpose(StrEnum):
+    """Why the user is reaching out — shapes the draft, never sent anywhere."""
+
+    INTRODUCTION = "introduction"  # first contact, no presumed familiarity
+    RECONNECTION = "reconnection"  # picking a real relationship back up
+    JOB = "job"  # interest in working at their company
+    ADVICE = "advice"  # asking for their perspective on shared ground
 
 
 class TalkingPoint(BaseModel):
@@ -22,6 +35,9 @@ class TalkingPoint(BaseModel):
     your_quote: str = Field(min_length=1)
     corpus_doc_id: str
     corpus_doc_title: str
+    # Inherited deterministically from the cited card stance — the model
+    # never labels the talking point itself.
+    dimension: StanceDimension | None = None
 
 
 class OutreachBrief(BaseModel):
@@ -31,7 +47,10 @@ class OutreachBrief(BaseModel):
     person_id: str
     person_name: str
     talking_points: list[TalkingPoint] = Field(default_factory=list)
-    draft_intro: str = ""
+    # Bullets of raw intro material — the user composes the actual message in
+    # their own voice. Deliberately not a ready-to-send draft.
+    intro_points: list[str] = Field(default_factory=list)
+    purpose: OutreachPurpose = OutreachPurpose.INTRODUCTION
     alignment: float | None = None
     corpus_documents_used: int
     pov_generated_at: datetime
@@ -54,4 +73,4 @@ class OutreachProposal(BaseModel):
     """The model's full proposal for a brief."""
 
     talking_points: list[ProposedTalkingPoint] = Field(default_factory=list)
-    intro: str = ""
+    intro_points: list[str] = Field(default_factory=list)

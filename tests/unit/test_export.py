@@ -151,6 +151,7 @@ def test_person_export_is_landscape_three_columns_with_links(workspace: Path) ->
                             "statement": STANCE,
                             "quote": "Every answer should show its work",
                             "doc_id": doc_id,
+                            "dimension": "values",
                         }
                     ],
                     "topics": ["explainability"],
@@ -174,7 +175,7 @@ def test_person_export_is_landscape_three_columns_with_links(workspace: Path) ->
                             "your_quote": "Explainable pipelines beat black boxes.",
                         }
                     ],
-                    "intro": "Hi Jane — brief draft.",
+                    "intro_points": ["Ask for twenty minutes"],
                 }
             ),
         )
@@ -201,6 +202,8 @@ def test_person_export_is_landscape_three_columns_with_links(workspace: Path) ->
     # two-voice talking point and the never-sends panel
     assert "they argue" in text and "you wrote" in text
     assert "wingman never sends (RFC-006)" in text
+    # the stance dimension renders as a styled chip in both columns
+    assert text.count('<span class="tag tag-values">values</span>') == 2
     assert "Head of Data · ExplainCo" in text
 
 
@@ -244,3 +247,26 @@ def test_company_export_upgrades_labels_and_links(workspace: Path) -> None:
     assert '<span class="tag tag-inference">inference</span>' in text
     assert '<span class="tag tag-fact">fact</span>' in text
     assert "[inference]" not in text and "[fact]" not in text
+
+
+def test_exports_honor_a_custom_output_folder(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        storage.add_profile_item(
+            ProfileItem(
+                kind=ProfileItemKind.SKILL,
+                name="Python",
+                detail="",
+                classification=ClaimClassification.FACT,
+                confidence=0.9,
+                evidence=[EvidenceSpan(source_record_id="r1", quote="Skills: Python")],
+                prompt_version="v1",
+                extracted_by="test",
+            )
+        )
+        custom = workspace / "my-exports"
+        path = export_career(config, storage, out_dir=custom)
+    assert path.parent == custom.resolve()
+    assert (custom / "wingman-pdf.css").exists()
+    text = path.read_text(encoding="utf-8")
+    assert f'stylesheet: "{custom.resolve() / "wingman-pdf.css"}"' in text

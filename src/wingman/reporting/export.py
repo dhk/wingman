@@ -123,19 +123,33 @@ code {
 .warmth-hot, .warmth-warm { color: var(--accent); }
 .warmth-cool { color: var(--accent-blue); }
 .warmth-cold { color: var(--text-dim); }
+/* stance dimensions: what kind of concordance a point offers */
+.tag-values { background: rgba(22, 163, 74, 0.10); color: #15803d; }
+.tag-attitude { background: rgba(124, 92, 224, 0.10); color: var(--accent-purple); }
+.tag-technical { background: rgba(41, 112, 214, 0.10); color: var(--accent-blue); }
+.tag-strategy { background: rgba(217, 79, 42, 0.10); color: var(--accent-orange); }
 """
 
 
-def _pdf_dir(config: Config) -> Path:
-    return config.reports_dir / "pdf"
+def _dimension_tag(dimension: object) -> str:
+    """A styled chip for a StanceDimension, empty for uncategorized."""
+    value = getattr(dimension, "value", None)
+    if not value:
+        return ""
+    return f'<span class="tag tag-{value}">{value}</span> '
 
 
-def _frontmatter(title: str, config: Config, landscape: bool = False) -> str:
+def _resolve_out_dir(config: Config, out_dir: Path | None) -> Path:
+    """The export destination: --out when given, reports/pdf/ otherwise."""
+    return (out_dir.expanduser() if out_dir is not None else config.reports_dir / "pdf").resolve()
+
+
+def _frontmatter(title: str, directory: Path, landscape: bool = False) -> str:
     margin = "14mm 16mm" if landscape else "32mm 28mm"
     # md-to-pdf resolves the stylesheet relative to the process cwd, not the
     # markdown file — so the frontmatter carries the absolute path (quoted:
     # the default workspace lives under "Application Support").
-    stylesheet = _pdf_dir(config) / STYLESHEET_NAME
+    stylesheet = directory / STYLESHEET_NAME
     lines = [
         "---",
         f"title: {title}",
@@ -190,8 +204,7 @@ def _warmth(person: Person, common_count: int) -> tuple[int, str, list[str]]:
     return score, label, signals
 
 
-def _write(config: Config, filename: str, markdown: str) -> Path:
-    directory = config.reports_dir / "pdf"
+def _write(directory: Path, filename: str, markdown: str) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     (directory / STYLESHEET_NAME).write_text(WINGMAN_PDF_CSS, encoding="utf-8")
     path = directory / filename
@@ -200,7 +213,7 @@ def _write(config: Config, filename: str, markdown: str) -> Path:
     return path
 
 
-def export_career(config: Config, storage: Storage) -> Path:
+def export_career(config: Config, storage: Storage, out_dir: Path | None = None) -> Path:
     """Portrait one-pager: the canonical profile with every claim cited inline."""
     items = [item for item in storage.list_profile_items() if item.status is ItemStatus.ACTIVE]
     conflicted = [
@@ -210,10 +223,11 @@ def export_career(config: Config, storage: Storage) -> Path:
         raise IngestError(
             "the profile is empty — nothing to export. Run 'wingman ingest <resume>' first."
         )
+    directory = _resolve_out_dir(config, out_dir)
     today = datetime.now(UTC).date().isoformat()
     sources = storage.count_source_records()
     parts = [
-        _frontmatter("Career Profile", config),
+        _frontmatter("Career Profile", directory),
         '<div class="portrait">',
         "",
         "# Career Profile",
@@ -252,13 +266,16 @@ def export_career(config: Config, storage: Storage) -> Path:
                 f"<strong>{_e(item.name)}</strong></div>"
             )
     parts.extend(["", "</div>", ""])
-    return _write(config, "career.md", "\n".join(parts))
+    return _write(directory, "career.md", "\n".join(parts))
 
 
-def export_company(name: str, config: Config, storage: Storage) -> Path:
+def export_company(
+    name: str, config: Config, storage: Storage, out_dir: Path | None = None
+) -> Path:
     """The company dossier, with fact/inference labels upgraded to styled tags."""
+    directory = _resolve_out_dir(config, out_dir)
     report = build_company_dossier(name, config, storage)
-    lines = [_frontmatter(f"Company dossier: {report.company}", config)]
+    lines = [_frontmatter(f"Company dossier: {report.company}", directory)]
     lines.append('<div class="portrait">')
     lines.append("")
     for raw in report.markdown.splitlines():
@@ -280,13 +297,14 @@ def export_company(name: str, config: Config, storage: Storage) -> Path:
         lines.append(line)
     lines.extend(["", "</div>", ""])
     date = datetime.now(UTC).date().isoformat()
-    return _write(config, f"{_slug(report.company)}-dossier-{date}.md", "\n".join(lines))
+    return _write(directory, f"{_slug(report.company)}-dossier-{date}.md", "\n".join(lines))
 
 
-def export_person(name: str, config: Config, storage: Storage) -> Path:
+def export_person(name: str, config: Config, storage: Storage, out_dir: Path | None = None) -> Path:
     """Landscape three-column sheet: outreach brief | point of view | related."""
     from wingman.application.people import match_people
 
+    directory = _resolve_out_dir(config, out_dir)
     candidates = match_people(storage, name)
     if len(candidates) != 1:
         raise IngestError(
@@ -311,23 +329,27 @@ def export_person(name: str, config: Config, storage: Storage) -> Path:
 
     left: list[str] = ["<h2>Outreach Brief</h2>"]
     if brief is not None:
+        brief_meta = f"purpose: {brief.purpose.value}"
         if brief.alignment is not None:
-            left.append(f'<div class="meta">alignment with your corpus {brief.alignment:.3f}</div>')
+            brief_meta += f" · alignment {brief.alignment:.3f}"
+        left.append(f'<div class="meta">{_e(brief_meta)}</div>')
         for point in brief.talking_points:
             left.append(
                 '<div class="stance">'
                 f'<div class="their"><span class="tag tag-inference">they argue</span> '
-                f"{_e(point.their_stance)}</div>"
+                f"{_dimension_tag(point.dimension)}{_e(point.their_stance)}</div>"
                 f'<div class="yours"><span class="tag tag-fact">you wrote</span> '
                 f'“{_e(point.your_quote)}” <span class="dim">— {_e(point.corpus_doc_title)}'
                 "</span></div>"
                 f'<p class="point">{_e(point.point)}</p></div>'
             )
-        if brief.draft_intro:
+        if brief.intro_points:
+            bullets = "".join(f"<li>{_e(bullet)}</li>" for bullet in brief.intro_points)
             left.append(
                 '<div class="draft-panel">'
-                '<div class="meta">draft — wingman never sends (RFC-006)</div>'
-                f"{_e(brief.draft_intro)}</div>"
+                '<div class="meta">intro material — compose it in your own voice · '
+                "wingman never sends (RFC-006)</div>"
+                f"<ul>{bullets}</ul></div>"
             )
     else:
         left.append(
@@ -346,7 +368,7 @@ def export_person(name: str, config: Config, storage: Storage) -> Path:
             source = _link(source_url, stance.doc_title) if source_url else _e(stance.doc_title)
             via = f" via {_e(stance.organization)}" if stance.organization else ""
             middle.append(
-                f'<div class="stance">{_e(stance.statement)}'
+                f'<div class="stance">{_dimension_tag(stance.dimension)}{_e(stance.statement)}'
                 f"<blockquote>“{_e(stance.quote)}” "
                 f'<span class="dim">— {source}{via}</span></blockquote></div>'
             )
@@ -445,7 +467,7 @@ def export_person(name: str, config: Config, storage: Storage) -> Path:
 
     markdown = "\n".join(
         [
-            _frontmatter(person.name, config, landscape=True),
+            _frontmatter(person.name, directory, landscape=True),
             f"# {_e(person.name)}",
             f'<div class="meta">{_e(meta)}</div>',
             '<div class="sheet">',
@@ -456,4 +478,4 @@ def export_person(name: str, config: Config, storage: Storage) -> Path:
             "",
         ]
     )
-    return _write(config, f"{_slug(person.name)}-{today}.md", markdown)
+    return _write(directory, f"{_slug(person.name)}-{today}.md", markdown)

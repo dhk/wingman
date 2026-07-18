@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.domain.pov import PovProposal
 
-PROMPT_VERSION = "pov_card_v1"
+PROMPT_VERSION = "pov_card_v2"
 
 SYSTEM_PROMPT = (
     "You summarize one person's point of view from their public writing for a "

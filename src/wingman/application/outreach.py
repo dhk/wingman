@@ -23,7 +23,7 @@ from wingman.agents.outreach_writer import (
 from wingman.application.ingest import IngestError
 from wingman.application.similarity import corpus_alignment
 from wingman.domain.corpus import CorpusDocument
-from wingman.domain.outreach import OutreachBrief, TalkingPoint
+from wingman.domain.outreach import OutreachBrief, OutreachPurpose, TalkingPoint
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.providers.base import ModelProvider, ModelRequest
@@ -34,11 +34,36 @@ _logger = get_logger("application.outreach")
 # overlap without drowning the stances.
 MAX_CORPUS_DOCUMENTS = 12
 MAX_CHARS_PER_DOCUMENT = 4_000
-# The prompt asks for at most 5 talking points and a sub-120-word intro;
+# The prompt asks for at most 5 talking points and 3-5 intro bullets;
 # enforce both deterministically too.
 MAX_TALKING_POINTS = 5
-MAX_INTRO_WORDS = 120
-MAX_INTRO_CHARS = 1_500
+MAX_INTRO_POINTS = 5
+MAX_CHARS_PER_INTRO_POINT = 300
+
+
+# What each purpose asks of the draft. Honesty constraints are explicit:
+# reconnection references real shared ground, never invented memories.
+PURPOSE_GUIDANCE: dict[OutreachPurpose, str] = {
+    OutreachPurpose.INTRODUCTION: (
+        "This is a first contact: presume no familiarity, open with the "
+        "strongest genuine overlap, and keep the ask small (a conversation)."
+    ),
+    OutreachPurpose.RECONNECTION: (
+        "They already know the user: acknowledge the gap in time plainly, "
+        "point to what changed since, and never invent shared memories — "
+        "only the supplied writing is known history."
+    ),
+    OutreachPurpose.JOB: (
+        "The user is interested in working at this person's company: connect "
+        "the user's demonstrated thinking to the company's direction, express "
+        "interest directly, and ask for a conversation — not a job."
+    ),
+    OutreachPurpose.ADVICE: (
+        "The user wants this person's perspective: frame one concrete "
+        "question growing out of the shared ground, and make it easy to "
+        "answer briefly."
+    ),
+}
 
 
 class RejectedTalkingPoint(BaseModel):
@@ -91,7 +116,12 @@ def _corpus_block(documents: list[CorpusDocument], bodies: dict[str, str]) -> st
     return "\n".join(parts)
 
 
-def build_outreach_brief(name: str, storage: Storage, provider: ModelProvider) -> OutreachReport:
+def build_outreach_brief(
+    name: str,
+    storage: Storage,
+    provider: ModelProvider,
+    purpose: OutreachPurpose = OutreachPurpose.INTRODUCTION,
+) -> OutreachReport:
     """Build (or rebuild) the outreach brief for a person. Drafts only — never sends."""
     name_key = " ".join(name.lower().split())
     person = storage.find_person_by_name_key(name_key)
@@ -117,13 +147,24 @@ def build_outreach_brief(name: str, storage: Storage, provider: ModelProvider) -
     if not documents:
         raise IngestError("your corpus documents have no extractable text.")
     by_id = {document.doc_id: document for document in documents}
-    stance_statements = {stance.statement for stance in card.stances}
+    stance_by_statement = {stance.statement: stance for stance in card.stances}
 
+    # The dimension goes on the evidence line, never prefixed to the statement:
+    # their_stance must be copied character-for-character, and a label glued to
+    # the statement would end up copied into it.
     stances_block = "\n".join(
-        f'- {stance.statement}\n  their words: "{stance.quote}" ({stance.doc_title})'
+        f"- {stance.statement}\n"
+        f'  their words: "{stance.quote}" ({stance.doc_title})'
+        + (f" [dimension: {stance.dimension.value}]" if stance.dimension else "")
         for stance in card.stances
     )
-    prompt = build_prompt(person.name, stances_block, _corpus_block(documents, bodies))
+    prompt = build_prompt(
+        person.name,
+        stances_block,
+        _corpus_block(documents, bodies),
+        purpose.value,
+        PURPOSE_GUIDANCE[purpose],
+    )
     response = provider.complete(ModelRequest(system=SYSTEM_PROMPT, prompt=prompt))
     proposal = parse_outreach_proposal(response.text)
 
@@ -147,7 +188,8 @@ def build_outreach_brief(name: str, storage: Storage, provider: ModelProvider) -
         if not point:
             rejected.append(RejectedTalkingPoint(point="(empty)", reason="empty point"))
             continue
-        if stance not in stance_statements:
+        matched_stance = stance_by_statement.get(stance)
+        if matched_stance is None:
             rejected.append(
                 RejectedTalkingPoint(
                     point=point,
@@ -182,6 +224,7 @@ def build_outreach_brief(name: str, storage: Storage, provider: ModelProvider) -
                 your_quote=quote,
                 corpus_doc_id=document.doc_id,
                 corpus_doc_title=document.title,
+                dimension=matched_stance.dimension,
             )
         )
     if not points:
@@ -190,15 +233,17 @@ def build_outreach_brief(name: str, storage: Storage, provider: ModelProvider) -
             f"({len(rejected)} rejected). The brief was not stored; re-run to retry."
         )
 
-    intro = proposal.intro.strip()
-    intro_words = intro.split()
-    if len(intro_words) > MAX_INTRO_WORDS:
-        intro = " ".join(intro_words[:MAX_INTRO_WORDS])
+    intro_points = [
+        bullet.strip()[:MAX_CHARS_PER_INTRO_POINT]
+        for bullet in proposal.intro_points
+        if bullet.strip()
+    ][:MAX_INTRO_POINTS]
     brief = OutreachBrief(
         person_id=person.person_id,
         person_name=person.name,
         talking_points=points,
-        draft_intro=intro[:MAX_INTRO_CHARS],
+        intro_points=intro_points,
+        purpose=purpose,
         alignment=corpus_alignment(storage, person.person_id),
         corpus_documents_used=len(documents),
         pov_generated_at=card.generated_at,
@@ -227,14 +272,25 @@ def render_outreach_brief(brief: OutreachBrief) -> str:
         f"{brief.corpus_documents_used} of your documents, {brief.provider}/{brief.model}, "
         f"{brief.generated_at.date().isoformat()})",
     ]
+    lines.append(f"Purpose: {brief.purpose.value}")
     if brief.alignment is not None:
         lines.append(f"Alignment with your corpus: {brief.alignment:.3f}")
+    mix: dict[str, int] = {}
+    for point in brief.talking_points:
+        key = point.dimension.value if point.dimension else "uncategorized"
+        mix[key] = mix.get(key, 0) + 1
+    if mix:
+        pretty = ", ".join(f"{count} {name}" for name, count in sorted(mix.items()))
+        lines.append(f"Grounded in: {pretty}")
     lines.extend(["", "Talking points:"])
     for number, point in enumerate(brief.talking_points, start=1):
-        lines.append(f"{number}. {point.point}")
+        label = f" [{point.dimension.value}]" if point.dimension else ""
+        lines.append(f"{number}.{label} {point.point}")
         lines.append(f"   they argue: {point.their_stance}")
         lines.append(f'   you wrote: "{point.your_quote}" ({point.corpus_doc_title})')
-    if brief.draft_intro:
-        lines.extend(["", "Draft intro (edit before sending — Wingman never sends, RFC-006):"])
-        lines.append(brief.draft_intro)
+    if brief.intro_points:
+        lines.extend(
+            ["", "Intro material (compose it in your own voice — Wingman never sends, RFC-006):"]
+        )
+        lines.extend(f"- {bullet}" for bullet in brief.intro_points)
     return "\n".join(lines)

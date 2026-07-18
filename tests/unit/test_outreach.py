@@ -66,6 +66,7 @@ def seeded_workspace(workspace: Path, storage: Storage, config) -> str:
                         "statement": STANCE,
                         "quote": "Every answer should show its work",
                         "doc_id": doc_id,
+                        "dimension": "technical",
                     }
                 ],
                 "topics": ["explainable analytics"],
@@ -95,16 +96,24 @@ def test_valid_points_are_stored_with_alignment(workspace: Path) -> None:
                         "your_quote": "Explainable analytics pipelines beat black boxes",
                     }
                 ],
-                "intro": "Hi Jane — your case for explainable answers matches what I build.",
+                "intro_points": [
+                    "Her explainability stance overlaps your pipelines essay",
+                    "Ask for twenty minutes on evidence-first analytics",
+                ],
             }
         )
         report = build_outreach_brief("Jane Author", storage, provider)
         assert provider.last_prompt is not None
         assert corpus_id in provider.last_prompt and STANCE in provider.last_prompt
+        assert "[dimension: technical]" in provider.last_prompt
         assert len(report.brief.talking_points) == 1
+        # the dimension is inherited from the cited stance, never model-labeled
+        from wingman.domain.pov import StanceDimension
+
+        assert report.brief.talking_points[0].dimension is StanceDimension.TECHNICAL
         assert report.brief.talking_points[0].corpus_doc_title.startswith("Explainable analytics")
         assert report.brief.alignment is not None
-        assert report.brief.draft_intro.startswith("Hi Jane")
+        assert len(report.brief.intro_points) == 2
 
         person = storage.find_person_by_name_key("jane author")
         assert person is not None
@@ -113,6 +122,11 @@ def test_valid_points_are_stored_with_alignment(workspace: Path) -> None:
         rendered = render_outreach_brief(stored)
         assert "nothing is sent" in rendered and "RFC-006" in rendered
         assert "black boxes" in rendered and "Alignment" in rendered
+        assert "Grounded in: 1 technical" in rendered
+        assert "1. [technical] " in rendered
+        assert "Purpose: introduction" in rendered
+        assert "Intro material (compose it in your own voice" in rendered
+        assert "- Ask for twenty minutes on evidence-first analytics" in rendered
 
 
 def test_fabricated_quotes_stances_and_docs_are_rejected(workspace: Path) -> None:
@@ -147,7 +161,7 @@ def test_fabricated_quotes_stances_and_docs_are_rejected(workspace: Path) -> Non
                         "your_quote": "anything",
                     },
                 ],
-                "intro": "",
+                "intro_points": [],
             }
         )
         report = build_outreach_brief("Jane Author", storage, provider)
@@ -176,13 +190,13 @@ def test_point_limit_and_no_survivors(workspace: Path) -> None:
                     }
                     for index in range(8)
                 ],
-                "intro": "word " * 150,
+                "intro_points": [f"bullet {i}" for i in range(8)] + ["  "],
             }
         )
         report = build_outreach_brief("Jane Author", storage, over_limit)
         assert len(report.brief.talking_points) == 5
         assert len([item for item in report.rejected if "limit" in item.reason]) == 3
-        assert len(report.brief.draft_intro.split()) == 120  # 120-word cap enforced
+        assert len(report.brief.intro_points) == 5  # bullet cap enforced, blanks dropped
 
         all_bad = ScriptedProvider(
             {
@@ -194,7 +208,7 @@ def test_point_limit_and_no_survivors(workspace: Path) -> None:
                         "your_quote": "never wrote this",
                     }
                 ],
-                "intro": "",
+                "intro_points": [],
             }
         )
         with pytest.raises(IngestError, match="no talking point survived"):
@@ -208,7 +222,7 @@ def test_point_limit_and_no_survivors(workspace: Path) -> None:
 
 def test_brief_requires_person_card_and_corpus(workspace: Path) -> None:
     config = load_config()
-    provider = ScriptedProvider({"talking_points": [], "intro": ""})
+    provider = ScriptedProvider({"talking_points": [], "intro_points": []})
     with Storage(config.db_path) as storage:
         with pytest.raises(IngestError, match="no person named"):
             build_outreach_brief("Nobody", storage, provider)
@@ -237,3 +251,30 @@ def test_brief_requires_person_card_and_corpus(workspace: Path) -> None:
         )
         with pytest.raises(IngestError, match="corpus is empty"):
             build_outreach_brief("Jane Author", storage, provider)
+
+
+def test_purpose_shapes_the_prompt_and_is_stored(workspace: Path) -> None:
+    from wingman.domain.outreach import OutreachPurpose
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        corpus_id = seeded_workspace(workspace, storage, config)
+        provider = ScriptedProvider(
+            {
+                "talking_points": [
+                    {
+                        "point": "Shared ground.",
+                        "their_stance": STANCE,
+                        "corpus_doc_id": corpus_id,
+                        "your_quote": "black boxes in production",
+                    }
+                ],
+                "intro_points": ["Express interest in the company's direction"],
+            }
+        )
+        report = build_outreach_brief("Jane Author", storage, provider, purpose=OutreachPurpose.JOB)
+        assert provider.last_prompt is not None
+        assert "The purpose of this outreach: job." in provider.last_prompt
+        assert "working at this person's company" in provider.last_prompt
+        assert report.brief.purpose is OutreachPurpose.JOB
+        assert "Purpose: job" in render_outreach_brief(report.brief)
