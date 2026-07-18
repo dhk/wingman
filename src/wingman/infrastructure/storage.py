@@ -71,6 +71,14 @@ CREATE TABLE IF NOT EXISTS pov_cards (
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS watchlist_members (
+    list_key TEXT NOT NULL,
+    list_name TEXT NOT NULL,
+    member_kind TEXT NOT NULL,
+    member_name TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (list_key, member_kind, member_name)
+);
 CREATE TABLE IF NOT EXISTS news_items (
     item_id TEXT PRIMARY KEY,
     person_id TEXT NOT NULL,
@@ -413,6 +421,55 @@ class Storage:
         )
         row: tuple[str] | None = cursor.fetchone()
         return PovCard.model_validate_json(row[0]) if row else None
+
+    def watchlist_add(self, list_name: str, member_kind: str, member_name: str) -> bool:
+        """Add a member to a (implicitly created) watchlist; False if already there."""
+        list_key = " ".join(list_name.lower().split())
+        try:
+            self._conn.execute(
+                "INSERT INTO watchlist_members"
+                " (list_key, list_name, member_kind, member_name, added_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    list_key,
+                    list_name.strip(),
+                    member_kind,
+                    member_name.strip(),
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError:
+            return False
+        self._conn.commit()
+        return True
+
+    def watchlist_remove(self, list_name: str, member_kind: str, member_name: str) -> bool:
+        list_key = " ".join(list_name.lower().split())
+        cursor = self._conn.execute(
+            "DELETE FROM watchlist_members"
+            " WHERE list_key = ? AND member_kind = ? AND member_name = ?",
+            (list_key, member_kind, member_name.strip()),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def watchlists(self) -> list[tuple[str, int]]:
+        """All watchlists with member counts, by name."""
+        cursor = self._conn.execute(
+            "SELECT MIN(list_name), COUNT(*) FROM watchlist_members"
+            " GROUP BY list_key ORDER BY list_key"
+        )
+        return [(row[0], row[1]) for row in cursor.fetchall()]
+
+    def watchlist_members(self, list_name: str) -> list[tuple[str, str]]:
+        """(member_kind, member_name) rows for one list, in added order."""
+        list_key = " ".join(list_name.lower().split())
+        cursor = self._conn.execute(
+            "SELECT member_kind, member_name FROM watchlist_members"
+            " WHERE list_key = ? ORDER BY added_at, member_name",
+            (list_key,),
+        )
+        return [(row[0], row[1]) for row in cursor.fetchall()]
 
     def replace_person_news(self, person_id: str, items: list[NewsItem]) -> None:
         """News is a refreshed snapshot, not an archive: old items are replaced."""

@@ -26,6 +26,8 @@ from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job as assess_job_use_case
 from wingman.application.corpus import find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
+from wingman.application.pipeline import MisoReport
+from wingman.application.pipeline import make_it_so as make_it_so_use_case
 from wingman.application.people import (
     add_person,
     attach_feed,
@@ -631,6 +633,103 @@ def my_pov(refresh: bool = False) -> str:
         f"\n  rejected stance {item.statement!r}: {item.reason}" for item in report.rejected
     )
     return render_pov_card(report.card) + rejected
+
+
+def _miso_lines(report: MisoReport) -> str:
+    marks = {"ok": "✓", "skipped": "–", "failed": "✗"}
+    lines = [f"{report.target} ({report.kind}):"]
+    lines.extend(
+        f"  {marks.get(step.status, '?')} {step.name}: {step.detail}" for step in report.steps
+    )
+    if report.export_path:
+        lines.append(f'Render: npx md-to-pdf "{report.export_path}"')
+    return "\n".join(lines)
+
+
+@server.tool()
+def make_it_so(name: str, purpose: str = "introduction", out_dir: str = "") -> str:
+    """The easy daily command: everything end to end for a person or company.
+
+    Fetch, news, embed, POV, brief, and both exports, with honest per-step
+    results — model steps skip visibly without API keys. Network use is the
+    same as the underlying tools (feed fetch, news RSS, embeddings egress).
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        outreach_purpose = OutreachPurpose(purpose.strip().lower())
+    except ValueError:
+        valid = ", ".join(entry.value for entry in OutreachPurpose)
+        return f"unknown purpose {purpose!r}; use one of: {valid}."
+    destination = Path(out_dir).expanduser() if out_dir.strip() else None
+    try:
+        with Storage(config.db_path) as storage:
+            report = make_it_so_use_case(
+                name, config, storage, purpose=outreach_purpose, out_dir=destination
+            )
+    except IngestError as exc:
+        return f"make-it-so failed: {exc}"
+    return _miso_lines(report)
+
+
+@server.tool()
+def watchlist(action: str, list_name: str = "", member: str = "", company: bool = False) -> str:
+    """Manage named groups of people/companies: action is add, remove, list, show, or run.
+
+    'run' cycles every member through make_it_so, continuing past failures.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    kind = "company" if company else "person"
+    with Storage(config.db_path) as storage:
+        if action == "add":
+            if not list_name.strip() or not member.strip():
+                return "watchlist add needs list_name and member."
+            member_name = member.strip()
+            if kind == "person":
+                found = _find_person(storage, member)
+                if isinstance(found, str):
+                    return found
+                member_name = found.name
+            added = storage.watchlist_add(list_name, kind, member_name)
+            state = "Added" if added else "Already on"
+            return f"{state} {member_name} ({kind}) — watchlist {list_name!r}."
+        if action == "remove":
+            removed = storage.watchlist_remove(list_name, kind, member)
+            return (
+                f"Removed {member} from {list_name!r}."
+                if removed
+                else f"{member} was not on {list_name!r}."
+            )
+        if action == "list":
+            lists = storage.watchlists()
+            if not lists:
+                return "No watchlists yet."
+            return "\n".join(f"{name}  [{count} members]" for name, count in lists)
+        if action == "show":
+            members = storage.watchlist_members(list_name)
+            if not members:
+                return f"Watchlist {list_name!r} has no members."
+            return "\n".join(f"{name}  ({member_kind})" for member_kind, name in members)
+        if action == "run":
+            members = storage.watchlist_members(list_name)
+            if not members:
+                return f"Watchlist {list_name!r} has no members. Nothing was run."
+            blocks: list[str] = []
+            failures = 0
+            for member_kind, member_name in members:
+                try:
+                    report = make_it_so_use_case(member_name, config, storage, kind=member_kind)
+                except IngestError as exc:
+                    failures += 1
+                    blocks.append(f"✗ {member_name} ({member_kind}): {exc}")
+                    continue
+                blocks.append(_miso_lines(report))
+            blocks.append(f"{len(members)} members processed, {failures} failed.")
+            return "\n\n".join(blocks)
+    return f"unknown action {action!r}; use add, remove, list, show, or run."
 
 
 @server.tool()
