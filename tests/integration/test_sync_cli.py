@@ -46,7 +46,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_sync_fetches_and_embeds(workspace: Path) -> None:
     result = runner.invoke(app, ["sync"])
     assert result.exit_code == 0, result.output
-    assert "Fetched 2/2 sources  new posts: 2" in result.output
+    assert "Fetched 2/2 people  new posts: 2" in result.output
     assert "Embedded 2 new documents (hashed/hashed-256)" in result.output
     assert "Sync complete." in result.output
 
@@ -70,7 +70,22 @@ def test_sync_tolerates_per_person_failures(
     result = runner.invoke(app, ["sync"])
     assert result.exit_code == 0
     assert "Jane Author: fetch failed" in result.output
-    assert "Fetched 1/2 sources" in result.output
+    assert "Fetched 1/2 people" in result.output
+
+
+def test_sync_exits_nonzero_when_every_fetch_fails(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def down(url: str) -> bytes:
+        raise FetchError("network unreachable")
+
+    monkeypatch.setattr(people_module, "fetch_url", down)
+    result = runner.invoke(app, ["sync"])
+    assert result.exit_code == 1
+    assert "Every fetch failed; embedding was not attempted." in result.output
+    # no documents were embedded or created
+    status = runner.invoke(app, ["status"])
+    assert "External documents: 0" in status.output
 
 
 def test_sync_fails_visibly_when_embedding_unconfigured(

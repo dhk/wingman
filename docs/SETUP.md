@@ -122,9 +122,13 @@ at 08:30:
 </plist>
 ```
 
-Graceful degradation: without a Voyage key, either set
-`provider = "hashed"` in `models.toml` (sync then stays fully local) or the
-embed step fails visibly in the log while fetched posts are kept.
+**Key handling:** the `EnvironmentVariables` block stores your Voyage key in
+plaintext in the plist — acceptable only if you accept that trade
+(`chmod 600` the file, keep it out of any repo or synced folder). The
+cleaner alternative: set `provider = "hashed"` in `models.toml` and omit the
+key block entirely — sync then stays fully local and keyless. With voyage
+configured but no key available, the embed step fails visibly in the log
+while fetched posts are kept.
 
 ## 4. Verify and use
 

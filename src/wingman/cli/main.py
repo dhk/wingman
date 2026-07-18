@@ -280,7 +280,7 @@ def sync() -> None:
     """Fetch every watched source and embed whatever is new — one command.
 
     The maintenance loop as a single explicit invocation (RFC-009 holds:
-    running this command is the consent). Per-source failures are reported
+    running this command is the consent). Per-person failures are reported
     and skipped, never silently hidden. Embedding degrades per RFC-010: with
     no VOYAGE_API_KEY, either configure the local 'hashed' provider in
     models.toml or expect the embed step to fail visibly (exit 1) while the
@@ -310,7 +310,7 @@ def sync() -> None:
             if report.added:
                 typer.echo(f"  {person.name}: +{report.added} new")
         typer.echo(
-            f"Fetched {fetched}/{len(targets)} sources  new posts: {new_posts}"
+            f"Fetched {fetched}/{len(targets)} people  new posts: {new_posts}"
             + (f"  failures: {failed}" if failed else "")
         )
         if fetched == 0:
