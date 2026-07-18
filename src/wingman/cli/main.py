@@ -24,6 +24,7 @@ from wingman.application.people import (
     seed_from_connections,
 )
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
+from wingman.application.pov import build_pov_card, render_pov_card
 from wingman.application.similarity import embed_missing, people_like, similar_people
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.logs import configure_logging
@@ -817,6 +818,52 @@ def people_like_cmd(
         typer.echo(
             f"{number}. {entry.name}{detail}  score {entry.score:.3f}  [{entry.documents} docs]"
         )
+
+
+@people_app.command("pov")
+def people_pov(
+    name: str = typer.Argument(..., help="Person to summarize."),
+    refresh: bool = typer.Option(
+        False, "--refresh", help="Rebuild the card (a model call) even if one is stored."
+    ),
+) -> None:
+    """What this person thinks: an evidence-backed POV card from their writing.
+
+    Building a card is a model call (synthesize_balanced): the person's stored
+    posts go to the configured provider, and every proposed stance is kept
+    only if its quote appears verbatim in the stored document. A stored card
+    is shown without any model call; --refresh rebuilds.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "summarized")
+    with Storage(config.db_path) as storage:
+        name_key = " ".join(name.lower().split())
+        person = storage.find_person_by_name_key(name_key)
+        if person is None:
+            typer.echo(f"No person named {name!r}; see 'wingman people list'.", err=True)
+            raise typer.Exit(code=1)
+        if not refresh:
+            stored = storage.get_pov_card(person.person_id)
+            if stored is not None:
+                typer.echo(render_pov_card(stored))
+                typer.echo("\n(stored card — rebuild with --refresh)")
+                return
+        try:
+            provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+            report = build_pov_card(name, storage, provider)
+        except (IngestError, ModelConfigError, ProviderError) as exc:
+            typer.echo(f"people pov failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        except ProposalParseError as exc:
+            typer.echo(
+                f"people pov failed: {exc}. Nothing was stored; re-run to retry.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+    typer.echo(render_pov_card(report.card))
+    for rejected in report.rejected:
+        typer.echo(f"  rejected stance {rejected.statement!r}: {rejected.reason}")
 
 
 @people_app.command("discover")

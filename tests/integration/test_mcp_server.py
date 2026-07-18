@@ -51,6 +51,7 @@ def test_all_tools_are_registered() -> None:
         "feed_discover",
         "feed_attach",
         "people_import_connections",
+        "people_pov",
     }
 
 
@@ -196,6 +197,52 @@ def test_feed_attach_is_a_two_step_confirmation(
     assert "medium.com" in people_list()
     # invalid kind is rejected
     assert "kind must be" in feed_attach("Marko Klopets", "https://x.example.com", kind="weird")
+
+
+def test_people_pov_via_mcp_with_recorded_provider(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+
+    import wingman.application.people as people_module
+    from wingman.infrastructure.storage import Storage
+    from wingman.mcp_server import people_add, people_fetch, people_pov
+
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
+    people_add("Jane Author", substack_url="https://jane.substack.com")
+    people_fetch("Jane Author")
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person = storage.find_person_by_name_key("jane author")
+        assert person is not None
+        doc_id = storage.list_external_documents(person.person_id)[0].doc_id
+    response_path = tmp_path / "pov-response.json"
+    response_path.write_text(
+        json.dumps(
+            {
+                "stances": [
+                    {
+                        "statement": "Believes streaming infrastructure is foundational.",
+                        "quote": "Kafka streaming pipelines everywhere",
+                        "doc_id": doc_id,
+                    }
+                ],
+                "topics": ["streaming"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config.models_config_path.write_text(
+        f'[models.synthesize_balanced]\nprovider = "recorded"\npath = "{response_path}"\n',
+        encoding="utf-8",
+    )
+    card = people_pov("Jane Author")
+    assert "POV card: Jane Author" in card
+    assert "streaming pipelines everywhere" in card
+    # second call serves the stored card without a model call
+    stored = people_pov("Jane Author")
+    assert "stored card" in stored
 
 
 def test_new_tools_report_uninitialized_workspace(

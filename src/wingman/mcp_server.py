@@ -35,6 +35,7 @@ from wingman.application.people import (
     find_people_evidence,
     seed_from_connections,
 )
+from wingman.application.pov import build_pov_card, render_pov_card
 from wingman.application.similarity import SimilarPerson, embed_missing, similar_people
 from wingman.application.similarity import people_like as people_like_use_case
 from wingman.domain.person import FeedAttribution, FeedKind, FeedSource
@@ -388,6 +389,39 @@ def people_like(names: list[str], limit: int = 10) -> str:
     if not report.people:
         return "No other people have embedded writing yet — fetch feeds and run the embed tool."
     return _similarity_lines(report.reference, list(report.people))
+
+
+@server.tool()
+def people_pov(name: str, refresh: bool = False) -> str:
+    """What this person thinks: an evidence-backed POV card from their stored writing.
+
+    Returns the stored card when one exists; refresh=True rebuilds it (a
+    model call — the person's stored posts go to the synthesize_balanced
+    provider, and every stance is kept only if its quote appears verbatim
+    in the stored document).
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        person = storage.find_person_by_name_key(_name_key(name))
+        if person is None:
+            return f"No person named {name!r}; see people_list."
+        if not refresh:
+            stored = storage.get_pov_card(person.person_id)
+            if stored is not None:
+                return render_pov_card(stored) + "\n\n(stored card — rebuild with refresh=True)"
+        try:
+            provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+            report = build_pov_card(name, storage, provider)
+        except ProposalParseError as exc:
+            return f"people pov failed: {exc}. Nothing was stored; call again to retry."
+        except (IngestError, ModelConfigError, ProviderError) as exc:
+            return f"people pov failed: {exc}"
+    rejected = "".join(
+        f"\n  rejected stance {item.statement!r}: {item.reason}" for item in report.rejected
+    )
+    return render_pov_card(report.card) + rejected
 
 
 @server.tool()

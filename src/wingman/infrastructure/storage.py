@@ -13,6 +13,7 @@ from wingman.domain import SourceRecord
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.opportunity import Opportunity
 from wingman.domain.person import ExternalDocument, Person
+from wingman.domain.pov import PovCard
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 
 _SCHEMA = """
@@ -63,6 +64,12 @@ CREATE TABLE IF NOT EXISTS external_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_external_documents_person ON external_documents (person_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS external_fts USING fts5(doc_id UNINDEXED, title, body);
+CREATE TABLE IF NOT EXISTS pov_cards (
+    card_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS embeddings (
     doc_id TEXT PRIMARY KEY,
     scope TEXT NOT NULL,
@@ -369,6 +376,29 @@ class Storage:
                 (person_id,),
             )
         return [ExternalDocument.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def save_pov_card(self, card: PovCard) -> None:
+        """Insert or replace the card for its person (cards are rebuilt, not versioned)."""
+        self._conn.execute(
+            "INSERT INTO pov_cards (card_id, person_id, payload, created_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(person_id) DO UPDATE SET card_id = excluded.card_id,"
+            " payload = excluded.payload, created_at = excluded.created_at",
+            (
+                card.card_id,
+                card.person_id,
+                card.model_dump_json(),
+                card.generated_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def get_pov_card(self, person_id: str) -> PovCard | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM pov_cards WHERE person_id = ?", (person_id,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return PovCard.model_validate_json(row[0]) if row else None
 
     def has_external_url(self, url: str) -> bool:
         cursor = self._conn.execute(
