@@ -465,6 +465,7 @@ def feed_attach(person_name: str, url: str, kind: str = "rss", organization: str
         return _NOT_INITIALIZED
     if kind not in {FeedKind.RSS.value, FeedKind.INDEX_PAGE.value}:
         return f"kind must be 'rss' or 'index_page'; got {kind!r}."
+    url = url.rstrip("/")  # match attach_feed's stored normalization in the echoed message
     with Storage(config.db_path) as storage:
         person = storage.find_person_by_name_key(_name_key(person_name))
         if person is None:

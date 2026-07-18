@@ -188,8 +188,11 @@ def test_feed_attach_is_a_two_step_confirmation(
     assert "explicit yes" in discovery or "confirm" in discovery
     assert "medium.com" not in people_list()
 
-    attached = feed_attach("Marko Klopets", "https://medium.com/feed/@marko")
+    # a trailing slash is normalized away, and the message echoes what was stored
+    attached = feed_attach("Marko Klopets", "https://medium.com/feed/@marko/")
     assert "Attached rss source" in attached
+    assert "https://medium.com/feed/@marko" in attached
+    assert "@marko/" not in attached
     assert "medium.com" in people_list()
     # invalid kind is rejected
     assert "kind must be" in feed_attach("Marko Klopets", "https://x.example.com", kind="weird")
