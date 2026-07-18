@@ -76,6 +76,7 @@ from wingman.application.similarity import (
 from wingman.application.similarity import people_like as people_like_use_case
 from wingman.domain.person import FeedAttribution, FeedKind, FeedSource, Person
 from wingman.infrastructure.config import Config, load_config
+from wingman.infrastructure.keys import ensure_env
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.providers.base import CapabilityClass, ProviderError
@@ -1186,6 +1187,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
     configure_logging()
+    ensure_env()  # hydrate missing API keys from the macOS Keychain (RFC-019)
     if not args.http:
         if args.rotate_token:
             parser.error("--rotate-token only makes sense with --http")

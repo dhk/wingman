@@ -223,9 +223,21 @@ shell PATH:
 }
 ```
 
-Model-backed tools (assess, ingest) need `ANTHROPIC_API_KEY` in the server's
-environment; add `"env": {"ANTHROPIC_API_KEY": "..."}` to the entry if your
-key is not set system-wide.
+Model-backed tools (assess, ingest) need `ANTHROPIC_API_KEY`, and embeddings
+need `VOYAGE_API_KEY`. On macOS, store both in the Keychain once and every
+entrypoint — CLI, MCP server, scheduled runs — hydrates them automatically
+(RFC-019), so the config above needs no `env` block and no secret ever sits
+in a plaintext file:
+
+```bash
+wingman keys set anthropic     # takes the exported env var, or prompts hidden
+wingman keys set voyage
+wingman keys list              # shows each key's source, never its value
+```
+
+An exported environment variable always wins over the Keychain; if you
+prefer env-based setup, add `"env": {"ANTHROPIC_API_KEY": "..."}` to the
+server entry as before.
 
 ### Remote MCP (claude.ai web/mobile) — RFC-017
 
@@ -272,17 +284,16 @@ command yourself. macOS launchd, running at 5:30am daily
   <array><string>/Users/you/.local/bin/wingman</string><string>overnight</string></array>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>5</integer><key>Minute</key><integer>30</integer></dict>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>ANTHROPIC_API_KEY</key><string>sk-ant-...</string>
-    <key>VOYAGE_API_KEY</key><string>pa-...</string>
-  </dict>
   <key>StandardOutPath</key><string>/tmp/wingman-overnight.log</string>
   <key>StandardErrorPath</key><string>/tmp/wingman-overnight.log</string>
 </dict></plist>
 ```
 
-Load it with `launchctl load ~/Library/LaunchAgents/com.wingman.overnight.plist`;
+API keys come from the Keychain automatically (`wingman keys set ...`,
+RFC-019) — no secrets in the plist. Run `wingman overnight` once by hand
+first and click **Always Allow** on the Keychain prompt so unattended runs
+never stall. Load it with
+`launchctl load ~/Library/LaunchAgents/com.wingman.overnight.plist`;
 unloading it is the schedule's off-switch.
 
 ## Quick Start (development checkout)

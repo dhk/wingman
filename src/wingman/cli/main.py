@@ -59,6 +59,14 @@ from wingman.application.similarity import (
     similar_people,
 )
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
+from wingman.infrastructure.keys import (
+    KNOWN_KEYS,
+    KeyStoreError,
+    ensure_env,
+    key_status,
+    set_key,
+    unset_key,
+)
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.providers.base import CapabilityClass, ProviderError
@@ -81,6 +89,15 @@ export_app = typer.Typer(help="Print-ready Letter-format exports (render with md
 app.add_typer(export_app, name="export")
 watchlist_app = typer.Typer(help="Named groups of people and companies to cycle through.")
 app.add_typer(watchlist_app, name="watchlist")
+keys_app = typer.Typer(help="API keys in the macOS Keychain — no plaintext files (RFC-019).")
+app.add_typer(keys_app, name="keys")
+
+
+@app.callback()
+def _bootstrap() -> None:
+    """Hydrate missing API keys from the Keychain before any command runs."""
+    ensure_env()
+
 
 MIN_PYTHON = (3, 12)
 _OUT_HELP = "Destination folder (default: the workspace's reports/pdf/)."
@@ -1599,6 +1616,59 @@ def company_follow_cmd(
         typer.echo(f"follow failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(render_follow_report(report))
+
+
+@keys_app.command("set")
+def keys_set(
+    name: str = typer.Argument(..., help="Which key: " + ", ".join(sorted(KNOWN_KEYS)) + "."),
+    value: str = typer.Option(
+        "",
+        "--value",
+        help="The key itself. Omit to take it from the already-exported environment "
+        "variable, or be prompted with hidden input.",
+    ),
+) -> None:
+    """Store an API key in the macOS Keychain (replaces any previous value).
+
+    Once stored, every wingman command and the MCP server hydrate it
+    automatically — no env blocks in claude_desktop_config.json, no
+    EnvironmentVariables in launchd plists, no wrapper scripts. An exported
+    environment variable still wins when both exist.
+    """
+    configure_logging()
+    env_var = KNOWN_KEYS.get(name.strip().lower(), "")
+    secret = value or os.environ.get(env_var, "").strip()
+    if not secret:
+        secret = typer.prompt(f"{name} key", hide_input=True)
+    try:
+        stored = set_key(name, secret)
+    except KeyStoreError as exc:
+        typer.echo(f"keys set failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Stored {stored} in the Keychain (account 'wingman').")
+
+
+@keys_app.command("list")
+def keys_list() -> None:
+    """Where each known key comes from right now — never the values."""
+    configure_logging()
+    for short_name, env_var, state in key_status():
+        typer.echo(f"{short_name:10s} {env_var:20s} {state}")
+    typer.echo("Precedence: an exported environment variable wins; the Keychain fills gaps.")
+
+
+@keys_app.command("unset")
+def keys_unset(
+    name: str = typer.Argument(..., help="Which key to remove from the Keychain."),
+) -> None:
+    """Remove a stored key from the Keychain (environment variables are untouched)."""
+    configure_logging()
+    try:
+        removed = unset_key(name)
+    except KeyStoreError as exc:
+        typer.echo(f"keys unset failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo("Removed." if removed else "Nothing was stored under that name.")
 
 
 @app.command()
