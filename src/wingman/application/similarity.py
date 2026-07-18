@@ -169,7 +169,7 @@ class _CompanySignal(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-def _company_key(name: str) -> str:
+def company_key(name: str) -> str:
     return " ".join(name.lower().split())
 
 
@@ -184,7 +184,7 @@ def _company_vectors(storage: Storage) -> dict[str, _CompanySignal]:
     signals: dict[str, _CompanySignal] = {}
 
     def contribute(company_name: str, doc_id: str, vector: list[float], person_id: str) -> None:
-        key = _company_key(company_name)
+        key = company_key(company_name)
         if not key:
             return
         signal = signals.setdefault(key, _CompanySignal(display_name=company_name.strip()))
@@ -218,7 +218,7 @@ def company_alignment(storage: Storage, name: str) -> float | None:
         reference = _corpus_vector(storage)
         if reference is None:
             return None
-        signal = _company_vectors(storage).get(_company_key(name))
+        signal = _company_vectors(storage).get(company_key(name))
         if signal is None:
             return None
         return _dot(reference, _mean(signal.vectors))
@@ -268,7 +268,7 @@ def similar_companies(
             reference="your corpus",
             companies=_rank_companies(reference, signals, exclude_keys=set(), limit=limit),
         )
-    key = _company_key(name)
+    key = company_key(name)
     signal = signals.get(key)
     if signal is None:
         raise IngestError(
@@ -294,7 +294,7 @@ def companies_like(storage: Storage, names: list[str], limit: int = 10) -> Compa
     references: list[list[float]] = []
     exclude: set[str] = set()
     for name in names:
-        key = _company_key(name)
+        key = company_key(name)
         signal = signals.get(key)
         if signal is None:
             raise IngestError(

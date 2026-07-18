@@ -155,3 +155,20 @@ def test_dossier_fails_visibly_for_unknown_company(workspace: Path) -> None:
     with Storage(config.db_path) as storage:
         with pytest.raises(IngestError, match="attributable"):
             build_company_dossier("NoSuchCo", config, storage)
+
+
+def test_dossier_filename_is_safe_and_blank_names_are_rejected(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        # a company name with path separators must not escape reports/companies/
+        add_employee(storage, config, "Ana", "ana", "Acme / ../Widgets", "kafka streaming")
+        report = build_company_dossier("Acme / ../Widgets", config, storage)
+        written = Path(report.path).resolve()
+        companies_dir = (config.reports_dir / "companies").resolve()
+        assert written.parent == companies_dir
+        assert written.name.startswith("acme-widgets-")
+
+        # a blank name must not silently match everyone with no company set
+        add_person("No Company", storage)
+        with pytest.raises(IngestError, match="empty"):
+            build_company_dossier("   ", config, storage)

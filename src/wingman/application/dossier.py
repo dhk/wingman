@@ -12,13 +12,14 @@ generated report.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
 from wingman.application.ingest import IngestError
 from wingman.application.similarity import (
-    _company_key,
+    company_key,
     company_alignment,
     similar_companies,
 )
@@ -40,21 +41,28 @@ class DossierReport(BaseModel):
 
 
 def _slug(name: str) -> str:
-    return "-".join(_company_key(name).split())
+    """A filesystem-safe filename fragment: company names are arbitrary user
+    data, so everything outside [a-z0-9] becomes a hyphen (no path separators,
+    no dot-dot)."""
+    cleaned = re.sub(r"[^a-z0-9]+", "-", company_key(name)).strip("-")
+    return cleaned or "company"
 
 
 def build_company_dossier(name: str, config: Config, storage: Storage) -> DossierReport:
     """Compose and write the dated dossier for one company. Local data only."""
-    key = _company_key(name)
-    people = [
-        person for person in storage.list_people() if _company_key(person.company or "") == key
-    ]
-    people_by_id = {person.person_id: person for person in storage.list_people()}
+    key = company_key(name)
+    if not key:
+        raise IngestError(
+            "company name is empty — an empty key would match every person with no company set."
+        )
+    all_people = storage.list_people()
+    people = [person for person in all_people if company_key(person.company or "") == key]
+    people_by_id = {person.person_id: person for person in all_people}
     documents: list[ExternalDocument] = []
     for document in storage.list_external_documents():
         person = people_by_id.get(document.person_id)
-        via_person = person is not None and _company_key(person.company or "") == key
-        via_org = _company_key(document.organization or "") == key
+        via_person = person is not None and company_key(person.company or "") == key
+        via_org = company_key(document.organization or "") == key
         if via_person or via_org:
             documents.append(document)
     if not people and not documents:
@@ -111,7 +119,7 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
         for person in sorted(people_by_id.values(), key=lambda entry: entry.name)
         for feed in person.sources
         if feed.attribution == FeedAttribution.ORGANIZATION
-        and _company_key(feed.org_name or "") == key
+        and company_key(feed.org_name or "") == key
     ]
     if org_sources:
         lines.extend(["", "## Organization sources", ""])
