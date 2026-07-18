@@ -1,54 +1,60 @@
 # Context Snapshot: wingman people + company intelligence sessions
-Generated: 2026-07-18T03:40:00Z
+Generated: 2026-07-18T20:50:00Z
 Branch: claude/wingman-pr-3-review-wzugg8
 Status: review
-Description: Queue complete: similarity, outreach briefs, company dossiers all merged
+Description: Backlog complete: backup, approved-source research, company themes, remote MCP
 
 ## Objective
 Build Wingman's people-discovery and company-intelligence surfaces: watchlist,
 public-writing ingestion, similarity, discovery, POV cards, outreach briefs,
-and company dossiers — CLI and MCP in lockstep — on top of the existing
-profile/corpus/assessment core.
+company dossiers, research, and remote access — CLI and MCP in lockstep — on
+top of the existing profile/corpus/assessment core.
 
 ## Where Things Stand
-PRs #13–#40 are all merged. Everything runs end to end and is orchestrated:
-resume imports (PDF/DOCX/LaTeX/Google URLs, RFC-013), feeds incl. smarter
-discovery (anchors + root paths), news snapshots via Google News RSS
-(RFC-014), embeddings/similarity (people + companies), POV cards with
-dimensions (values/attitude/technical/strategy), own-corpus POV
-('wingman pov'), outreach briefs with purposes + intro bullets, company
-dossiers (RFC-012), Letter exports styled by the DHK design system
-(career portrait, company, person 2x2 briefing dock: brief|POV|
-background|news; --html tabbed page that prints as the 2x2),
-'wingman make-it-so' (alias miso — the easy daily command, fetch→news→
-embed→pov→brief→both exports with honest per-step results), and
-watchlists ('watchlist add|remove|list|show|run' cycling miso). MCP
-parity at 29 tools. 210 tests; checks = pytest, ruff check/format,
-mypy strict. Copilot review quota exhausted mid-day — later PRs merged
-on green CI + local suite per precedent.
+PRs #13–#46 are all merged; the ordered backlog ("MCP last") is done:
+- #43 `wingman backup [DEST] [--keep N]` / `restore [--force]`: dated
+  tarballs via SQLite online-backup, retention pruning, traversal-safe
+  restore. MCP `backup`; restore is CLI-only (documented parity exception).
+- #44 RFC-015 approved-source research: `company add-source/sources/
+  remove-source/research` — one GET per user-approved URL, snapshots =
+  text hash + link set, findings = deterministic diffs ("N new links since
+  <date>" is the hiring signal). Dossier "Research" section, 30-day
+  staleness flag. MCP `company_source` (action tool) + `company_research`.
+- #45 RFC-016 company themes: `company pov "X" [--refresh]` — the
+  quote-validated POV pipeline over the company's document pool, author
+  attribution riding doc titles, stored under `__company__{key}`. Dossier
+  renders the stored card; still zero model calls at dossier time.
+  MCP `company_pov` (33 tools).
+- #46 RFC-017 remote MCP: `wingman-mcp --http` — streamable HTTP on
+  loopback at `/mcp/<token>` (workspace file `mcp-http-token`, 0600);
+  `--rotate-token` = revocation; user-managed tunnel (tailscale serve /
+  funnel) for claude.ai connectors; non-loopback bind warns. Live-verified
+  200-on-path / 404-off-path.
+232 tests; checks = pytest, ruff check/format, mypy strict. Copilot review
+quota exhausted all day — #43–#46 merged on green CI + local suite per
+precedent.
 
 ## Technical Decisions (durable ones live in docs/RFC.md — the authoritative record)
 
 ### Delivery loop
 **Decision**: build → all checks → commit (Claude trailer) → push → PR →
 request Copilot review → ~280s background timer → fix-or-decline findings →
-reply + resolve threads → merge on green → reset branch from origin/main.
+merge on green → reset branch from origin/main.
 **State**: implemented; user rejected subscribe_pr_activity — poll with timers.
 
-### Provider/egress rules (see RFC-009/010/011/012)
-**Decision**: network = explicit user-invoked HTTPS reads of public feeds;
-embeddings = voyage/voyage-4 default with keyless 'hashed' fallback; egress
-only via explicit embed/sync; dossiers and similarity are deterministic
-arithmetic over stored data; graceful degradation everywhere (standing user
-directive: mark anything useful for others standing up an instance —
-docs/SETUP.md is the vehicle).
+### Provider/egress rules (RFC-009/010/011/014/015/017)
+**Decision**: network = explicit user-invoked HTTPS reads (feeds, news RSS,
+approved research pages — the user names research URLs, adding is the
+approval); embeddings = voyage/voyage-4 with keyless 'hashed' fallback;
+remote MCP exposes nothing publicly itself — loopback + capability path,
+tunnel is the user's act. RFC-006 always: wingman never sends anything.
 
 ### Fabrication guards
 **Decision**: every model proposal is validated deterministically — POV
-stances need verbatim quotes from stored docs; outreach talking points must
-cite a card stance exactly AND quote the user's corpus verbatim; zero
-survivors stores nothing. Company dossiers skip the model entirely and
-compose validated artifacts with [fact]/[inference] labels.
+stances and company themes need verbatim quotes from stored docs; outreach
+talking points must cite a card stance exactly AND quote the user's corpus
+verbatim; zero survivors stores nothing. Dossiers and research findings are
+deterministic composition/diffs, no model call.
 
 ## User Environment
 - All repos live at ~/Documents/dev — wingman is ~/Documents/dev/wingman.
@@ -67,29 +73,29 @@ compose validated artifacts with [fact]/[inference] labels.
 - LinkedIn export: 2,619 connections seeded (emails never stored)
 
 ## Warnings
-- ⚠️ Container egress proxy blocks substack.com/medium.com etc. — live fetch
-  paths verified only to their visible-failure branch; real verification
-  happens on the user's Mac.
-- ⚠️ User's Mac may still need: git pull + `uv tool install --reinstall .`,
-  Claude Desktop full restart for new MCP tools (7 new since last restart:
-  people_pov, people_brief, company_similar, company_like, company_dossier,
-  plus earlier additions), seed-subscriptions.sh run, VOYAGE_API_KEY
-  exported (already defined per user).
+- ⚠️ Container egress proxy blocks substack.com/medium.com/news.google.com
+  and general web — live fetch paths verified to their visible-failure
+  branch in-container; real verification happens on the user's Mac. The
+  HTTP MCP transport WAS live-verified in-container (loopback).
+- ⚠️ User's Mac needs: git pull + `uv tool install --reinstall .`, then a
+  full Claude Desktop restart to pick up the 4 newest MCP tools (backup,
+  company_source, company_research, company_pov).
 - ⚠️ Version tag (v0.2.0) must be pushed from the user's machine — container
   push is branch-scoped (tags 403).
 
 ## Next Actions
-- [ ] User-side daily loop: pull + reinstall → 'wingman watchlist add
-      investors ...' → 'wingman watchlist run investors --out ~/Downloads'
-- [ ] Marko outreach: interview done in-session (lead: democratize-the-doing/
+- [ ] User-side: pull + reinstall; try the daily loop
+      ('wingman watchlist run investors --out ~/Downloads')
+- [ ] User-side: point 'wingman backup' at a synced folder (e.g.
+      ~/Dropbox/wingman-backups) and consider a cron/launchd entry
+- [ ] User-side: approve research sources for target companies
+      ('wingman company add-source "Supersimple" https://... --label careers')
+- [ ] User-side remote MCP, when wanted: 'wingman-mcp --http' +
+      'tailscale funnel 8787' + claude.ai custom connector with the printed URL
+- [ ] Marko outreach: interview material ready (lead: democratize-the-doing/
       centralize-the-meaning symmetry; ask: where does semantic-layer
-      authority live when agents query; purpose: advice/idea-exchange) —
-      user still to compose + send
-- [ ] Backlog, in no committed order: `wingman backup` command; remote MCP
-      for claude.ai web/mobile (needs its own RFC); Phase 3 continuation
-      (approved-source research plan — the network-scope decision RFC-012
-      deferred); model-synthesized company themes if per-person POV cards
-      prove insufficient; v0.2.0 tag from the user's machine
+      authority live when agents query) — user still to compose + send
+- [ ] Backlog is empty; next work arrives from field usage
 
 ---
 *Resume:* load this file in your next session.
