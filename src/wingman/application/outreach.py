@@ -34,8 +34,10 @@ _logger = get_logger("application.outreach")
 # overlap without drowning the stances.
 MAX_CORPUS_DOCUMENTS = 12
 MAX_CHARS_PER_DOCUMENT = 4_000
-# The prompt asks for at most 5 talking points; enforce it deterministically too.
+# The prompt asks for at most 5 talking points and a sub-120-word intro;
+# enforce both deterministically too.
 MAX_TALKING_POINTS = 5
+MAX_INTRO_WORDS = 120
 MAX_INTRO_CHARS = 1_500
 
 
@@ -128,6 +130,9 @@ def build_outreach_brief(name: str, storage: Storage, provider: ModelProvider) -
     points: list[TalkingPoint] = []
     rejected: list[RejectedTalkingPoint] = []
     for proposed in proposal.talking_points:
+        # Outer whitespace is trimmed before the exact checks below: the value
+        # that gets stored still matches a card stance (or appears in the
+        # corpus) character-for-character, and interior differences still fail.
         point = proposed.point.strip()
         stance = proposed.their_stance.strip()
         quote = proposed.your_quote.strip()
@@ -185,11 +190,15 @@ def build_outreach_brief(name: str, storage: Storage, provider: ModelProvider) -
             f"({len(rejected)} rejected). The brief was not stored; re-run to retry."
         )
 
+    intro = proposal.intro.strip()
+    intro_words = intro.split()
+    if len(intro_words) > MAX_INTRO_WORDS:
+        intro = " ".join(intro_words[:MAX_INTRO_WORDS])
     brief = OutreachBrief(
         person_id=person.person_id,
         person_name=person.name,
         talking_points=points,
-        draft_intro=proposal.intro.strip()[:MAX_INTRO_CHARS],
+        draft_intro=intro[:MAX_INTRO_CHARS],
         alignment=corpus_alignment(storage, person.person_id),
         corpus_documents_used=len(documents),
         pov_generated_at=card.generated_at,

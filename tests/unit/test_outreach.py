@@ -176,12 +176,13 @@ def test_point_limit_and_no_survivors(workspace: Path) -> None:
                     }
                     for index in range(8)
                 ],
-                "intro": "",
+                "intro": "word " * 150,
             }
         )
         report = build_outreach_brief("Jane Author", storage, over_limit)
         assert len(report.brief.talking_points) == 5
         assert len([item for item in report.rejected if "limit" in item.reason]) == 3
+        assert len(report.brief.draft_intro.split()) == 120  # 120-word cap enforced
 
         all_bad = ScriptedProvider(
             {
