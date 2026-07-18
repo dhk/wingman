@@ -30,21 +30,22 @@ against, not traded away silently:
 - **Optimizes opportunity quality, not application volume.** North star:
   *find a small number of exceptional opportunities and make the user the
   obvious candidate for the best of them.*
-- **Local-first private data.** One SQLite workspace on the user's machine.
-  Nothing syncs anywhere the user didn't explicitly point it.
 - **Evidence before assertion.** Every model-proposed claim (profile items,
   POV stances, company themes, outreach talking points) survives only with a
   verbatim quote from a stored document. Zero survivors → nothing stored.
 - **Human approval before external action; Wingman never sends anything**
   (RFC-006). Drafting support ends at material the user composes in their own
   voice.
-- **Explicit, enumerable egress** (RFC-009/014/015): every network read is
-  user-invoked, HTTPS, and listable; embeddings egress is opt-in (RFC-010)
-  with a keyless local fallback.
 - **Deterministic composition over model claims** where possible: dossiers,
   similarity, research diffs, warmth scores are arithmetic and diffs, not
   generation.
 - **No invented familiarity; partial truth over polished fiction.**
+
+**Out of scope for this comparison** (per user direction, 2026-07-18):
+local-first data residency and the explicit-egress model are Wingman
+implementation choices, not scoring criteria — do not award or dock
+comparators for where data lives or how it fetches. Score against the
+bullets above only.
 
 **Explicitly not:** an autonomous applicant, a mass-application engine, a
 keyword optimizer, a status-tracking CRM, or anything that sends on the
@@ -126,22 +127,21 @@ alternative if one exists.
 | Page-change monitoring | Visualping, Distill.io, changedetection.io (OSS) | D (RFC-015 research) |
 | Feed reading / monitoring | Feedly (+Leo), Inoreader, Readwise Reader | C (feeds, news) |
 | AI outreach writers | LinkedIn assistants (Waalaxy, Dripify class), general AI writers | E |
-| PKM + AI (local-first comparators) | Obsidian ecosystem, Notion AI, Rewind/Limitless | A, C (philosophical rivals) |
+| PKM + AI | Obsidian ecosystem, Notion AI, Rewind/Limitless | A, C |
 | MCP-native / agentic career tools | whatever now exists — search explicitly | F (the integration surface) |
 
 ## 4. Rubric (record per tool, date-stamped)
 
-1. **Data ownership & privacy posture** — where does the user's data live?
-   Exportable? Local option?
-2. **Evidence discipline** — does it fabricate? Any provenance on claims?
-3. **Egress/automation posture** — does it send on the user's behalf? Scrape?
-   Auto-apply?
-4. **Feature overlap** — which inventory items (A–F) it covers, and *how much
+1. **Evidence discipline** — does it fabricate? Any provenance on claims?
+2. **Autonomy posture** — does it send or apply on the user's behalf?
+   (Relevant to the never-sends / human-approval invariants; data residency
+   and fetch mechanics are out of scope per §1.)
+3. **Feature overlap** — which inventory items (A–F) it covers, and *how much
    better/worse* (1–5 maturity vs Wingman's version, with one sentence why).
-5. **Interfaces** — API? MCP? Export formats? Could Wingman integrate rather
+4. **Interfaces** — API? MCP? Export formats? Could Wingman integrate rather
    than compete?
-6. **Price & model** — free/paid tiers; what the paid tier actually gates.
-7. **ToS friction** — especially LinkedIn-adjacent functionality.
+5. **Price & model** — free/paid tiers; what the paid tier actually gates.
+6. **ToS friction** — especially LinkedIn-adjacent functionality.
 
 House style applies to the findings: label claims **[fact]** (vendor docs,
 observed behavior, dated) vs **[inference]** (your read). No undated claims.
