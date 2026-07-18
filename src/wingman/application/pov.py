@@ -9,6 +9,9 @@ and reported, never stored (the same fabrication guard as resume ingestion).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from datetime import UTC, datetime
+
 from pydantic import BaseModel, Field
 
 from wingman.agents.pov_analyst import (
@@ -18,8 +21,9 @@ from wingman.agents.pov_analyst import (
     parse_pov_proposal,
 )
 from wingman.application.ingest import IngestError
+from wingman.domain.corpus import CorpusDocument
 from wingman.domain.person import ExternalDocument
-from wingman.domain.pov import PovCard, Stance, StanceDimension
+from wingman.domain.pov import PovCard, PovProposal, Stance, StanceDimension
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
 from wingman.providers.base import ModelProvider, ModelRequest
@@ -44,7 +48,14 @@ class PovReport(BaseModel):
     rejected: list[RejectedStance] = Field(default_factory=list)
 
 
-def _documents_block(documents: list[ExternalDocument], bodies: dict[str, str]) -> str:
+# The identity key for the user's own corpus card in the pov_cards table.
+CORPUS_PERSON_ID = "__corpus__"
+CORPUS_PERSON_NAME = "Your corpus"
+
+
+def _documents_block(
+    documents: Sequence[ExternalDocument | CorpusDocument], bodies: dict[str, str]
+) -> str:
     parts = []
     for document in documents:
         body = bodies[document.doc_id][:MAX_CHARS_PER_DOCUMENT]
@@ -53,32 +64,29 @@ def _documents_block(documents: list[ExternalDocument], bodies: dict[str, str]) 
     return "\n".join(parts)
 
 
-def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovReport:
-    """Build (or rebuild) the POV card for a person from their stored writing."""
-    name_key = " ".join(name.lower().split())
-    person = storage.find_person_by_name_key(name_key)
-    if person is None:
-        raise IngestError(f"no person named {name!r}; see 'wingman people list'.")
-    documents = storage.list_external_documents(person.person_id)
-    if not documents:
-        raise IngestError(
-            f"{person.name} has no stored writing yet. Fetch their sources first "
-            f"('wingman people fetch \"{person.name}\"'), then build the card."
-        )
-    documents.sort(key=lambda d: (d.published_at is not None, d.published_at), reverse=True)
-    documents = documents[:MAX_DOCUMENTS]
-    bodies = {
-        document.doc_id: storage.get_external_body(document.doc_id) or "" for document in documents
-    }
-    documents = [document for document in documents if bodies[document.doc_id].strip()]
-    if not documents:
-        raise IngestError(f"{person.name}'s stored documents have no extractable text.")
-    by_id = {document.doc_id: document for document in documents}
+def _newest[DocT: (ExternalDocument, CorpusDocument)](
+    documents: list[DocT], limit: int
+) -> list[DocT]:
+    """Newest-first cap; naive timestamps treated as UTC so mixed dates sort."""
 
-    prompt = build_prompt(person.name, _documents_block(documents, bodies))
-    response = provider.complete(ModelRequest(system=SYSTEM_PROMPT, prompt=prompt))
-    proposal = parse_pov_proposal(response.text)
+    def key(document: DocT) -> tuple[bool, datetime]:
+        when = document.published_at
+        if when is None:
+            return (False, datetime.min.replace(tzinfo=UTC))
+        return (True, when if when.tzinfo else when.replace(tzinfo=UTC))
 
+    return sorted(documents, key=key, reverse=True)[:limit]
+
+
+def _validate_proposal(
+    proposal: PovProposal,
+    docs: dict[str, tuple[str, str, str | None]],
+    bodies: dict[str, str],
+) -> tuple[list[Stance], list[RejectedStance]]:
+    """Model proposes, this disposes: doc must be supplied, quote verbatim.
+
+    docs maps doc_id -> (title, source_record_id, organization).
+    """
     stances: list[Stance] = []
     rejected: list[RejectedStance] = []
     for proposed in proposal.stances:
@@ -95,8 +103,8 @@ def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovR
         if not statement:
             rejected.append(RejectedStance(statement="(empty)", reason="empty statement"))
             continue
-        document = by_id.get(proposed.doc_id)
-        if document is None:
+        entry = docs.get(proposed.doc_id)
+        if entry is None:
             rejected.append(
                 RejectedStance(
                     statement=statement,
@@ -104,11 +112,12 @@ def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovR
                 )
             )
             continue
-        if not quote or quote not in bodies[document.doc_id]:
+        title, source_record_id, organization = entry
+        if not quote or quote not in bodies[proposed.doc_id]:
             rejected.append(
                 RejectedStance(
                     statement=statement,
-                    reason=f"quote does not appear verbatim in {document.title!r}",
+                    reason=f"quote does not appear verbatim in {title!r}",
                 )
             )
             continue
@@ -122,13 +131,47 @@ def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovR
             Stance(
                 statement=statement,
                 quote=quote,
-                doc_id=document.doc_id,
-                doc_title=document.title,
-                source_record_id=document.source_record_id,
-                organization=document.organization,
+                doc_id=proposed.doc_id,
+                doc_title=title,
+                source_record_id=source_record_id,
+                organization=organization,
                 dimension=dimension,
             )
         )
+    return stances, rejected
+
+
+def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovReport:
+    """Build (or rebuild) the POV card for a person from their stored writing."""
+    name_key = " ".join(name.lower().split())
+    person = storage.find_person_by_name_key(name_key)
+    if person is None:
+        raise IngestError(f"no person named {name!r}; see 'wingman people list'.")
+    documents = storage.list_external_documents(person.person_id)
+    if not documents:
+        raise IngestError(
+            f"{person.name} has no stored writing yet. Fetch their sources first "
+            f"('wingman people fetch \"{person.name}\"'), then build the card."
+        )
+    documents = _newest(documents, MAX_DOCUMENTS)
+    bodies = {
+        document.doc_id: storage.get_external_body(document.doc_id) or "" for document in documents
+    }
+    documents = [document for document in documents if bodies[document.doc_id].strip()]
+    if not documents:
+        raise IngestError(f"{person.name}'s stored documents have no extractable text.")
+
+    prompt = build_prompt(person.name, _documents_block(documents, bodies))
+    response = provider.complete(ModelRequest(system=SYSTEM_PROMPT, prompt=prompt))
+    proposal = parse_pov_proposal(response.text)
+    stances, rejected = _validate_proposal(
+        proposal,
+        {
+            document.doc_id: (document.title, document.source_record_id, document.organization)
+            for document in documents
+        },
+        bodies,
+    )
     if not stances:
         raise IngestError(
             f"no stance survived validation for {person.name} "
@@ -149,6 +192,69 @@ def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovR
     _logger.info(
         "pov_card person=%s documents=%d stances=%d rejected=%d provider=%s model=%s",
         person.name,
+        len(documents),
+        len(stances),
+        len(rejected),
+        response.provider,
+        response.model,
+    )
+    return PovReport(card=card, rejected=rejected)
+
+
+def build_own_pov(storage: Storage, provider: ModelProvider) -> PovReport:
+    """Build (or rebuild) the POV card for the user's own corpus.
+
+    The same machinery as a person's card, pointed at the user's writing:
+    an assembly of the subject areas where the corpus takes a position,
+    each stance backed by a verbatim quote from the user's own documents.
+    Stored under the reserved CORPUS_PERSON_ID.
+    """
+    documents = storage.list_corpus_documents()
+    if not documents:
+        raise IngestError(
+            "your corpus is empty — nothing to take a position from. "
+            "Add your writing with 'wingman corpus add' first."
+        )
+    documents = _newest(documents, MAX_DOCUMENTS)
+    bodies = {
+        document.doc_id: storage.get_corpus_body(document.doc_id) or "" for document in documents
+    }
+    documents = [document for document in documents if bodies[document.doc_id].strip()]
+    if not documents:
+        raise IngestError("your corpus documents have no extractable text.")
+
+    prompt = build_prompt(
+        "the author of these documents (write statements as 'The author ...')",
+        _documents_block(documents, bodies),
+    )
+    response = provider.complete(ModelRequest(system=SYSTEM_PROMPT, prompt=prompt))
+    proposal = parse_pov_proposal(response.text)
+    stances, rejected = _validate_proposal(
+        proposal,
+        {
+            document.doc_id: (document.title, document.source_record_id, None)
+            for document in documents
+        },
+        bodies,
+    )
+    if not stances:
+        raise IngestError(
+            f"no stance survived validation for your corpus ({len(rejected)} rejected). "
+            "The card was not stored; re-run to retry."
+        )
+    card = PovCard(
+        person_id=CORPUS_PERSON_ID,
+        person_name=CORPUS_PERSON_NAME,
+        stances=stances,
+        topics=[topic.strip() for topic in proposal.topics if topic.strip()][:8],
+        documents_used=len(documents),
+        provider=response.provider,
+        model=response.model,
+        prompt_version=PROMPT_VERSION,
+    )
+    storage.save_pov_card(card)
+    _logger.info(
+        "own_pov documents=%d stances=%d rejected=%d provider=%s model=%s",
         len(documents),
         len(stances),
         len(rejected),

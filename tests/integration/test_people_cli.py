@@ -149,3 +149,20 @@ def test_bare_fetch_offers_the_most_recent_person(
     result = runner.invoke(app, ["people", "fetch"], input="y\n")
     assert result.exit_code == 0
     assert "Jane Author:" in result.stdout
+
+
+def test_people_docs_lists_stored_documents(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
+    runner.invoke(app, ["people", "add", "Jane Author", "--substack", "https://j.substack.com"])
+    result = runner.invoke(app, ["people", "docs", "Jane Author"])
+    assert result.exit_code == 0
+    assert "no stored documents" in result.stdout
+
+    runner.invoke(app, ["people", "fetch", "Jane Author"])
+    result = runner.invoke(app, ["people", "docs", "jane"])
+    assert result.exit_code == 0
+    assert "On Kafka Migrations" in result.stdout
+    assert "2026-07-14" in result.stdout
+    assert "1 documents." in result.stdout

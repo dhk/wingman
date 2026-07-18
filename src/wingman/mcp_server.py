@@ -39,7 +39,12 @@ from wingman.application.people import (
 from wingman.application.dossier import build_company_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.domain.outreach import OutreachPurpose
-from wingman.application.pov import build_pov_card, render_pov_card
+from wingman.application.pov import (
+    CORPUS_PERSON_ID,
+    build_own_pov,
+    build_pov_card,
+    render_pov_card,
+)
 from wingman.reporting.export import export_career, export_company, export_person
 from wingman.application.similarity import (
     CompanySimilarityReport,
@@ -528,7 +533,7 @@ def company_dossier(name: str) -> str:
 
 
 @server.tool()
-def export_pdf(target: str, name: str = "", out_dir: str = "") -> str:
+def export_pdf(target: str, name: str = "", out_dir: str = "", as_html: bool = False) -> str:
     """Write a print-ready, design-system-styled Letter export under reports/pdf/.
 
     target is 'career' (portrait profile one-pager), 'company' (dossier,
@@ -555,7 +560,9 @@ def export_pdf(target: str, name: str = "", out_dir: str = "") -> str:
                 found = _find_person(storage, name)
                 if isinstance(found, str):
                     return found
-                path = export_person(found.name, config, storage, out_dir=destination)
+                path = export_person(
+                    found.name, config, storage, out_dir=destination, as_html=as_html
+                )
             else:
                 return f"unknown export target {target!r}; use career, company, or person."
     except IngestError as exc:
@@ -595,6 +602,61 @@ def people_pov(name: str, refresh: bool = False) -> str:
         f"\n  rejected stance {item.statement!r}: {item.reason}" for item in report.rejected
     )
     return render_pov_card(report.card) + rejected
+
+
+@server.tool()
+def my_pov(refresh: bool = False) -> str:
+    """The user's own point of view: subject areas where their corpus takes a position.
+
+    The same evidence-validated card machinery as people_pov, pointed at the
+    user's own writing (a model call on refresh). Use it to help the user
+    choose which of their positions to lead with in outreach.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        if not refresh:
+            stored = storage.get_pov_card(CORPUS_PERSON_ID)
+            if stored is not None:
+                return render_pov_card(stored) + "\n\n(stored card — rebuild with refresh=True)"
+        try:
+            provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+            report = build_own_pov(storage, provider)
+        except ProposalParseError as exc:
+            return f"pov failed: {exc}. Nothing was stored; call again to retry."
+        except (IngestError, ModelConfigError, ProviderError) as exc:
+            return f"pov failed: {exc}"
+    rejected = "".join(
+        f"\n  rejected stance {item.statement!r}: {item.reason}" for item in report.rejected
+    )
+    return render_pov_card(report.card) + rejected
+
+
+@server.tool()
+def people_docs(name: str) -> str:
+    """List a person's stored documents: title, date, and source URL, newest first."""
+    from wingman.reporting.export import newest_first
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        found = _find_person(storage, name)
+        if isinstance(found, str):
+            return found
+        person = found
+        documents = storage.list_external_documents(person.person_id)
+    if not documents:
+        return f"{person.name} has no stored documents yet — call people_fetch first."
+    lines = []
+    for number, document in enumerate(newest_first(documents), start=1):
+        when = document.published_at.date().isoformat() if document.published_at else "undated"
+        via = f" (via {document.organization})" if document.organization else ""
+        lines.append(f"{number}. {document.title} [{when}]{via}")
+        lines.append(f"   {document.url or document.source_record_id}")
+    lines.append(f"{len(documents)} documents.")
+    return "\n".join(lines)
 
 
 @server.tool()

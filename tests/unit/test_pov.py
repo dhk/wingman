@@ -197,3 +197,45 @@ def test_unparseable_model_output_raises(workspace: Path) -> None:
         seeded_storage(storage, config)
         with pytest.raises(ProposalParseError):
             build_pov_card("Jane Author", storage, GarbageProvider())
+
+
+def test_own_pov_builds_from_the_corpus(workspace: Path) -> None:
+    from wingman.application.corpus import add_to_corpus
+    from wingman.application.pov import CORPUS_PERSON_ID, build_own_pov
+    from wingman.infrastructure.config import load_config
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        with pytest.raises(IngestError, match="corpus is empty"):
+            build_own_pov(storage, ScriptedProvider({"stances": [], "topics": []}))
+        essay = workspace / "essay.md"
+        essay.write_text(
+            "Answers must show their work. Explainability beats dashboards.", encoding="utf-8"
+        )
+        add_to_corpus(essay, "writing", config, storage)
+        doc_id = storage.list_corpus_documents()[0].doc_id
+        provider = ScriptedProvider(
+            {
+                "stances": [
+                    {
+                        "statement": "The author believes answers must show their work.",
+                        "quote": "Answers must show their work",
+                        "doc_id": doc_id,
+                        "dimension": "values",
+                    },
+                    {
+                        "statement": "Fabricated.",
+                        "quote": "never wrote this",
+                        "doc_id": doc_id,
+                    },
+                ],
+                "topics": ["explainability"],
+            }
+        )
+        report = build_own_pov(storage, provider)
+        assert provider.last_prompt is not None and "the author" in provider.last_prompt
+        assert len(report.card.stances) == 1 and len(report.rejected) == 1
+        stored = storage.get_pov_card(CORPUS_PERSON_ID)
+        assert stored is not None and stored.person_name == "Your corpus"
+        rendered = render_pov_card(stored)
+        assert "Your corpus" in rendered and "[values]" in rendered
