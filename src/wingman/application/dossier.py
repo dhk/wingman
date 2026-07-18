@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel
 
 from wingman.application.ingest import IngestError
+from wingman.application.research import RESEARCH_STALE_AFTER_DAYS
 from wingman.application.similarity import (
     company_key,
     company_alignment,
@@ -126,6 +127,26 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
         for person, feed in org_sources:
             lines.append(f"- {feed.url} ({feed.kind.value}, via {person.name})")
 
+    research_sources = storage.list_company_sources(key)
+    if research_sources:
+        lines.extend(["", "## Research (approved sources)", ""])
+        for source in research_sources:
+            label = f" ({source.label})" if source.label else ""
+            snapshot = storage.get_research_snapshot(key, source.url)
+            if snapshot is None:
+                lines.append(
+                    f"- {source.url}{label} — no snapshot yet; run 'wingman company research'"
+                )
+                continue
+            entry = (
+                f"- {source.url}{label} — {len(snapshot.links)} links, "
+                f"snapshot {snapshot.fetched_at.date().isoformat()}"
+            )
+            age_days = (now - snapshot.fetched_at).days
+            if age_days > RESEARCH_STALE_AFTER_DAYS:
+                entry += f" — ⚠ stale ({age_days} days old); re-run 'wingman company research'"
+            lines.append(entry)
+
     lines.extend(["", "## What its people argue", ""])
     cards = 0
     missing_cards: list[str] = []
@@ -166,6 +187,11 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
         gaps.append(f"POV cards missing for: {pretty} — build with 'wingman people pov <name>'")
     if not documents:
         gaps.append("no stored writing yet — 'wingman people fetch' or attach an org feed")
+    if not research_sources:
+        gaps.append(
+            f'no approved research sources — \'wingman company add-source "{display}" '
+            "<https-url>' names a careers page or newsroom to watch"
+        )
     if gaps:
         lines.extend(["", "## Gaps", ""])
         lines.extend(f"- {gap}" for gap in gaps)

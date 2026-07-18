@@ -64,6 +64,8 @@ def test_all_tools_are_registered() -> None:
         "make_it_so",
         "watchlist",
         "backup",
+        "company_source",
+        "company_research",
     }
 
 

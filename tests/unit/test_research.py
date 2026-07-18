@@ -1,0 +1,134 @@
+"""Approved-source research (RFC-015): user-named pages, deterministic diffs."""
+
+from pathlib import Path
+
+import pytest
+
+from wingman.application.ingest import IngestError
+from wingman.application.research import (
+    add_company_source,
+    extract_page,
+    list_company_sources,
+    remove_company_source,
+    render_research_report,
+    research_company,
+)
+from wingman.infrastructure.config import load_config
+from wingman.infrastructure.fetch import FetchError
+from wingman.infrastructure.storage import Storage
+
+PAGE_V1 = b"""<html><head><title>Acme Careers</title>
+<script>analytics("nonce-12345");</script></head>
+<body><h1>Open roles</h1>
+<a href="/jobs/data-engineer">Data Engineer</a>
+<a href="https://acme.example.com/jobs/pm#apply">PM</a>
+<a href="http://insecure.example.com/x">insecure</a>
+<a href="/jobs/data-engineer">Data Engineer (dupe)</a>
+</body></html>"""
+
+PAGE_V2 = b"""<html><body><h1>Open roles</h1>
+<a href="/jobs/data-engineer">Data Engineer</a>
+<a href="https://acme.example.com/jobs/pm">PM</a>
+<a href="/jobs/staff-mle">Staff MLE</a>
+</body></html>"""
+
+
+@pytest.fixture
+def storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Storage:
+    monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
+    config = load_config()
+    config.data_dir.mkdir(parents=True)
+    with Storage(config.db_path) as handle:
+        yield handle
+
+
+def test_extract_page_links_and_text() -> None:
+    text, links = extract_page(PAGE_V1, "https://acme.example.com/careers")
+    # relative resolved, fragment stripped, http and duplicates dropped
+    assert links == [
+        "https://acme.example.com/jobs/data-engineer",
+        "https://acme.example.com/jobs/pm",
+    ]
+    assert "Open roles" in text and "Data Engineer" in text
+    assert "nonce-12345" not in text  # script content is not visible text
+
+
+def test_add_list_remove_sources(storage: Storage) -> None:
+    source, created = add_company_source(
+        "Acme Corp", "https://acme.example.com/careers", storage, label="careers"
+    )
+    assert created and source.company_key == "acme corp"
+    _, again = add_company_source("ACME  Corp", "https://acme.example.com/careers", storage)
+    assert not again  # same normalized company + url is one approval
+    assert [s.url for s in list_company_sources("acme corp", storage)] == [
+        "https://acme.example.com/careers"
+    ]
+    assert remove_company_source("Acme Corp", "https://acme.example.com/careers", storage)
+    assert list_company_sources("Acme Corp", storage) == []
+    assert not remove_company_source("Acme Corp", "https://acme.example.com/careers", storage)
+
+
+def test_add_source_rejects_non_https(storage: Storage) -> None:
+    with pytest.raises(IngestError, match="https"):
+        add_company_source("Acme", "http://acme.example.com/careers", storage)
+    with pytest.raises(IngestError, match="empty"):
+        add_company_source("   ", "https://acme.example.com/careers", storage)
+
+
+def test_research_requires_approved_sources(storage: Storage) -> None:
+    with pytest.raises(IngestError, match="add-source"):
+        research_company("Acme", storage)
+
+
+def test_research_diffs_snapshots(storage: Storage) -> None:
+    add_company_source("Acme", "https://acme.example.com/careers", storage, label="careers")
+
+    first = research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+    assert first.fetched == 1 and first.failed == 0
+    assert "first snapshot: 2 links" in first.results[0].detail
+    assert first.results[0].new_links == []
+
+    unchanged = research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+    assert unchanged.results[0].detail.startswith("unchanged since ")
+
+    changed = research_company("Acme", storage, fetcher=lambda url: PAGE_V2)
+    assert "1 new link since" in changed.results[0].detail
+    assert changed.results[0].new_links == ["https://acme.example.com/jobs/staff-mle"]
+    rendered = render_research_report(changed)
+    assert "✓ https://acme.example.com/careers (careers)" in rendered
+    assert "+ https://acme.example.com/jobs/staff-mle" in rendered
+
+
+def test_research_failure_keeps_previous_snapshot(storage: Storage) -> None:
+    add_company_source("Acme", "https://acme.example.com/careers", storage)
+    research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+
+    def boom(url: str) -> bytes:
+        raise FetchError("HTTP Error 429")
+
+    report = research_company("Acme", storage, fetcher=boom)
+    assert report.failed == 1 and report.results[0].status == "failed"
+    assert "previous snapshot was kept" in report.results[0].detail
+    # the kept snapshot still diffs correctly on the next good fetch
+    recovered = research_company("Acme", storage, fetcher=lambda url: PAGE_V2)
+    assert "1 new link since" in recovered.results[0].detail
+
+
+def test_dossier_renders_research_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from wingman.application.dossier import build_company_dossier
+    from wingman.application.people import add_person
+
+    monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
+    config = load_config()
+    for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
+        directory.mkdir(parents=True)
+    with Storage(config.db_path) as storage:
+        add_person("Ana", storage, company="Acme")
+        add_company_source("Acme", "https://acme.example.com/careers", storage, label="careers")
+        before = build_company_dossier("Acme", config, storage).markdown
+        assert "## Research (approved sources)" in before
+        assert "no snapshot yet" in before
+        research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+        after = build_company_dossier("Acme", config, storage).markdown
+        assert "2 links, snapshot" in after
+        assert "no approved research sources" not in after  # gap line gone

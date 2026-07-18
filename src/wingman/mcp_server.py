@@ -48,6 +48,13 @@ from wingman.application.pov import (
     build_pov_card,
     render_pov_card,
 )
+from wingman.application.research import (
+    add_company_source,
+    list_company_sources,
+    remove_company_source,
+    render_research_report,
+    research_company,
+)
 from wingman.reporting.export import export_career, export_company, export_person
 from wingman.application.similarity import (
     CompanySimilarityReport,
@@ -731,6 +738,75 @@ def watchlist(action: str, list_name: str = "", member: str = "", company: bool 
             blocks.append(f"{len(members)} members processed, {failures} failed.")
             return "\n\n".join(blocks)
     return f"unknown action {action!r}; use add, remove, list, show, or run."
+
+
+@server.tool()
+def company_source(action: str, name: str, url: str = "", label: str = "") -> str:
+    """Manage approved research URLs for a company: action is add, remove, or list.
+
+    Adding a source IS the approval (RFC-015): 'company_research' will fetch
+    exactly the pages approved here, nothing else. https:// only.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "add":
+                if not url.strip():
+                    return "company_source add needs a url."
+                source, created = add_company_source(name, url, storage, label=label or None)
+                state = "Approved" if created else "Already approved"
+                return f"{state} for {source.company_name}: {source.url}"
+            if action == "remove":
+                removed = remove_company_source(name, url, storage)
+                return (
+                    f"Withdrawn: {url}"
+                    if removed
+                    else f"{url} was not an approved source for {name!r}."
+                )
+            if action == "list":
+                sources = list_company_sources(name, storage)
+                if not sources:
+                    return (
+                        f"No approved research sources for {name!r}. "
+                        "Approve one with company_source(action='add', ...)."
+                    )
+                lines = []
+                for entry in sources:
+                    snapshot = storage.get_research_snapshot(entry.company_key, entry.url)
+                    state = (
+                        f"snapshot {snapshot.fetched_at.date().isoformat()},"
+                        f" {len(snapshot.links)} links"
+                        if snapshot
+                        else "no snapshot yet"
+                    )
+                    tag = f" ({entry.label})" if entry.label else ""
+                    lines.append(f"- {entry.url}{tag} — {state}")
+                return "\n".join(lines)
+    except IngestError as exc:
+        return f"company_source failed: {exc}"
+    return f"unknown action {action!r}; use add, remove, or list."
+
+
+@server.tool()
+def company_research(name: str) -> str:
+    """Fetch every approved research source for a company and report what changed.
+
+    One read-only HTTPS GET per user-approved URL (RFC-015). Findings are
+    deterministic diffs against the previous snapshot: new links (the
+    hiring/announcement signal) and changed page text. A failed source keeps
+    its previous snapshot and is reported, never fatal.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            report = research_company(name, storage)
+    except IngestError as exc:
+        return f"research failed: {exc}"
+    return render_research_report(report)
 
 
 @server.tool()
