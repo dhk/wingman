@@ -1,6 +1,7 @@
 """Print-ready exports: Letter format, design-system classes, clickable links."""
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -274,3 +275,51 @@ def test_exports_honor_a_custom_output_folder(workspace: Path) -> None:
     assert (custom / "wingman-pdf.css").exists()
     text = path.read_text(encoding="utf-8")
     assert f'stylesheet: "{custom.resolve() / "wingman-pdf.css"}"' in text
+
+
+def test_person_html_export_is_tabbed_and_self_contained(workspace: Path) -> None:
+    from wingman.domain.outreach import OutreachBrief, TalkingPoint
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Tab Person", storage, substack_url="https://tab.substack.com")
+        fetch_person_feed(person, config, storage, fetcher=lambda url: FEED.encode())
+        # a brief with NO intro bullets (pre-bullets schema): the export must say so
+        storage.save_outreach_brief(
+            OutreachBrief(
+                person_id=person.person_id,
+                person_name=person.name,
+                talking_points=[
+                    TalkingPoint(
+                        point="p",
+                        their_stance="s",
+                        your_quote="q",
+                        corpus_doc_id="c1",
+                        corpus_doc_title="t",
+                    )
+                ],
+                corpus_documents_used=1,
+                pov_generated_at=datetime.now(UTC),
+                provider="x",
+                model="x",
+                prompt_version="v2",
+            )
+        )
+        html_path = export_person("Tab Person", config, storage, as_html=True)
+        md_path = export_person("Tab Person", config, storage)
+
+    html_text = html_path.read_text(encoding="utf-8")
+    assert html_path.suffix == ".html"
+    assert html_text.startswith("<!doctype html>")
+    assert html_text.count('type="radio"') == 3
+    for label in ("Outreach Brief", "Point of View", "Related"):
+        assert f">{label}</label>" in html_text
+    assert 'class="panel panel-brief"' in html_text
+    assert "--font-cond" in html_text  # stylesheet embedded, self-contained
+    assert "No intro bullets stored" in html_text
+
+    md_text = md_path.read_text(encoding="utf-8")
+    assert "No intro bullets stored" in md_text
+    # the Related column lists the stored document with a link, not just a count
+    assert "writing — 1 documents" in md_text
+    assert "On Kafka Migrations" in md_text or "Explainable Analytics" in md_text

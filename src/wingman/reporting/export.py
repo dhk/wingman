@@ -25,7 +25,7 @@ from pathlib import Path
 from wingman.application.dossier import build_company_dossier
 from wingman.application.ingest import IngestError
 from wingman.application.similarity import company_key, similar_people
-from wingman.domain.person import FeedAttribution, Person, PersonOrigin
+from wingman.domain.person import ExternalDocument, FeedAttribution, Person, PersonOrigin
 from wingman.domain.profile import ItemStatus, ProfileItemKind
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
@@ -153,6 +153,18 @@ def _dimension_tag(dimension: object) -> str:
     if not value:
         return ""
     return f'<span class="tag tag-{value}">{value}</span> '
+
+
+def newest_first(documents: list[ExternalDocument]) -> list[ExternalDocument]:
+    """Documents newest-first; naive timestamps treated as UTC so mixed feeds sort."""
+
+    def key(document: ExternalDocument) -> tuple[bool, datetime]:
+        when = document.published_at
+        if when is None:
+            return (False, datetime.min.replace(tzinfo=UTC))
+        return (True, when if when.tzinfo else when.replace(tzinfo=UTC))
+
+    return sorted(documents, key=key, reverse=True)
 
 
 def _resolve_out_dir(config: Config, out_dir: Path | None) -> Path:
@@ -316,8 +328,79 @@ def export_company(
     return _write(directory, f"{_slug(report.company)}-dossier-{date}.md", "\n".join(lines))
 
 
-def export_person(name: str, config: Config, storage: Storage, out_dir: Path | None = None) -> Path:
-    """Landscape three-column sheet: outreach brief | point of view | related."""
+# CSS-only tabs for the HTML variant of the person export: same design
+# tokens, one column at a time — denser PDF stays the print artifact.
+_TABS_CSS = """
+.tab-page { max-width: 1100px; margin: 0 auto; padding: 28px 24px; }
+.tab-page h1 { font-size: 36px; margin: 0 0 4px; }
+.tabs input { display: none; }
+.tabbar { border-bottom: 1px solid var(--border); margin: 18px 0 0; }
+.tabbar label {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; padding: 8px 14px; cursor: pointer;
+  color: var(--text-dim); display: inline-block;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.panel { display: none; padding-top: 20px; max-width: 780px; }
+#tab-brief:checked ~ .panel-brief,
+#tab-pov:checked ~ .panel-pov,
+#tab-related:checked ~ .panel-related { display: block; }
+#tab-brief:checked ~ .tabbar label[for="tab-brief"],
+#tab-pov:checked ~ .tabbar label[for="tab-pov"],
+#tab-related:checked ~ .tabbar label[for="tab-related"] {
+  color: var(--text); border-bottom-color: var(--accent);
+}
+"""
+
+
+def _person_html(
+    person: Person, meta: str, left: list[str], middle: list[str], right: list[str]
+) -> str:
+    """Self-contained tabbed HTML: brief | pov | related, one panel at a time."""
+    panels = (
+        ("brief", "Outreach Brief", left),
+        ("pov", "Point of View", middle),
+        ("related", "Related", right),
+    )
+    inputs = "\n".join(
+        f'<input type="radio" name="tab" id="tab-{key}"{" checked" if key == "brief" else ""}>'
+        for key, _, _ in panels
+    )
+    labels = "".join(f'<label for="tab-{key}">{title}</label>' for key, title, _ in panels)
+    # each column starts with its <h2>; the tab label already says it
+    sections = "\n".join(
+        f'<div class="panel panel-{key}">\n' + "\n".join(column[1:]) + "\n</div>"
+        for key, _, column in panels
+    )
+    return (
+        "<!doctype html>\n"
+        '<meta charset="utf-8">\n'
+        f"<title>{_e(person.name)}</title>\n"
+        f"<style>\n{WINGMAN_PDF_CSS}\n{_TABS_CSS}</style>\n"
+        '<div class="tab-page">\n'
+        f"<h1>{_e(person.name)}</h1>\n"
+        f'<div class="meta">{_e(meta)}</div>\n'
+        '<div class="tabs">\n'
+        f"{inputs}\n"
+        f'<nav class="tabbar">{labels}</nav>\n'
+        f"{sections}\n"
+        "</div>\n"
+        "</div>\n"
+    )
+
+
+def export_person(
+    name: str,
+    config: Config,
+    storage: Storage,
+    out_dir: Path | None = None,
+    as_html: bool = False,
+) -> Path:
+    """Landscape three-column sheet: outreach brief | point of view | related.
+
+    as_html=True writes a tabbed, self-contained HTML page instead — easier
+    to read on screen; the dense PDF sheet remains the print artifact.
+    """
     from wingman.application.people import match_people
 
     directory = _resolve_out_dir(config, out_dir)
@@ -366,6 +449,13 @@ def export_person(name: str, config: Config, storage: Storage, out_dir: Path | N
                 '<div class="meta">intro material — compose it in your own voice · '
                 "wingman never sends (RFC-006)</div>"
                 f"<ul>{bullets}</ul></div>"
+            )
+        else:
+            # A brief from before intro bullets existed (or one whose bullets
+            # were all rejected): say so instead of silently omitting the panel.
+            left.append(
+                f'<p class="dim">No intro bullets stored — rebuild with '
+                f'<code>wingman people brief "{_e(person.name)}" --refresh</code>.</p>'
             )
     else:
         left.append(
@@ -470,11 +560,16 @@ def export_person(name: str, config: Config, storage: Storage, out_dir: Path | N
         if more > 0:
             rows.append(f"<li><span class='dim'>+{more} more</span></li>")
         right.append("<ul>" + "".join(rows) + "</ul>")
-    dated = [d.published_at for d in documents if d.published_at is not None]
-    stats = f"{len(documents)} documents stored"
-    if dated:
-        stats += f" · newest {max(dated).date().isoformat()}"
-    right.append(f'<div class="meta">writing</div><p>{_e(stats)}</p>')
+    if documents:
+        right.append(f'<div class="meta">writing — {len(documents)} documents</div>')
+        doc_rows = []
+        for document in newest_first(documents)[:8]:
+            when = document.published_at.date().isoformat() if document.published_at else "undated"
+            title = _link(document.url, document.title) if document.url else _e(document.title)
+            doc_rows.append(f"<li>{title} <span class='dim'>{when}</span></li>")
+        if len(documents) > 8:
+            doc_rows.append(f"<li><span class='dim'>+{len(documents) - 8} more</span></li>")
+        right.append("<ul>" + "".join(doc_rows) + "</ul>")
     try:
         similar = similar_people(storage, name=person.name, limit=5)
     except IngestError:
@@ -486,6 +581,10 @@ def export_person(name: str, config: Config, storage: Storage, out_dir: Path | N
             for entry in similar.people
         )
         right.append(f"<ul>{similar_rows}</ul>")
+
+    if as_html:
+        html_page = _person_html(person, meta, left, middle, right)
+        return _write(directory, f"{_slug(person.name)}-{today}.html", html_page)
 
     markdown = "\n".join(
         [

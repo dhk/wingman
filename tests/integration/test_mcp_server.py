@@ -58,6 +58,8 @@ def test_all_tools_are_registered() -> None:
         "company_like",
         "company_dossier",
         "export_pdf",
+        "my_pov",
+        "people_docs",
     }
 
 

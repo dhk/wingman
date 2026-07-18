@@ -31,7 +31,12 @@ from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
 from wingman.application.dossier import build_company_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.domain.outreach import OutreachPurpose
-from wingman.application.pov import build_pov_card, render_pov_card
+from wingman.application.pov import (
+    CORPUS_PERSON_ID,
+    build_own_pov,
+    build_pov_card,
+    render_pov_card,
+)
 from wingman.application.similarity import (
     companies_like,
     embed_missing,
@@ -1051,6 +1056,71 @@ def people_discover(
     typer.echo('Add one with: wingman people add "<Name>" --substack <url>')
 
 
+@app.command()
+def pov(
+    refresh: bool = typer.Option(
+        False, "--refresh", help="Rebuild the card (a model call) even if one is stored."
+    ),
+) -> None:
+    """Your own point of view: the subject areas where your corpus takes a position.
+
+    The same machinery as a person's POV card, pointed at your writing — a
+    model call (synthesize_balanced) whose every stance must quote your own
+    documents verbatim. Use it to decide which of your positions to lead
+    with in outreach. A stored card is shown without any model call;
+    --refresh rebuilds.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "summarized")
+    with Storage(config.db_path) as storage:
+        if not refresh:
+            stored = storage.get_pov_card(CORPUS_PERSON_ID)
+            if stored is not None:
+                typer.echo(render_pov_card(stored))
+                typer.echo("\n(stored card — rebuild with --refresh)")
+                return
+        try:
+            provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+            report = build_own_pov(storage, provider)
+        except (IngestError, ModelConfigError, ProviderError) as exc:
+            typer.echo(f"pov failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        except ProposalParseError as exc:
+            typer.echo(f"pov failed: {exc}. Nothing was stored; re-run to retry.", err=True)
+            raise typer.Exit(code=1) from exc
+    typer.echo(render_pov_card(report.card))
+    for rejected in report.rejected:
+        typer.echo(f"  rejected stance {rejected.statement!r}: {rejected.reason}")
+
+
+@people_app.command("docs")
+def people_docs(
+    name: str = typer.Argument(..., help="Person whose stored documents to list."),
+) -> None:
+    """List a person's stored documents: title, date, and source URL."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        person = _resolve_person(storage, name, "listed")
+        documents = storage.list_external_documents(person.person_id)
+    if not documents:
+        typer.echo(
+            f"{person.name} has no stored documents yet — "
+            f"'wingman people fetch \"{person.name}\"' first."
+        )
+        return
+    from wingman.reporting.export import newest_first
+
+    for number, document in enumerate(newest_first(documents), start=1):
+        when = document.published_at.date().isoformat() if document.published_at else "undated"
+        via = f" (via {document.organization})" if document.organization else ""
+        typer.echo(f"{number}. {document.title} [{when}]{via}")
+        typer.echo(f"   {document.url or document.source_record_id}")
+    typer.echo(f"{len(documents)} documents.")
+
+
 @people_app.command("evidence")
 def people_evidence(
     query: str = typer.Argument(..., help="Words or a quoted phrase to search for."),
@@ -1167,20 +1237,30 @@ def export_company_cmd(
 def export_person_cmd(
     name: str = typer.Argument(..., help="Person to export the landscape sheet for."),
     out: Path | None = typer.Option(None, "--out", help=_OUT_HELP),
+    html: bool = typer.Option(
+        False, "--html", help="Write a tabbed HTML page for reading on screen instead."
+    ),
 ) -> None:
-    """Landscape three-column sheet: outreach brief | point of view | related links."""
+    """Landscape three-column sheet: outreach brief | point of view | related links.
+
+    --html writes a self-contained tabbed page (brief | pov | related) for
+    the screen; the default Markdown renders to the dense one-page PDF.
+    """
     configure_logging()
     config = load_config()
     _require_workspace(config, "exported")
     try:
         with Storage(config.db_path) as storage:
             person = _resolve_person(storage, name, "exported")
-            path = export_person(person.name, config, storage, out_dir=out)
+            path = export_person(person.name, config, storage, out_dir=out, as_html=html)
     except IngestError as exc:
         typer.echo(f"export failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Wrote {path}")
-    typer.echo(_render_hint(path))
+    if html:
+        typer.echo(f'Open it: open "{path}"')
+    else:
+        typer.echo(_render_hint(path))
 
 
 @company_app.command("dossier")
