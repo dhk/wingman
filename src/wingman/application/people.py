@@ -565,6 +565,96 @@ def attach_feed(person: Person, source: FeedSource, storage: Storage) -> Person:
     return updated
 
 
+class RecommendationCandidate(BaseModel):
+    """One publication your watched publications recommend but you don't watch."""
+
+    url: str
+    recommenders: list[str] = Field(default_factory=list)
+
+
+class DiscoverReport(BaseModel):
+    scanned: int
+    failures: list[str] = Field(default_factory=list)
+    candidates: list[RecommendationCandidate] = Field(default_factory=list)
+
+
+# Substack system subdomains that appear in page chrome, never as publications.
+_SUBSTACK_SYSTEM_SUBDOMAINS = {"www", "substack", "open", "support", "api", "cdn", "on", "reader"}
+
+
+def _substack_publications_in_page(page_bytes: bytes, own_netloc: str) -> list[str]:
+    """Publication roots (https://<pub>.substack.com) linked from a page."""
+    parser = _IndexLinkParser()
+    parser.feed(page_bytes.decode("utf-8", errors="replace"))
+    found: list[str] = []
+    for href in parser.hrefs:
+        parts = urlsplit(href)
+        netloc = parts.netloc.lower()
+        if not netloc.endswith(".substack.com") or netloc == own_netloc:
+            continue
+        subdomain = netloc.removesuffix(".substack.com")
+        if not subdomain or subdomain in _SUBSTACK_SYSTEM_SUBDOMAINS:
+            continue
+        root = f"https://{netloc}"
+        if root not in found:
+            found.append(root)
+    return found
+
+
+def discover_recommendations(
+    storage: Storage,
+    fetcher: Callable[[str], bytes] | None = None,
+    limit: int = 10,
+) -> DiscoverReport:
+    """Walk the public recommendations pages of watched Substacks (RFC-009).
+
+    Suggestion-only: candidates are ranked by how many watched publications
+    recommend them and returned for the user to add by hand — nothing is
+    ever attached automatically. One page per watched publication, no
+    deeper crawling. The page shape is unofficial; a page that yields no
+    candidates simply contributes nothing.
+    """
+    fetch = fetcher if fetcher is not None else fetch_url
+    watched = [person for person in storage.list_people() if person.substack_url]
+    if not watched:
+        return DiscoverReport(scanned=0)
+    watched_netlocs = {
+        urlsplit(source.url).netloc.lower()
+        for person in storage.list_people()
+        for source in person.sources
+    } | {urlsplit(p.substack_url).netloc.lower() for p in watched if p.substack_url}
+    recommenders: dict[str, list[str]] = {}
+    failures: list[str] = []
+    scanned = 0
+    for person in watched:
+        assert person.substack_url is not None
+        base = person.substack_url.rstrip("/")
+        own_netloc = urlsplit(base).netloc.lower()
+        try:
+            page = fetch(base + "/recommendations")
+        except FetchError as exc:
+            failures.append(f"{person.name}: {exc}")
+            continue
+        scanned += 1
+        for candidate in _substack_publications_in_page(page, own_netloc):
+            if urlsplit(candidate).netloc.lower() in watched_netlocs:
+                continue
+            recommenders.setdefault(candidate, [])
+            if person.name not in recommenders[candidate]:
+                recommenders[candidate].append(person.name)
+    candidates = [
+        RecommendationCandidate(url=url, recommenders=names) for url, names in recommenders.items()
+    ]
+    candidates.sort(key=lambda entry: (-len(entry.recommenders), entry.url))
+    _logger.info(
+        "discover scanned=%d failures=%d candidates=%d",
+        scanned,
+        len(failures),
+        len(candidates),
+    )
+    return DiscoverReport(scanned=scanned, failures=failures, candidates=candidates[:limit])
+
+
 def find_people_evidence(
     query: str, storage: Storage, limit: int = 10
 ) -> list[ExternalEvidenceHit]:

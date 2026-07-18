@@ -18,6 +18,7 @@ from wingman.application.people import (
     add_person,
     attach_feed,
     discover_feed,
+    discover_recommendations,
     fetch_person_feed,
     find_people_evidence,
     seed_from_connections,
@@ -816,6 +817,46 @@ def people_like_cmd(
         typer.echo(
             f"{number}. {entry.name}{detail}  score {entry.score:.3f}  [{entry.documents} docs]"
         )
+
+
+@people_app.command("discover")
+def people_discover(
+    limit: int = typer.Option(10, "--limit", help="Maximum suggestions to show."),
+) -> None:
+    """Suggest new people via the recommendations of Substacks you already watch.
+
+    Reads each watched publication's public /recommendations page (one page
+    each, RFC-009) and ranks publications you don't watch by how many of
+    your watched ones recommend them. Suggestions only — nothing is ever
+    added without you running 'wingman people add' yourself.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "discovered")
+    with Storage(config.db_path) as storage:
+        report = discover_recommendations(storage, limit=limit)
+    for failure in report.failures:
+        typer.echo(f"  {failure}", err=True)
+    if report.scanned == 0 and not report.failures:
+        typer.echo(
+            "No watched Substacks to walk — add some with 'wingman people add --substack' first."
+        )
+        return
+    if report.scanned == 0:
+        typer.echo("Every recommendations page failed to fetch (shown above).", err=True)
+        raise typer.Exit(code=1)
+    if not report.candidates:
+        typer.echo(f"Scanned {report.scanned} publications — no new recommendations found.")
+        return
+    typer.echo(f"Scanned {report.scanned} publications. Worth a look:")
+    for number, candidate in enumerate(report.candidates, start=1):
+        who = ", ".join(candidate.recommenders[:3])
+        more = f" +{len(candidate.recommenders) - 3}" if len(candidate.recommenders) > 3 else ""
+        typer.echo(
+            f"{number}. {candidate.url}  (recommended by {len(candidate.recommenders)}: "
+            f"{who}{more})"
+        )
+    typer.echo('Add one with: wingman people add "<Name>" --substack <url>')
 
 
 @people_app.command("evidence")
