@@ -78,3 +78,58 @@ def test_news_fetch_failure_keeps_the_old_snapshot(workspace: Path) -> None:
         with pytest.raises(IngestError, match="snapshot was kept"):
             fetch_person_news(person, storage, fetcher=failing)
         assert storage.list_person_news(person.person_id) == before
+
+
+FIELD_RSS = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <item><title>Supersimple Raises $2.2 Million to Rethink How Companies Work With Data in Age of Artificial Intelligence - PR Newswire</title>
+    <link>https://news.google.com/rss/articles/real1</link>
+    <pubDate>Tue, 02 Apr 2024 10:00:00 GMT</pubDate></item>
+  <item><title>This Supersimple Trick Will Make Your Hair Look Great in Photos - Allure</title>
+    <link>https://news.google.com/rss/articles/junk1</link>
+    <pubDate>Tue, 20 Oct 2015 10:00:00 GMT</pubDate></item>
+  <item><title>Here comes Caitie - The Chatham Voice</title>
+    <link>https://news.google.com/rss/articles/junk2</link>
+    <pubDate>Fri, 29 Aug 2025 10:00:00 GMT</pubDate></item>
+  <item><title>4 Marinades to Keep in Your Dinner Arsenal - Oprah.com</title>
+    <link>https://news.google.com/rss/articles/junk3</link></item>
+  <item><title>My Cats Are Obsessed With This Supersimple Toy: Decorative Peacock Feathers! - Popsugar</title>
+    <link>https://news.google.com/rss/articles/junk4</link></item>
+  <item><title>Future Today Chosen to Expand Super Simple Songs Beyond YouTube - GlobeNewswire</title>
+    <link>https://news.google.com/rss/articles/junk5</link></item>
+  <item><title>Marko Klopets on the future of BI - Podcast</title>
+    <link>https://news.google.com/rss/articles/real2</link>
+    <pubDate>Mon, 13 Jul 2026 10:00:00 GMT</pubDate></item>
+</channel></rss>
+"""
+
+
+def test_relevance_filter_on_field_data(workspace: Path) -> None:
+    """Regression from the first live run: 'Supersimple' is a common adjective."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Marko Klopets", storage, company="Supersimple")
+        report = fetch_person_news(person, storage, fetcher=lambda url: FIELD_RSS)
+        # kept: the funding story (company + corporate context) and the
+        # person-name headline; every adjective/'Super Simple Songs' item dropped
+        assert report.stored == 2 and report.dropped == 5
+        titles = report.titles
+        assert titles[0].startswith("Marko Klopets on the future")  # newest first
+        assert titles[1].startswith("Supersimple Raises $2.2 Million")
+        stored = storage.list_person_news(person.person_id)
+        assert len(stored) == 2
+
+
+def test_all_junk_stores_nothing_but_reports_it(workspace: Path) -> None:
+    junk = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <item><title>This Supersimple Trick - Allure</title>
+    <link>https://news.google.com/rss/articles/j1</link></item>
+</channel></rss>
+"""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Marko Klopets", storage, company="Supersimple")
+        report = fetch_person_news(person, storage, fetcher=lambda url: junk)
+        assert report.stored == 0 and report.dropped == 1
+        assert storage.list_person_news(person.person_id) == []

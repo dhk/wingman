@@ -11,6 +11,7 @@ nothing else about the workspace leaves the machine.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from urllib.parse import quote
 
@@ -27,11 +28,68 @@ _logger = get_logger("application.news")
 NEWS_LIMIT = 8
 _GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 
+# Company names are often ordinary words ("Supersimple" the startup vs
+# "supersimple trick" the adjective). A company-matched headline only counts
+# when it also carries a corporate-context word; person-name matches always
+# count. Deterministic and explainable — dropped items are tallied, never
+# silently vanished.
+_CORPORATE_CONTEXT = frozenset(
+    {
+        "raises",
+        "raised",
+        "raise",
+        "funding",
+        "round",
+        "seed",
+        "series",
+        "launches",
+        "launch",
+        "launched",
+        "announces",
+        "announced",
+        "unveils",
+        "acquires",
+        "acquired",
+        "acquisition",
+        "merges",
+        "merger",
+        "partners",
+        "partnership",
+        "ceo",
+        "cto",
+        "founder",
+        "founders",
+        "startup",
+        "million",
+        "billion",
+        "hires",
+        "appoints",
+        "names",
+        "valuation",
+        "ipo",
+        "revenue",
+        "customers",
+        "ai",
+    }
+)
+
+
+def _title_is_relevant(title: str, person: Person) -> bool:
+    lowered = title.lower()
+    if person.name.strip() and person.name.lower() in lowered:
+        return True
+    company = (person.company or "").strip().lower()
+    if not company or company not in lowered:
+        return False
+    words = set(re.findall(r"[a-z0-9]+", lowered))
+    return not _CORPORATE_CONTEXT.isdisjoint(words)
+
 
 class NewsReport(BaseModel):
     person_name: str
     query: str
     stored: int
+    dropped: int = 0
     titles: list[str] = Field(default_factory=list)
 
 
@@ -63,13 +121,17 @@ def fetch_person_news(
     except FetchError as exc:
         raise IngestError(f"news fetch failed: {exc}. The stored snapshot was kept.") from exc
     entries = _parse_feed_items(data, url)
-    items: list[NewsItem] = []
+    kept: list[NewsItem] = []
+    dropped = 0
     for entry in entries:
         title = entry["title"].strip()
         link = entry["link"].strip()
         if not title or not link.startswith("https://"):
             continue
-        items.append(
+        if not _title_is_relevant(title, person):
+            dropped += 1
+            continue
+        kept.append(
             NewsItem(
                 person_id=person.person_id,
                 title=title,
@@ -77,13 +139,23 @@ def fetch_person_news(
                 published_at=_published_at(entry["published"]),
             )
         )
-        if len(items) >= NEWS_LIMIT:
-            break
+    # newest first, undated last, then cap — a briefing wants recency
+    kept.sort(
+        key=lambda item: (
+            item.published_at is not None,
+            item.published_at.timestamp() if item.published_at else 0.0,
+        ),
+        reverse=True,
+    )
+    items = kept[:NEWS_LIMIT]
     storage.replace_person_news(person.person_id, items)
-    _logger.info("news person=%s query=%s stored=%d", person.name, query, len(items))
+    _logger.info(
+        "news person=%s query=%s stored=%d dropped=%d", person.name, query, len(items), dropped
+    )
     return NewsReport(
         person_name=person.name,
         query=query,
         stored=len(items),
+        dropped=dropped,
         titles=[item.title for item in items],
     )

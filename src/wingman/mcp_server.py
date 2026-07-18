@@ -755,10 +755,18 @@ def people_news(name: str) -> str:
         except IngestError as exc:
             return f"people news failed: {exc}"
     if not report.titles:
+        if report.dropped:
+            return (
+                f"{report.dropped} results for {report.query} were all low-relevance; "
+                "nothing stored."
+            )
         return f"No recent news found for {report.query}."
     lines = [f"News for {report.query}:"]
     lines.extend(f"{number}. {title}" for number, title in enumerate(report.titles, start=1))
-    lines.append(f"{report.stored} items stored.")
+    summary = f"{report.stored} items stored"
+    if report.dropped:
+        summary += f", {report.dropped} low-relevance dropped"
+    lines.append(summary + ".")
     return "\n".join(lines)
 
 
