@@ -942,6 +942,12 @@ def people_evidence(
         typer.echo(f"   source: {hit.document.url or hit.document.source_record_id}")
 
 
+_NO_COMPANY_SIGNALS = (
+    "No other companies have embedded writing yet — add people with --company "
+    "or attach an org-attributed feed, then run `wingman sync`."
+)
+
+
 @company_app.command("similar")
 def company_similar(
     name: str | None = typer.Argument(
@@ -965,7 +971,7 @@ def company_similar(
         typer.echo(f"company similar failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     if not report.companies:
-        typer.echo("No other companies have embedded writing yet.")
+        typer.echo(_NO_COMPANY_SIGNALS)
         return
     typer.echo(f"Closest to {report.reference}:")
     for number, entry in enumerate(report.companies, start=1):
@@ -991,7 +997,7 @@ def company_like(
         typer.echo(f"company like failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     if not report.companies:
-        typer.echo("No other companies have embedded writing yet.")
+        typer.echo(_NO_COMPANY_SIGNALS)
         return
     typer.echo(f"Closest to {report.reference}:")
     for number, entry in enumerate(report.companies, start=1):

@@ -400,7 +400,11 @@ def people_like(names: list[str], limit: int = 10) -> str:
 
 def _company_lines(report: CompanySimilarityReport) -> str:
     if not report.companies:
-        return "No other companies have embedded writing yet."
+        return (
+            "No other companies have embedded writing yet — add people with a "
+            "company (people_add) or attach an org-attributed feed "
+            "(feed_attach), then run the sync tool."
+        )
     lines = [f"Closest to {report.reference}:"]
     for number, entry in enumerate(report.companies, start=1):
         lines.append(
