@@ -89,6 +89,47 @@ active subscriptions — each sender handle is the publication URL. If you use
 Claude with a Gmail connector, ask it to build the `wingman people add`
 script from that search; it takes a minute.
 
+## 3½. Keep it fresh — one command, optionally scheduled
+
+`wingman sync` fetches every watched source and embeds whatever is new, in
+one explicit invocation. Wingman never fetches in the background on its own
+(RFC-009), but *you* can schedule the command with your OS. On macOS, save
+this as `~/Library/LaunchAgents/io.wingman.sync.plist` (adjust the binary
+path to `which wingman`), then `launchctl load` it — it runs every morning
+at 08:30:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>io.wingman.sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/you/.local/bin/wingman</string>
+    <string>sync</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>VOYAGE_API_KEY</key><string>pa-your-key</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>30</integer></dict>
+  <key>StandardOutPath</key><string>/tmp/wingman-sync.log</string>
+  <key>StandardErrorPath</key><string>/tmp/wingman-sync.log</string>
+</dict>
+</plist>
+```
+
+**Key handling:** the `EnvironmentVariables` block stores your Voyage key in
+plaintext in the plist — acceptable only if you accept that trade
+(`chmod 600` the file, keep it out of any repo or synced folder). The
+cleaner alternative: set `provider = "hashed"` in `models.toml` and omit the
+key block entirely — sync then stays fully local and keyless. With voyage
+configured but no key available, the embed step fails visibly in the log
+while fetched posts are kept.
+
 ## 4. Verify and use
 
 ```bash

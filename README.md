@@ -56,6 +56,7 @@ wingman people add-feed "Jane Author" https://medium.com/@jane   # any RSS/Atom,
 wingman people add-feed "Scott Brady" https://firm.example.com/insights --org "Firm"  # feed-less blogs too
 wingman people fetch --all
 wingman people evidence "developer tools"
+wingman sync   # fetch everything + embed what's new, in one command
 ```
 
 Beyond Substack: `add-feed` takes any public feed or blog homepage — it
