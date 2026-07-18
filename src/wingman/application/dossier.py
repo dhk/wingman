@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel
 
 from wingman.application.ingest import IngestError
+from wingman.application.pov import company_card_id
 from wingman.application.research import RESEARCH_STALE_AFTER_DAYS
 from wingman.application.similarity import (
     company_key,
@@ -147,6 +148,24 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
                 entry += f" — ⚠ stale ({age_days} days old); re-run 'wingman company research'"
             lines.append(entry)
 
+    company_card = storage.get_pov_card(company_card_id(key))
+    if company_card is not None:
+        lines.extend(
+            [
+                "",
+                f"## Company themes (synthesized {company_card.generated_at.date().isoformat()},"
+                f" {company_card.provider}/{company_card.model})",
+                "",
+            ]
+        )
+        for stance in company_card.stances:
+            tag = f"[{stance.dimension.value}] " if stance.dimension else ""
+            lines.append(f"- [inference] {tag}{stance.statement}")
+            lines.append(f'  [fact] "{stance.quote}" ({stance.doc_title})')
+        if company_card.topics:
+            lines.append("")
+            lines.append("Writes about: " + ", ".join(company_card.topics))
+
     lines.extend(["", "## What its people argue", ""])
     cards = 0
     missing_cards: list[str] = []
@@ -187,6 +206,11 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
         gaps.append(f"POV cards missing for: {pretty} — build with 'wingman people pov <name>'")
     if not documents:
         gaps.append("no stored writing yet — 'wingman people fetch' or attach an org feed")
+    if company_card is None and documents:
+        gaps.append(
+            f"no synthesized company themes — 'wingman company pov \"{display}\"' "
+            "builds them (a model call, validated quote-by-quote)"
+        )
     if not research_sources:
         gaps.append(
             f'no approved research sources — \'wingman company add-source "{display}" '

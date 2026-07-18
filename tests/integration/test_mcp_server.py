@@ -66,6 +66,7 @@ def test_all_tools_are_registered() -> None:
         "backup",
         "company_source",
         "company_research",
+        "company_pov",
     }
 
 
