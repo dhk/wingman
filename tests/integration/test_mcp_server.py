@@ -67,6 +67,8 @@ def test_all_tools_are_registered() -> None:
         "company_source",
         "company_research",
         "company_pov",
+        "company_follow",
+        "overnight",
     }
 
 

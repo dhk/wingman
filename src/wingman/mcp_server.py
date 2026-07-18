@@ -32,6 +32,7 @@ from wingman.application.assess import assess_job as assess_job_use_case
 from wingman.application.backup import create_backup
 from wingman.application.corpus import find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
+from wingman.application.focus import follow_company, overnight_run, render_follow_report
 from wingman.application.pipeline import MisoReport
 from wingman.application.pipeline import make_it_so as make_it_so_use_case
 from wingman.application.people import (
@@ -777,6 +778,52 @@ def watchlist(action: str, list_name: str = "", member: str = "", company: bool 
             blocks.append(f"{len(members)} members processed, {failures} failed.")
             return "\n\n".join(blocks)
     return f"unknown action {action!r}; use add, remove, list, show, or run."
+
+
+@server.tool()
+def company_follow(name: str, url: str = "") -> str:
+    """Turn a company into a standing focus: enroll it (and known people there with
+    writing) on the overnight watchlist; with url, probe the domain's conventional
+    pages once and approve live ones as research sources (RFC-018).
+
+    Enrollment is the consent record for overnight runs — enumerable via
+    watchlist(action='show', list_name='overnight'), revocable via watchlist remove.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            report = follow_company(name, storage, url=url or None)
+    except IngestError as exc:
+        return f"follow failed: {exc}"
+    return render_follow_report(report)
+
+
+@server.tool()
+def overnight() -> str:
+    """Deep-refresh every followed target and write the dated digest (RFC-018).
+
+    Deliberately expensive: research diffs, feed fetches, news queries (each
+    enrolled name+company goes to the news provider), embeddings, fresh POV
+    cards, company themes, briefs, exports. Returns the per-target results and
+    the digest path. Nothing is ever sent on the user's behalf (RFC-006).
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            report = overnight_run(config, storage)
+    except IngestError as exc:
+        return f"overnight failed: {exc}"
+    lines = [
+        f"{'✓' if target.status == 'ok' else '✗'} {target.name} ({target.kind})"
+        for target in report.targets
+    ]
+    lines.append(f"{report.processed} targets, {report.failed} with failures.")
+    lines.append(f"Digest: {report.digest_path}")
+    return "\n".join(lines)
 
 
 @server.tool()
