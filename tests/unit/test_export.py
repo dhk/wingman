@@ -78,7 +78,9 @@ def test_career_export_is_letter_portrait_with_cited_cards(workspace: Path) -> N
         path = export_career(config, storage)
     text = path.read_text(encoding="utf-8")
     assert "format: Letter" in text and "landscape" not in text
-    assert "stylesheet: wingman-pdf.css" in text
+    # absolute stylesheet path: md-to-pdf resolves it against the process cwd,
+    # so a relative name only worked when rendering from inside reports/pdf/
+    assert f'stylesheet: "{path.parent / "wingman-pdf.css"}"' in text
     assert (path.parent / "wingman-pdf.css").exists()
     # cards carry the claim, the tag, and the verbatim quote — HTML-escaped
     assert "Search &lt;rewrite&gt;" in text

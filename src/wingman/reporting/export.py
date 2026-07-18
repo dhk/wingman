@@ -118,8 +118,16 @@ code {
 """
 
 
-def _frontmatter(title: str, landscape: bool = False) -> str:
+def _pdf_dir(config: Config) -> Path:
+    return config.reports_dir / "pdf"
+
+
+def _frontmatter(title: str, config: Config, landscape: bool = False) -> str:
     margin = "14mm 16mm" if landscape else "32mm 28mm"
+    # md-to-pdf resolves the stylesheet relative to the process cwd, not the
+    # markdown file — so the frontmatter carries the absolute path (quoted:
+    # the default workspace lives under "Application Support").
+    stylesheet = _pdf_dir(config) / STYLESHEET_NAME
     lines = [
         "---",
         f"title: {title}",
@@ -130,7 +138,7 @@ def _frontmatter(title: str, landscape: bool = False) -> str:
     ]
     if landscape:
         lines.append("  landscape: true")
-    lines.extend([f"stylesheet: {STYLESHEET_NAME}", "---", ""])
+    lines.extend([f'stylesheet: "{stylesheet}"', "---", ""])
     return "\n".join(lines)
 
 
@@ -171,7 +179,7 @@ def export_career(config: Config, storage: Storage) -> Path:
     today = datetime.now(UTC).date().isoformat()
     sources = storage.count_source_records()
     parts = [
-        _frontmatter("Career Profile"),
+        _frontmatter("Career Profile", config),
         '<div class="portrait">',
         "",
         "# Career Profile",
@@ -216,7 +224,7 @@ def export_career(config: Config, storage: Storage) -> Path:
 def export_company(name: str, config: Config, storage: Storage) -> Path:
     """The company dossier, with fact/inference labels upgraded to styled tags."""
     report = build_company_dossier(name, config, storage)
-    lines = [_frontmatter(f"Company dossier: {report.company}")]
+    lines = [_frontmatter(f"Company dossier: {report.company}", config)]
     lines.append('<div class="portrait">')
     lines.append("")
     for raw in report.markdown.splitlines():
@@ -350,7 +358,7 @@ def export_person(name: str, config: Config, storage: Storage) -> Path:
 
     markdown = "\n".join(
         [
-            _frontmatter(person.name, landscape=True),
+            _frontmatter(person.name, config, landscape=True),
             f"# {_e(person.name)}",
             f'<div class="meta">{_e(meta)}</div>',
             '<div class="sheet">',
