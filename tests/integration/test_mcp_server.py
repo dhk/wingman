@@ -51,6 +51,7 @@ def test_all_tools_are_registered() -> None:
         "feed_discover",
         "feed_attach",
         "people_import_connections",
+        "ingest_resume_url",
         "people_pov",
         "people_brief",
         "company_similar",

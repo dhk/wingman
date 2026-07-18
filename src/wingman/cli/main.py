@@ -12,7 +12,7 @@ import typer
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job
 from wingman.application.corpus import add_to_corpus, find_evidence
-from wingman.application.ingest import IngestError, ingest_resume
+from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
 from wingman.application.people import (
     add_person,
@@ -374,9 +374,22 @@ def status() -> None:
 
 @app.command()
 def ingest(
-    resume: Path = typer.Argument(..., help="Path to a resume in Markdown or plain text."),
+    resume: Path | None = typer.Argument(
+        None, help="Path to a resume: Markdown, plain text, PDF, DOCX, or LaTeX."
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        help="Fetch the resume from a link-accessible Google Docs or Drive URL instead.",
+    ),
 ) -> None:
-    """Ingest a resume into the canonical profile and write career.json / career.md."""
+    """Ingest a resume into the canonical profile and write career.json / career.md.
+
+    Accepts a local file (.md, .txt, .pdf, .docx, .tex) or, with --url, a
+    Google Docs/Drive link — one explicit HTTPS fetch (RFC-009), archived to
+    the inbox before extraction. LaTeX is flattened to its visible words,
+    not typeset.
+    """
     configure_logging()
     config = load_config()
     if not config.db_path.exists():
@@ -386,10 +399,17 @@ def ingest(
             err=True,
         )
         raise typer.Exit(code=1)
+    if (resume is None) == (url is None):
+        typer.echo("Provide exactly one of: a resume path, or --url.", err=True)
+        raise typer.Exit(code=1)
     try:
         provider = get_provider(CapabilityClass.EXTRACT_FAST, config)
         with Storage(config.db_path) as storage:
-            report = ingest_resume(resume, config, storage, provider)
+            if resume is not None:
+                report = ingest_resume(resume, config, storage, provider)
+            else:
+                assert url is not None
+                report = ingest_resume_from_url(url, config, storage, provider)
     except (IngestError, ModelConfigError, ProviderError) as exc:
         typer.echo(f"ingest failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc

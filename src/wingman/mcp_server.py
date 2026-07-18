@@ -25,7 +25,7 @@ from mcp.server.fastmcp import FastMCP
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job as assess_job_use_case
 from wingman.application.corpus import find_evidence
-from wingman.application.ingest import IngestError, ingest_resume
+from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.people import (
     add_person,
     attach_feed,
@@ -177,6 +177,37 @@ def ingest_resume_text(resume_markdown: str, filename: str = "resume.md") -> str
         with Storage(config.db_path) as storage:
             report = ingest_resume(
                 resume_path,
+                config,
+                storage,
+                get_provider(CapabilityClass.EXTRACT_FAST, config),
+            )
+    except (IngestError, ModelConfigError, ProviderError, ProposalParseError) as exc:
+        return f"Ingestion failed: {exc}"
+    rejected = "".join(f"\n  rejected {item.name!r}: {item.reason}" for item in report.rejected)
+    return (
+        f"Accepted: {report.accepted}  Duplicates skipped: {report.skipped_duplicates}  "
+        f"Evidence merged: {report.evidence_merged}  Conflicts: {report.conflicts}  "
+        f"Rejected: {len(report.rejected)}{rejected}\n"
+        f"Profile written to {report.career_md_path}"
+    )
+
+
+@server.tool()
+def ingest_resume_url(url: str) -> str:
+    """Ingest a resume from a link-accessible Google Docs or Drive URL.
+
+    One explicit HTTPS fetch (RFC-009): the document is downloaded (Docs via
+    its plain-text export; Drive files sniffed as PDF/DOCX/text), archived
+    to the inbox, then flows through the ordinary extraction + evidence
+    validation pipeline. Returns the ingestion summary.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            report = ingest_resume_from_url(
+                url,
                 config,
                 storage,
                 get_provider(CapabilityClass.EXTRACT_FAST, config),

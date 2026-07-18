@@ -117,8 +117,15 @@ career.md with evidence references
 ```
 
 ```bash
-wingman ingest path/to/resume.md
+wingman ingest path/to/resume.md     # also .txt, .pdf, .docx, .tex
+wingman ingest --url "https://docs.google.com/document/d/<id>/edit"
 ```
+
+Resumes can be Markdown, plain text, PDF, DOCX, or LaTeX (flattened to its
+visible words — good enough for extraction, not a TeX engine), or fetched
+from a link-accessible Google Docs/Drive URL: one explicit HTTPS request
+(RFC-009), archived to the inbox before extraction so the original artifact
+stays the provenance record.
 
 Every accepted claim carries verbatim quotes from the source; claims whose
 quotes do not appear in the source are rejected and reported, never stored.

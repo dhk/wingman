@@ -31,3 +31,67 @@ def test_redirect_to_https_is_allowed() -> None:
     )
     assert redirected is not None
     assert redirected.full_url == "https://example.com/moved-feed"
+
+
+def test_rate_limit_gets_one_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    import email.message
+    import io
+    import urllib.error
+
+    from wingman.infrastructure import fetch as fetch_module
+
+    calls: list[str] = []
+    slept: list[int] = []
+
+    class FakeResponse:
+        def __enter__(self):  # noqa: ANN204
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self, limit: int) -> bytes:
+            return b"feed body"
+
+    class FakeOpener:
+        def open(self, request: urllib.request.Request, timeout: int):  # noqa: ANN201
+            calls.append(request.full_url)
+            if len(calls) == 1:
+                headers = email.message.Message()
+                headers["Retry-After"] = "3"
+                raise urllib.error.HTTPError(
+                    request.full_url, 429, "Too Many Requests", headers, io.BytesIO(b"")
+                )
+            return FakeResponse()
+
+    monkeypatch.setattr(fetch_module, "_opener", FakeOpener())
+    monkeypatch.setattr(fetch_module.time, "sleep", slept.append)
+    assert fetch_module.fetch_url("https://rate.example.com/feed") == b"feed body"
+    assert len(calls) == 2
+    assert slept == [3]
+
+
+def test_persistent_429_fails_visibly(monkeypatch: pytest.MonkeyPatch) -> None:
+    import email.message
+    import io
+    import urllib.error
+
+    from wingman.infrastructure import fetch as fetch_module
+
+    class AlwaysLimited:
+        def open(self, request: urllib.request.Request, timeout: int):  # noqa: ANN201
+            raise urllib.error.HTTPError(
+                request.full_url, 429, "Too Many Requests", email.message.Message(), io.BytesIO(b"")
+            )
+
+    monkeypatch.setattr(fetch_module, "_opener", AlwaysLimited())
+    monkeypatch.setattr(fetch_module.time, "sleep", lambda _: None)
+    with pytest.raises(FetchError, match="429"):
+        fetch_module.fetch_url("https://rate.example.com/feed")
+
+
+def test_fetch_sends_identifying_browser_compatible_agent() -> None:
+    from wingman.infrastructure.fetch import _HEADERS
+
+    assert _HEADERS["User-Agent"].startswith("Mozilla/5.0 (compatible; wingman")
+    assert "Accept" in _HEADERS
