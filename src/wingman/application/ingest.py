@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from wingman.domain import SourceRecord
 from wingman.domain.extraction import ProposedItem
 from wingman.domain.profile import EvidenceSpan, ProfileItem
 from wingman.infrastructure.config import Config
+from wingman.infrastructure.fetch import FetchError
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
 from wingman.providers.base import ModelProvider, ModelRequest
@@ -61,18 +63,11 @@ class IngestReport(BaseModel):
 
 
 def _read_resume(resume_path: Path) -> str:
-    try:
-        text = resume_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise IngestError(
-            f"could not read {resume_path} ({exc}). Nothing was ingested; "
-            "check the path and re-run 'wingman ingest'."
-        ) from exc
-    except UnicodeDecodeError as exc:
-        raise IngestError(
-            f"{resume_path} is not UTF-8 text ({exc}). Nothing was ingested; "
-            "convert the resume to Markdown or plain text and re-run 'wingman ingest'."
-        ) from exc
+    # Imported here, not at module top: resume_formats needs IngestError from
+    # this module, so a top-level import would be circular.
+    from wingman.application.resume_formats import extract_resume_text
+
+    text = extract_resume_text(resume_path)
     if not text.strip():
         raise IngestError(f"{resume_path} is empty. Nothing was ingested.")
     return text
@@ -128,6 +123,39 @@ def _validate_evidence(
         prompt_version=PROMPT_VERSION,
         extracted_by="",
     )
+
+
+def ingest_resume_from_url(
+    url: str,
+    config: Config,
+    storage: Storage,
+    provider: ModelProvider,
+    fetcher: Callable[[str], bytes] | None = None,
+) -> IngestReport:
+    """Fetch a resume from a Google Docs/Drive link, archive it, and ingest it.
+
+    The fetched bytes are written to the inbox first (the original artifact
+    is the provenance record), then flow through the ordinary file pipeline.
+    """
+    from wingman.application.resume_formats import fetch_resume_bytes, suffix_for_bytes
+
+    try:
+        name, data = (
+            fetch_resume_bytes(url, fetcher) if fetcher is not None else fetch_resume_bytes(url)
+        )
+    except FetchError as exc:
+        raise IngestError(f"{exc}. Nothing was ingested.") from exc
+    # Microsecond stamp: two fetches of the same document in the same second
+    # must archive as two artifacts, never overwrite one another.
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    path = config.inbox_dir / f"{stamp}-{name}{suffix_for_bytes(data)}"
+    try:
+        path.write_bytes(data)
+    except OSError as exc:
+        raise IngestError(
+            f"could not archive the fetched document to {path} ({exc}). Nothing was ingested."
+        ) from exc
+    return ingest_resume(path, config, storage, provider)
 
 
 def ingest_resume(

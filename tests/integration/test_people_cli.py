@@ -100,3 +100,52 @@ def test_people_fetch_all_without_feeds(workspace: Path) -> None:
     result = runner.invoke(app, ["people", "fetch", "--all"])
     assert result.exit_code == 0
     assert "Nothing was fetched" in result.stdout
+
+
+def test_partial_names_resolve_and_ambiguity_gets_a_picker(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
+    runner.invoke(app, ["people", "add", "Marko Klopets", "--substack", "https://m.substack.com"])
+    runner.invoke(app, ["people", "add", "Mark Otero", "--substack", "https://o.substack.com"])
+
+    # unique partial resolves with a visible note
+    result = runner.invoke(app, ["people", "fetch", "klopets"])
+    assert result.exit_code == 0
+    assert "→ Marko Klopets" in result.stdout
+    assert "Marko Klopets:" in result.stdout
+
+    # ambiguous partial becomes a numbered picker; choosing 2 fetches Marko
+    result = runner.invoke(app, ["people", "fetch", "mark"], input="2\n")
+    assert result.exit_code == 0
+    assert "matches 2 people" in result.stdout
+    assert "1. Mark Otero" in result.stdout and "2. Marko Klopets" in result.stdout
+    assert "Marko Klopets:" in result.stdout
+
+    # cancelling the picker (0) does nothing
+    result = runner.invoke(app, ["people", "fetch", "mark"], input="0\n")
+    assert result.exit_code == 1
+
+    # no match still fails with guidance
+    result = runner.invoke(app, ["people", "fetch", "nobody"])
+    assert result.exit_code == 1
+    assert "No person named" in result.output
+
+
+def test_bare_fetch_offers_the_most_recent_person(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
+    runner.invoke(app, ["people", "add", "Jane Author", "--substack", "https://j.substack.com"])
+    runner.invoke(app, ["people", "add", "No Sources Person"])
+
+    # Jane is the most recent person WITH sources; declining keeps the old error
+    result = runner.invoke(app, ["people", "fetch"], input="n\n")
+    assert result.exit_code == 1
+    assert "Fetch Jane Author" in result.output
+    assert "Name a person or pass --all" in result.output
+
+    # accepting fetches her
+    result = runner.invoke(app, ["people", "fetch"], input="y\n")
+    assert result.exit_code == 0
+    assert "Jane Author:" in result.stdout

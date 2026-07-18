@@ -153,3 +153,44 @@ def test_resume_copied_into_inbox(workspace: Config, tmp_path: Path) -> None:
     assert record is not None
     assert record.source_locator.startswith("inbox/")
     assert (workspace.data_dir / record.source_locator).read_text(encoding="utf-8") == RESUME
+
+
+def test_ingest_from_google_url_archives_then_extracts(workspace: Config) -> None:
+    from wingman.application.ingest import ingest_resume_from_url
+
+    def fetcher(url: str) -> bytes:
+        assert url == "https://docs.google.com/document/d/DOC1/export?format=txt"
+        return RESUME.encode()
+
+    with Storage(workspace.db_path) as storage:
+        report = ingest_resume_from_url(
+            "https://docs.google.com/document/d/DOC1/edit",
+            workspace,
+            storage,
+            RecordedProvider(RESPONSE),
+            fetcher=fetcher,
+        )
+        assert report.accepted == 2
+    # the fetched artifact was archived in the inbox before extraction
+    archived = list(workspace.inbox_dir.glob("*google-DOC1*"))
+    assert len(archived) == 1 and archived[0].suffix == ".txt"
+    assert archived[0].read_text(encoding="utf-8") == RESUME
+
+
+def test_repeat_url_ingest_never_overwrites_the_archive(workspace: Config) -> None:
+    from wingman.application.ingest import ingest_resume_from_url
+
+    def fetcher(url: str) -> bytes:
+        return RESUME.encode()
+
+    with Storage(workspace.db_path) as storage:
+        for _ in range(2):
+            ingest_resume_from_url(
+                "https://docs.google.com/document/d/DOC1/edit",
+                workspace,
+                storage,
+                RecordedProvider(RESPONSE),
+                fetcher=fetcher,
+            )
+    # both fetches were archived as distinct artifacts (microsecond stamps)
+    assert len(list(workspace.inbox_dir.glob("*google-DOC1*"))) == 2

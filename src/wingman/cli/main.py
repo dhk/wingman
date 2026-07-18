@@ -7,12 +7,13 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import click
 import typer
 
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job
 from wingman.application.corpus import add_to_corpus, find_evidence
-from wingman.application.ingest import IngestError, ingest_resume
+from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
 from wingman.application.people import (
     add_person,
@@ -21,8 +22,10 @@ from wingman.application.people import (
     discover_recommendations,
     fetch_person_feed,
     find_people_evidence,
+    match_people,
     seed_from_connections,
 )
+from wingman.domain.person import Person
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
 from wingman.application.dossier import build_company_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
@@ -374,9 +377,22 @@ def status() -> None:
 
 @app.command()
 def ingest(
-    resume: Path = typer.Argument(..., help="Path to a resume in Markdown or plain text."),
+    resume: Path | None = typer.Argument(
+        None, help="Path to a resume: Markdown, plain text, PDF, DOCX, or LaTeX."
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        help="Fetch the resume from a link-accessible Google Docs or Drive URL instead.",
+    ),
 ) -> None:
-    """Ingest a resume into the canonical profile and write career.json / career.md."""
+    """Ingest a resume into the canonical profile and write career.json / career.md.
+
+    Accepts a local file (.md, .txt, .pdf, .docx, .tex) or, with --url, a
+    Google Docs/Drive link — one explicit HTTPS fetch (RFC-009), archived to
+    the inbox before extraction. LaTeX is flattened to its visible words,
+    not typeset.
+    """
     configure_logging()
     config = load_config()
     if not config.db_path.exists():
@@ -386,10 +402,17 @@ def ingest(
             err=True,
         )
         raise typer.Exit(code=1)
+    if (resume is None) == (url is None):
+        typer.echo("Provide exactly one of: a resume path, or --url.", err=True)
+        raise typer.Exit(code=1)
     try:
         provider = get_provider(CapabilityClass.EXTRACT_FAST, config)
         with Storage(config.db_path) as storage:
-            report = ingest_resume(resume, config, storage, provider)
+            if resume is not None:
+                report = ingest_resume(resume, config, storage, provider)
+            else:
+                assert url is not None
+                report = ingest_resume_from_url(url, config, storage, provider)
     except (IngestError, ModelConfigError, ProviderError) as exc:
         typer.echo(f"ingest failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -493,6 +516,48 @@ def _require_workspace(config: Config, action: str) -> None:
             err=True,
         )
         raise typer.Exit(code=1)
+
+
+_PICKER_LIMIT = 5
+
+
+def _resolve_person(storage: Storage, name: str, action: str) -> Person:
+    """Resolve a possibly-partial name to exactly one person.
+
+    Exact match wins; a unique partial match is used with a visible note; a
+    small ambiguity (2-5 people) becomes a numbered picker; anything else
+    fails with guidance. Deterministic lookups stay deterministic — the
+    picker only appears when the input was genuinely ambiguous.
+    """
+    candidates = match_people(storage, name)
+    if len(candidates) == 1:
+        person = candidates[0]
+        if person.name_key != " ".join(name.lower().split()):
+            typer.echo(f"→ {person.name}")
+        return person
+    if 2 <= len(candidates) <= _PICKER_LIMIT:
+        typer.echo(f"{name!r} matches {len(candidates)} people:")
+        for number, person in enumerate(candidates, start=1):
+            where = ", ".join(part for part in (person.position, person.company) if part)
+            detail = f"  ({where})" if where else ""
+            typer.echo(f"{number}. {person.name}{detail}")
+        try:
+            choice = int(typer.prompt("Which one? (number, 0 cancels)", type=int, default=0))
+        except click.exceptions.Abort:
+            choice = 0
+        if 1 <= choice <= len(candidates):
+            return candidates[choice - 1]
+        typer.echo(f"Nothing was {action}.", err=True)
+        raise typer.Exit(code=1)
+    if candidates:
+        typer.echo(
+            f"{name!r} matches {len(candidates)} people — be more specific; "
+            "see 'wingman people list'.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    typer.echo(f"No person named {name!r}; see 'wingman people list'.", err=True)
+    raise typer.Exit(code=1)
 
 
 @corpus_app.command("add")
@@ -625,15 +690,7 @@ def people_add_feed(
 
     attribution = FeedAttribution.ORGANIZATION if org else FeedAttribution.PERSON
     with Storage(config.db_path) as storage:
-        name_key = " ".join(name.lower().split())
-        person = storage.find_person_by_name_key(name_key)
-        if person is None:
-            typer.echo(
-                f"No person named {name!r}. Nothing was attached; add them first with "
-                "'wingman people add'.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
+        person = _resolve_person(storage, name, "attached")
         try:
             discovery = discover_feed(url)
         except IngestError as exc:
@@ -712,18 +769,24 @@ def people_fetch(
                 typer.echo("No people have any sources configured. Nothing was fetched.")
                 return
         elif name is None:
-            typer.echo("Name a person or pass --all. Nothing was fetched.", err=True)
-            raise typer.Exit(code=1)
-        else:
-            name_key = " ".join(name.lower().split())
-            person = storage.find_person_by_name_key(name_key)
-            if person is None:
-                typer.echo(
-                    f"No person named {name!r}. Nothing was fetched; see 'wingman people list'.",
-                    err=True,
-                )
+            # Offer the most recently added person with sources before failing.
+            latest = max(
+                (person for person in storage.list_people() if person.sources),
+                key=lambda person: person.created_at,
+                default=None,
+            )
+            confirmed = False
+            if latest is not None:
+                try:
+                    confirmed = typer.confirm(f"Fetch {latest.name} (added most recently)?")
+                except click.exceptions.Abort:
+                    confirmed = False
+            if latest is None or not confirmed:
+                typer.echo("Name a person or pass --all. Nothing was fetched.", err=True)
                 raise typer.Exit(code=1)
-            targets = [person]
+            targets = [latest]
+        else:
+            targets = [_resolve_person(storage, name, "fetched")]
         failures = 0
         for person in targets:
             try:
@@ -781,6 +844,8 @@ def people_similar(
     _require_workspace(config, "compared")
     try:
         with Storage(config.db_path) as storage:
+            if name is not None:
+                name = _resolve_person(storage, name, "compared").name
             report = similar_people(storage, name=name, limit=limit)
     except IngestError as exc:
         typer.echo(f"people similar failed: {exc}", err=True)
@@ -812,6 +877,8 @@ def people_like_cmd(
     _require_workspace(config, "compared")
     try:
         with Storage(config.db_path) as storage:
+            if len(names) >= 2:
+                names = [_resolve_person(storage, name, "compared").name for name in names]
             report = people_like(storage, names=names, limit=limit)
     except IngestError as exc:
         typer.echo(f"people like failed: {exc}", err=True)
@@ -848,11 +915,7 @@ def people_pov(
     config = load_config()
     _require_workspace(config, "summarized")
     with Storage(config.db_path) as storage:
-        name_key = " ".join(name.lower().split())
-        person = storage.find_person_by_name_key(name_key)
-        if person is None:
-            typer.echo(f"No person named {name!r}; see 'wingman people list'.", err=True)
-            raise typer.Exit(code=1)
+        person = _resolve_person(storage, name, "summarized")
         if not refresh:
             stored = storage.get_pov_card(person.person_id)
             if stored is not None:
@@ -861,7 +924,7 @@ def people_pov(
                 return
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
-            report = build_pov_card(name, storage, provider)
+            report = build_pov_card(person.name, storage, provider)
         except (IngestError, ModelConfigError, ProviderError) as exc:
             typer.echo(f"people pov failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
@@ -896,11 +959,7 @@ def people_brief(
     config = load_config()
     _require_workspace(config, "drafted")
     with Storage(config.db_path) as storage:
-        name_key = " ".join(name.lower().split())
-        person = storage.find_person_by_name_key(name_key)
-        if person is None:
-            typer.echo(f"No person named {name!r}; see 'wingman people list'.", err=True)
-            raise typer.Exit(code=1)
+        person = _resolve_person(storage, name, "drafted")
         if not refresh:
             stored = storage.get_outreach_brief(person.person_id)
             if stored is not None:
@@ -909,7 +968,7 @@ def people_brief(
                 return
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
-            report = build_outreach_brief(name, storage, provider)
+            report = build_outreach_brief(person.name, storage, provider)
         except (IngestError, ModelConfigError, ProviderError) as exc:
             typer.echo(f"people brief failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
