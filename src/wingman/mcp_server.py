@@ -414,7 +414,9 @@ def people_pov(name: str, refresh: bool = False) -> str:
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
             report = build_pov_card(name, storage, provider)
-        except (IngestError, ModelConfigError, ProviderError, ProposalParseError) as exc:
+        except ProposalParseError as exc:
+            return f"people pov failed: {exc}. Nothing was stored; call again to retry."
+        except (IngestError, ModelConfigError, ProviderError) as exc:
             return f"people pov failed: {exc}"
     rejected = "".join(
         f"\n  rejected stance {item.statement!r}: {item.reason}" for item in report.rejected

@@ -119,6 +119,29 @@ def test_fabricated_quotes_and_unknown_docs_are_rejected(workspace: Path) -> Non
         assert "verbatim" in reasons and "not among the supplied documents" in reasons
 
 
+def test_stance_limit_is_enforced_deterministically(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        doc_id = seeded_storage(storage, config)
+        provider = ScriptedProvider(
+            {
+                "stances": [
+                    {
+                        "statement": f"Stance number {index}.",
+                        "quote": "Every answer should show its work",
+                        "doc_id": doc_id,
+                    }
+                    for index in range(9)
+                ],
+                "topics": [],
+            }
+        )
+        report = build_pov_card("Jane Author", storage, provider)
+        assert len(report.card.stances) == 6
+        over_limit = [item for item in report.rejected if "limit" in item.reason]
+        assert len(over_limit) == 3
+
+
 def test_no_surviving_stance_stores_nothing(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:

@@ -30,6 +30,8 @@ _logger = get_logger("application.pov")
 # without blowing the context on prolific authors.
 MAX_DOCUMENTS = 20
 MAX_CHARS_PER_DOCUMENT = 6_000
+# The prompt asks for at most 6 stances; enforce it deterministically too.
+MAX_STANCES = 6
 
 
 class RejectedStance(BaseModel):
@@ -82,6 +84,14 @@ def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovR
     for proposed in proposal.stances:
         statement = proposed.statement.strip()
         quote = proposed.quote.strip()
+        if len(stances) >= MAX_STANCES:
+            rejected.append(
+                RejectedStance(
+                    statement=statement or "(empty)",
+                    reason=f"over the {MAX_STANCES}-stance limit",
+                )
+            )
+            continue
         if not statement:
             rejected.append(RejectedStance(statement="(empty)", reason="empty statement"))
             continue
