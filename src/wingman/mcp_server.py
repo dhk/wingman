@@ -634,6 +634,36 @@ def my_pov(refresh: bool = False) -> str:
 
 
 @server.tool()
+def people_news(name: str) -> str:
+    """Fetch and store recent news mentioning a person or their company.
+
+    One read-only GET of Google News's public RSS search (RFC-009 shape).
+    The query — their name and company — is sent to the news provider; that
+    is the entire egress. Replaces the stored snapshot shown in the person
+    export's News quadrant.
+    """
+    from wingman.application.news import fetch_person_news
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        found = _find_person(storage, name)
+        if isinstance(found, str):
+            return found
+        try:
+            report = fetch_person_news(found, storage)
+        except IngestError as exc:
+            return f"people news failed: {exc}"
+    if not report.titles:
+        return f"No recent news found for {report.query}."
+    lines = [f"News for {report.query}:"]
+    lines.extend(f"{number}. {title}" for number, title in enumerate(report.titles, start=1))
+    lines.append(f"{report.stored} items stored.")
+    return "\n".join(lines)
+
+
+@server.tool()
 def people_docs(name: str) -> str:
     """List a person's stored documents: title, date, and source URL, newest first."""
     from wingman.reporting.export import newest_first

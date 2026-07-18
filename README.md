@@ -60,6 +60,7 @@ wingman sync             # fetch everything + embed what's new, in one command
 wingman people discover  # who your watched Substacks recommend (suggestions only)
 wingman people pov "Jane Author"    # what she thinks — stances with verbatim quotes
 wingman people docs "Jane Author"   # her stored documents: title, date, source URL
+wingman people news "Jane Author"   # recent news on her or her company (query goes to Google News)
 wingman pov                         # your own POV: where your corpus takes a position
 wingman people brief "Jane Author" --purpose advice  # talking points + intro bullets; you send, never Wingman
 ```
@@ -103,8 +104,9 @@ Print-ready exports (US Letter, styled by the site design system, rendered
 with `npx md-to-pdf "<file>"` which drops the PDF next to the source —
 wingman writes Markdown + CSS, never runs a browser): `wingman export career` (portrait one-pager, every claim cited),
 `wingman export company "DataCo"`, and `wingman export person "Jane Author"`
-— a landscape three-column sheet (outreach brief | point of view | related)
-with clickable source links; add `--html` for a tabbed on-screen page.
+— a landscape 2x2 briefing dock (outreach brief | point of view |
+background | news) with clickable source links; add `--html` for a tabbed
+on-screen page.
 Files land in `reports/pdf/` (or anywhere via `--out`).
 
 Company signals come from the people you watch: each embedded post counts

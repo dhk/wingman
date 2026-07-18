@@ -13,7 +13,7 @@ from wingman.domain import SourceRecord
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.opportunity import Opportunity
 from wingman.domain.outreach import OutreachBrief
-from wingman.domain.person import ExternalDocument, Person
+from wingman.domain.person import ExternalDocument, NewsItem, Person
 from wingman.domain.pov import PovCard
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 
@@ -71,6 +71,13 @@ CREATE TABLE IF NOT EXISTS pov_cards (
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS news_items (
+    item_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    fetched_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_news_items_person ON news_items (person_id);
 CREATE TABLE IF NOT EXISTS outreach_briefs (
     brief_id TEXT PRIMARY KEY,
     person_id TEXT NOT NULL UNIQUE,
@@ -406,6 +413,25 @@ class Storage:
         )
         row: tuple[str] | None = cursor.fetchone()
         return PovCard.model_validate_json(row[0]) if row else None
+
+    def replace_person_news(self, person_id: str, items: list[NewsItem]) -> None:
+        """News is a refreshed snapshot, not an archive: old items are replaced."""
+        self._conn.execute("DELETE FROM news_items WHERE person_id = ?", (person_id,))
+        self._conn.executemany(
+            "INSERT INTO news_items (item_id, person_id, payload, fetched_at) VALUES (?, ?, ?, ?)",
+            [
+                (item.item_id, item.person_id, item.model_dump_json(), item.fetched_at.isoformat())
+                for item in items
+            ],
+        )
+        self._conn.commit()
+
+    def list_person_news(self, person_id: str) -> list[NewsItem]:
+        cursor = self._conn.execute(
+            "SELECT payload FROM news_items WHERE person_id = ? ORDER BY fetched_at, item_id",
+            (person_id,),
+        )
+        return [NewsItem.model_validate_json(row[0]) for row in cursor.fetchall()]
 
     def save_outreach_brief(self, brief: OutreachBrief) -> None:
         """Insert or replace the brief for its person (briefs are rebuilt, not versioned)."""

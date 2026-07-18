@@ -185,8 +185,10 @@ def test_person_export_is_landscape_three_columns_with_links(workspace: Path) ->
     text = path.read_text(encoding="utf-8")
     assert "landscape: true" in text and "format: Letter" in text
     assert '<div class="sheet">' in text
-    for column in ("Outreach Brief", "Point of View", "Related"):
+    for column in ("Outreach Brief", "Point of View", "Background"):
         assert f"<h2>{column}</h2>" in text
+    assert "<h2>News &amp; Updates</h2>" in text
+    assert "wingman people news" in text  # empty news quadrant carries the fetch hint
     # clickable links: the stance's source post and the Substack itself
     assert 'href="https://jane.substack.com/p/explainable"' in text
     assert 'href="https://jane.substack.com"' in text
@@ -311,8 +313,8 @@ def test_person_html_export_is_tabbed_and_self_contained(workspace: Path) -> Non
     html_text = html_path.read_text(encoding="utf-8")
     assert html_path.suffix == ".html"
     assert html_text.startswith("<!doctype html>")
-    assert html_text.count('type="radio"') == 3
-    for label in ("Outreach Brief", "Point of View", "Related"):
+    assert html_text.count('type="radio"') == 4
+    for label in ("Outreach Brief", "Point of View", "Background", "News & Updates"):
         assert f">{label}</label>" in html_text
     assert 'class="panel panel-brief"' in html_text
     assert "--font-cond" in html_text  # stylesheet embedded, self-contained

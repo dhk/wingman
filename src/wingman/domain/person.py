@@ -97,6 +97,18 @@ class ExternalDocument(BaseModel):
     added_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class NewsItem(BaseModel):
+    """One recent news mention of a person or their company, from a public
+    news feed (never their own writing — that's ExternalDocument)."""
+
+    item_id: str = Field(default_factory=lambda: str(uuid4()))
+    person_id: str
+    title: str
+    url: str
+    published_at: datetime | None = None
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class ExternalEvidenceHit(BaseModel):
     """One search result over people's writing: document, excerpt, and author."""
 

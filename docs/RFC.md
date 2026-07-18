@@ -187,3 +187,15 @@ Two deferrals, on the demonstrated-need rule:
 **Rationale.** Resumes live in PDF and DOCX far more often than Markdown; requiring manual conversion was the biggest friction in Phase 1's front door. Each format gets the cheapest honest extraction that the evidence-validation gate can stand behind.
 
 **Revisit if.** Scanned-PDF resumes turn out to be common (OCR becomes its own decision), or users need non-Google document hosts (the URL allowlist then becomes a configured, documented surface).
+
+## RFC-014: Recent-news snapshots via a public news RSS endpoint
+
+**Decision.** `wingman people news <name>` fetches recent news mentioning a person or their company from Google News's public RSS search endpoint — one explicit, user-invoked, read-only HTTPS GET of an unauthenticated public feed, squarely inside the RFC-009 invariants. Results are stored as a replace-on-refresh snapshot (a new `news_items` table, capped at 8 items), rendered as the fourth quadrant of the person export's 2x2 briefing dock with the fetch date and a staleness flag past 7 days. News items are never mixed into ExternalDocuments: a journalist's article about a person is not that person's writing, and keeping the stores separate keeps POV cards quoting only the person's own words.
+
+**The privacy trade, stated plainly.** The query — the person's name and their company — is sent to the news provider when the user runs the command. That is the entire egress and it is disclosed in the command's help text; the command never runs implicitly (not part of `wingman sync` for now, precisely so the disclosure stays attached to the action).
+
+**Alternatives.** News APIs with keys (credentialed egress for a commodity feed); scraping search result pages (ToS-hostile, brittle); asking the user to paste links (the manual fallback still works — any judgment about an article belongs to the user reading it either way).
+
+**Rationale.** Outreach benefits from knowing what just happened at the person's company; a public RSS search is the cheapest honest source, and snapshot-replace semantics keep it a briefing input rather than a growing archive of third-party content.
+
+**Revisit if.** The provider retires the endpoint (Bing News RSS is the drop-in shape), or users want news in `wingman sync` (then the disclosure has to move with it).

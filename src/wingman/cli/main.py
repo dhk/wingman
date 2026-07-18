@@ -15,6 +15,7 @@ from wingman.application.assess import assess_job
 from wingman.application.corpus import add_to_corpus, find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
+from wingman.application.news import fetch_person_news
 from wingman.application.people import (
     add_person,
     attach_feed,
@@ -1094,6 +1095,36 @@ def pov(
         typer.echo(f"  rejected stance {rejected.statement!r}: {rejected.reason}")
 
 
+@people_app.command("news")
+def people_news(
+    name: str = typer.Argument(..., help="Person to fetch recent news for."),
+) -> None:
+    """Fetch recent news mentioning this person or their company (explicit fetch).
+
+    One read-only GET of Google News's public RSS search (RFC-009 shape).
+    Privacy, stated plainly: the query — their name and company — is sent
+    to the news provider. The result replaces the stored snapshot and
+    appears in the person export's News quadrant.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "fetched")
+    with Storage(config.db_path) as storage:
+        person = _resolve_person(storage, name, "fetched")
+        try:
+            report = fetch_person_news(person, storage)
+        except IngestError as exc:
+            typer.echo(f"people news failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+    if not report.titles:
+        typer.echo(f"No recent news found for {report.query}.")
+        return
+    typer.echo(f"News for {report.query}:")
+    for number, title in enumerate(report.titles, start=1):
+        typer.echo(f"{number}. {title}")
+    typer.echo(f"{report.stored} items stored — they'll appear in 'wingman export person'.")
+
+
 @people_app.command("docs")
 def people_docs(
     name: str = typer.Argument(..., help="Person whose stored documents to list."),
@@ -1241,7 +1272,7 @@ def export_person_cmd(
         False, "--html", help="Write a tabbed HTML page for reading on screen instead."
     ),
 ) -> None:
-    """Landscape three-column sheet: outreach brief | point of view | related links.
+    """Landscape 2x2 briefing dock: brief | point of view | background | news.
 
     --html writes a self-contained tabbed page (brief | pov | related) for
     the screen; the default Markdown renders to the dense one-page PDF.
