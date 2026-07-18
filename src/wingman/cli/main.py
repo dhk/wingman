@@ -36,8 +36,10 @@ from wingman.application.outreach import build_outreach_brief, render_outreach_b
 from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import (
     CORPUS_PERSON_ID,
+    build_company_pov,
     build_own_pov,
     build_pov_card,
+    company_card_id,
     render_pov_card,
 )
 from wingman.application.research import (
@@ -49,6 +51,7 @@ from wingman.application.research import (
 )
 from wingman.application.similarity import (
     companies_like,
+    company_key,
     embed_missing,
     people_like,
     similar_companies,
@@ -1564,6 +1567,48 @@ def company_dossier(
         raise typer.Exit(code=1) from exc
     typer.echo(report.markdown)
     typer.echo(f"(written to {report.path})")
+
+
+@company_app.command("pov")
+def company_pov_cmd(
+    name: str = typer.Argument(..., help="Company to synthesize themes for."),
+    refresh: bool = typer.Option(
+        False, "--refresh", help="Rebuild the themes (a model call) even if stored."
+    ),
+) -> None:
+    """Synthesized company themes from its people's writing (RFC-016).
+
+    A model call (synthesize_balanced) over the company's document pool —
+    writing by watched people there plus org-attributed feeds, with author
+    attribution on every document. Each theme survives only if its quote
+    appears verbatim in a stored document. A stored card is shown without
+    any model call; --refresh rebuilds. The dossier renders the stored card.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "synthesized")
+    with Storage(config.db_path) as storage:
+        if not refresh:
+            stored = storage.get_pov_card(company_card_id(company_key(name)))
+            if stored is not None:
+                typer.echo(render_pov_card(stored))
+                typer.echo("\n(stored card — rebuild with --refresh)")
+                return
+        try:
+            provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+            report = build_company_pov(name, storage, provider)
+        except (IngestError, ModelConfigError, ProviderError) as exc:
+            typer.echo(f"company pov failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        except ProposalParseError as exc:
+            typer.echo(
+                f"company pov failed: {exc}. Nothing was stored; re-run to retry.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+    typer.echo(render_pov_card(report.card))
+    for rejected in report.rejected:
+        typer.echo(f"  rejected theme {rejected.statement!r}: {rejected.reason}")
 
 
 @company_app.command("add-source")

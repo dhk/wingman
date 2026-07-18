@@ -44,8 +44,10 @@ from wingman.application.outreach import build_outreach_brief, render_outreach_b
 from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import (
     CORPUS_PERSON_ID,
+    build_company_pov,
     build_own_pov,
     build_pov_card,
+    company_card_id,
     render_pov_card,
 )
 from wingman.application.research import (
@@ -60,6 +62,7 @@ from wingman.application.similarity import (
     CompanySimilarityReport,
     SimilarPerson,
     companies_like,
+    company_key,
     embed_missing,
     similar_companies,
     similar_people,
@@ -610,6 +613,37 @@ def people_pov(name: str, refresh: bool = False) -> str:
             return f"people pov failed: {exc}"
     rejected = "".join(
         f"\n  rejected stance {item.statement!r}: {item.reason}" for item in report.rejected
+    )
+    return render_pov_card(report.card) + rejected
+
+
+@server.tool()
+def company_pov(name: str, refresh: bool = False) -> str:
+    """Synthesized company themes from its people's writing (a model call on refresh).
+
+    The company's document pool — writing by watched people there plus
+    org-attributed feeds, author attribution on every document — goes to the
+    synthesize_balanced provider, and every theme is kept only if its quote
+    appears verbatim in a stored document. Returns the stored card when one
+    exists; refresh=True rebuilds. The dossier renders the stored card.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        if not refresh:
+            stored = storage.get_pov_card(company_card_id(company_key(name)))
+            if stored is not None:
+                return render_pov_card(stored) + "\n\n(stored card — rebuild with refresh=True)"
+        try:
+            provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+            report = build_company_pov(name, storage, provider)
+        except ProposalParseError as exc:
+            return f"company pov failed: {exc}. Nothing was stored; call again to retry."
+        except (IngestError, ModelConfigError, ProviderError) as exc:
+            return f"company pov failed: {exc}"
+    rejected = "".join(
+        f"\n  rejected theme {item.statement!r}: {item.reason}" for item in report.rejected
     )
     return render_pov_card(report.card) + rejected
 

@@ -21,6 +21,7 @@ from wingman.agents.pov_analyst import (
     parse_pov_proposal,
 )
 from wingman.application.ingest import IngestError
+from wingman.application.similarity import company_key
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.person import ExternalDocument
 from wingman.domain.pov import PovCard, PovProposal, Stance, StanceDimension
@@ -51,6 +52,14 @@ class PovReport(BaseModel):
 # The identity key for the user's own corpus card in the pov_cards table.
 CORPUS_PERSON_ID = "__corpus__"
 CORPUS_PERSON_NAME = "Your corpus"
+
+# Company theme cards live in the same table under a reserved id per company.
+COMPANY_POV_PREFIX = "__company__"
+
+
+def company_card_id(key: str) -> str:
+    """pov_cards identity for a company's synthesized themes (key is company_key)."""
+    return f"{COMPANY_POV_PREFIX}{key}"
 
 
 def _documents_block(
@@ -255,6 +264,105 @@ def build_own_pov(storage: Storage, provider: ModelProvider) -> PovReport:
     storage.save_pov_card(card)
     _logger.info(
         "own_pov documents=%d stances=%d rejected=%d provider=%s model=%s",
+        len(documents),
+        len(stances),
+        len(rejected),
+        response.provider,
+        response.model,
+    )
+    return PovReport(card=card, rejected=rejected)
+
+
+def build_company_pov(name: str, storage: Storage, provider: ModelProvider) -> PovReport:
+    """Build (or rebuild) synthesized themes for a company from its document pool.
+
+    The pool is the same one the dossier reads: writing by watched people at
+    the company plus org-attributed documents (RFC-016). Author attribution
+    rides each document's title so the model knows who is speaking, and every
+    proposed theme passes the same verbatim-quote validation as any POV card —
+    a company theme is still only as real as the sentence it quotes.
+    """
+    key = company_key(name)
+    if not key:
+        raise IngestError("company name is empty — nothing to synthesize.")
+    all_people = storage.list_people()
+    people_by_id = {person.person_id: person for person in all_people}
+    documents: list[ExternalDocument] = []
+    authors: dict[str, str] = {}
+    for document in storage.list_external_documents():
+        person = people_by_id.get(document.person_id)
+        via_person = person is not None and company_key(person.company or "") == key
+        via_org = company_key(document.organization or "") == key
+        if not (via_person or via_org):
+            continue
+        documents.append(document)
+        if via_person and person is not None:
+            authors[document.doc_id] = person.name
+        else:
+            authors[document.doc_id] = document.organization or "organization feed"
+    if not documents:
+        raise IngestError(
+            f"nothing in the workspace is attributable to {name!r}. Companies come from "
+            "watched people's company field and org-attributed feeds; fetch some writing first."
+        )
+    display = next(
+        (
+            person.company
+            for person in all_people
+            if person.company and company_key(person.company) == key
+        ),
+        next((document.organization for document in documents if document.organization), name),
+    )
+    assert display is not None  # at least one branch above produced a name
+
+    documents = _newest(documents, MAX_DOCUMENTS)
+    bodies = {
+        document.doc_id: storage.get_external_body(document.doc_id) or "" for document in documents
+    }
+    documents = [document for document in documents if bodies[document.doc_id].strip()]
+    if not documents:
+        raise IngestError(f"{display}'s attributable documents have no extractable text.")
+
+    # Attribution rides the title: the model sees who wrote each document, and
+    # the attributed title is what gets stored on each surviving stance.
+    attributed = [
+        document.model_copy(update={"title": f"{document.title} — by {authors[document.doc_id]}"})
+        for document in documents
+    ]
+    prompt = build_prompt(
+        f"the people of {display} (a company; write statements about what "
+        f"{display}'s people collectively argue, naming authors where it helps)",
+        _documents_block(attributed, bodies),
+    )
+    response = provider.complete(ModelRequest(system=SYSTEM_PROMPT, prompt=prompt))
+    proposal = parse_pov_proposal(response.text)
+    stances, rejected = _validate_proposal(
+        proposal,
+        {
+            document.doc_id: (document.title, document.source_record_id, document.organization)
+            for document in attributed
+        },
+        bodies,
+    )
+    if not stances:
+        raise IngestError(
+            f"no theme survived validation for {display} "
+            f"({len(rejected)} rejected). Nothing was stored; re-run to retry."
+        )
+    card = PovCard(
+        person_id=company_card_id(key),
+        person_name=f"{display} (company)",
+        stances=stances,
+        topics=[topic.strip() for topic in proposal.topics if topic.strip()][:8],
+        documents_used=len(documents),
+        provider=response.provider,
+        model=response.model,
+        prompt_version=PROMPT_VERSION,
+    )
+    storage.save_pov_card(card)
+    _logger.info(
+        "company_pov company=%s documents=%d stances=%d rejected=%d provider=%s model=%s",
+        display,
         len(documents),
         len(stances),
         len(rejected),

@@ -100,6 +100,7 @@ wingman company similar                      # companies closest to your own cor
 wingman company similar "DataCo"             # companies whose people write similarly
 wingman company like "DataCo" "StreamCorp"   # near the centroid of both companies
 wingman company dossier "DataCo"             # dated snapshot → reports/companies/
+wingman company pov "DataCo"                 # synthesized themes, validated quote-by-quote
 wingman company add-source "DataCo" https://dataco.example.com/careers --label careers
 wingman company research "DataCo"            # fetch approved pages; new links = hiring signal
 ```
