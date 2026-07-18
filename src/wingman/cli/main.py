@@ -24,6 +24,7 @@ from wingman.application.people import (
     seed_from_connections,
 )
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
+from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pov import build_pov_card, render_pov_card
 from wingman.application.similarity import (
     companies_like,
@@ -872,6 +873,54 @@ def people_pov(
     typer.echo(render_pov_card(report.card))
     for rejected in report.rejected:
         typer.echo(f"  rejected stance {rejected.statement!r}: {rejected.reason}")
+
+
+@people_app.command("brief")
+def people_brief(
+    name: str = typer.Argument(..., help="Person to draft outreach material for."),
+    refresh: bool = typer.Option(
+        False, "--refresh", help="Rebuild the brief (a model call) even if one is stored."
+    ),
+) -> None:
+    """Draft talking points and an intro connecting their POV to your writing.
+
+    Building a brief is a model call (synthesize_balanced): the person's POV
+    card and excerpts of your own corpus go to the configured provider, and a
+    talking point is kept only if it cites a card stance exactly and quotes
+    your corpus verbatim. Drafts only — Wingman never sends anything
+    (RFC-006). A stored brief is shown without any model call; --refresh
+    rebuilds.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "drafted")
+    with Storage(config.db_path) as storage:
+        name_key = " ".join(name.lower().split())
+        person = storage.find_person_by_name_key(name_key)
+        if person is None:
+            typer.echo(f"No person named {name!r}; see 'wingman people list'.", err=True)
+            raise typer.Exit(code=1)
+        if not refresh:
+            stored = storage.get_outreach_brief(person.person_id)
+            if stored is not None:
+                typer.echo(render_outreach_brief(stored))
+                typer.echo("\n(stored brief — rebuild with --refresh)")
+                return
+        try:
+            provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+            report = build_outreach_brief(name, storage, provider)
+        except (IngestError, ModelConfigError, ProviderError) as exc:
+            typer.echo(f"people brief failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        except ProposalParseError as exc:
+            typer.echo(
+                f"people brief failed: {exc}. Nothing was stored; re-run to retry.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+    typer.echo(render_outreach_brief(report.brief))
+    for rejected in report.rejected:
+        typer.echo(f"  rejected point {rejected.point!r}: {rejected.reason}")
 
 
 @people_app.command("discover")

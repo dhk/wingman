@@ -58,13 +58,19 @@ wingman people fetch --all
 wingman people evidence "developer tools"
 wingman sync             # fetch everything + embed what's new, in one command
 wingman people discover  # who your watched Substacks recommend (suggestions only)
-wingman people pov "Jane Author"  # what she thinks — stances with verbatim quotes
+wingman people pov "Jane Author"    # what she thinks — stances with verbatim quotes
+wingman people brief "Jane Author"  # draft talking points + intro; you send, never Wingman
 ```
 
 POV cards summarize what a person believes, from their own writing: the
 model proposes stances, and deterministic validation keeps only those whose
 quote appears verbatim in the stored post — the same fabrication guard as
 resume ingestion, applied to other people's words.
+
+Outreach briefs build on the card: talking points connecting their stances
+to your own corpus (each one must cite a card stance exactly and quote your
+writing verbatim) plus a draft intro. Wingman drafts; it never sends
+anything (RFC-006).
 
 Beyond Substack: `add-feed` takes any public feed or blog homepage — it
 autodiscovers RSS/Atom (Medium, WordPress, Ghost) and, for feed-less sites
