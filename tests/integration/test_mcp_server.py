@@ -55,6 +55,7 @@ def test_all_tools_are_registered() -> None:
         "people_brief",
         "company_similar",
         "company_like",
+        "company_dossier",
     }
 
 

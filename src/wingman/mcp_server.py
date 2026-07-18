@@ -35,6 +35,7 @@ from wingman.application.people import (
     find_people_evidence,
     seed_from_connections,
 )
+from wingman.application.dossier import build_company_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pov import build_pov_card, render_pov_card
 from wingman.application.similarity import (
@@ -443,6 +444,27 @@ def company_like(names: list[str], limit: int = 10) -> str:
     except IngestError as exc:
         return f"company like failed: {exc}"
     return _company_lines(report)
+
+
+@server.tool()
+def company_dossier(name: str) -> str:
+    """A dated, cited company snapshot from data already in the workspace.
+
+    Deterministic composition — no model call, no network: watched people at
+    the company, org-attributed sources, their validated POV stances (each an
+    [inference] backed by a verbatim [fact] quote), similarity signals when
+    embeddings exist, staleness warnings, and gaps. Also written as Markdown
+    under reports/companies/.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            report = build_company_dossier(name, config, storage)
+    except IngestError as exc:
+        return f"company dossier failed: {exc}"
+    return report.markdown + f"\n(written to {report.path})"
 
 
 @server.tool()

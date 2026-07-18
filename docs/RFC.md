@@ -160,3 +160,18 @@ Everything else RFC-009 established holds unchanged: explicit invocation only, r
 **Rationale.** Public writing is the raw material of relationship intelligence, and it lives behind exactly two shapes: feeds (near-universal on personal-blog platforms) and feed-less marketing sites. Covering both with one confirm-gated command keeps the watchlist honest about attribution and keeps every fetched byte inside the existing provenance rules.
 
 **Revisit if.** Index-page extraction proves too brittle against redesigns (then sitemap.xml `lastmod`-driven fetching becomes the refinement, still within these invariants), or per-author attribution on company blogs is wanted (post-page metadata reading — a further widening that gets its own look).
+
+## RFC-012: Company dossiers as deterministic composition (Phase 3, slice ii)
+
+**Decision.** `wingman company dossier <name>` produces the roadmap's dated company snapshot by composing artifacts the workspace has already validated: watched people at the company (via the Person `company` field), org-attributed sources (RFC-011), POV-card stances rendered with explicit labels (`[inference]` statement backed by a verbatim `[fact]` quote — RFC-005's fact/inference/hypothesis discipline made visible), embedding-based signals when available (alignment with the user's corpus, nearest companies), a staleness warning when the newest attributable document is older than 90 days, and an explicit Gaps section naming what is missing and the command that fills it. The dossier is deterministic — no model call, no network — and is written as dated Markdown under `reports/companies/`, the artifact convention from DESIGN.md.
+
+Two deferrals, on the demonstrated-need rule:
+
+- **No stored Organization entity yet.** Companies are derived at read time from Person records and document attribution. A first-class Organization row earns its place when there is user-supplied metadata to hang on it (aliases, notes, approved research sources) — not before.
+- **No model-synthesized "company themes" yet.** The dossier's claims are inherited from per-person POV cards, which were already validated quote-by-quote. A company-level synthesis step (many documents → themes) is a further model surface that gets added when per-person stances prove insufficient.
+
+**Alternatives.** Model-written dossiers (unauditable claims exactly where the roadmap demands labeled ones); live research at dossier time (Phase 3's "research plan / approved-source handling" — a bigger decision about network scope that deserves its own entry when built); storing dossiers in SQLite (they are cheap, derived, and dated — the filesystem under `reports/` is the record).
+
+**Rationale.** Phase 3's usable outcome is "generate a dated company dossier". Every ingredient already existed with provenance attached; composing them deterministically ships the outcome without adding a model surface or a network path, and the Gaps section turns missing data into the next command to run — graceful degradation as a feature.
+
+**Revisit if.** Per-company research sources arrive (then approved-source handling and refresh become the durable design), or users want cross-person synthesis beyond what POV cards carry.

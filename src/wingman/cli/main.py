@@ -24,6 +24,7 @@ from wingman.application.people import (
     seed_from_connections,
 )
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
+from wingman.application.dossier import build_company_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pov import build_pov_card, render_pov_card
 from wingman.application.similarity import (
@@ -1028,6 +1029,31 @@ def company_similar(
             f"{number}. {entry.name}  score {entry.score:.3f}  "
             f"[{entry.people} people, {entry.documents} docs]"
         )
+
+
+@company_app.command("dossier")
+def company_dossier(
+    name: str = typer.Argument(..., help="Company to snapshot, e.g. 'Innovation Endeavors'."),
+) -> None:
+    """A dated, cited company snapshot from what the workspace already knows.
+
+    Deterministic composition — no model call, no network: watched people
+    there, org-attributed sources, their validated POV stances (each an
+    [inference] backed by a verbatim [fact] quote), similarity signals when
+    embeddings exist, staleness warnings, and gaps. Written as Markdown
+    under reports/companies/.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "summarized")
+    try:
+        with Storage(config.db_path) as storage:
+            report = build_company_dossier(name, config, storage)
+    except IngestError as exc:
+        typer.echo(f"company dossier failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(report.markdown)
+    typer.echo(f"(written to {report.path})")
 
 
 @company_app.command("like")
