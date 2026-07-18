@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import html
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -206,30 +207,41 @@ def _link(url: str, label: str | None = None) -> str:
     return f'<a class="meta-link" href="{_e(url)}">{_e(label or url)}</a>'
 
 
-def _warmth(person: Person, common_count: int) -> tuple[int, str, list[str]]:
-    """A transparent warmth score: every point names the signal behind it.
+@dataclass(frozen=True)
+class WarmthSignal:
+    """One named, independently auditable component of the warmth vector (RFC-020)."""
 
-    Deterministic arithmetic over what the workspace actually knows — a
-    direct LinkedIn connection, an email on file, shared-company
-    connections. No model call, no guessing.
+    name: str
+    points: int
+    description: str
+
+
+def _warmth(person: Person, common_count: int) -> list[WarmthSignal]:
+    """Deterministic warmth signals — arithmetic over what the workspace actually
+    knows, decomposed so each point names the signal behind it (RFC-020) rather
+    than collapsing into one opaque score. No model call, no guessing.
     """
-    score = 0
-    signals: list[str] = []
+    signals: list[WarmthSignal] = []
     if person.connected_on or person.origin is PersonOrigin.LINKEDIN_CONNECTIONS:
-        score += 2
         since = f" since {person.connected_on}" if person.connected_on else ""
-        signals.append(f"direct connection{since}")
+        signals.append(WarmthSignal("direct_connection", 2, f"direct connection{since}"))
     if person.email:
-        score += 1
-        signals.append("email on file")
+        signals.append(WarmthSignal("email_on_file", 1, "email on file"))
     if common_count:
-        score += 2 if common_count >= 3 else 1
+        points = 2 if common_count >= 3 else 1
         plural = "s" if common_count != 1 else ""
-        signals.append(f"{common_count} shared-company connection{plural}")
-    if not signals:
-        signals.append("no direct path known — warm it up through the writing")
+        signals.append(
+            WarmthSignal(
+                "shared_connections", points, f"{common_count} shared-company connection{plural}"
+            )
+        )
+    return signals
+
+
+def _warmth_label(signals: list[WarmthSignal]) -> tuple[int, str]:
+    score = sum(signal.points for signal in signals)
     label = "cold" if score == 0 else "cool" if score == 1 else "warm" if score <= 3 else "hot"
-    return score, label, signals
+    return score, label
 
 
 def _write(directory: Path, filename: str, markdown: str) -> Path:
@@ -536,10 +548,14 @@ def export_person(
         ]
 
     right: list[str] = ["<h2>Background</h2>"]
-    score, warmth_label, warmth_signals = _warmth(person, len(common))
+    warmth_signals = _warmth(person, len(common))
+    score, warmth_label = _warmth_label(warmth_signals)
     dots = "●" * min(score, 4) + "○" * (4 - min(score, 4))
     right.append(f'<div class="warmth warmth-{warmth_label}">{dots} {warmth_label}</div>')
-    right.append(f'<p class="dim">{_e("; ".join(warmth_signals))}</p>')
+    signal_text = "; ".join(signal.description for signal in warmth_signals) or (
+        "no direct path known — warm it up through the writing"
+    )
+    right.append(f'<p class="dim">{_e(signal_text)}</p>')
     links: list[str] = []
     if person.linkedin_url:
         links.append(f"<li>{_link(person.linkedin_url, 'LinkedIn')}</li>")
