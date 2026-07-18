@@ -1290,12 +1290,22 @@ def people_news(
             typer.echo(f"people news failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
     if not report.titles:
-        typer.echo(f"No recent news found for {report.query}.")
+        if report.dropped:
+            typer.echo(
+                f"{report.dropped} results for {report.query} were all low-relevance "
+                "(name/company not in the headline, or a common-word company without "
+                "corporate context) — nothing stored."
+            )
+        else:
+            typer.echo(f"No recent news found for {report.query}.")
         return
     typer.echo(f"News for {report.query}:")
     for number, title in enumerate(report.titles, start=1):
         typer.echo(f"{number}. {title}")
-    typer.echo(f"{report.stored} items stored — they'll appear in 'wingman export person'.")
+    summary = f"{report.stored} items stored"
+    if report.dropped:
+        summary += f", {report.dropped} low-relevance dropped"
+    typer.echo(f"{summary} — they'll appear in 'wingman export person'.")
 
 
 @people_app.command("docs")
