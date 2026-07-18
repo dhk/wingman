@@ -52,6 +52,7 @@ def test_all_tools_are_registered() -> None:
         "feed_attach",
         "people_import_connections",
         "people_pov",
+        "people_brief",
         "company_similar",
         "company_like",
     }

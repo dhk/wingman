@@ -35,6 +35,7 @@ from wingman.application.people import (
     find_people_evidence,
     seed_from_connections,
 )
+from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pov import build_pov_card, render_pov_card
 from wingman.application.similarity import (
     CompanySimilarityReport,
@@ -475,6 +476,42 @@ def people_pov(name: str, refresh: bool = False) -> str:
         f"\n  rejected stance {item.statement!r}: {item.reason}" for item in report.rejected
     )
     return render_pov_card(report.card) + rejected
+
+
+@server.tool()
+def people_brief(name: str, refresh: bool = False) -> str:
+    """Draft outreach talking points and an intro connecting a person's POV to the user's writing.
+
+    Returns the stored brief when one exists; refresh=True rebuilds it (a
+    model call — the person's POV card plus excerpts of the user's corpus go
+    to the synthesize_balanced provider, and a talking point is kept only if
+    it cites a card stance exactly and quotes the corpus verbatim). Drafts
+    only — Wingman never sends anything (RFC-006).
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        person = storage.find_person_by_name_key(_name_key(name))
+        if person is None:
+            return f"No person named {name!r}; see people_list."
+        if not refresh:
+            stored = storage.get_outreach_brief(person.person_id)
+            if stored is not None:
+                return (
+                    render_outreach_brief(stored) + "\n\n(stored brief — rebuild with refresh=True)"
+                )
+        try:
+            provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+            report = build_outreach_brief(name, storage, provider)
+        except ProposalParseError as exc:
+            return f"people brief failed: {exc}. Nothing was stored; call again to retry."
+        except (IngestError, ModelConfigError, ProviderError) as exc:
+            return f"people brief failed: {exc}"
+    rejected = "".join(
+        f"\n  rejected point {item.point!r}: {item.reason}" for item in report.rejected
+    )
+    return render_outreach_brief(report.brief) + rejected
 
 
 @server.tool()

@@ -12,6 +12,7 @@ from typing import Self
 from wingman.domain import SourceRecord
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.opportunity import Opportunity
+from wingman.domain.outreach import OutreachBrief
 from wingman.domain.person import ExternalDocument, Person
 from wingman.domain.pov import PovCard
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
@@ -66,6 +67,12 @@ CREATE INDEX IF NOT EXISTS idx_external_documents_person ON external_documents (
 CREATE VIRTUAL TABLE IF NOT EXISTS external_fts USING fts5(doc_id UNINDEXED, title, body);
 CREATE TABLE IF NOT EXISTS pov_cards (
     card_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS outreach_briefs (
+    brief_id TEXT PRIMARY KEY,
     person_id TEXT NOT NULL UNIQUE,
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
@@ -399,6 +406,29 @@ class Storage:
         )
         row: tuple[str] | None = cursor.fetchone()
         return PovCard.model_validate_json(row[0]) if row else None
+
+    def save_outreach_brief(self, brief: OutreachBrief) -> None:
+        """Insert or replace the brief for its person (briefs are rebuilt, not versioned)."""
+        self._conn.execute(
+            "INSERT INTO outreach_briefs (brief_id, person_id, payload, created_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(person_id) DO UPDATE SET brief_id = excluded.brief_id,"
+            " payload = excluded.payload, created_at = excluded.created_at",
+            (
+                brief.brief_id,
+                brief.person_id,
+                brief.model_dump_json(),
+                brief.generated_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def get_outreach_brief(self, person_id: str) -> OutreachBrief | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM outreach_briefs WHERE person_id = ?", (person_id,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return OutreachBrief.model_validate_json(row[0]) if row else None
 
     def has_external_url(self, url: str) -> bool:
         cursor = self._conn.execute(

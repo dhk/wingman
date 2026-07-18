@@ -320,6 +320,26 @@ def _corpus_vector(storage: Storage) -> list[float] | None:
     return _mean(vectors) if vectors else None
 
 
+def corpus_alignment(storage: Storage, person_id: str) -> float | None:
+    """Cosine of one person's vector against the user's corpus, as enrichment.
+
+    Returns None whenever the comparison is unavailable (no embeddings on
+    either side, or mixed models) — callers use this to annotate, never to
+    gate, so it degrades silently instead of raising.
+    """
+    try:
+        _require_one_model(storage)
+        reference = _corpus_vector(storage)
+        if reference is None:
+            return None
+        entry = _person_vectors(storage).get(person_id)
+        if entry is None:
+            return None
+        return _dot(reference, entry[0])
+    except IngestError:
+        return None
+
+
 def _rank(
     reference: list[float],
     storage: Storage,
