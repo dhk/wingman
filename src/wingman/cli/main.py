@@ -25,7 +25,13 @@ from wingman.application.people import (
 )
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
 from wingman.application.pov import build_pov_card, render_pov_card
-from wingman.application.similarity import embed_missing, people_like, similar_people
+from wingman.application.similarity import (
+    companies_like,
+    embed_missing,
+    people_like,
+    similar_companies,
+    similar_people,
+)
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.storage import CorpusSearchError, Storage
@@ -43,6 +49,8 @@ corpus_app = typer.Typer(help="Manage the corpus: your writing as citable eviden
 app.add_typer(corpus_app, name="corpus")
 people_app = typer.Typer(help="Watchlist of people and their public writing.")
 app.add_typer(people_app, name="people")
+company_app = typer.Typer(help="Companies, seen through the writing of their people and blogs.")
+app.add_typer(company_app, name="company")
 
 MIN_PYTHON = (3, 12)
 
@@ -932,6 +940,71 @@ def people_evidence(
         typer.echo(f"{number}. {hit.person_name}{via} — {hit.document.title} [{when}]")
         typer.echo(f"   {hit.snippet}")
         typer.echo(f"   source: {hit.document.url or hit.document.source_record_id}")
+
+
+_NO_COMPANY_SIGNALS = (
+    "No other companies have embedded writing yet — add people with --company "
+    "or attach an org-attributed feed, then run `wingman sync`."
+)
+
+
+@company_app.command("similar")
+def company_similar(
+    name: str | None = typer.Argument(
+        None, help="Company to compare against; omit to compare against your own corpus."
+    ),
+    limit: int = typer.Option(10, "--limit", help="How many companies to show."),
+) -> None:
+    """Which companies think about the same things — as this company, or as you.
+
+    A company's signal is the embedded writing of watched people who work
+    there plus posts from its org-attributed feeds (RFC-011). Deterministic
+    arithmetic over stored vectors — no model call, no network.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "compared")
+    try:
+        with Storage(config.db_path) as storage:
+            report = similar_companies(storage, name=name, limit=limit)
+    except IngestError as exc:
+        typer.echo(f"company similar failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not report.companies:
+        typer.echo(_NO_COMPANY_SIGNALS)
+        return
+    typer.echo(f"Closest to {report.reference}:")
+    for number, entry in enumerate(report.companies, start=1):
+        typer.echo(
+            f"{number}. {entry.name}  score {entry.score:.3f}  "
+            f"[{entry.people} people, {entry.documents} docs]"
+        )
+
+
+@company_app.command("like")
+def company_like(
+    names: list[str] = typer.Argument(..., help="Two or more companies, e.g. 'Supersimple' 'Hex'."),
+    limit: int = typer.Option(10, "--limit", help="How many companies to show."),
+) -> None:
+    """'If these companies interest you, look at…' — centroid of the named ones."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "compared")
+    try:
+        with Storage(config.db_path) as storage:
+            report = companies_like(storage, names=names, limit=limit)
+    except IngestError as exc:
+        typer.echo(f"company like failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not report.companies:
+        typer.echo(_NO_COMPANY_SIGNALS)
+        return
+    typer.echo(f"Closest to {report.reference}:")
+    for number, entry in enumerate(report.companies, start=1):
+        typer.echo(
+            f"{number}. {entry.name}  score {entry.score:.3f}  "
+            f"[{entry.people} people, {entry.documents} docs]"
+        )
 
 
 @app.command()

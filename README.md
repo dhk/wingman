@@ -82,7 +82,14 @@ wingman embed
 wingman people similar                       # closest to your own corpus
 wingman people similar "Jane Author"         # closest to Jane
 wingman people like "Mario Rossi" "Brian Chen"   # near the centroid of both
+wingman company similar                      # companies closest to your own corpus
+wingman company similar "DataCo"             # companies whose people write similarly
+wingman company like "DataCo" "StreamCorp"   # near the centroid of both companies
 ```
+
+Company signals come from the people you watch: each embedded post counts
+toward the author's `--company` and, for organization-attributed feeds (a
+firm blog), toward that organization.
 
 The Phase 1 product proof works end to end:
 

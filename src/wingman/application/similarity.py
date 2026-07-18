@@ -148,6 +148,148 @@ def embed_missing(storage: Storage, provider: EmbeddingProvider) -> EmbedReport:
     )
 
 
+class SimilarCompany(BaseModel):
+    name: str
+    score: float
+    people: int
+    documents: int
+
+
+class CompanySimilarityReport(BaseModel):
+    reference: str
+    companies: list[SimilarCompany] = Field(default_factory=list)
+
+
+class _CompanySignal(BaseModel):
+    display_name: str
+    vectors: list[list[float]] = Field(default_factory=list)
+    person_ids: set[str] = Field(default_factory=set)
+    doc_ids: set[str] = Field(default_factory=set)
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+def _company_key(name: str) -> str:
+    return " ".join(name.lower().split())
+
+
+def _company_vectors(storage: Storage) -> dict[str, _CompanySignal]:
+    """company key -> aggregated writing signal, from two sources (slice i):
+
+    a person's documents count toward the company on their Person record, and
+    org-attributed documents (RFC-011 company blogs) count toward that
+    organization — deduplicated per document when the two coincide.
+    """
+    people_by_id = {person.person_id: person for person in storage.list_people()}
+    signals: dict[str, _CompanySignal] = {}
+
+    def contribute(company_name: str, doc_id: str, vector: list[float], person_id: str) -> None:
+        key = _company_key(company_name)
+        if not key:
+            return
+        signal = signals.setdefault(key, _CompanySignal(display_name=company_name.strip()))
+        if doc_id in signal.doc_ids:
+            return
+        signal.doc_ids.add(doc_id)
+        signal.vectors.append(vector)
+        signal.person_ids.add(person_id)
+
+    for document in storage.list_external_documents():
+        embedded = storage.get_embedding(document.doc_id)
+        if embedded is None:
+            continue
+        person = people_by_id.get(document.person_id)
+        if person is not None and person.company:
+            contribute(person.company, document.doc_id, embedded[0], document.person_id)
+        if document.organization:
+            contribute(document.organization, document.doc_id, embedded[0], document.person_id)
+    return signals
+
+
+def _rank_companies(
+    reference: list[float],
+    signals: dict[str, _CompanySignal],
+    exclude_keys: set[str],
+    limit: int,
+) -> list[SimilarCompany]:
+    ranked = [
+        SimilarCompany(
+            name=signal.display_name,
+            score=round(_dot(reference, _mean(signal.vectors)), 4),
+            people=len(signal.person_ids),
+            documents=len(signal.doc_ids),
+        )
+        for key, signal in signals.items()
+        if key not in exclude_keys
+    ]
+    ranked.sort(key=lambda entry: entry.score, reverse=True)
+    return ranked[:limit]
+
+
+def similar_companies(
+    storage: Storage, name: str | None = None, limit: int = 10
+) -> CompanySimilarityReport:
+    """Rank companies by the writing of their people and blogs — vs one company or vs you."""
+    _require_one_model(storage)
+    signals = _company_vectors(storage)
+    if not signals:
+        raise IngestError(
+            "no company has embedded writing yet. Watch people with a company set "
+            "(or org-attributed feeds), fetch, and run 'wingman embed' first."
+        )
+    if name is None:
+        reference = _corpus_vector(storage)
+        if reference is None:
+            raise IngestError(
+                "your corpus has no embeddings yet. Run 'wingman corpus add' and then "
+                "'wingman embed' first."
+            )
+        return CompanySimilarityReport(
+            reference="your corpus",
+            companies=_rank_companies(reference, signals, exclude_keys=set(), limit=limit),
+        )
+    key = _company_key(name)
+    signal = signals.get(key)
+    if signal is None:
+        raise IngestError(
+            f"no embedded writing is attributable to {name!r}. Companies come from "
+            "watched people's company field and org-attributed feeds."
+        )
+    reference = _mean(signal.vectors)
+    return CompanySimilarityReport(
+        reference=signal.display_name,
+        companies=_rank_companies(reference, signals, exclude_keys={key}, limit=limit),
+    )
+
+
+def companies_like(storage: Storage, names: list[str], limit: int = 10) -> CompanySimilarityReport:
+    """'If these companies interest you, look at…': rank companies near their centroid."""
+    if len(names) < 2:
+        raise IngestError(
+            "name at least two companies to blend — for a single company, "
+            "use 'wingman company similar <name>'."
+        )
+    _require_one_model(storage)
+    signals = _company_vectors(storage)
+    references: list[list[float]] = []
+    exclude: set[str] = set()
+    for name in names:
+        key = _company_key(name)
+        signal = signals.get(key)
+        if signal is None:
+            raise IngestError(
+                f"no embedded writing is attributable to {name!r}. Companies come from "
+                "watched people's company field and org-attributed feeds."
+            )
+        references.append(_mean(signal.vectors))
+        exclude.add(key)
+    reference = _mean(references)
+    return CompanySimilarityReport(
+        reference=" + ".join(names),
+        companies=_rank_companies(reference, signals, exclude_keys=exclude, limit=limit),
+    )
+
+
 def _require_one_model(storage: Storage) -> None:
     models = storage.embedding_models_in_use()
     if len(models) > 1:

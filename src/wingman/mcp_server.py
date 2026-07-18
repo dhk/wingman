@@ -36,7 +36,14 @@ from wingman.application.people import (
     seed_from_connections,
 )
 from wingman.application.pov import build_pov_card, render_pov_card
-from wingman.application.similarity import SimilarPerson, embed_missing, similar_people
+from wingman.application.similarity import (
+    CompanySimilarityReport,
+    SimilarPerson,
+    companies_like,
+    embed_missing,
+    similar_companies,
+    similar_people,
+)
 from wingman.application.similarity import people_like as people_like_use_case
 from wingman.domain.person import FeedAttribution, FeedKind, FeedSource
 from wingman.infrastructure.config import Config, load_config
@@ -389,6 +396,52 @@ def people_like(names: list[str], limit: int = 10) -> str:
     if not report.people:
         return "No other people have embedded writing yet — fetch feeds and run the embed tool."
     return _similarity_lines(report.reference, list(report.people))
+
+
+def _company_lines(report: CompanySimilarityReport) -> str:
+    if not report.companies:
+        return (
+            "No other companies have embedded writing yet — add people with a "
+            "company (people_add) or attach an org-attributed feed "
+            "(feed_attach), then run the sync tool."
+        )
+    lines = [f"Closest to {report.reference}:"]
+    for number, entry in enumerate(report.companies, start=1):
+        lines.append(
+            f"{number}. {entry.name}  score {entry.score:.3f}  "
+            f"[{entry.people} people, {entry.documents} docs]"
+        )
+    return "\n".join(lines)
+
+
+@server.tool()
+def company_similar(name: str = "", limit: int = 10) -> str:
+    """Rank companies by the writing of their people and blogs — vs one company, or vs the user's corpus with no name."""
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    limit = max(1, min(limit, 25))
+    try:
+        with Storage(config.db_path) as storage:
+            report = similar_companies(storage, name=name.strip() or None, limit=limit)
+    except IngestError as exc:
+        return f"company similar failed: {exc}"
+    return _company_lines(report)
+
+
+@server.tool()
+def company_like(names: list[str], limit: int = 10) -> str:
+    """'If these companies interest you, look at…': rank companies near the centroid of two or more names."""
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    limit = max(1, min(limit, 25))
+    try:
+        with Storage(config.db_path) as storage:
+            report = companies_like(storage, names=names, limit=limit)
+    except IngestError as exc:
+        return f"company like failed: {exc}"
+    return _company_lines(report)
 
 
 @server.tool()
