@@ -502,6 +502,10 @@ class FeedDiscovery(BaseModel):
 
 # Bounded conventional probe list — an enumerable set of GETs, never a crawl.
 CONVENTIONAL_FEED_PATHS = ["/feed", "/rss", "/rss.xml", "/atom.xml", "/index.xml", "/feed.xml"]
+# Caps on add-time discovery: at most this many feed-shaped page anchors are
+# considered, and at most this many candidate GETs total.
+_ANCHOR_CANDIDATE_LIMIT = 3
+_MAX_FEED_PROBES = 16
 
 
 def _feed_title(data: bytes) -> str | None:
@@ -518,24 +522,40 @@ def _feed_title(data: bytes) -> str | None:
 
 
 class _AlternateLinkParser(HTMLParser):
-    """Find <link rel="alternate" type="application/rss+xml|atom+xml"> in page HTML."""
+    """Find feed candidates in page HTML: <link rel="alternate"> plus feed-ish anchors.
+
+    Proper autodiscovery tags come first. Many site builders (Webflow
+    prominently) configure an RSS feed but never emit the <link> tag — the
+    only trace is an <a> to something like /blog/rss.xml, so anchors whose
+    href looks like a feed are kept as second-tier candidates.
+    """
 
     _FEED_TYPES = {"application/rss+xml", "application/atom+xml"}
+    _ANCHOR_HINTS = ("rss", "atom", "feed")
 
     def __init__(self) -> None:
         super().__init__()
         self.feed_hrefs: list[str] = []
+        self.anchor_hrefs: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag != "link":
-            return
         by_name = {name: (value or "") for name, value in attrs}
-        if "alternate" in by_name.get("rel", "").lower().split() and (
-            by_name.get("type", "").lower() in self._FEED_TYPES
-        ):
+        if tag == "link":
+            if "alternate" in by_name.get("rel", "").lower().split() and (
+                by_name.get("type", "").lower() in self._FEED_TYPES
+            ):
+                href = by_name.get("href", "").strip()
+                if href:
+                    self.feed_hrefs.append(href)
+        elif tag == "a":
             href = by_name.get("href", "").strip()
-            if href:
-                self.feed_hrefs.append(href)
+            lowered = href.lower()
+            if href and any(hint in lowered for hint in self._ANCHOR_HINTS):
+                last = lowered.rstrip("/").rsplit("/", 1)[-1]
+                # only hrefs whose final segment is feed-shaped ("rss.xml",
+                # "feed", "atom.xml") — not every URL that mentions "feed"
+                if last.split(".")[0] in self._ANCHOR_HINTS:
+                    self.anchor_hrefs.append(href)
 
 
 def discover_feed(url: str, fetcher: Callable[[str], bytes] | None = None) -> FeedDiscovery:
@@ -559,20 +579,33 @@ def discover_feed(url: str, fetcher: Callable[[str], bytes] | None = None) -> Fe
         return FeedDiscovery(feed_url=url, feed_title=title, probed=probed)
     parser = _AlternateLinkParser()
     parser.feed(data.decode("utf-8", errors="replace"))
+
+    # Candidate order: real autodiscovery tags, then feed-shaped anchors on
+    # the page, then conventional paths under the given URL, then the same
+    # paths at the site root (a company blog handed over as /blog often keeps
+    # its feed at the root). Bounded and deduplicated — never a crawl.
+    candidates: list[str] = []
+    seen: set[str] = set(probed)
+
+    def consider(candidate: str) -> None:
+        if candidate.startswith("https://") and candidate not in seen:
+            seen.add(candidate)
+            candidates.append(candidate)
+
     for href in parser.feed_hrefs:
-        candidate = urljoin(url, href)
-        if not candidate.startswith("https://"):
-            continue
-        probed.append(candidate)
-        try:
-            candidate_title = _feed_title(fetch(candidate))
-        except FetchError:
-            continue
-        if candidate_title is not None:
-            return FeedDiscovery(feed_url=candidate, feed_title=candidate_title, probed=probed)
+        consider(urljoin(url, href))
+    for href in parser.anchor_hrefs[:_ANCHOR_CANDIDATE_LIMIT]:
+        consider(urljoin(url, href))
     base = url.rstrip("/")
     for path in CONVENTIONAL_FEED_PATHS:
-        candidate = base + path
+        consider(base + path)
+    parts = urlsplit(url)
+    origin = f"https://{parts.netloc}"
+    if origin != base:
+        for path in CONVENTIONAL_FEED_PATHS:
+            consider(origin + path)
+
+    for candidate in candidates[:_MAX_FEED_PROBES]:
         probed.append(candidate)
         try:
             candidate_title = _feed_title(fetch(candidate))

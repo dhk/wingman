@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from wingman.application.ingest import IngestError
+from wingman.infrastructure.fetch import FetchError
 from wingman.application.people import (
     add_person,
     attach_feed,
@@ -226,3 +227,56 @@ def test_substack_and_added_feed_both_fetch(workspace: Path) -> None:
         assert report.added == 2
         types = {d.source_type for d in storage.list_external_documents(person.person_id)}
         assert types == {"substack_feed", "rss_feed"}
+
+
+def test_discovery_finds_feed_via_page_anchor() -> None:
+    """Webflow pattern: RSS exists, but only an <a> in the footer points at it."""
+    calls: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        calls.append(url)
+        if url == "https://www.example.com/blog":
+            return (
+                b'<html><body><a href="/blog/latest">Latest</a>'
+                b'<a href="/blog/rss.xml">RSS</a></body></html>'
+            )
+        if url == "https://www.example.com/blog/rss.xml":
+            return RSS_FEED
+        raise FetchError("404")
+
+    discovery = discover_feed("https://www.example.com/blog", fetcher=fetch)
+    assert discovery.feed_url == "https://www.example.com/blog/rss.xml"
+    # the non-feed anchor was never fetched
+    assert "https://www.example.com/blog/latest" not in calls
+
+
+def test_discovery_falls_back_to_site_root_paths() -> None:
+    """A /blog page whose feed lives at the site root, not under /blog."""
+
+    def fetch(url: str) -> bytes:
+        if url == "https://www.example.com/blog":
+            return b"<html><body>no feed tags here</body></html>"
+        if url == "https://www.example.com/feed":
+            return RSS_FEED
+        raise FetchError("404")
+
+    discovery = discover_feed("https://www.example.com/blog", fetcher=fetch)
+    assert discovery.feed_url == "https://www.example.com/feed"
+    # given-path probes were tried before root probes
+    assert discovery.probed.index("https://www.example.com/blog/feed") < discovery.probed.index(
+        "https://www.example.com/feed"
+    )
+
+
+def test_discovery_probe_count_stays_bounded() -> None:
+    anchors = "".join(f'<a href="/x{i}/rss.xml">r</a>' for i in range(20))
+
+    def fetch(url: str) -> bytes:
+        if url == "https://www.example.com/blog":
+            return f"<html><body>{anchors}</body></html>".encode()
+        raise FetchError("404")
+
+    discovery = discover_feed("https://www.example.com/blog", fetcher=fetch)
+    assert discovery.feed_url is None
+    # 1 page GET + at most 16 candidate GETs, despite 20 anchors and 12 paths
+    assert len(discovery.probed) <= 17
