@@ -191,3 +191,43 @@ def test_mixed_models_refuse_to_compare(workspace: Path) -> None:
         )
         with pytest.raises(IngestError, match="different models"):
             similar_people(storage, name="Jane Author")
+
+
+def test_embed_batches_respect_the_provider_token_budget(workspace: Path) -> None:
+    """Regression: 64 long documents once exceeded Voyage's per-batch token cap."""
+    from wingman.providers.embeddings import MAX_BATCH_CHARS
+
+    class RecordingProvider:
+        provider_name = "recording"
+        model = "recording-1"
+
+        def __init__(self) -> None:
+            self.batches: list[list[int]] = []
+
+        def embed(self, texts: list[str], input_type: str) -> list[list[float]]:
+            self.batches.append([len(text) for text in texts])
+            return [[1.0, 0.0] for _ in texts]
+
+    config = load_config()
+    provider = RecordingProvider()
+    with Storage(config.db_path) as storage:
+        # nine essays of 90K chars (under the per-text truncation cap, so each
+        # costs its full length in the batch budget): eight fit in 720K, the
+        # ninth would cross MAX_BATCH_CHARS — packing must split into two calls
+        # (bodies are made distinct — identical content would dedupe by hash)
+        for index in range(9):
+            body = f"writer{index} " + "word " * 17_998  # ~90K chars
+            add_writer(storage, config, f"Writer {index}", f"writer{index}", body)
+        report = embed_missing(storage, provider)
+        assert report.external_embedded == 9
+        assert len(provider.batches) == 2
+        assert [len(lengths) for lengths in provider.batches] == [8, 1]
+        assert all(sum(lengths) <= MAX_BATCH_CHARS for lengths in provider.batches)
+
+        # small documents still share one call
+        small = RecordingProvider()
+        add_writer(storage, config, "Di", "di", "tiny one")
+        add_writer(storage, config, "Ed", "ed", "tiny two")
+        report = embed_missing(storage, small)
+        assert report.external_embedded == 2
+        assert len(small.batches) == 1

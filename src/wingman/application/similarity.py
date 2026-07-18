@@ -17,7 +17,12 @@ from pydantic import BaseModel, Field
 from wingman.application.ingest import IngestError
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
-from wingman.providers.embeddings import BATCH_SIZE, EmbeddingProvider
+from wingman.providers.embeddings import (
+    BATCH_SIZE,
+    MAX_BATCH_CHARS,
+    TEXT_CHAR_LIMIT,
+    EmbeddingProvider,
+)
 
 _logger = get_logger("application.similarity")
 
@@ -118,9 +123,24 @@ def embed_missing(storage: Storage, provider: EmbeddingProvider) -> EmbedReport:
         reembedded += int(current is False)
         pending.append((external.doc_id, "external", body))
 
+    # Pack batches against both provider limits: text count AND total size
+    # (Voyage rejects a whole batch over its token cap — a 64-post batch of
+    # long essays can exceed it even though each post alone is fine).
+    batches: list[list[tuple[str, str, str]]] = []
+    open_batch: list[tuple[str, str, str]] = []
+    open_chars = 0
+    for item in pending:
+        length = min(len(item[2]), TEXT_CHAR_LIMIT)
+        if open_batch and (len(open_batch) >= BATCH_SIZE or open_chars + length > MAX_BATCH_CHARS):
+            batches.append(open_batch)
+            open_batch, open_chars = [], 0
+        open_batch.append(item)
+        open_chars += length
+    if open_batch:
+        batches.append(open_batch)
+
     counts = {"corpus": 0, "external": 0}
-    for start in range(0, len(pending), BATCH_SIZE):
-        batch = pending[start : start + BATCH_SIZE]
+    for batch in batches:
         vectors = provider.embed([body for _, _, body in batch], input_type="document")
         for (doc_id, scope, _), vector in zip(batch, vectors, strict=True):
             storage.upsert_embedding(

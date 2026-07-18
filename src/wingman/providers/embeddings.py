@@ -26,11 +26,16 @@ from typing import Literal, Protocol
 _VOYAGE_ENDPOINT = "https://api.voyageai.com/v1/embeddings"
 _VOYAGE_ENV_KEY = "VOYAGE_API_KEY"
 _TIMEOUT_SECONDS = 60
-# Voyage caps requests by batch size and tokens; 64 documents per call is
-# comfortably inside both for essay-length texts.
+# Voyage caps a request two ways: number of texts, and total tokens across
+# the whole batch (320K for voyage-4). 64 essay-length documents can exceed
+# the token cap, so batches are packed against BOTH limits: at most
+# BATCH_SIZE texts and at most MAX_BATCH_CHARS characters per call
+# (~250K tokens at a conservative 3.2 chars/token — real headroom under 320K).
 BATCH_SIZE = 64
-# Stay well under the 32K-token context; ~4 chars/token makes 100K chars safe.
-_MAX_CHARS = 100_000
+MAX_BATCH_CHARS = 800_000
+# Per-text cap: stay well under the 32K-token context; ~4 chars/token makes
+# 100K chars safe. Also the per-text term in the batch packing arithmetic.
+TEXT_CHAR_LIMIT = 100_000
 
 InputType = Literal["document", "query"]
 
@@ -71,7 +76,7 @@ class VoyageEmbeddingProvider:
             )
         payload = json.dumps(
             {
-                "input": [text[:_MAX_CHARS] for text in texts],
+                "input": [text[:TEXT_CHAR_LIMIT] for text in texts],
                 "model": self.model,
                 "input_type": input_type,
             }
