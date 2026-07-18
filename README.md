@@ -57,6 +57,8 @@ wingman people add-feed "Scott Brady" https://firm.example.com/insights --org "F
 wingman people fetch --all
 wingman people evidence "developer tools"
 wingman sync             # fetch everything + embed what's new, in one command
+wingman make-it-so "Jane Author"   # the easy daily command: everything, end to end (alias: miso)
+wingman watchlist add targets "Jane Author"   # named groups; 'watchlist run targets' cycles them
 wingman people discover  # who your watched Substacks recommend (suggestions only)
 wingman people pov "Jane Author"    # what she thinks — stances with verbatim quotes
 wingman people docs "Jane Author"   # her stored documents: title, date, source URL

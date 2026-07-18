@@ -16,6 +16,7 @@ from wingman.application.corpus import add_to_corpus, find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
 from wingman.application.news import fetch_person_news
+from wingman.application.pipeline import MisoReport, make_it_so
 from wingman.application.people import (
     add_person,
     attach_feed,
@@ -66,8 +67,11 @@ company_app = typer.Typer(help="Companies, seen through the writing of their peo
 app.add_typer(company_app, name="company")
 export_app = typer.Typer(help="Print-ready Letter-format exports (render with md-to-pdf).")
 app.add_typer(export_app, name="export")
+watchlist_app = typer.Typer(help="Named groups of people and companies to cycle through.")
+app.add_typer(watchlist_app, name="watchlist")
 
 MIN_PYTHON = (3, 12)
+_OUT_HELP = "Destination folder (default: the workspace's reports/pdf/)."
 
 
 def _workspace_dirs(config: Config) -> list[Path]:
@@ -1095,6 +1099,175 @@ def pov(
         typer.echo(f"  rejected stance {rejected.statement!r}: {rejected.reason}")
 
 
+_STEP_MARKS = {"ok": "✓", "skipped": "–", "failed": "✗"}
+
+
+def _echo_miso(report: MisoReport) -> None:
+    typer.echo(f"{report.target} ({report.kind}):")
+    for step in report.steps:
+        typer.echo(f"  {_STEP_MARKS.get(step.status, '?')} {step.name}: {step.detail}")
+    if report.export_path:
+        typer.echo(f'Render: npx md-to-pdf "{report.export_path}"')
+
+
+def _parse_purpose(purpose: str) -> OutreachPurpose:
+    try:
+        return OutreachPurpose(purpose.strip().lower())
+    except ValueError:
+        valid = ", ".join(entry.value for entry in OutreachPurpose)
+        typer.echo(f"unknown purpose {purpose!r}; use one of: {valid}.", err=True)
+        raise typer.Exit(code=1) from None
+
+
+def _make_it_so_impl(name: str, purpose: str, out: Path | None) -> None:
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "run")
+    outreach_purpose = _parse_purpose(purpose)
+    try:
+        with Storage(config.db_path) as storage:
+            report = make_it_so(name, config, storage, purpose=outreach_purpose, out_dir=out)
+    except IngestError as exc:
+        typer.echo(f"make-it-so failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_miso(report)
+
+
+@app.command("make-it-so")
+def make_it_so_cmd(
+    name: str = typer.Argument(..., help="A person or company to run everything for."),
+    purpose: str = typer.Option("introduction", "--purpose", help="Outreach purpose."),
+    out: Path | None = typer.Option(None, "--out", help=_OUT_HELP),
+) -> None:
+    """The easy daily command: everything end to end, so you don't remember steps.
+
+    Fetch, news, embed, POV, brief, and both exports (PDF sheet + tabbed
+    HTML), in order, with honest per-step results — model steps skip
+    visibly without API keys, fetch failures don't stop the rest.
+    Alias: 'wingman miso'.
+    """
+    _make_it_so_impl(name, purpose, out)
+
+
+@app.command("miso", hidden=True)
+def miso_cmd(
+    name: str = typer.Argument(..., help="A person or company to run everything for."),
+    purpose: str = typer.Option("introduction", "--purpose", help="Outreach purpose."),
+    out: Path | None = typer.Option(None, "--out", help=_OUT_HELP),
+) -> None:
+    """Alias for make-it-so."""
+    _make_it_so_impl(name, purpose, out)
+
+
+@watchlist_app.command("add")
+def watchlist_add(
+    list_name: str = typer.Argument(..., help="Watchlist name (created on first add)."),
+    member: str = typer.Argument(..., help="Person or company to add."),
+    company: bool = typer.Option(False, "--company", help="The member is a company."),
+) -> None:
+    """Add a person (default) or company to a named watchlist."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "added")
+    with Storage(config.db_path) as storage:
+        if company:
+            kind, member_name = "company", member.strip()
+        else:
+            kind, member_name = "person", _resolve_person(storage, member, "added").name
+        added = storage.watchlist_add(list_name, kind, member_name)
+    if added:
+        typer.echo(f"Added {member_name} ({kind}) to watchlist {list_name!r}.")
+    else:
+        typer.echo(f"{member_name} is already on watchlist {list_name!r}.")
+
+
+@watchlist_app.command("remove")
+def watchlist_remove(
+    list_name: str = typer.Argument(..., help="Watchlist name."),
+    member: str = typer.Argument(..., help="Member to remove (exact name)."),
+    company: bool = typer.Option(False, "--company", help="The member is a company."),
+) -> None:
+    """Remove a member from a watchlist."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "removed")
+    with Storage(config.db_path) as storage:
+        removed = storage.watchlist_remove(list_name, "company" if company else "person", member)
+    if removed:
+        typer.echo(f"Removed {member} from watchlist {list_name!r}.")
+    else:
+        typer.echo(f"{member} was not on watchlist {list_name!r}.", err=True)
+        raise typer.Exit(code=1)
+
+
+@watchlist_app.command("list")
+def watchlist_list() -> None:
+    """All watchlists with member counts."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        lists = storage.watchlists()
+    if not lists:
+        typer.echo("No watchlists yet — create one with 'wingman watchlist add <list> <name>'.")
+        return
+    for name, count in lists:
+        typer.echo(f"{name}  [{count} members]")
+
+
+@watchlist_app.command("show")
+def watchlist_show(
+    list_name: str = typer.Argument(..., help="Watchlist to show."),
+) -> None:
+    """Members of one watchlist."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "shown")
+    with Storage(config.db_path) as storage:
+        members = storage.watchlist_members(list_name)
+    if not members:
+        typer.echo(f"Watchlist {list_name!r} has no members.")
+        return
+    for kind, member in members:
+        typer.echo(f"{member}  ({kind})")
+
+
+@watchlist_app.command("run")
+def watchlist_run(
+    list_name: str = typer.Argument(..., help="Watchlist to run make-it-so across."),
+    purpose: str = typer.Option("introduction", "--purpose", help="Outreach purpose."),
+    out: Path | None = typer.Option(None, "--out", help=_OUT_HELP),
+) -> None:
+    """Cycle every member of a watchlist through make-it-so.
+
+    A member's failure is reported and the cycle continues — one broken
+    feed never blocks the rest of the list.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "run")
+    outreach_purpose = _parse_purpose(purpose)
+    with Storage(config.db_path) as storage:
+        members = storage.watchlist_members(list_name)
+        if not members:
+            typer.echo(f"Watchlist {list_name!r} has no members. Nothing was run.", err=True)
+            raise typer.Exit(code=1)
+        failures = 0
+        for kind, member in members:
+            try:
+                report = make_it_so(
+                    member, config, storage, purpose=outreach_purpose, out_dir=out, kind=kind
+                )
+            except IngestError as exc:
+                failures += 1
+                typer.echo(f"✗ {member} ({kind}): {exc}", err=True)
+                continue
+            _echo_miso(report)
+    typer.echo(f"{len(members)} members processed, {failures} failed.")
+    if failures:
+        raise typer.Exit(code=1)
+
+
 @people_app.command("news")
 def people_news(
     name: str = typer.Argument(..., help="Person to fetch recent news for."),
@@ -1222,9 +1395,6 @@ def company_similar(
 def _render_hint(path: Path) -> str:
     pdf = path.with_suffix(".pdf")
     return f'Render: npx md-to-pdf "{path}"\nPDF lands at: {pdf}'
-
-
-_OUT_HELP = "Destination folder (default: the workspace's reports/pdf/)."
 
 
 @export_app.command("career")
