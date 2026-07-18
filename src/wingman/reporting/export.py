@@ -350,6 +350,34 @@ _TABS_CSS = """
 #tab-related:checked ~ .tabbar label[for="tab-related"] {
   color: var(--text); border-bottom-color: var(--accent);
 }
+/* on screen the tab label is the heading; in print the h2 comes back */
+.panel h2 { display: none; }
+/* printing the tabbed page collapses it back into the three-column sheet */
+@media print {
+  @page { size: letter landscape; margin: 14mm 16mm; }
+  .tab-page { max-width: none; padding: 0; }
+  .tab-page h1 { font-size: 32px; margin: 0 0 2px; }
+  .tabs input, .tabbar { display: none; }
+  .tabs {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 26px;
+    align-items: start; font-size: 12.5px; line-height: 1.5;
+  }
+  .panel { display: block; max-width: none; padding-top: 8px; }
+  .panel h2 {
+    display: block; font-size: 19px; margin: 0 0 8px;
+    padding-bottom: 5px; border-bottom: 1px solid var(--border);
+  }
+  .tabs p { margin: 0 0 8px; }
+  .tabs ul { margin: 0 0 8px; padding-left: 16px; }
+  .tabs li { margin-bottom: 3px; }
+  .tabs .meta { margin: 0 0 8px; }
+  .tabs .stance { margin: 0 0 12px; }
+  .tabs blockquote { padding: 1px 0 1px 12px; margin: 5px 0 8px; }
+  .tabs .their, .tabs .yours { margin: 0 0 5px; padding: 1px 0 1px 11px; }
+  .tabs .point { margin: 0 0 12px; }
+  .tabs .draft-panel { padding: 12px 14px; margin-top: 10px; }
+  .tabs .tag { font-size: 8px; padding: 1px 6px; }
+}
 """
 
 
@@ -367,9 +395,10 @@ def _person_html(
         for key, _, _ in panels
     )
     labels = "".join(f'<label for="tab-{key}">{title}</label>' for key, title, _ in panels)
-    # each column starts with its <h2>; the tab label already says it
+    # columns keep their <h2>: hidden on screen (the tab label says it),
+    # shown again when printing collapses the tabs into three columns
     sections = "\n".join(
-        f'<div class="panel panel-{key}">\n' + "\n".join(column[1:]) + "\n</div>"
+        f'<div class="panel panel-{key}">\n' + "\n".join(column) + "\n</div>"
         for key, _, column in panels
     )
     return (

@@ -317,6 +317,10 @@ def test_person_html_export_is_tabbed_and_self_contained(workspace: Path) -> Non
     assert 'class="panel panel-brief"' in html_text
     assert "--font-cond" in html_text  # stylesheet embedded, self-contained
     assert "No intro bullets stored" in html_text
+    # printing the tabbed page collapses back into the three-column sheet
+    assert "@media print" in html_text
+    assert "size: letter landscape" in html_text
+    assert "<h2>Point of View</h2>" in html_text  # h2 kept: hidden on screen, shown in print
 
     md_text = md_path.read_text(encoding="utf-8")
     assert "No intro bullets stored" in md_text
