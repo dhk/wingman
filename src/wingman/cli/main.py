@@ -1118,7 +1118,9 @@ def company_similar(
         )
 
 
-_RENDER_HINT = "Render: md-to-pdf {path}  (or open in any Markdown previewer)"
+def _render_hint(path: Path) -> str:
+    pdf = path.with_suffix(".pdf")
+    return f'Render: npx md-to-pdf "{path}"\nPDF lands at: {pdf}'
 
 
 _OUT_HELP = "Destination folder (default: the workspace's reports/pdf/)."
@@ -1139,7 +1141,7 @@ def export_career_cmd(
         typer.echo(f"export failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Wrote {path}")
-    typer.echo(_RENDER_HINT.format(path=path))
+    typer.echo(_render_hint(path))
 
 
 @export_app.command("company")
@@ -1158,7 +1160,7 @@ def export_company_cmd(
         typer.echo(f"export failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Wrote {path}")
-    typer.echo(_RENDER_HINT.format(path=path))
+    typer.echo(_render_hint(path))
 
 
 @export_app.command("person")
@@ -1178,7 +1180,7 @@ def export_person_cmd(
         typer.echo(f"export failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Wrote {path}")
-    typer.echo(_RENDER_HINT.format(path=path))
+    typer.echo(_render_hint(path))
 
 
 @company_app.command("dossier")

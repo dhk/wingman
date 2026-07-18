@@ -98,8 +98,8 @@ wingman company dossier "DataCo"             # dated snapshot → reports/compan
 ```
 
 Print-ready exports (US Letter, styled by the site design system, rendered
-with your own `md-to-pdf` — wingman writes Markdown + CSS, never runs a
-browser): `wingman export career` (portrait one-pager, every claim cited),
+with `npx md-to-pdf "<file>"` which drops the PDF next to the source —
+wingman writes Markdown + CSS, never runs a browser): `wingman export career` (portrait one-pager, every claim cited),
 `wingman export company "DataCo"`, and `wingman export person "Jane Author"`
 — a landscape three-column sheet (outreach brief | point of view | related)
 with clickable source links. Files land in `reports/pdf/`.

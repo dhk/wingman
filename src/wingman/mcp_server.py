@@ -560,7 +560,7 @@ def export_pdf(target: str, name: str = "", out_dir: str = "") -> str:
                 return f"unknown export target {target!r}; use career, company, or person."
     except IngestError as exc:
         return f"export failed: {exc}"
-    return f"Wrote {path}\nRender: md-to-pdf {path} (or open in any Markdown previewer)"
+    return f'Wrote {path}\nRender: npx md-to-pdf "{path}"\nPDF lands at: {path.with_suffix(".pdf")}'
 
 
 @server.tool()
