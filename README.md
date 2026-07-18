@@ -198,9 +198,9 @@ surface: status, evidence search, the cited career profile, job assessment,
 resume ingestion, and the entire people surface — add, list, fetch, sync,
 embed, similar, like, discover, connections import, and feed attachment
 (feed_attach runs only after you confirm feed_discover's finding in
-conversation). Stdio only: nothing listens on the network, and network reads
-happen exactly as in the CLI — explicit public-feed fetches (RFC-009/011)
-and embedding egress (RFC-010).
+conversation). By default it speaks stdio: nothing listens on the network,
+and network reads happen exactly as in the CLI — explicit public-feed
+fetches (RFC-009/011) and embedding egress (RFC-010).
 
 Claude Code:
 
@@ -224,6 +224,25 @@ shell PATH:
 Model-backed tools (assess, ingest) need `ANTHROPIC_API_KEY` in the server's
 environment; add `"env": {"ANTHROPIC_API_KEY": "..."}` to the entry if your
 key is not set system-wide.
+
+### Remote MCP (claude.ai web/mobile) — RFC-017
+
+The same server can speak streamable HTTP for clients that are not on your
+machine. It binds loopback only and serves at an unguessable capability path;
+reaching it from elsewhere is a tunnel you run yourself, so the trust
+decision — and the off-switch — stay in your hands:
+
+```bash
+wingman-mcp --http                      # http://127.0.0.1:8787/mcp/<token>
+tailscale serve 8787                    # your own devices (tailnet only)
+tailscale funnel 8787                   # public HTTPS, e.g. for a claude.ai connector
+wingman-mcp --http --rotate-token       # revoke every previously shared URL
+```
+
+The URL is a capability: anyone holding it can use the workspace, so treat
+it like a password and rotate on any doubt. Wingman never opens a public
+listener itself — binding a non-loopback `--host` requires saying so
+explicitly and prints a warning.
 
 ## Quick Start (development checkout)
 
