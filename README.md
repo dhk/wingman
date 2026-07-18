@@ -149,6 +149,15 @@ quotes do not appear in the source are rejected and reported, never stored.
 Model routing is configured in the workspace `models.toml` (written by
 `wingman init`; set `ANTHROPIC_API_KEY` to use the default mapping).
 
+The workspace is one SQLite file plus the inbox and reports — and a live
+database does not sync safely through iCloud/Dropbox, while a closed tarball
+does:
+
+```bash
+wingman backup ~/Dropbox/wingman-backups --keep 14   # dated tarball, pruned
+wingman restore <archive>.tar.gz --force             # the inverse (CLI only)
+```
+
 ## Repository Guide
 
 - [`docs/SETUP.md`](docs/SETUP.md): standing up your own instance, with graceful degradation

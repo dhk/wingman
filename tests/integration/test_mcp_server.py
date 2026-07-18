@@ -63,6 +63,7 @@ def test_all_tools_are_registered() -> None:
         "people_news",
         "make_it_so",
         "watchlist",
+        "backup",
     }
 
 
