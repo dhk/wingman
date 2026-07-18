@@ -1,6 +1,8 @@
 """Wingman MCP server: the workspace as tools for a local MCP client (RFC-008).
 
-A stdio server for Claude Desktop / Claude Code on the same machine. The
+A stdio server for Claude Desktop / Claude Code on the same machine, or —
+with --http — a loopback streamable-HTTP server for remote clients behind a
+tunnel the user runs themselves (RFC-017). Same tools either way. The
 workspace never leaves the machine; every tool runs the same deterministic
 validation pipelines as the CLI, so the connected model can request work but
 cannot bypass evidence rules. Network access mirrors the CLI exactly:
@@ -17,6 +19,9 @@ conversation).
 
 from __future__ import annotations
 
+import argparse
+import secrets
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -1087,9 +1092,75 @@ def backup(dest: str = "", keep: int = 10) -> str:
     return "\n".join(lines)
 
 
-def main() -> None:
+_TOKEN_FILENAME = "mcp-http-token"
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _http_token(config: Config, rotate: bool = False) -> str:
+    """The capability-path token for the HTTP transport (RFC-017).
+
+    Generated once into the workspace with owner-only permissions; rotating
+    it is how a leaked URL is revoked.
+    """
+    path = config.data_dir / _TOKEN_FILENAME
+    if rotate or not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(secrets.token_urlsafe(24) + "\n", encoding="utf-8")
+        path.chmod(0o600)
+    return path.read_text(encoding="utf-8").strip()
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="wingman-mcp",
+        description=(
+            "Wingman MCP server. Default: stdio for a local client (Claude Desktop / "
+            "Claude Code). With --http: streamable HTTP on loopback for remote use "
+            "through a tunnel you run yourself (RFC-017) — e.g. 'tailscale serve' "
+            "for your own devices, 'tailscale funnel' for claude.ai connectors."
+        ),
+    )
+    parser.add_argument(
+        "--http",
+        action="store_true",
+        help="Serve streamable HTTP instead of stdio, at /mcp/<token> (loopback only "
+        "by default; the URL is a capability — treat it like a password).",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address for --http (default 127.0.0.1; non-loopback prints a warning).",
+    )
+    parser.add_argument("--port", type=int, default=8787, help="Port for --http (default 8787).")
+    parser.add_argument(
+        "--rotate-token",
+        action="store_true",
+        help="Generate a fresh capability token before serving (revokes every old URL).",
+    )
+    args = parser.parse_args(argv)
     configure_logging()
-    server.run()
+    if not args.http:
+        if args.rotate_token:
+            parser.error("--rotate-token only makes sense with --http")
+        server.run()
+        return
+    config = load_config()
+    token = _http_token(config, rotate=args.rotate_token)
+    server.settings.host = args.host
+    server.settings.port = args.port
+    server.settings.streamable_http_path = f"/mcp/{token}"
+    if args.host not in _LOOPBACK_HOSTS:
+        print(
+            f"WARNING: binding {args.host} exposes the whole workspace (and its fetch/model "
+            "surfaces) to that network. The capability path is the only guard. "
+            "Prefer 127.0.0.1 plus a tunnel.",
+            file=sys.stderr,
+        )
+    print(f"MCP over HTTP: http://{args.host}:{args.port}/mcp/{token}")
+    print("The URL is a capability — anyone holding it can use the workspace.")
+    print("Revoke it any time: wingman-mcp --http --rotate-token")
+    print(f"Reach it from elsewhere via your own tunnel, e.g.: tailscale serve {args.port}")
+    server.run(transport="streamable-http")
 
 
 if __name__ == "__main__":
