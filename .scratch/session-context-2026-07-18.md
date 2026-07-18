@@ -1,21 +1,24 @@
-# Context Snapshot: wingman people-discovery sessions
-Generated: 2026-07-18T02:53:36Z
+# Context Snapshot: wingman people + company intelligence sessions
+Generated: 2026-07-18T03:40:00Z
 Branch: claude/wingman-pr-3-review-wzugg8
-Status: in-progress
-Description: People discovery built end to end; PR #22 merging; company similarity next
+Status: review
+Description: Queue complete: similarity, outreach briefs, company dossiers all merged
 
 ## Objective
-Build Wingman's people-discovery surface: watchlist, public-writing ingestion,
-similarity, discovery, and POV cards — CLI and MCP in lockstep — on top of the
-existing profile/corpus/assessment core.
+Build Wingman's people-discovery and company-intelligence surfaces: watchlist,
+public-writing ingestion, similarity, discovery, POV cards, outreach briefs,
+and company dossiers — CLI and MCP in lockstep — on top of the existing
+profile/corpus/assessment core.
 
 ## Where Things Stand
-PRs #13–#21 are merged; #22 (POV cards) has review fixes pushed and merges on
-green CI. The full pipeline works: LinkedIn-seeded watchlist → feeds
-(Substack/Medium/RSS/Atom/index pages, RFC-011) → FTS evidence → Voyage
-embeddings + cosine similarity (RFC-010) → recommendations-graph discovery →
-evidence-validated POV cards. MCP server has full CLI parity (RFC-008 parity
-principle). 155+ tests; checks = pytest, ruff check/format, mypy strict.
+PRs #13–#26 are all merged; the agreed queue is done. The pipeline now runs
+end to end: LinkedIn-seeded watchlist → feeds (Substack/Medium/RSS/Atom/index
+pages, RFC-011) → FTS evidence → Voyage embeddings + cosine similarity
+(RFC-010, people AND companies) → recommendations-graph discovery →
+evidence-validated POV cards → outreach briefs (talking points + draft intro,
+never sent, RFC-006) → dated company dossiers (deterministic composition,
+RFC-012). MCP server has full CLI parity at 22 tools (RFC-008 parity
+principle). 169 tests; checks = pytest, ruff check/format, mypy strict.
 
 ## Technical Decisions (durable ones live in docs/RFC.md — the authoritative record)
 
@@ -25,12 +28,20 @@ request Copilot review → ~280s background timer → fix-or-decline findings �
 reply + resolve threads → merge on green → reset branch from origin/main.
 **State**: implemented; user rejected subscribe_pr_activity — poll with timers.
 
-### Provider/egress rules (see RFC-009/010/011)
+### Provider/egress rules (see RFC-009/010/011/012)
 **Decision**: network = explicit user-invoked HTTPS reads of public feeds;
 embeddings = voyage/voyage-4 default with keyless 'hashed' fallback; egress
-only via explicit embed/sync; graceful degradation everywhere (standing user
+only via explicit embed/sync; dossiers and similarity are deterministic
+arithmetic over stored data; graceful degradation everywhere (standing user
 directive: mark anything useful for others standing up an instance —
 docs/SETUP.md is the vehicle).
+
+### Fabrication guards
+**Decision**: every model proposal is validated deterministically — POV
+stances need verbatim quotes from stored docs; outreach talking points must
+cite a card stance exactly AND quote the user's corpus verbatim; zero
+survivors stores nothing. Company dossiers skip the model entirely and
+compose validated artifacts with [fact]/[inference] labels.
 
 ## Authoritative Inputs
 - User's Substack: dhkondata (export zip workflow kept, per user decision)
@@ -46,21 +57,22 @@ docs/SETUP.md is the vehicle).
   paths verified only to their visible-failure branch; real verification
   happens on the user's Mac.
 - ⚠️ User's Mac may still need: git pull + `uv tool install --reinstall .`,
-  Claude Desktop full restart for new MCP tools, seed-subscriptions.sh run,
-  VOYAGE_API_KEY exported (already defined per user).
+  Claude Desktop full restart for new MCP tools (7 new since last restart:
+  people_pov, people_brief, company_similar, company_like, company_dossier,
+  plus earlier additions), seed-subscriptions.sh run, VOYAGE_API_KEY
+  exported (already defined per user).
 - ⚠️ Version tag (v0.2.0) must be pushed from the user's machine — container
   push is branch-scoped (tags 403).
 
 ## Next Actions
-- [ ] Merge PR #22 on green CI (fixes pushed: stance cap, MCP parse message)
-- [ ] Build company similarity slice i: company vectors from person-by-company
-      grouping + org-attributed documents; `wingman company similar/like`
-      (+ MCP parity tools) — user said go
-- [ ] Then: outreach brief (compose POV card + own evidence + similarity into
-      draft talking points; drafts only, RFC-006 — never sends)
-- [ ] Then: Phase 3 company intelligence (Organization entity, dossiers)
-- [ ] User-side payoff loop: seed script → add the 3 investor targets →
-      `wingman sync` → similar/discover/pov on real data
+- [ ] User-side payoff loop: pull + reinstall → seed script → add the 3
+      investor targets → `wingman sync` → similar/discover/pov/brief/dossier
+      on real data
+- [ ] Backlog, in no committed order: `wingman backup` command; remote MCP
+      for claude.ai web/mobile (needs its own RFC); Phase 3 continuation
+      (approved-source research plan — the network-scope decision RFC-012
+      deferred); model-synthesized company themes if per-person POV cards
+      prove insufficient; v0.2.0 tag from the user's machine
 
 ---
 *Resume:* load this file in your next session.
