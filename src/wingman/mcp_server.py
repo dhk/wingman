@@ -24,6 +24,7 @@ from mcp.server.fastmcp import FastMCP
 
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job as assess_job_use_case
+from wingman.application.backup import create_backup
 from wingman.application.corpus import find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.pipeline import MisoReport
@@ -952,6 +953,28 @@ def people_import_connections(export_path: str) -> str:
         f"Created: {report.created}  Already known: {report.skipped_existing}  "
         f"Incomplete rows skipped: {report.skipped_incomplete}"
     )
+
+
+@server.tool()
+def backup(dest: str = "", keep: int = 10) -> str:
+    """Snapshot the workspace into a dated tarball (database, models.toml, inbox, reports).
+
+    dest: destination folder (default: the workspace's backups/). Point it at a
+    synced folder — a closed tarball syncs safely where the live database does not.
+    keep: backups to retain at the destination (0 keeps all). Restoring is
+    deliberately CLI-only ('wingman restore') because it overwrites the workspace.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        report = create_backup(config, dest=Path(dest).expanduser() if dest else None, keep=keep)
+    except IngestError as exc:
+        return f"backup failed: {exc}"
+    lines = [f"Backup written: {report.path}", f"{report.files} files, {report.size_bytes} bytes"]
+    lines.extend(f"pruned old backup: {name}" for name in report.pruned)
+    lines.append(f'Restore (CLI only): wingman restore "{report.path}"')
+    return "\n".join(lines)
 
 
 def main() -> None:

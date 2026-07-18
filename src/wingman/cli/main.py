@@ -12,6 +12,7 @@ import typer
 
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job
+from wingman.application.backup import create_backup, restore_backup
 from wingman.application.corpus import add_to_corpus, find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
@@ -387,6 +388,65 @@ def status() -> None:
     typer.echo(f"Corpus documents: {documents}")
     typer.echo(f"People: {people}")
     typer.echo(f"External documents: {external}")
+
+
+def _human_size(size_bytes: int) -> str:
+    size = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+@app.command()
+def backup(
+    dest: Path | None = typer.Argument(
+        None,
+        help=(
+            "Destination folder for the archive (default: the workspace's backups/). "
+            "Point this at a synced folder — iCloud/Dropbox sync a closed tarball "
+            "safely, unlike the live database."
+        ),
+    ),
+    keep: int = typer.Option(
+        10, "--keep", help="Backups to retain at the destination (0 keeps all)."
+    ),
+) -> None:
+    """Snapshot the workspace into a dated tarball: database, models.toml, inbox, reports."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "backed up")
+    try:
+        report = create_backup(config, dest=dest, keep=keep)
+    except IngestError as exc:
+        typer.echo(f"Backup failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Backup written: {report.path}")
+    typer.echo(f"  {report.files} files, {_human_size(report.size_bytes)}")
+    for name in report.pruned:
+        typer.echo(f"  pruned old backup: {name}")
+    typer.echo(f'Restore with: wingman restore "{report.path}"')
+
+
+@app.command()
+def restore(
+    archive: Path = typer.Argument(
+        ..., help="A wingman-backup-*.tar.gz written by 'wingman backup'."
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite the existing workspace database with the backup."
+    ),
+) -> None:
+    """Restore a workspace from a backup tarball (refuses to overwrite without --force)."""
+    configure_logging()
+    config = load_config()
+    try:
+        report = restore_backup(archive, config, force=force)
+    except IngestError as exc:
+        typer.echo(f"Restore failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Restored {report.files} files from {report.archive} into {config.data_dir}")
 
 
 @app.command()
