@@ -823,7 +823,7 @@ def people_like_cmd(
 def people_discover(
     limit: int = typer.Option(10, "--limit", help="Maximum suggestions to show."),
 ) -> None:
-    """Suggest new people via the recommendations of Substacks you already watch.
+    """Suggest new publications via the recommendations of Substacks you watch.
 
     Reads each watched publication's public /recommendations page (one page
     each, RFC-009) and ranks publications you don't watch by how many of

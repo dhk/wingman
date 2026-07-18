@@ -582,20 +582,23 @@ class DiscoverReport(BaseModel):
 _SUBSTACK_SYSTEM_SUBDOMAINS = {"www", "substack", "open", "support", "api", "cdn", "on", "reader"}
 
 
-def _substack_publications_in_page(page_bytes: bytes, own_netloc: str) -> list[str]:
-    """Publication roots (https://<pub>.substack.com) linked from a page."""
+def _substack_publications_in_page(page_bytes: bytes, own_hostname: str) -> list[str]:
+    """Publication roots (https://<pub>.substack.com) linked from a page.
+
+    Uses parsed hostnames (never raw netlocs), so userinfo or ports in a
+    crafted link can neither leak into candidate URLs nor dodge filtering.
+    """
     parser = _IndexLinkParser()
     parser.feed(page_bytes.decode("utf-8", errors="replace"))
     found: list[str] = []
     for href in parser.hrefs:
-        parts = urlsplit(href)
-        netloc = parts.netloc.lower()
-        if not netloc.endswith(".substack.com") or netloc == own_netloc:
+        hostname = (urlsplit(href).hostname or "").lower()
+        if not hostname.endswith(".substack.com") or hostname == own_hostname:
             continue
-        subdomain = netloc.removesuffix(".substack.com")
+        subdomain = hostname.removesuffix(".substack.com")
         if not subdomain or subdomain in _SUBSTACK_SYSTEM_SUBDOMAINS:
             continue
-        root = f"https://{netloc}"
+        root = f"https://{hostname}"
         if root not in found:
             found.append(root)
     return found
@@ -618,26 +621,31 @@ def discover_recommendations(
     watched = [person for person in storage.list_people() if person.substack_url]
     if not watched:
         return DiscoverReport(scanned=0)
-    watched_netlocs = {
-        urlsplit(source.url).netloc.lower()
+    watched_hostnames = {
+        hostname.lower()
         for person in storage.list_people()
         for source in person.sources
-    } | {urlsplit(p.substack_url).netloc.lower() for p in watched if p.substack_url}
+        if (hostname := urlsplit(source.url).hostname)
+    } | {
+        hostname.lower()
+        for p in watched
+        if p.substack_url and (hostname := urlsplit(p.substack_url).hostname)
+    }
     recommenders: dict[str, list[str]] = {}
     failures: list[str] = []
     scanned = 0
     for person in watched:
         assert person.substack_url is not None
         base = person.substack_url.rstrip("/")
-        own_netloc = urlsplit(base).netloc.lower()
+        own_hostname = (urlsplit(base).hostname or "").lower()
         try:
             page = fetch(base + "/recommendations")
         except FetchError as exc:
             failures.append(f"{person.name}: {exc}")
             continue
         scanned += 1
-        for candidate in _substack_publications_in_page(page, own_netloc):
-            if urlsplit(candidate).netloc.lower() in watched_netlocs:
+        for candidate in _substack_publications_in_page(page, own_hostname):
+            if (urlsplit(candidate).hostname or "").lower() in watched_hostnames:
                 continue
             recommenders.setdefault(candidate, [])
             if person.name not in recommenders[candidate]:

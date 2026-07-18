@@ -98,6 +98,25 @@ def test_discover_with_no_watched_substacks(workspace: Path) -> None:
         assert report.candidates == []
 
 
+def test_discover_strips_userinfo_and_ports_from_links(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_person("Alpha", storage, substack_url="https://alpha.substack.com")
+        crafted = (
+            b'<html><body><a href="https://user:pw@tricky.substack.com:8443/">x</a>'
+            b'<a href="https://evil@beta.substack.com/">y</a></body></html>'
+        )
+        add_person("Beta", storage, substack_url="https://beta.substack.com")
+
+        def fetch(url: str) -> bytes:
+            return crafted if "alpha" in url else page()
+
+        report = discover_recommendations(storage, fetcher=fetch)
+        # hostnames only: no credentials or ports in candidates, and the
+        # credential-bearing link to a watched publication is still excluded
+        assert [c.url for c in report.candidates] == ["https://tricky.substack.com"]
+
+
 def test_discover_respects_limit(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
