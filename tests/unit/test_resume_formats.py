@@ -165,3 +165,16 @@ def test_fetch_resume_bytes_sniffs_and_rejects_permission_walls() -> None:
 
     with pytest.raises(IngestError, match="link-accessible"):
         fetch_resume_bytes("https://drive.google.com/file/d/F1/view", fetcher=login_wall)
+
+
+def test_docx_with_entity_declarations_is_refused() -> None:
+    evil = (
+        '<?xml version="1.0"?><!DOCTYPE w [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;">]>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>&b;</w:t></w:r></w:p></w:body></w:document>"
+    )
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as archive:
+        archive.writestr("word/document.xml", evil)
+    with pytest.raises(IngestError, match="entity declarations"):
+        docx_text(out.getvalue(), "evil.docx")

@@ -68,6 +68,14 @@ def docx_text(data: bytes, name: str) -> str:
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             document = archive.read("word/document.xml")
+        # Untrusted XML: stdlib ElementTree expands internal entities, so a
+        # crafted DOCX could billion-laughs the parse. Word never emits DTDs —
+        # reject them outright.
+        lowered = document.lower()
+        if b"<!doctype" in lowered or b"<!entity" in lowered:
+            raise IngestError(
+                f"{name} contains XML entity declarations, which are refused. Nothing was ingested."
+            )
         root = ElementTree.fromstring(document)
     except (zipfile.BadZipFile, KeyError, ElementTree.ParseError) as exc:
         raise IngestError(

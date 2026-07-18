@@ -175,3 +175,22 @@ def test_ingest_from_google_url_archives_then_extracts(workspace: Config) -> Non
     archived = list(workspace.inbox_dir.glob("*google-DOC1*"))
     assert len(archived) == 1 and archived[0].suffix == ".txt"
     assert archived[0].read_text(encoding="utf-8") == RESUME
+
+
+def test_repeat_url_ingest_never_overwrites_the_archive(workspace: Config) -> None:
+    from wingman.application.ingest import ingest_resume_from_url
+
+    def fetcher(url: str) -> bytes:
+        return RESUME.encode()
+
+    with Storage(workspace.db_path) as storage:
+        for _ in range(2):
+            ingest_resume_from_url(
+                "https://docs.google.com/document/d/DOC1/edit",
+                workspace,
+                storage,
+                RecordedProvider(RESPONSE),
+                fetcher=fetcher,
+            )
+    # both fetches were archived as distinct artifacts (microsecond stamps)
+    assert len(list(workspace.inbox_dir.glob("*google-DOC1*"))) == 2

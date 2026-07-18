@@ -145,9 +145,16 @@ def ingest_resume_from_url(
         )
     except FetchError as exc:
         raise IngestError(f"{exc}. Nothing was ingested.") from exc
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    # Microsecond stamp: two fetches of the same document in the same second
+    # must archive as two artifacts, never overwrite one another.
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
     path = config.inbox_dir / f"{stamp}-{name}{suffix_for_bytes(data)}"
-    path.write_bytes(data)
+    try:
+        path.write_bytes(data)
+    except OSError as exc:
+        raise IngestError(
+            f"could not archive the fetched document to {path} ({exc}). Nothing was ingested."
+        ) from exc
     return ingest_resume(path, config, storage, provider)
 
 
