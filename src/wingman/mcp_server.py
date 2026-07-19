@@ -75,6 +75,13 @@ from wingman.application.pov import (
     company_card_id,
     render_pov_card,
 )
+from wingman.application.company_feeds import (
+    attach_company_feed,
+    fetch_company_feeds,
+    is_company_anchor,
+    list_company_feeds,
+    remove_company_feed,
+)
 from wingman.application.profile_manage import (
     clear_profile,
     remove_item,
@@ -470,6 +477,7 @@ def people_list(watched_only: bool = False) -> str:
         return _NOT_INITIALIZED
     with Storage(config.db_path) as storage:
         people = storage.list_people()
+    people = [person for person in people if not is_company_anchor(person)]
     if watched_only:
         people = [person for person in people if person.sources]
     if not people:
@@ -1084,6 +1092,47 @@ def digest() -> str:
             "(enroll targets first with company_follow)."
         )
     return newest.read_text(encoding="utf-8")
+
+
+@server.tool()
+def company_feed(action: str, name: str, url: str = "", index_page: bool = False) -> str:
+    """Manage feeds attached directly to a company — no person needed (RFC-029).
+
+    action is 'attach', 'list', 'remove', or 'fetch'. attach takes a feed
+    URL (RSS/Atom; index_page=true for a blog index with no feed) and only
+    after the user confirmed the exact URL (RFC-011) — use feed_discover
+    to find it from a blog page first. Posts are organization-attributed
+    to the company and flow into its dossier, themes, news, and search;
+    'fetch' pulls them now, and overnight runs fetch them automatically
+    for followed companies.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "attach":
+                anchor, source = attach_company_feed(name, url, storage, index_page=index_page)
+                return f"Attached to {anchor.company}: {source.url} ({source.kind.value})"
+            if action == "list":
+                feeds = list_company_feeds(name, storage)
+                if not feeds:
+                    return f"No company feeds for {name.strip()!r}."
+                return "\n".join(f"{feed.url} ({feed.kind.value})" for feed in feeds)
+            if action == "remove":
+                if remove_company_feed(name, url, storage):
+                    return f"Removed {url}"
+                return f"No such feed on {name.strip()!r}: {url}"
+            if action == "fetch":
+                report = fetch_company_feeds(name, config, storage)
+                titles = "".join(f"\n  + {title}" for title in report.titles)
+                return (
+                    f"{report.items} item(s) seen, {report.added} added, "
+                    f"{report.skipped_duplicates} duplicate(s) skipped.{titles}"
+                )
+    except IngestError as exc:
+        return f"company feed {action} failed: {exc}"
+    return f"unknown action {action!r}; use attach, list, remove, or fetch."
 
 
 @server.tool()

@@ -235,6 +235,28 @@ def _company_deep(
                 )
     except IngestError as exc:
         target.lines.append(f"research skipped: {exc}")
+    # Company-attached feeds (RFC-029): fetched like a person's, before the
+    # themes pass so fresh posts are part of what gets synthesized.
+    from wingman.application.company_feeds import fetch_company_feeds, get_company_anchor
+
+    anchor = get_company_anchor(name, storage)
+    if anchor is not None and anchor.sources:
+        try:
+            feeds = fetch_company_feeds(name, config, storage)
+            target.lines.append(
+                f"company feeds: {feeds.added} new post(s) from {len(anchor.sources)} feed(s)"
+            )
+            if feeds.added:
+                actions.append(
+                    ActionItem(
+                        what=f"Read {name}'s new posts",
+                        why=f"{feeds.added} new company post(s) fetched overnight",
+                        who=name,
+                        evidence=feeds.titles[:_MAX_ACTION_EVIDENCE],
+                    )
+                )
+        except IngestError as exc:
+            target.lines.append(f"company feeds failed: {exc}")
     try:
         provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
         themes = build_company_pov(name, storage, provider)

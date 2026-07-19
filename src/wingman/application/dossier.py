@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel
 
 from wingman.application.ingest import IngestError
-from wingman.application.pov import company_card_id
+from wingman.application.pov import COMPANY_POV_PREFIX, company_card_id
 from wingman.application.research import RESEARCH_STALE_AFTER_DAYS
 from wingman.application.similarity import (
     company_key,
@@ -58,7 +58,14 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
             "company name is empty — an empty key would match every person with no company set."
         )
     all_people = storage.list_people()
-    people = [person for person in all_people if company_key(person.company or "") == key]
+    # The company feed anchor (RFC-029) is not a person: its documents count
+    # (people_by_id keeps it attributable), but it never lists as one.
+    people = [
+        person
+        for person in all_people
+        if company_key(person.company or "") == key
+        and not person.person_id.startswith(COMPANY_POV_PREFIX)
+    ]
     people_by_id = {person.person_id: person for person in all_people}
     documents: list[ExternalDocument] = []
     for document in storage.list_external_documents():

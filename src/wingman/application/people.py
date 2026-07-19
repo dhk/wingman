@@ -162,9 +162,20 @@ def _require_single_match(storage: Storage, query: str) -> Person:
     return matches[0]
 
 
+def _refuse_company_anchor(person: Person, action: str) -> None:
+    # Company anchors (RFC-029) are system-owned carriers of company feeds:
+    # people-surface mutations would orphan or shadow them.
+    if person.person_id.startswith("__company__"):
+        raise IngestError(
+            f"{person.name!r} is a company feed anchor, not a person; {action} the company "
+            "instead ('wingman company …', company_manage/company_feed via MCP)."
+        )
+
+
 def rename_person(current: str, new_name: str, storage: Storage) -> Person:
     """Rename a watchlist person in place; person_id and all their data are untouched."""
     person = _require_single_match(storage, current)
+    _refuse_company_anchor(person, "rename")
     new_name = new_name.strip()
     if not new_name:
         raise IngestError("new name is empty.")
@@ -179,6 +190,7 @@ def rename_person(current: str, new_name: str, storage: Storage) -> Person:
 def delete_person(current: str, storage: Storage) -> Person:
     """Delete a watchlist person and everything keyed to them."""
     person = _require_single_match(storage, current)
+    _refuse_company_anchor(person, "delete")
     storage.delete_person(person.person_id)
     return person
 
@@ -188,6 +200,7 @@ def fix_person(current: str, correct_name: str, storage: Storage) -> tuple[Perso
     `current` is merged into them (their blank fields filled, documents/POV card/outreach
     brief moved over) instead of creating a name collision. Returns (final_person, merged)."""
     person = _require_single_match(storage, current)
+    _refuse_company_anchor(person, "fix")
     correct_name = correct_name.strip()
     if not correct_name:
         raise IngestError("correct name is empty.")

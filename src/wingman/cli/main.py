@@ -108,6 +108,13 @@ from wingman.infrastructure.telemetry import (
 from wingman.infrastructure.telemetry import (
     set_enabled as telemetry_set_enabled,
 )
+from wingman.application.company_feeds import (
+    attach_company_feed,
+    fetch_company_feeds,
+    is_company_anchor,
+    list_company_feeds,
+    remove_company_feed,
+)
 from wingman.application.profile_manage import (
     clear_profile,
     remove_item,
@@ -908,6 +915,7 @@ def people_list(
     _require_workspace(config, "listed")
     with Storage(config.db_path) as storage:
         people = storage.list_people()
+    people = [person for person in people if not is_company_anchor(person)]
     if watched:
         people = [person for person in people if person.sources]
     if not people:
@@ -2046,6 +2054,91 @@ def company_sources_cmd(
             else "no snapshot yet"
         )
         typer.echo(f"- {source.url}{label} — {state}")
+
+
+@company_app.command("add-feed")
+def company_add_feed(
+    name: str = typer.Argument(..., help="Company the feed belongs to."),
+    url: str = typer.Argument(..., help="https:// feed URL (RSS/Atom), or a blog index page."),
+    index: bool = typer.Option(
+        False, "--index", help="The URL is a blog index page, not a feed (RFC-011)."
+    ),
+) -> None:
+    """Attach a company blog/newsroom feed — no person required (RFC-029).
+
+    Posts are organization-attributed to the company and flow into its
+    dossier, themes, news, and search exactly like a watched person's
+    writing. Find the feed URL first with 'wingman people discover-feed'
+    style discovery if you only know the blog page.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "attached")
+    try:
+        with Storage(config.db_path) as storage:
+            anchor, source = attach_company_feed(name, url, storage, index_page=index)
+    except IngestError as exc:
+        typer.echo(f"add-feed failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Attached to {anchor.company}: {source.url} ({source.kind.value})")
+    typer.echo(f'Fetch it with: wingman company fetch "{anchor.company}"')
+
+
+@company_app.command("feeds")
+def company_feeds_list(
+    name: str = typer.Argument(..., help="Company whose feeds to list."),
+) -> None:
+    """List the feeds attached directly to a company (RFC-029)."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        feeds = list_company_feeds(name, storage)
+    if not feeds:
+        typer.echo(f"No company feeds for {name.strip()!r} — 'wingman company add-feed' adds one.")
+        return
+    for feed in feeds:
+        typer.echo(f"{feed.url} ({feed.kind.value})")
+
+
+@company_app.command("remove-feed")
+def company_remove_feed(
+    name: str = typer.Argument(..., help="Company the feed belongs to."),
+    url: str = typer.Argument(..., help="Feed URL to remove."),
+) -> None:
+    """Detach a company feed (already-fetched posts are kept)."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "removed")
+    with Storage(config.db_path) as storage:
+        removed = remove_company_feed(name, url, storage)
+    if removed:
+        typer.echo(f"Removed {url}")
+    else:
+        typer.echo(f"No such feed on {name.strip()!r}: {url}", err=True)
+        raise typer.Exit(code=1)
+
+
+@company_app.command("fetch")
+def company_fetch(
+    name: str = typer.Argument(..., help="Company whose feeds to fetch."),
+) -> None:
+    """Fetch a company's attached feeds now (RFC-009: explicit, enumerable)."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "fetched")
+    try:
+        with Storage(config.db_path) as storage:
+            report = fetch_company_feeds(name, config, storage)
+    except IngestError as exc:
+        typer.echo(f"fetch failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"{report.items} item(s) seen, {report.added} added, "
+        f"{report.skipped_duplicates} duplicate(s) skipped."
+    )
+    for title in report.titles:
+        typer.echo(f"  + {title}")
 
 
 @company_app.command("research")
