@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import secrets
 import sys
 import time
@@ -865,6 +866,8 @@ def watchlist(action: str, list_name: str = "", member: str = "", company: bool 
                     failures += 1
                     blocks.append(f"✗ {member_name} ({member_kind}): {exc}")
                     continue
+                if any(step.status == "failed" for step in report.steps):
+                    failures += 1
                 blocks.append(_miso_lines(report))
             blocks.append(f"{len(members)} members processed, {failures} failed.")
             return "\n\n".join(blocks)
@@ -1091,15 +1094,19 @@ def company_manage(action: str, name: str, new_name: str = "") -> str:
     try:
         with Storage(config.db_path) as storage:
             if action == "rename":
-                moved = rename_company(name, new_name, storage)
-                return f"Renamed {name!r} to {new_name!r} ({moved} source(s) moved)"
-            if action == "delete":
-                removed = delete_company(name, storage)
+                moved, people_moved = rename_company(name, new_name, storage)
                 return (
-                    f"Deleted {name!r} (sources, research, POV card, watchlist memberships)."
-                    if removed
-                    else f"Nothing found for {name!r}."
+                    f"Renamed {name!r} to {new_name!r} "
+                    f"({moved} source(s), {people_moved} person/people moved)"
                 )
+            if action == "delete":
+                removed, cleared = delete_company(name, storage)
+                if not removed:
+                    return f"Nothing found for {name!r}."
+                message = f"Deleted {name!r} (sources, research, POV card, watchlist memberships)."
+                if cleared:
+                    message += f" Company cleared on: {', '.join(cleared)}"
+                return message
     except IngestError as exc:
         return f"company_manage {action} failed: {exc}"
     if action == "delete-dossier":
@@ -1522,6 +1529,9 @@ def main(argv: list[str] | None = None) -> None:
     print("The URL is a capability — anyone holding it can use the workspace.")
     print("Revoke it any time: wingman-mcp --http --rotate-token")
     print(f"Reach it from elsewhere via your own tunnel, e.g.: tailscale serve {args.port}")
+    # The capability token lives in the URL path; uvicorn's access log would
+    # write it on every request, silently defeating rotation-as-revocation (#70).
+    logging.getLogger("uvicorn.access").disabled = True
     server.run(transport="streamable-http")
 
 

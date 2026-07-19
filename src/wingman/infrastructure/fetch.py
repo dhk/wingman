@@ -8,12 +8,15 @@ swallowed into an empty result.
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 import time
 import urllib.error
 import urllib.request
 from email.message import Message
 from http.client import HTTPMessage
 from typing import IO
+from urllib.parse import urlparse
 
 # The "Mozilla/5.0 (compatible; ...)" prefix is the convention legitimate
 # crawlers use; bot filters that reject unrecognized agents outright accept
@@ -29,6 +32,47 @@ _MAX_RETRY_AFTER_SECONDS = 10
 
 class FetchError(Exception):
     """A public feed could not be fetched."""
+
+
+# Injectable for tests; the SSRF guard below must never need live DNS in CI.
+_resolve = socket.getaddrinfo
+
+
+def _require_public_host(url: str) -> None:
+    """Refuse hosts that resolve to non-public addresses (SSRF guard, #71).
+
+    Feed autodiscovery follows anchors found in page content, so the target
+    of a fetch can be attacker-influenced; loopback, RFC1918, link-local
+    (cloud metadata), and reserved ranges are never legitimate public feeds.
+    Applied to the initial URL and to every redirect target. Residual note:
+    a DNS answer can change between this check and the connect (rebinding);
+    closing that fully means connecting by pinned IP, which urllib does not
+    expose — this guard covers the practical attack shapes.
+    """
+    host = urlparse(url).hostname
+    if not host:
+        raise FetchError(f"{url!r} has no host; nothing was fetched")
+    try:
+        infos = _resolve(host, None)
+    except OSError as exc:
+        raise FetchError(f"could not resolve {host} ({exc}); nothing was fetched") from exc
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_reserved
+            or address.is_multicast
+            or address.is_unspecified
+        ):
+            raise FetchError(
+                f"{host} resolves to a non-public address ({address}); "
+                "refusing to fetch (SSRF guard)"
+            )
 
 
 class HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -48,6 +92,7 @@ class HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
             raise FetchError(
                 f"redirect to non-HTTPS URL {newurl!r} refused (RFC-009); nothing was fetched"
             )
+        _require_public_host(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -72,6 +117,7 @@ def fetch_url(url: str) -> bytes:
     """
     if not url.startswith("https://"):
         raise FetchError(f"only https:// URLs are fetched (RFC-009); got {url!r}")
+    _require_public_host(url)
     request = urllib.request.Request(url, headers=dict(_HEADERS))  # noqa: S310
     for attempt in (1, 2):
         try:

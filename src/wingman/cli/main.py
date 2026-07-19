@@ -1486,6 +1486,10 @@ def watchlist_run(
                 failures += 1
                 typer.echo(f"✗ {member} ({kind}): {exc}", err=True)
                 continue
+            # a member with any failed step counts as failed — systemic
+            # provider breakage must never read as "0 failed" (#66)
+            if any(step.status == "failed" for step in report.steps):
+                failures += 1
             _echo_miso(report)
     typer.echo(f"{len(members)} members processed, {failures} failed.")
     if failures:
@@ -2095,11 +2099,14 @@ def company_rename(
     _require_workspace(config, "renamed")
     try:
         with Storage(config.db_path) as storage:
-            moved = rename_company(current, new_name, storage)
+            moved, people_moved = rename_company(current, new_name, storage)
     except IngestError as exc:
         typer.echo(f"company rename failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(f"Renamed {current!r} to {new_name!r} ({moved} source(s) moved)")
+    typer.echo(
+        f"Renamed {current!r} to {new_name!r} "
+        f"({moved} source(s), {people_moved} person/people moved)"
+    )
 
 
 @company_app.command("delete")
@@ -2113,11 +2120,13 @@ def company_delete(
     config = load_config()
     _require_workspace(config, "deleted")
     with Storage(config.db_path) as storage:
-        removed = delete_company(name, storage)
+        removed, cleared = delete_company(name, storage)
     if not removed:
         typer.echo(f"Nothing found for {name!r}.")
         return
     typer.echo(f"Deleted {name!r} (sources, research, POV card, watchlist memberships).")
+    if cleared:
+        typer.echo(f"Company cleared on: {', '.join(cleared)}")
 
 
 @company_app.command("delete-dossier")

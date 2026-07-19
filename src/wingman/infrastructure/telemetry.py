@@ -18,6 +18,7 @@ this module is swallowed into a log line.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -33,6 +34,28 @@ _logger = get_logger("infrastructure.telemetry")
 _MARKER = "telemetry.on"
 # Per-value cap: enough to understand usage, not enough to duplicate the store.
 MAX_TEXT_CHARS = 4_000
+
+# Credentials are never usage (RFC-019/023). Scrubbed at the single write
+# choke point so every capture surface — live CLI, MCP results, harvested
+# transcripts (#69) — is covered without each caller remembering to.
+_SECRET_PATTERNS = [
+    re.compile(r"(sk-ant-[A-Za-z0-9_\-]{4,})"),
+    re.compile(r"\b(sk-[A-Za-z0-9_\-]{16,})"),
+    re.compile(r"\b(pa-[A-Za-z0-9_\-]{16,})"),
+    re.compile(r"(--value[ =]+)(\S+)"),
+    re.compile(r"(add-generic-password.*?-w[ =]+)(\S+)"),
+    re.compile(r"((?:ANTHROPIC|VOYAGE)_API_KEY[ =:\"']+)([^\s\"']+)"),
+]
+
+
+def scrub_secrets(text: str) -> str:
+    for pattern in _SECRET_PATTERNS:
+        if pattern.groups == 1:
+            text = pattern.sub("[redacted]", text)
+        else:
+            text = pattern.sub(lambda m: m.group(1) + "[redacted]", text)
+    return text
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS telemetry_events (
@@ -66,8 +89,9 @@ def set_enabled(config: Config, on: bool) -> None:
 
 
 def _clip(value: Any) -> Any:
-    if isinstance(value, str) and len(value) > MAX_TEXT_CHARS:
-        return value[: MAX_TEXT_CHARS - 1] + "…"
+    if isinstance(value, str):
+        value = scrub_secrets(value)
+        return value if len(value) <= MAX_TEXT_CHARS else value[: MAX_TEXT_CHARS - 1] + "…"
     if isinstance(value, dict):
         return {key: _clip(entry) for key, entry in value.items()}
     if isinstance(value, list):

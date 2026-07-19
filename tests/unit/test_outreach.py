@@ -125,7 +125,7 @@ def test_valid_points_are_stored_with_alignment(workspace: Path) -> None:
         assert "Grounded in: 1 technical" in rendered
         assert "1. [technical] " in rendered
         assert "Purpose: introduction" in rendered
-        assert "Intro material (compose it in your own voice" in rendered
+        assert "Intro material (unverified draft" in rendered
         assert "- Ask for twenty minutes on evidence-first analytics" in rendered
 
 
@@ -278,3 +278,36 @@ def test_purpose_shapes_the_prompt_and_is_stored(workspace: Path) -> None:
         assert "working at this person's company" in provider.last_prompt
         assert report.brief.purpose is OutreachPurpose.JOB
         assert "Purpose: job" in render_outreach_brief(report.brief)
+
+
+def test_intro_bullets_with_fabricated_quotes_are_rejected(workspace: Path) -> None:
+    """#67: a quoted span in an intro bullet claims to be a citation — it must
+    appear verbatim in the card or corpus, or the bullet is rejected."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        corpus_id = seeded_workspace(workspace, storage, config)
+        provider = ScriptedProvider(
+            {
+                "talking_points": [
+                    {
+                        "point": "You both argue analytics must show its reasoning.",
+                        "their_stance": STANCE,
+                        "corpus_doc_id": corpus_id,
+                        "your_quote": "Explainable analytics pipelines beat black boxes",
+                    }
+                ],
+                "intro_points": [
+                    'She wrote "Every answer should show its work" — open there',
+                    'Great catching up when you said "we should grab coffee at the summit"',
+                    "Ask for twenty minutes on evidence-first analytics",
+                ],
+            }
+        )
+        report = build_outreach_brief("Jane Author", storage, provider)
+    # grounded quote kept, fabricated quote rejected with a reason, plain bullet kept
+    assert len(report.brief.intro_points) == 2
+    assert any("show its work" in bullet for bullet in report.brief.intro_points)
+    fabricated = [entry for entry in report.rejected if "appears nowhere" in entry.reason]
+    assert len(fabricated) == 1 and "grab coffee" in fabricated[0].point
+    rendered = render_outreach_brief(report.brief)
+    assert "unverified draft" in rendered and "check any claimed shared context" in rendered

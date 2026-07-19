@@ -61,6 +61,12 @@ def _tokens(query: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]+", query.lower()) if token]
 
 
+def _fts_query(tokens: list[str]) -> str:
+    """The user's words as a safe FTS5 query: each token double-quoted, so
+    hyphens, '+', and reserved words (AND/OR/NOT) are literals, never syntax (#68)."""
+    return " ".join(f'"{token}"' for token in tokens)
+
+
 def _matches(tokens: list[str], haystack: str) -> bool:
     """All query tokens must appear — the same AND semantics FTS5 defaults to."""
     lowered = haystack.lower()
@@ -175,11 +181,14 @@ def search_workspace(query: str, storage: Storage, config: Config, limit: int = 
     report = SearchReport(query=query)
     columns: list[list[SearchHit]] = []
 
-    # Your corpus (FTS5 relevance, real snippets)
+    # Your corpus (FTS5 relevance, real snippets). The sanitized query cannot
+    # error, but a store degrading must never abort the whole sweep (#68).
+    fts_query = _fts_query(tokens)
     try:
-        corpus_hits = find_evidence(query, storage, limit=per_store)
+        corpus_hits = find_evidence(fts_query, storage, limit=per_store)
     except CorpusSearchError as exc:
-        raise IngestError(f"search failed: {exc}") from exc
+        corpus_hits = []
+        report.notes.append(f"corpus pass skipped: {exc}")
     report.searched.append("corpus")
     columns.append(
         [
@@ -197,7 +206,11 @@ def search_workspace(query: str, storage: Storage, config: Config, limit: int = 
     )
 
     # Watched people's writing (FTS5)
-    writing_hits = find_people_evidence(query, storage, limit=per_store)
+    try:
+        writing_hits = find_people_evidence(fts_query, storage, limit=per_store)
+    except CorpusSearchError as exc:
+        writing_hits = []
+        report.notes.append(f"writing pass skipped: {exc}")
     report.searched.append("writing")
     columns.append(
         [

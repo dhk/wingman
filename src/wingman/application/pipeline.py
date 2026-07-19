@@ -28,7 +28,7 @@ from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
 from wingman.providers.base import CapabilityClass
-from wingman.providers.router import get_embedding_provider, get_provider
+from wingman.providers.router import ModelConfigError, get_embedding_provider, get_provider
 
 _logger = get_logger("application.pipeline")
 
@@ -116,15 +116,23 @@ def _person_pipeline(
             f"{embedded.corpus_embedded + embedded.external_embedded} new vectors "
             f"({embedded.provider}/{embedded.model})",
         )
-    except Exception as exc:  # noqa: BLE001 — every failure is reported, none is fatal
+    except ModelConfigError as exc:
+        # Intentionally unconfigured is a skip; anything else is a failure (#66)
         _step(report, "embed", "skipped", str(exc))
+    except Exception as exc:  # noqa: BLE001 — every failure is reported, none is fatal
+        _step(report, "embed", "failed", str(exc))
 
     try:
         provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
         pov = build_pov_card(person.name, storage, provider)
         _step(report, "pov", "ok", f"{len(pov.card.stances)} stances")
-    except Exception as exc:  # noqa: BLE001 — every failure is reported, none is fatal
+    except ModelConfigError as exc:
         _step(report, "pov", "skipped", str(exc))
+    except IngestError as exc:
+        # "no stored writing yet" is a benign skip, not a systemic failure
+        _step(report, "pov", "skipped", str(exc))
+    except Exception as exc:  # noqa: BLE001 — every failure is reported, none is fatal
+        _step(report, "pov", "failed", str(exc))
 
     try:
         provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
@@ -135,8 +143,12 @@ def _person_pipeline(
             "ok",
             f"{len(brief.brief.talking_points)} talking points ({purpose.value})",
         )
-    except Exception as exc:  # noqa: BLE001
+    except ModelConfigError as exc:
         _step(report, "brief", "skipped", str(exc))
+    except IngestError as exc:
+        _step(report, "brief", "skipped", str(exc))
+    except Exception as exc:  # noqa: BLE001 — every failure is reported, none is fatal
+        _step(report, "brief", "failed", str(exc))
 
     try:
         path = export_person(person.name, config, storage, out_dir=out_dir)
