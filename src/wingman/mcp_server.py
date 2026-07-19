@@ -93,7 +93,8 @@ from wingman.application.similarity import people_like as people_like_use_case
 from wingman.domain.person import FeedAttribution, FeedKind, FeedSource, Person
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.keys import ensure_env
-from wingman.infrastructure.logs import configure_logging
+from wingman.infrastructure.logs import configure_logging, get_logger
+from wingman.version import wingman_version
 from wingman.infrastructure.telemetry import (
     count_events as telemetry_count,
 )
@@ -130,6 +131,7 @@ def status() -> str:
         return _NOT_INITIALIZED
     with Storage(config.db_path) as storage:
         return (
+            f"Wingman: {wingman_version()}\n"
             f"Workspace: {config.data_dir}\n"
             f"Source records: {storage.count_source_records()}\n"
             f"Profile items: {storage.count_profile_items()}\n"
@@ -1453,6 +1455,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
     configure_logging()
+    get_logger("mcp").info("wingman-mcp %s starting", wingman_version())
     ensure_env()  # hydrate missing API keys from the macOS Keychain (RFC-019)
     if not args.http:
         if args.rotate_token:

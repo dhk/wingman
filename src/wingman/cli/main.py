@@ -73,6 +73,7 @@ from wingman.application.similarity import (
     similar_people,
 )
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
+from wingman.version import wingman_version
 from wingman.infrastructure.keys import (
     KNOWN_KEYS,
     KeyStoreError,
@@ -129,8 +130,22 @@ telemetry_app = typer.Typer(help="Opt-in local usage journal — never leaves th
 app.add_typer(telemetry_app, name="telemetry")
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"wingman {wingman_version()}")
+        raise typer.Exit()
+
+
 @app.callback()
-def _bootstrap() -> None:
+def _bootstrap(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Print the installed build (git-derived) and exit.",
+    ),
+) -> None:
     """Hydrate missing API keys from the Keychain before any command runs."""
     ensure_env()
 
@@ -202,6 +217,7 @@ def doctor() -> None:
         f"{sys.version_info.major}.{sys.version_info.minor} "
         f"(requires >= {MIN_PYTHON[0]}.{MIN_PYTHON[1]})",
     )
+    report("version", True, wingman_version())
     report("config", True, f"data dir {config.data_dir} resolved from {config.data_dir_source}")
     if config.data_dir.exists():
         try:
@@ -434,6 +450,7 @@ def status() -> None:
     """Show the current Wingman workspace status."""
     configure_logging()
     config = load_config()
+    typer.echo(f"Wingman: {wingman_version()}")
     typer.echo(f"Workspace: {config.data_dir} (from {config.data_dir_source})")
     if not config.db_path.exists():
         typer.echo("Database: not initialized — run 'wingman init'.")
