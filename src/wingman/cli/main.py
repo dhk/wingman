@@ -108,6 +108,12 @@ from wingman.infrastructure.telemetry import (
 from wingman.infrastructure.telemetry import (
     set_enabled as telemetry_set_enabled,
 )
+from wingman.application.profile_manage import (
+    clear_profile,
+    remove_item,
+    render_profile_listing,
+    resolve_item,
+)
 from wingman.application.telemetry_harvest import harvest_transcript
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.providers.base import CapabilityClass, ProviderError
@@ -138,6 +144,10 @@ feature_app = typer.Typer(
     help="Feature requests: previewed, confirmed, filed to your repo via gh (RFC-025)."
 )
 app.add_typer(feature_app, name="feature")
+profile_app = typer.Typer(
+    help="Manage the career profile: list, remove, resolve conflicts, clear (RFC-027)."
+)
+app.add_typer(profile_app, name="profile")
 
 
 def _version_callback(value: bool) -> None:
@@ -2340,6 +2350,83 @@ def telemetry_harvest(
         typer.echo(f"  {kind}: {count}")
     if report.skipped_lines:
         typer.echo(f"  (skipped {report.skipped_lines} unparseable lines)")
+
+
+@profile_app.command("list")
+def profile_list() -> None:
+    """Every profile item with its id: active by kind, then unresolved conflicts."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        typer.echo(render_profile_listing(storage.list_profile_items()))
+
+
+@profile_app.command("rm")
+def profile_rm(
+    item_id: str = typer.Argument(..., help="Item id (any unambiguous prefix) to delete."),
+) -> None:
+    """Delete one item — active or conflict — and re-render career.md/json."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "removed")
+    try:
+        with Storage(config.db_path) as storage:
+            item = remove_item(item_id, config, storage)
+    except IngestError as exc:
+        typer.echo(f"profile rm failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Removed {item.kind.value} {item.name!r} ({item.item_id[:8]}).")
+
+
+@profile_app.command("resolve")
+def profile_resolve(
+    item_id: str = typer.Argument(
+        ..., help="Id (any unambiguous prefix) of the item to KEEP; its rivals are dropped."
+    ),
+) -> None:
+    """Settle a conflict: keep this item, drop every rival with the same name."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "resolved")
+    try:
+        with Storage(config.db_path) as storage:
+            winner, rivals = resolve_item(item_id, config, storage)
+    except IngestError as exc:
+        typer.echo(f"profile resolve failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Kept {winner.kind.value} {winner.name!r} ({winner.item_id[:8]}).")
+    for rival in rivals:
+        typer.echo(f"  dropped {rival.item_id[:8]} — {rival.detail or rival.name}")
+    if not rivals:
+        typer.echo("  (nothing conflicted with it)")
+
+
+@profile_app.command("clear")
+def profile_clear(
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
+) -> None:
+    """Delete EVERY profile item, for a clean re-ingest of your source of truth.
+
+    Reversible only via 'wingman restore' from a backup — take one first.
+    Stored job assessments cite item ids that stop existing; re-run
+    'wingman assess' for anything that still matters.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "cleared")
+    with Storage(config.db_path) as storage:
+        count = storage.count_profile_items()
+        if count == 0:
+            typer.echo("The profile is already empty.")
+            return
+        if not yes:
+            typer.confirm(
+                f"Delete all {count} profile items? ('wingman backup' first is wise)",
+                abort=True,
+            )
+        removed = clear_profile(config, storage)
+    typer.echo(f"Removed {removed} profile items. Re-ingest with 'wingman ingest <resume>'.")
 
 
 def run() -> None:

@@ -75,6 +75,12 @@ from wingman.application.pov import (
     company_card_id,
     render_pov_card,
 )
+from wingman.application.profile_manage import (
+    clear_profile,
+    remove_item,
+    render_profile_listing,
+    resolve_item,
+)
 from wingman.application.research import (
     add_company_source,
     delete_company,
@@ -216,6 +222,48 @@ def career_profile() -> str:
             "('wingman ingest') or a LinkedIn export ('wingman ingest-linkedin') first."
         )
     return career_md.read_text(encoding="utf-8")
+
+
+@server.tool()
+def profile_manage(action: str, item_id: str = "") -> str:
+    """List, remove, resolve, or clear career-profile items (RFC-027).
+
+    action is 'list', 'rm', 'resolve', or 'clear'. 'list' shows every item
+    with its id — active by kind, then unresolved conflicts. 'rm' deletes
+    the one item whose id starts with item_id (any unambiguous prefix).
+    'resolve' settles a duplicate/conflict: the item_id item is kept and
+    promoted to active, every rival with the same kind and name is dropped.
+    'clear' deletes EVERY profile item for a clean re-ingest — not
+    reversible except via 'wingman restore', so suggest a backup first.
+    Mutations re-render career.md/career.json; stored job assessments cite
+    item ids that stop existing, so re-run assess_job afterwards.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "list":
+                return render_profile_listing(storage.list_profile_items())
+            if action == "rm":
+                item = remove_item(item_id, config, storage)
+                return f"Removed {item.kind.value} {item.name!r} ({item.item_id[:8]})."
+            if action == "resolve":
+                winner, rivals = resolve_item(item_id, config, storage)
+                dropped = ", ".join(rival.item_id[:8] for rival in rivals) or "none"
+                return (
+                    f"Kept {winner.kind.value} {winner.name!r} ({winner.item_id[:8]}); "
+                    f"dropped: {dropped}."
+                )
+            if action == "clear":
+                removed = clear_profile(config, storage)
+                return (
+                    f"Removed {removed} profile items. Re-ingest the source of truth "
+                    "(ingest_resume_text or 'wingman ingest') to rebuild the profile."
+                )
+    except IngestError as exc:
+        return f"profile {action} failed: {exc}"
+    return f"unknown action {action!r}; use list, rm, resolve, or clear."
 
 
 @server.tool()
