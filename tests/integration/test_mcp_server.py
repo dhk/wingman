@@ -72,6 +72,7 @@ def test_all_tools_are_registered() -> None:
         "people_manage",
         "company_manage",
         "search",
+        "telemetry",
     }
 
 

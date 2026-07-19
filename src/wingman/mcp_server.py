@@ -20,8 +20,11 @@ conversation).
 from __future__ import annotations
 
 import argparse
+import json
 import secrets
 import sys
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -84,6 +87,16 @@ from wingman.domain.person import FeedAttribution, FeedKind, FeedSource, Person
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.keys import ensure_env
 from wingman.infrastructure.logs import configure_logging
+from wingman.infrastructure.telemetry import (
+    count_events as telemetry_count,
+)
+from wingman.infrastructure.telemetry import (
+    is_enabled as telemetry_is_enabled,
+)
+from wingman.infrastructure.telemetry import (
+    list_events as telemetry_list,
+)
+from wingman.infrastructure.telemetry import record_event
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.providers.base import CapabilityClass, ProviderError
 from wingman.providers.embeddings import EmbeddingError
@@ -1254,6 +1267,84 @@ def _http_token(config: Config, rotate: bool = False) -> str:
         path.write_text(secrets.token_urlsafe(24) + "\n", encoding="utf-8")
         path.chmod(0o600)
     return path.read_text(encoding="utf-8").strip()
+
+
+@server.tool()
+def telemetry(action: str = "status", limit: int = 20) -> str:
+    """The opt-in local usage journal (RFC-023): action is 'status' or 'show'.
+
+    'show' returns recent events — CLI invocations, MCP tool calls with
+    their arguments and results, harvested transcript messages. The journal
+    is local-only and default-off; turning it on/off is deliberately
+    CLI-only ('wingman telemetry on|off'), like key management.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    if action == "status":
+        state = "ON" if telemetry_is_enabled(config) else "OFF"
+        return f"Telemetry: {state}  events: {telemetry_count(config)}"
+    if action == "show":
+        events = telemetry_list(config, limit=max(1, min(limit, 100)))
+        if not events:
+            return "No telemetry events recorded."
+        lines = []
+        for event in events:
+            payload = json.dumps(event["payload"], ensure_ascii=False)
+            lines.append(
+                f"{event['ts']}  [{event['surface']}] {event['name']} ({event['outcome']})\n"
+                f"   {payload[:300]}{'…' if len(payload) > 300 else ''}"
+            )
+        return "\n".join(lines)
+    return f"unknown action {action!r}; use status or show."
+
+
+def _instrument_tools() -> None:
+    """Wrap every registered tool so calls land in the opt-in journal (RFC-023).
+
+    Recording is a no-op unless the owner ran 'wingman telemetry on'; a
+    failure to record never breaks the tool call being recorded.
+    """
+    manager = getattr(server, "_tool_manager", None)
+    tools = getattr(manager, "_tools", None)
+    if not tools:  # pragma: no cover — internals moved; better unrecorded than broken
+        return
+    for tool in tools.values():
+        original = tool.fn
+
+        def wrapped(
+            *args: object,
+            __original: Callable[..., str] = original,
+            __name: str = tool.name,
+            **kwargs: object,
+        ) -> str:
+            started = time.monotonic()
+            try:
+                result = __original(*args, **kwargs)
+            except Exception as exc:
+                record_event(
+                    load_config(),
+                    "mcp",
+                    __name,
+                    {"args": kwargs, "error": str(exc)},
+                    outcome="error",
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+                raise
+            record_event(
+                load_config(),
+                "mcp",
+                __name,
+                {"args": kwargs, "result": result},
+                outcome="ok",
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+            return result
+
+        tool.fn = wrapped
+
+
+_instrument_tools()
 
 
 def main(argv: list[str] | None = None) -> None:

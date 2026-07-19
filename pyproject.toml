@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-wingman = "wingman.cli.main:app"
+wingman = "wingman.cli.main:run"
 wingman-mcp = "wingman.mcp_server:main"
 
 [dependency-groups]
