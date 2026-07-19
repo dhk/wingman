@@ -17,6 +17,10 @@ is a command you ran (RFC-009/018).
   macOS-only; on Linux use environment variables.
 - Optional, for PDF rendering: Node (`npx md-to-pdf`).
 
+Deploying to an always-on Ubuntu server (systemd timers, the MCP server as
+a service, claude.ai over Tailscale) has its own guide:
+[`SERVER.md`](SERVER.md).
+
 ## 2. Download and install
 
 From a release / the repository directly:
