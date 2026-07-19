@@ -80,6 +80,12 @@ standing focus in one act, and `wingman overnight` deep-refreshes
 everything followed into a dated digest — schedule it and wake up to
 answers (RFC-018).
 
+**Search.** `wingman search "semantic layers"` answers "what does the
+workspace know about X" in one call — corpus, people's writing, POV
+stances, news, research links, and briefs in a single ranked list, every
+hit attributed, dated, and sourced. Fully local: the query never leaves
+the machine (RFC-020).
+
 **Delivery.** Print-ready US-Letter exports styled by the site design
 system: career one-pager, company dossier, and a landscape 2×2 person
 briefing dock (brief | POV | background | news) with clickable sources;

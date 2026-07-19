@@ -190,6 +190,10 @@ anything.
   https://acme.com` enrolls it (and your people there) for deep refresh;
   `wingman overnight` catches everything up and writes a dated digest —
   schedule it and wake up to answers ([`INSTALL.md`](INSTALL.md) §5).
+- **Ask the workspace anything** — `wingman search "semantic layers"`
+  sweeps every store (corpus, writing, stances, news, research, briefs)
+  into one ranked, cited list; from Claude, the `search` tool is the
+  starting point for any "what do we know about…" question.
 - **Assess a role** — `wingman assess job.md` → a cited fit brief.
 - **Company intelligence** — `company dossier`, `company pov`,
   `company research` (approved pages, new-links-as-hiring-signal).

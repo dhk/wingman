@@ -516,6 +516,24 @@ class Storage:
         row: tuple[str] | None = cursor.fetchone()
         return PovCard.model_validate_json(row[0]) if row else None
 
+    def list_pov_cards(self) -> list[PovCard]:
+        cursor = self._conn.execute("SELECT payload FROM pov_cards ORDER BY created_at")
+        return [PovCard.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def list_news_items(self) -> list[NewsItem]:
+        cursor = self._conn.execute("SELECT payload FROM news_items ORDER BY fetched_at, item_id")
+        return [NewsItem.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def list_research_snapshots(self) -> list[ResearchSnapshot]:
+        cursor = self._conn.execute(
+            "SELECT payload FROM research_snapshots ORDER BY fetched_at, url"
+        )
+        return [ResearchSnapshot.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def list_outreach_briefs(self) -> list[OutreachBrief]:
+        cursor = self._conn.execute("SELECT payload FROM outreach_briefs ORDER BY created_at")
+        return [OutreachBrief.model_validate_json(row[0]) for row in cursor.fetchall()]
+
     def watchlist_add(self, list_name: str, member_kind: str, member_name: str) -> bool:
         """Add a member to a (implicitly created) watchlist; False if already there."""
         list_key = " ".join(list_name.lower().split())

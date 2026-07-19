@@ -71,6 +71,7 @@ def test_all_tools_are_registered() -> None:
         "overnight",
         "people_manage",
         "company_manage",
+        "search",
     }
 
 

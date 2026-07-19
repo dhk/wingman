@@ -78,6 +78,7 @@ from wingman.application.similarity import (
     similar_companies,
     similar_people,
 )
+from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import people_like as people_like_use_case
 from wingman.domain.person import FeedAttribution, FeedKind, FeedSource, Person
 from wingman.infrastructure.config import Config, load_config
@@ -115,6 +116,28 @@ def status() -> str:
             f"Opportunities: {storage.count_opportunities()}\n"
             f"Corpus documents: {storage.count_corpus_documents()}"
         )
+
+
+@server.tool()
+def search(query: str, limit: int = 12) -> str:
+    """Search everything the workspace knows: the user's corpus, watched people's
+    writing, POV stances and company themes, news snapshots, research links, and
+    outreach briefs — one ranked list with attribution, dates, and sources.
+
+    START HERE for any question about what the workspace knows ("what do we
+    know about X", "who said anything about Y") before reaching for the
+    narrower per-store tools. Fully local: the query never leaves the machine.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    limit = max(1, min(limit, 50))
+    try:
+        with Storage(config.db_path) as storage:
+            report = search_workspace(query, storage, limit=limit)
+    except IngestError as exc:
+        return f"search failed: {exc}"
+    return render_search_report(report)
 
 
 @server.tool()
