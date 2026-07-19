@@ -13,7 +13,7 @@ import click
 import typer
 
 from wingman.agents.profile_curator import ProposalParseError
-from wingman.application.assess import assess_job
+from wingman.application.assess import assess_job, fetch_job_posting
 from wingman.application.backup import create_backup, restore_backup
 from wingman.application.corpus import add_to_corpus, find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
@@ -25,6 +25,7 @@ from wingman.application.focus import (
     overnight_run,
     render_follow_report,
 )
+from wingman.application.pack import build_application_pack
 from wingman.application.pipeline import MisoReport, make_it_so
 from wingman.application.people import (
     add_person,
@@ -578,7 +579,15 @@ def ingest(
 
 @app.command()
 def assess(
-    job: Path = typer.Argument(..., help="Path to a job description in Markdown or plain text."),
+    job: Path | None = typer.Argument(
+        None, help="Path to a job description in Markdown or plain text."
+    ),
+    url: str = typer.Option(
+        "",
+        "--url",
+        help="Fetch the posting straight from its https:// URL instead — one explicit "
+        "GET (RFC-009), archived to the inbox as the provenance record (RFC-024).",
+    ),
 ) -> None:
     """Assess a job description against the profile and write a cited fit brief."""
     configure_logging()
@@ -590,7 +599,14 @@ def assess(
             err=True,
         )
         raise typer.Exit(code=1)
+    if (job is None) == (not url):
+        typer.echo("assess needs exactly one of: a file path, or --url.", err=True)
+        raise typer.Exit(code=1)
     try:
+        if url:
+            job = fetch_job_posting(url, config)
+            typer.echo(f"Fetched posting → {job}")
+        assert job is not None
         extract_provider = get_provider(CapabilityClass.EXTRACT_FAST, config)
         assess_provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
         with Storage(config.db_path) as storage:
@@ -1828,6 +1844,39 @@ def digest(
         typer.echo(f"Opened {newest}")
         return
     typer.echo(newest.read_text(encoding="utf-8"))
+
+
+@app.command()
+def pack(
+    query: str = typer.Argument(..., help="Part of the assessed role's title, e.g. 'staff mle'."),
+    company: str = typer.Option(
+        "", "--company", help="Attach this company's intelligence (default: inferred from title)."
+    ),
+    out: Path | None = typer.Option(
+        None, "--out", help="Destination folder (default: the workspace's reports/packs/)."
+    ),
+) -> None:
+    """Compose the application pack for an assessed role (RFC-024).
+
+    Deterministic composition, no model call: the cited fit summary,
+    cover-letter fodder quoting your own evidence verbatim (compose it in
+    your voice — Wingman never sends), and the company intelligence the
+    workspace already validated: themes, people you know there, research
+    sources. Renders with npx md-to-pdf like every export.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "packed")
+    try:
+        with Storage(config.db_path) as storage:
+            report = build_application_pack(
+                query, config, storage, company=company or None, out_dir=out
+            )
+    except IngestError as exc:
+        typer.echo(f"pack failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Pack: {report.title}" + (f" @ {report.company}" if report.company else ""))
+    typer.echo(_render_hint(Path(report.path)))
 
 
 @company_app.command("pov")

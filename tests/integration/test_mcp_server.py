@@ -74,6 +74,8 @@ def test_all_tools_are_registered() -> None:
         "search",
         "telemetry",
         "digest",
+        "assess_job_url",
+        "pack",
     }
 
 

@@ -217,6 +217,42 @@ def _next_action(assessments: list[RequirementAssessment]) -> str:
     return "Requirements look covered — decide whether to pursue this role."
 
 
+def fetch_job_posting(url: str, config: Config, fetcher: object = None) -> Path:
+    """Fetch a job posting page into the inbox as assessable text (RFC-024).
+
+    One explicit, user-invoked HTTPS GET (RFC-009 shape); the page is
+    reduced to its visible text and archived under inbox/ so the original
+    fetch stays the provenance record. A page with no extractable text
+    (login wall, JS-only) fails visibly.
+    """
+    from collections.abc import Callable
+
+    from wingman.application.research import extract_page
+    from wingman.infrastructure.fetch import FetchError, fetch_url
+
+    url = url.strip()
+    if not url.startswith("https://"):
+        raise IngestError(f"only https:// postings are fetched (RFC-009); got {url!r}")
+    fetch: Callable[[str], bytes] = fetcher if callable(fetcher) else fetch_url
+    try:
+        data = fetch(url)
+    except FetchError as exc:
+        raise IngestError(f"could not fetch the posting: {exc}. Nothing was assessed.") from exc
+    text, _links = extract_page(data, url)
+    text = text.strip()
+    if len(text) < 200:
+        raise IngestError(
+            f"{url} yielded almost no readable text ({len(text)} chars) — likely a "
+            "login wall or a JavaScript-only page. Save the posting as a file and "
+            "run 'wingman assess <file>' instead."
+        )
+    config.inbox_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    path = config.inbox_dir / f"{stamp}-job-posting.md"
+    path.write_text(f"Source: {url}\n\n{text}\n", encoding="utf-8")
+    return path
+
+
 def assess_job(
     job_path: Path,
     config: Config,

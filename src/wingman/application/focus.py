@@ -213,12 +213,15 @@ def _company_deep(
                     if jobish
                     else f"Review what changed on {name}'s {result.label or 'watched'} page"
                 )
+                evidence = (jobish or result.new_links)[:_MAX_ACTION_EVIDENCE]
+                if jobish:
+                    evidence = evidence + [f'run: wingman assess --url "{jobish[0]}"']
                 actions.append(
                     ActionItem(
                         what=what,
                         why=result.detail + f" ({result.url})",
                         who=name,
-                        evidence=(jobish or result.new_links)[:_MAX_ACTION_EVIDENCE],
+                        evidence=evidence,
                     )
                 )
             elif result.status == "failed":
