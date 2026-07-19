@@ -77,8 +77,12 @@ your message and never sends anything.
 everything for one target, honestly reporting each step. Watchlists cycle
 groups. `wingman company follow "Acme" --url https://acme.com` assembles a
 standing focus in one act, and `wingman overnight` deep-refreshes
-everything followed into a dated digest — schedule it and wake up to
-answers (RFC-018).
+everything followed into a dated digest ending in an action list
+(what / why / who / evidence) — schedule it and wake up to marching
+orders (RFC-018). `wingman digest` shows the newest one (`--open` pops
+it in your viewer), `latest.md` is a stable pointer for scripts and
+editor tabs, `--out ~/Desktop` lands it where you look, and digests are
+searchable (`wingman search`).
 
 **Search.** `wingman search "semantic layers"` answers "what does the
 workspace know about X" in one call — corpus, people's writing, POV
@@ -106,7 +110,7 @@ back. Default off; nothing is ever transmitted.
 
 ## Use from Claude (MCP)
 
-`wingman-mcp` exposes the workspace as 35 MCP tools running the same
+`wingman-mcp` exposes the workspace as 40 MCP tools running the same
 deterministic validation as the CLI (RFC-008) — stdio for Claude Code and
 Claude Desktop on your machine, and an opt-in loopback HTTP transport with
 a rotatable capability path for claude.ai web/mobile through a tunnel you

@@ -35,7 +35,12 @@ from wingman.application.assess import assess_job as assess_job_use_case
 from wingman.application.backup import create_backup
 from wingman.application.corpus import find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
-from wingman.application.focus import follow_company, overnight_run, render_follow_report
+from wingman.application.focus import (
+    follow_company,
+    latest_digest,
+    overnight_run,
+    render_follow_report,
+)
 from wingman.application.pipeline import MisoReport
 from wingman.application.pipeline import make_it_so as make_it_so_use_case
 from wingman.application.people import (
@@ -901,6 +906,24 @@ def overnight() -> str:
     lines.append(f"{report.processed} targets, {report.failed} with failures.")
     lines.append(f"Digest: {report.digest_path}")
     return "\n".join(lines)
+
+
+@server.tool()
+def digest() -> str:
+    """The newest overnight digest — what changed, what failed, and the action
+    list (what/why/who/evidence). The morning starting point after a scheduled
+    'wingman overnight' run; pair with 'search' to dig into anything it raises.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    newest = latest_digest(config)
+    if newest is None:
+        return (
+            "No digests yet — 'wingman overnight' writes one per run "
+            "(enroll targets first with company_follow)."
+        )
+    return newest.read_text(encoding="utf-8")
 
 
 @server.tool()

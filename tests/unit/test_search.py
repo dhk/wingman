@@ -115,6 +115,7 @@ def test_search_sweeps_every_store(loaded: Storage) -> None:
         "stances",
         "news",
         "research",
+        "digests",
         "briefs",
     ]
     by_kind = {hit.kind: hit for hit in report.hits}

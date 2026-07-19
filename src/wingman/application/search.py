@@ -290,6 +290,34 @@ def search_workspace(query: str, storage: Storage, config: Config, limit: int = 
     report.searched.append("research")
     columns.append(research_hits[:per_store])
 
+    # Overnight digests (files under reports/digests/, newest first)
+    digest_hits: list[SearchHit] = []
+    digest_dir = config.reports_dir / "digests"
+    if digest_dir.exists():
+        for digest_file in sorted(digest_dir.glob("overnight-*.md"), reverse=True)[:30]:
+            try:
+                content = digest_file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if not _matches(tokens, content):
+                continue
+            lowered = content.lower()
+            first = min(lowered.index(token) for token in tokens if token in lowered)
+            window = content[max(0, first - 80) : first + 160]
+            digest_hits.append(
+                SearchHit(
+                    kind="digest",
+                    title=digest_file.stem,
+                    snippet=_clip("…" + " ".join(window.split()) + "…"),
+                    who="overnight run",
+                    when=digest_file.stem.removeprefix("overnight-")[:8],
+                    source=str(digest_file),
+                    rank=len(digest_hits) + 1,
+                )
+            )
+    report.searched.append("digests")
+    columns.append(digest_hits[:per_store])
+
     # Outreach briefs (talking points + intro bullets)
     brief_hits: list[SearchHit] = []
     for brief in storage.list_outreach_briefs():
