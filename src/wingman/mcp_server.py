@@ -32,6 +32,8 @@ from mcp.server.fastmcp import FastMCP
 
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job as assess_job_use_case
+from wingman.application.assess import fetch_job_posting
+from wingman.application.pack import build_application_pack
 from wingman.application.backup import create_backup
 from wingman.application.corpus import find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
@@ -906,6 +908,58 @@ def overnight() -> str:
     lines.append(f"{report.processed} targets, {report.failed} with failures.")
     lines.append(f"Digest: {report.digest_path}")
     return "\n".join(lines)
+
+
+@server.tool()
+def assess_job_url(url: str) -> str:
+    """Fetch a job posting from its https:// URL and assess it against the profile.
+
+    One explicit GET (RFC-009/024): the page's visible text is archived to the
+    inbox as the provenance record, then assessed exactly like a pasted job
+    description — verdicts cite only real profile items. Fails visibly on
+    login walls and JavaScript-only pages.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        job_path = fetch_job_posting(url, config)
+        with Storage(config.db_path) as storage:
+            report = assess_job_use_case(
+                job_path,
+                config,
+                storage,
+                get_provider(CapabilityClass.EXTRACT_FAST, config),
+                get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config),
+            )
+    except (IngestError, ModelConfigError, ProviderError, ProposalParseError) as exc:
+        return f"assess failed: {exc}"
+    return Path(report.brief_md_path).read_text(encoding="utf-8")
+
+
+@server.tool()
+def pack(query: str, company: str = "", out_dir: str = "") -> str:
+    """Compose the application pack for an assessed role (RFC-024): cited fit
+    summary, cover-letter fodder quoting the user's own evidence verbatim (they
+    compose the letter in their voice — Wingman never sends), and the company
+    intelligence already in the workspace. Returns the pack markdown; the file
+    also lands under reports/packs/ for md-to-pdf rendering.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            report = build_application_pack(
+                query,
+                config,
+                storage,
+                company=company or None,
+                out_dir=Path(out_dir).expanduser() if out_dir else None,
+            )
+    except IngestError as exc:
+        return f"pack failed: {exc}"
+    return report.markdown
 
 
 @server.tool()

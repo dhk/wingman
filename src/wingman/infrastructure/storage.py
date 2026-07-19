@@ -280,6 +280,10 @@ class Storage:
         row: tuple[str] | None = cursor.fetchone()
         return Opportunity.model_validate_json(row[0]) if row else None
 
+    def list_opportunities(self) -> list[Opportunity]:
+        cursor = self._conn.execute("SELECT payload FROM opportunities ORDER BY created_at")
+        return [Opportunity.model_validate_json(row[0]) for row in cursor.fetchall()]
+
     def count_opportunities(self) -> int:
         cursor = self._conn.execute("SELECT COUNT(*) FROM opportunities")
         count: int = cursor.fetchone()[0]

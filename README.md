@@ -45,10 +45,14 @@ add positions, skills, recommendations — and seed the watchlist from your
 connections (names and roles only, never emails). Your own writing becomes
 a searchable evidence corpus (`wingman evidence "kafka migration"`).
 
-**Opportunity assessment.** `wingman assess job.md` extracts requirements
-with verbatim quotes and judges each met / partial / gap / unknown, citing
-only real profile items — unsupported verdicts are downgraded by
-deterministic validation.
+**Opportunity assessment.** `wingman assess job.md` — or `wingman assess
+--url <posting>` straight from a careers page — extracts requirements with
+verbatim quotes and judges each met / partial / gap / unknown, citing only
+real profile items; unsupported verdicts are downgraded by deterministic
+validation. `wingman pack "staff mle"` then composes the application pack
+for an assessed role: the cited fit summary, cover-letter fodder quoting
+your own evidence verbatim (you write the letter, in your voice), and the
+company intelligence the workspace already holds (RFC-024).
 
 **People intelligence.** Watch the people you read: Substack, any RSS/Atom
 feed, or feed-less blogs via their index page with honest org attribution
@@ -130,7 +134,7 @@ claude mcp add wingman -- wingman-mcp    # Claude Code, one line
 - [`ROADMAP.md`](ROADMAP.md): phased delivery plan and current status
 - [`AGENTS.md`](AGENTS.md): engineering and agent instructions
 - [`docs/DESIGN.md`](docs/DESIGN.md): architecture — what the system is
-- [`docs/RFC.md`](docs/RFC.md): the decision ledger (RFC-001…023) — why it is this way
+- [`docs/RFC.md`](docs/RFC.md): the decision ledger (RFC-001…024) — why it is this way
 - [`docs/EVALUATION.md`](docs/EVALUATION.md): how we measure that it's getting better
 - [`docs/RESEARCH-BRIEFING.md`](docs/RESEARCH-BRIEFING.md): competitive-landscape research brief
 

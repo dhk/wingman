@@ -189,7 +189,10 @@ def test_second_run_actions_carry_new_link_evidence(
     action = next(a for a in report.actions if "opening" in a.what)
     assert action.who == "Acme"
     assert "1 new link since" in action.why
-    assert action.evidence == ["https://acme.example.com/jobs/staff-mle"]
+    assert action.evidence == [
+        "https://acme.example.com/jobs/staff-mle",
+        'run: wingman assess --url "https://acme.example.com/jobs/staff-mle"',
+    ]
     text = Path(report.digest_path).read_text(encoding="utf-8")
     assert "**Assess the new opening(s) at Acme**" in text
 
