@@ -148,8 +148,8 @@ def test_search_and_semantics_and_errors(loaded: Storage) -> None:
     assert all("meaning" in (hit.title + hit.snippet).lower() for hit in both.hits)
     with pytest.raises(IngestError, match="empty"):
         search_workspace("   ", loaded, load_config())
-    with pytest.raises(IngestError, match="search failed"):
-        search_workspace('"unbalanced', loaded, load_config())
+    # FTS5 syntax in the query is neutralized, never fatal (#68)
+    assert search_workspace('"unbalanced', loaded, load_config()).searched
 
 
 @pytest.fixture

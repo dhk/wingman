@@ -13,7 +13,7 @@ from wingman.domain import SourceRecord
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.opportunity import Opportunity
 from wingman.domain.outreach import OutreachBrief
-from wingman.domain.person import ExternalDocument, NewsItem, Person
+from wingman.domain.person import ExternalDocument, NewsItem, Person, PersonOrigin
 from wingman.domain.pov import PovCard
 from wingman.domain.research import CompanySource, ResearchSnapshot
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
@@ -424,6 +424,15 @@ class Storage:
             for field in ("company", "position", "linkedin_url", "email", "substack_url")
             if not getattr(keep, field) and getattr(absorb, field)
         }
+        # The verified-connection signal survives the merge regardless of which
+        # record is kept: origin and connected_on feed the warmth score (#65).
+        if (
+            absorb.origin is PersonOrigin.LINKEDIN_CONNECTIONS
+            and keep.origin is not PersonOrigin.LINKEDIN_CONNECTIONS
+        ):
+            filled["origin"] = absorb.origin
+        if not keep.connected_on and absorb.connected_on:
+            filled["connected_on"] = absorb.connected_on
         merged = keep.model_copy(update=filled) if filled else keep
         if filled:
             self.update_person(merged)
@@ -753,13 +762,18 @@ class Storage:
 
     def move_pov_card(self, old_id: str, new_id: str) -> bool:
         """Re-key a stored card's identity (company rename). If a card already exists at
-        new_id, the old one is dropped instead of overwriting it."""
+        new_id, the old one is dropped instead of overwriting it. The move is an
+        in-place UPDATE: re-inserting under the same card_id would collide with the
+        still-present original row's primary key (#62)."""
         card = self.get_pov_card(old_id)
         if card is None:
             return False
         if self.get_pov_card(new_id) is None:
-            self.save_pov_card(card.model_copy(update={"person_id": new_id}))
-        self._conn.execute("DELETE FROM pov_cards WHERE person_id = ?", (old_id,))
+            self._conn.execute(
+                "UPDATE pov_cards SET person_id = ? WHERE person_id = ?", (new_id, old_id)
+            )
+        else:
+            self._conn.execute("DELETE FROM pov_cards WHERE person_id = ?", (old_id,))
         self._conn.commit()
         return True
 

@@ -109,9 +109,10 @@ def list_company_sources(name: str, storage: Storage) -> list[CompanySource]:
     return storage.list_company_sources(_resolve_company(name))
 
 
-def rename_company(old_name: str, new_name: str, storage: Storage) -> int:
-    """Re-key a company's sources, research snapshots, POV card, and watchlist
-    memberships to a new name. Returns the number of approved sources moved."""
+def rename_company(old_name: str, new_name: str, storage: Storage) -> tuple[int, int]:
+    """Re-key a company's sources, research snapshots, POV card, watchlist
+    memberships, AND every person attributed to it (#63 — Person.company is the
+    field attribution actually joins on). Returns (sources moved, people moved)."""
     old_key = _resolve_company(old_name)
     new_key = _resolve_company(new_name)
     if old_key == new_key:
@@ -119,17 +120,29 @@ def rename_company(old_name: str, new_name: str, storage: Storage) -> int:
     moved = storage.move_company_sources(old_key, new_key, new_name.strip())
     storage.move_pov_card(company_card_id(old_key), company_card_id(new_key))
     storage.watchlist_rename_member("company", old_name.strip(), new_name.strip())
-    return moved
+    people_moved = 0
+    for person in storage.list_people():
+        if person.company and company_key(person.company) == old_key:
+            storage.update_person(person.model_copy(update={"company": new_name.strip()}))
+            people_moved += 1
+    return moved, people_moved
 
 
-def delete_company(name: str, storage: Storage) -> bool:
+def delete_company(name: str, storage: Storage) -> tuple[bool, list[str]]:
     """Delete a company's approved sources, research snapshots, POV card, and any
-    watchlist memberships under this exact name. Returns whether anything existed."""
+    watchlist memberships under this exact name — and clear Person.company on
+    everyone attributed to it, so the delete is actually complete (#64).
+    Returns (whether anything existed, names of people whose company was cleared)."""
     key = _resolve_company(name)
     removed_sources = storage.delete_company_sources(key) > 0
     removed_card = storage.delete_pov_card(company_card_id(key))
     removed_watchlist = storage.watchlist_delete_member("company", name.strip()) > 0
-    return removed_sources or removed_card or removed_watchlist
+    cleared: list[str] = []
+    for person in storage.list_people():
+        if person.company and company_key(person.company) == key:
+            storage.update_person(person.model_copy(update={"company": None}))
+            cleared.append(person.name)
+    return removed_sources or removed_card or removed_watchlist or bool(cleared), cleared
 
 
 class SourceResult(BaseModel):

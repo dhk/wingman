@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 
+
 from pydantic import BaseModel, Field
 
 from wingman.agents.outreach_writer import (
@@ -29,6 +30,10 @@ from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.providers.base import ModelProvider, ModelRequest
 
 _logger = get_logger("application.outreach")
+
+# A quoted span inside an intro bullet claims to be a citation; short spans
+# (a word in scare quotes) are style, not citation, and are left alone.
+_QUOTED_SPAN = re.compile(r"[\"\u201c]([^\"\u201c\u201d]{15,})[\"\u201d]")
 
 # Corpus budget for the prompt: enough of the user's own writing to find real
 # overlap without drowning the stances.
@@ -233,11 +238,41 @@ def build_outreach_brief(
             f"({len(rejected)} rejected). The brief was not stored; re-run to retry."
         )
 
-    intro_points = [
-        bullet.strip()[:MAX_CHARS_PER_INTRO_POINT]
-        for bullet in proposal.intro_points
-        if bullet.strip()
-    ][:MAX_INTRO_POINTS]
+    # Intro bullets are drafting material, not assertions — free prose cannot
+    # be deterministically fact-checked, and the never-sends boundary plus the
+    # explicit "unverified" label in the render are the controls for that. But
+    # anything the model puts in quotation marks CLAIMS to be a citation, and
+    # a fabricated citation is checkable: every quoted span must appear
+    # verbatim in the card's stances/quotes or the supplied corpus (#67).
+    grounding = [card_stance.statement for card_stance in card.stances] + [
+        card_stance.quote for card_stance in card.stances
+    ]
+    intro_points: list[str] = []
+    for bullet in proposal.intro_points:
+        bullet = bullet.strip()[:MAX_CHARS_PER_INTRO_POINT]
+        if not bullet:
+            continue
+        if len(intro_points) >= MAX_INTRO_POINTS:
+            break
+        spans = _QUOTED_SPAN.findall(bullet)
+        ungrounded = [
+            span
+            for span in spans
+            if not any(span in text for text in grounding)
+            and not any(span in body for body in bodies.values())
+        ]
+        if ungrounded:
+            rejected.append(
+                RejectedTalkingPoint(
+                    point=bullet,
+                    reason=(
+                        "intro bullet quotes text that appears nowhere in the POV card "
+                        f"or supplied corpus: {ungrounded[0]!r}"
+                    ),
+                )
+            )
+            continue
+        intro_points.append(bullet)
     brief = OutreachBrief(
         person_id=person.person_id,
         person_name=person.name,
@@ -290,7 +325,11 @@ def render_outreach_brief(brief: OutreachBrief) -> str:
         lines.append(f'   you wrote: "{point.your_quote}" ({point.corpus_doc_title})')
     if brief.intro_points:
         lines.extend(
-            ["", "Intro material (compose it in your own voice — Wingman never sends, RFC-006):"]
+            [
+                "",
+                "Intro material (unverified draft — compose it in your own voice and "
+                "check any claimed shared context; Wingman never sends, RFC-006):",
+            ]
         )
         lines.extend(f"- {bullet}" for bullet in brief.intro_points)
     return "\n".join(lines)

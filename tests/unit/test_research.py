@@ -140,7 +140,7 @@ def test_rename_company_moves_sources_and_watchlist(storage: Storage) -> None:
     add_company_source("Synctera", "https://synctera.com/careers", storage, label="careers")
     storage.watchlist_add("overnight", "company", "Synctera")
     moved = rename_company("Synctera", "Synctera Inc.", storage)
-    assert moved == 1
+    assert moved == (1, 0)
     assert list_company_sources("Synctera", storage) == []
     renamed_sources = list_company_sources("Synctera Inc.", storage)
     assert len(renamed_sources) == 1
@@ -166,4 +166,4 @@ def test_delete_company_removes_sources_snapshots_and_watchlist(storage: Storage
 
 
 def test_delete_company_nothing_found_returns_false(storage: Storage) -> None:
-    assert delete_company("Nobody Corp", storage) is False
+    assert delete_company("Nobody Corp", storage) == (False, [])

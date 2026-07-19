@@ -4,7 +4,16 @@ import urllib.request
 
 import pytest
 
+from wingman.infrastructure import fetch as fetch_module
 from wingman.infrastructure.fetch import FetchError, HttpsOnlyRedirectHandler, fetch_url
+
+
+@pytest.fixture(autouse=True)
+def public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests exercise retry/redirect logic, not DNS: every host resolves public."""
+    monkeypatch.setattr(
+        fetch_module, "_resolve", lambda host, port: [(2, 1, 6, "", ("93.184.216.34", 0))]
+    )
 
 
 def test_fetch_rejects_non_https_url() -> None:
