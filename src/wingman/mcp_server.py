@@ -298,7 +298,14 @@ def assess_job(job_description: str) -> str:
 
 @server.tool()
 def ingest_resume_text(resume_markdown: str, filename: str = "resume.md") -> str:
-    """Ingest resume text into the canonical profile (model extraction plus deterministic evidence validation). Returns the ingestion summary."""
+    """Ingest resume text into the canonical profile (model extraction plus deterministic evidence validation). Returns the ingestion summary.
+
+    filename is the document's identity (RFC-028): re-ingesting under the
+    same filename means "this is a newer version of that document" — its
+    changed claims replace the earlier version's (Updated), claims it no
+    longer makes are retired, and nothing piles up as a conflict. Use a
+    different filename only for a genuinely different source document.
+    """
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
@@ -323,6 +330,7 @@ def ingest_resume_text(resume_markdown: str, filename: str = "resume.md") -> str
     return (
         f"Accepted: {report.accepted}  Duplicates skipped: {report.skipped_duplicates}  "
         f"Evidence merged: {report.evidence_merged}  Conflicts: {report.conflicts}  "
+        f"Updated: {report.updated}  Retired: {report.retired}  "
         f"Rejected: {len(report.rejected)}{rejected}\n"
         f"Profile written to {report.career_md_path}"
     )
@@ -354,6 +362,7 @@ def ingest_resume_url(url: str) -> str:
     return (
         f"Accepted: {report.accepted}  Duplicates skipped: {report.skipped_duplicates}  "
         f"Evidence merged: {report.evidence_merged}  Conflicts: {report.conflicts}  "
+        f"Updated: {report.updated}  Retired: {report.retired}  "
         f"Rejected: {len(report.rejected)}{rejected}\n"
         f"Profile written to {report.career_md_path}"
     )

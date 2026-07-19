@@ -81,23 +81,26 @@ def test_reingest_same_resume_is_idempotent(workspace: Config, tmp_path: Path) -
         assert storage.count_profile_items() == 2
 
 
-def test_conflicting_value_is_preserved_and_surfaced(workspace: Config, tmp_path: Path) -> None:
+def test_conflicting_value_across_sources_is_preserved_and_surfaced(
+    workspace: Config, tmp_path: Path
+) -> None:
+    """A DIFFERENT document disagreeing is a real conflict, kept side by side.
+
+    (A newer version of the SAME document replacing its own claim is not —
+    that's the RFC-028 supersede path, covered in test_supersede.py.)
+    """
     conflicting = json.loads(RESPONSE)
     conflicting["items"][1]["detail"] = "10 years of experience"
-    v2_dir = tmp_path / "v2"
-    v2_dir.mkdir()
+    other = tmp_path / "recruiter-notes.md"
+    other.write_text(RESUME + "\nMore Python.\n", encoding="utf-8")
     with Storage(workspace.db_path) as storage:
         ingest_resume(_resume_file(tmp_path), workspace, storage, RecordedProvider(RESPONSE))
-        report = ingest_resume(
-            _resume_file(v2_dir, text=RESUME + "\nMore Python.\n"),
-            workspace,
-            storage,
-            RecordedProvider(json.dumps(conflicting)),
-        )
+        report = ingest_resume(other, workspace, storage, RecordedProvider(json.dumps(conflicting)))
         # identical achievement from a new source merges evidence; conflicting
         # skill is stored side by side
         assert report.conflicts == 1
         assert report.evidence_merged == 1
+        assert report.updated == 0 and report.retired == 0
         assert storage.count_profile_items() == 3
     markdown = report.career_md_path.read_text(encoding="utf-8")
     assert "Conflicts (need your resolution)" in markdown

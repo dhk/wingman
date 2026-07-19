@@ -23,6 +23,7 @@ from wingman.application.ingest import IngestError
 from wingman.application.profile_store import ItemCounts, persist_items
 from wingman.domain import ClaimClassification, SourceRecord
 from wingman.domain.profile import EvidenceSpan, ProfileItem, ProfileItemKind
+from wingman.domain.source_record import derive_document_key
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -81,6 +82,7 @@ def _persist_csv_source(
         if stored.is_relative_to(config.data_dir.resolve())
         else str(stored),
         content_hash=content_hash,
+        document_key=derive_document_key(basename),
     )
     storage.add_source_record(record)
     return record, True
@@ -191,7 +193,16 @@ def import_linkedin(export_path: Path, config: Config, storage: Storage) -> Link
             "Nothing was imported; check that this is a LinkedIn data export zip."
         )
 
-    counts = persist_items(items, storage)
+    # A newer export supersedes each CSV's own earlier versions (RFC-028):
+    # union the lineage of every CSV record this import touched.
+    superseded: set[str] = set()
+    for record_id in {span.source_record_id for item in items for span in item.evidence}:
+        source = storage.get_source_record(record_id)
+        if source is not None and source.document_key:
+            superseded |= storage.record_ids_for_document(
+                source.document_key, exclude_record_id=record_id
+            )
+    counts = persist_items(items, storage, superseded_records=superseded)
     career_json, career_md = render_career(
         storage,
         config,
