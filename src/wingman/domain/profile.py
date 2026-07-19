@@ -21,6 +21,9 @@ class ProfileItemKind(StrEnum):
 class ItemStatus(StrEnum):
     ACTIVE = "active"
     CONFLICT = "conflict"
+    # Replaced by a newer version of the same source document (RFC-028):
+    # kept for provenance (old assessments cite it), invisible everywhere else.
+    SUPERSEDED = "superseded"
 
 
 class EvidenceSpan(BaseModel):

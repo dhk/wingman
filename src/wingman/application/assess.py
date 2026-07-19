@@ -28,6 +28,7 @@ from wingman.agents.opportunity_analyst import (
 from wingman.application.evidence import fold_whitespace
 from wingman.application.ingest import IngestError, RejectedItem
 from wingman.domain import SourceRecord
+from wingman.domain.source_record import derive_document_key
 from wingman.domain.opportunity import (
     FitVerdict,
     Opportunity,
@@ -97,6 +98,7 @@ def _persist_source(
         if stored.is_relative_to(config.data_dir.resolve())
         else str(stored),
         content_hash=content_hash,
+        document_key=derive_document_key(job_path.name),
     )
     storage.add_source_record(record)
     return record, False

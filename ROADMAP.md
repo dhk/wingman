@@ -7,7 +7,7 @@ Each phase must leave Wingman in a usable state.
 | Phase | Status |
 |---|---|
 | 0 — Foundation | **Delivered** (init/doctor/status, storage, logging, provenance, CI, version stamping) |
-| 1 — Career Brain | **Delivered** (resume formats incl. PDF/DOCX/LaTeX/Google URLs with Markdown normalization RFC-026, LinkedIn import, career.md/json, profile manage RFC-027) |
+| 1 — Career Brain | **Delivered** (resume formats incl. PDF/DOCX/LaTeX/Google URLs with Markdown normalization RFC-026, LinkedIn import, career.md/json, profile manage RFC-027, document lineage & supersede-on-reingest RFC-028) |
 | 2 — Opportunity Inbox | **Delivered** (cited fit briefs via `wingman assess`, posting fetch via `assess --url`, application packs RFC-024) |
 | 3 — Company Research | **Delivered** (dossiers RFC-012, approved-source research RFC-015, synthesized themes RFC-016) |
 | 4 — Relationship Intelligence | **Partial** — connections import, warmth signal vector (RFC-020), POV cards, similarity; no interaction timeline / follow-up queue yet |
@@ -23,7 +23,7 @@ restore, Keychain-backed keys (RFC-019), object rename/delete/fix for people
 and companies (RFC-021), unified ranked search with a semantic pass
 (RFC-022), opt-in local telemetry (RFC-023), gated feature-request capture
 (RFC-025). The decision ledger is [`docs/RFC.md`](docs/RFC.md)
-(RFC-001…027).
+(RFC-001…028).
 
 The competitive research pass is **done**: two independent landscape
 passes over ~30 comparators and the decisions drawn from them live in

@@ -24,6 +24,7 @@ from wingman.agents.profile_curator import (
 from wingman.application.evidence import fold_whitespace
 from wingman.application.profile_store import persist_items
 from wingman.domain import SourceRecord
+from wingman.domain.source_record import derive_document_key
 from wingman.domain.extraction import ProposedItem
 from wingman.domain.profile import EvidenceSpan, ProfileItem
 from wingman.infrastructure.config import Config
@@ -52,6 +53,8 @@ class IngestReport(BaseModel):
     skipped_duplicates: int
     evidence_merged: int
     conflicts: int
+    updated: int
+    retired: int
     rejected: list[RejectedItem]
     career_json_path: Path
     career_md_path: Path
@@ -94,6 +97,7 @@ def _persist_source(
         if stored.is_relative_to(config.data_dir.resolve())
         else str(stored),
         content_hash=content_hash,
+        document_key=derive_document_key(resume_path.name),
     )
     storage.add_source_record(record)
     return record, False
@@ -183,7 +187,12 @@ def ingest_resume(
         validated.append(
             result.model_copy(update={"extracted_by": f"{response.provider}/{response.model}"})
         )
-    counts = persist_items(validated, storage)
+    # Earlier versions of the same document (RFC-028): their claims are
+    # replaced by this version's, never piled up as conflicts with it.
+    superseded = storage.record_ids_for_document(
+        record.document_key, exclude_record_id=record.record_id
+    )
+    counts = persist_items(validated, storage, superseded_records=superseded)
     accepted = counts.accepted
     skipped = counts.skipped_duplicates
     merged = counts.evidence_merged
@@ -201,7 +210,8 @@ def ingest_resume(
     )
     _logger.info(
         "ingest source=%s reused=%s provider=%s model=%s prompt=%s accepted=%d skipped=%d"
-        " merged=%d conflicts=%d rejected=%d latency_ms=%d input_tokens=%s output_tokens=%s",
+        " merged=%d conflicts=%d updated=%d retired=%d rejected=%d latency_ms=%d"
+        " input_tokens=%s output_tokens=%s",
         record.record_id,
         reused,
         response.provider,
@@ -211,6 +221,8 @@ def ingest_resume(
         skipped,
         merged,
         conflicts,
+        counts.updated,
+        counts.retired,
         len(rejected),
         response.latency_ms,
         response.input_tokens,
@@ -223,6 +235,8 @@ def ingest_resume(
         skipped_duplicates=skipped,
         evidence_merged=merged,
         conflicts=conflicts,
+        updated=counts.updated,
+        retired=counts.retired,
         rejected=rejected,
         career_json_path=career_json,
         career_md_path=career_md,

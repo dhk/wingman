@@ -91,3 +91,29 @@ def test_export_without_relevant_csvs_fails_visibly(workspace: Config, tmp_path:
         with pytest.raises(IngestError, match="Nothing was imported"):
             import_linkedin(archive, workspace, storage)
         assert storage.count_source_records() == 0
+
+
+def test_newer_export_supersedes_the_previous_one(workspace: Config, tmp_path: Path) -> None:
+    """RFC-028 via the LinkedIn path: each CSV is one document lineage."""
+    from wingman.domain.profile import ItemStatus
+
+    with Storage(workspace.db_path) as storage:
+        import_linkedin(_export_zip(tmp_path), workspace, storage)
+        # A newer export: the Beta Corp advisory got an end date (changed
+        # detail), and the Python skill row was dropped.
+        v2_dir = tmp_path / "v2"
+        v2_dir.mkdir()
+        archive = v2_dir / "linkedin-export.zip"
+        newer_positions = POSITIONS.replace("Apr 2023,\n", "Apr 2023,May 2026\n")
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("Positions.csv", newer_positions)
+            zf.writestr("Skills.csv", "Name\nData Engineering\n")
+            zf.writestr("Recommendations_Received.csv", RECOMMENDATIONS)
+        report = import_linkedin(archive, workspace, storage)
+        assert report.counts.updated == 1  # Beta Corp advisory re-dated
+        assert report.counts.retired == 1  # Python dropped from Skills.csv
+        assert report.counts.conflicts == 0
+        active = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
+        assert not any(i.name == "Python" for i in active)
+        advisor = next(i for i in active if "Advisor" in i.name)
+        assert "May 2026" in advisor.detail

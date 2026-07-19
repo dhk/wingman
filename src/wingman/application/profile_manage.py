@@ -109,6 +109,12 @@ def render_profile_listing(items: list[ProfileItem]) -> str:
         return "The profile is empty — ingest a resume with 'wingman ingest'."
     active = [item for item in items if item.status is ItemStatus.ACTIVE]
     conflicts = [item for item in items if item.status is ItemStatus.CONFLICT]
+    superseded = sum(1 for item in items if item.status is ItemStatus.SUPERSEDED)
+    if not active and not conflicts:
+        return (
+            f"No live profile items ({superseded} superseded by newer document versions) "
+            "— ingest a resume with 'wingman ingest'."
+        )
     lines: list[str] = []
     for kind in sorted({item.kind for item in active}, key=lambda k: k.value):
         lines.append(f"{kind.value.title()}s:")
@@ -121,5 +127,8 @@ def render_profile_listing(items: list[ProfileItem]) -> str:
             rival = (item.conflicts_with or "?")[:8]
             detail = f" — {item.detail}" if item.detail else ""
             lines.append(f"  {item.item_id[:8]}  {item.name}{detail}  (conflicts with {rival})")
-    lines.append(f"{len(active)} active, {len(conflicts)} in conflict.")
+    summary = f"{len(active)} active, {len(conflicts)} in conflict"
+    if superseded:
+        summary += f", {superseded} superseded by newer document versions (hidden)"
+    lines.append(summary + ".")
     return "\n".join(lines)

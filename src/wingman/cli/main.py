@@ -605,6 +605,7 @@ def ingest(
     typer.echo(
         f"Accepted: {report.accepted}  Duplicates skipped: {report.skipped_duplicates}  "
         f"Evidence merged: {report.evidence_merged}  Conflicts: {report.conflicts}  "
+        f"Updated: {report.updated}  Retired: {report.retired}  "
         f"Rejected: {len(report.rejected)}"
     )
     for rejected in report.rejected:
@@ -692,7 +693,8 @@ def ingest_linkedin(
     counts = report.counts
     typer.echo(
         f"Accepted: {counts.accepted}  Duplicates skipped: {counts.skipped_duplicates}  "
-        f"Evidence merged: {counts.evidence_merged}  Conflicts: {counts.conflicts}"
+        f"Evidence merged: {counts.evidence_merged}  Conflicts: {counts.conflicts}  "
+        f"Updated: {counts.updated}  Retired: {counts.retired}"
     )
     typer.echo(f"Wrote {report.career_json_path}")
     typer.echo(f"Wrote {report.career_md_path}")

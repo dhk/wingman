@@ -10,6 +10,7 @@ from types import TracebackType
 from typing import Self
 
 from wingman.domain import SourceRecord
+from wingman.domain.source_record import derive_document_key
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.opportunity import Opportunity
 from wingman.domain.outreach import OutreachBrief
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS source_records (
     source_type TEXT NOT NULL,
     source_locator TEXT NOT NULL,
     content_hash TEXT NOT NULL,
+    document_key TEXT NOT NULL DEFAULT '',
     source_timestamp TEXT,
     ingested_at TEXT NOT NULL
 );
@@ -133,7 +135,28 @@ class Storage:
     def __init__(self, db_path: Path) -> None:
         self._conn = sqlite3.connect(db_path)
         self._conn.executescript(_SCHEMA)
+        self._migrate_document_key()
         self._conn.commit()
+
+    def _migrate_document_key(self) -> None:
+        """Pre-RFC-028 databases lack source_records.document_key: add and backfill.
+
+        The backfill derives each record's document identity from its
+        locator's basename — the same derivation new records use — so
+        lineage works retroactively for documents already ingested.
+        """
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(source_records)")}
+        if "document_key" in columns:
+            return
+        self._conn.execute(
+            "ALTER TABLE source_records ADD COLUMN document_key TEXT NOT NULL DEFAULT ''"
+        )
+        rows = self._conn.execute("SELECT record_id, source_locator FROM source_records").fetchall()
+        for record_id, locator in rows:
+            self._conn.execute(
+                "UPDATE source_records SET document_key = ? WHERE record_id = ?",
+                (derive_document_key(locator), record_id),
+            )
 
     def __enter__(self) -> Self:
         return self
@@ -153,14 +176,15 @@ class Storage:
         try:
             self._conn.execute(
                 "INSERT INTO source_records"
-                " (record_id, source_type, source_locator, content_hash,"
+                " (record_id, source_type, source_locator, content_hash, document_key,"
                 " source_timestamp, ingested_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.record_id,
                     record.source_type,
                     record.source_locator,
                     record.content_hash,
+                    record.document_key,
                     record.source_timestamp.isoformat() if record.source_timestamp else None,
                     record.ingested_at.isoformat(),
                 ),
@@ -174,11 +198,11 @@ class Storage:
 
     def get_source_record(self, record_id: str) -> SourceRecord | None:
         cursor = self._conn.execute(
-            "SELECT record_id, source_type, source_locator, content_hash,"
+            "SELECT record_id, source_type, source_locator, content_hash, document_key,"
             " source_timestamp, ingested_at FROM source_records WHERE record_id = ?",
             (record_id,),
         )
-        row: tuple[str, str, str, str, str | None, str] | None = cursor.fetchone()
+        row: tuple[str, str, str, str, str, str | None, str] | None = cursor.fetchone()
         if row is None:
             return None
         return SourceRecord(
@@ -186,9 +210,20 @@ class Storage:
             source_type=row[1],
             source_locator=row[2],
             content_hash=row[3],
-            source_timestamp=datetime.fromisoformat(row[4]) if row[4] else None,
-            ingested_at=datetime.fromisoformat(row[5]),
+            document_key=row[4],
+            source_timestamp=datetime.fromisoformat(row[5]) if row[5] else None,
+            ingested_at=datetime.fromisoformat(row[6]),
         )
+
+    def record_ids_for_document(self, document_key: str, exclude_record_id: str = "") -> set[str]:
+        """Every source record that is a version of this document (RFC-028)."""
+        if not document_key:
+            return set()
+        cursor = self._conn.execute(
+            "SELECT record_id FROM source_records WHERE document_key = ? AND record_id != ?",
+            (document_key, exclude_record_id),
+        )
+        return {row[0] for row in cursor.fetchall()}
 
     def get_source_record_by_hash(self, content_hash: str) -> SourceRecord | None:
         cursor = self._conn.execute(
