@@ -242,6 +242,23 @@ class Storage:
             raise KeyError(f"profile item {item.item_id} does not exist")
         self._conn.commit()
 
+    def get_profile_item(self, item_id: str) -> ProfileItem | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM profile_items WHERE item_id = ?", (item_id,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return ProfileItem.model_validate_json(row[0]) if row else None
+
+    def delete_profile_item(self, item_id: str) -> bool:
+        cursor = self._conn.execute("DELETE FROM profile_items WHERE item_id = ?", (item_id,))
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def clear_profile_items(self) -> int:
+        cursor = self._conn.execute("DELETE FROM profile_items")
+        self._conn.commit()
+        return cursor.rowcount
+
     def list_profile_items(self) -> list[ProfileItem]:
         cursor = self._conn.execute(
             "SELECT payload FROM profile_items ORDER BY created_at, item_id"
