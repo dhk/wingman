@@ -1090,7 +1090,6 @@ wheels = [
 
 [[package]]
 name = "wingman"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
