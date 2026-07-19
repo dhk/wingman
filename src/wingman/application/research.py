@@ -21,7 +21,7 @@ from urllib.parse import urljoin
 from pydantic import BaseModel, Field
 
 from wingman.application.ingest import IngestError
-from wingman.application.pov import company_card_id
+from wingman.application.pov import COMPANY_POV_PREFIX, company_card_id
 from wingman.application.similarity import company_key
 from wingman.domain.research import CompanySource, ResearchSnapshot
 from wingman.infrastructure.fetch import FetchError, fetch_url
@@ -120,8 +120,24 @@ def rename_company(old_name: str, new_name: str, storage: Storage) -> tuple[int,
     moved = storage.move_company_sources(old_key, new_key, new_name.strip())
     storage.move_pov_card(company_card_id(old_key), company_card_id(new_key))
     storage.watchlist_rename_member("company", old_name.strip(), new_name.strip())
+    # The company feed anchor (RFC-029) is keyed by company: re-key it and
+    # carry its documents/news along, before the general people loop.
+    anchor = storage.get_person(company_card_id(old_key))
+    if anchor is not None:
+        rekeyed = anchor.model_copy(
+            update={
+                "person_id": company_card_id(new_key),
+                "name": f"{new_name.strip()} (company)",
+                "company": new_name.strip(),
+            }
+        )
+        storage.add_person(rekeyed)
+        storage.move_person_content(anchor.person_id, rekeyed.person_id)
+        storage.delete_person(anchor.person_id)
     people_moved = 0
     for person in storage.list_people():
+        if person.person_id.startswith(COMPANY_POV_PREFIX):
+            continue  # anchors were re-keyed above
         if person.company and company_key(person.company) == old_key:
             storage.update_person(person.model_copy(update={"company": new_name.strip()}))
             people_moved += 1
@@ -137,12 +153,15 @@ def delete_company(name: str, storage: Storage) -> tuple[bool, list[str]]:
     removed_sources = storage.delete_company_sources(key) > 0
     removed_card = storage.delete_pov_card(company_card_id(key))
     removed_watchlist = storage.watchlist_delete_member("company", name.strip()) > 0
+    # The feed anchor and everything keyed to it goes with the company (RFC-029).
+    removed_anchor = storage.delete_person(company_card_id(key))
     cleared: list[str] = []
     for person in storage.list_people():
         if person.company and company_key(person.company) == key:
             storage.update_person(person.model_copy(update={"company": None}))
             cleared.append(person.name)
-    return removed_sources or removed_card or removed_watchlist or bool(cleared), cleared
+    existed = removed_sources or removed_card or removed_watchlist or removed_anchor
+    return existed or bool(cleared), cleared
 
 
 class SourceResult(BaseModel):

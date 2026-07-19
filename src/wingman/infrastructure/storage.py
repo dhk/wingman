@@ -461,6 +461,18 @@ class Storage:
         self.watchlist_delete_member("person", person.name)
         return True
 
+    def move_person_content(self, old_person_id: str, new_person_id: str) -> None:
+        """Reassign documents and news to a new person id (RFC-029 anchor re-key)."""
+        self._conn.execute(
+            "UPDATE external_documents SET person_id = ? WHERE person_id = ?",
+            (new_person_id, old_person_id),
+        )
+        self._conn.execute(
+            "UPDATE news_items SET person_id = ? WHERE person_id = ?",
+            (new_person_id, old_person_id),
+        )
+        self._conn.commit()
+
     def merge_person(self, keep_id: str, absorb_id: str) -> Person:
         """Merge absorb_id into keep_id: keep_id's blank fields are filled from absorb_id,
         absorb_id's documents/news reassign to keep_id, its POV card and outreach brief move

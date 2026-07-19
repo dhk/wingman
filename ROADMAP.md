@@ -9,7 +9,7 @@ Each phase must leave Wingman in a usable state.
 | 0 — Foundation | **Delivered** (init/doctor/status, storage, logging, provenance, CI, version stamping) |
 | 1 — Career Brain | **Delivered** (resume formats incl. PDF/DOCX/LaTeX/Google URLs with Markdown normalization RFC-026, LinkedIn import, career.md/json, profile manage RFC-027, document lineage & supersede-on-reingest RFC-028) |
 | 2 — Opportunity Inbox | **Delivered** (cited fit briefs via `wingman assess`, posting fetch via `assess --url`, application packs RFC-024) |
-| 3 — Company Research | **Delivered** (dossiers RFC-012, approved-source research RFC-015, synthesized themes RFC-016) |
+| 3 — Company Research | **Delivered** (dossiers RFC-012, approved-source research RFC-015, synthesized themes RFC-016, company feeds RFC-029) |
 | 4 — Relationship Intelligence | **Partial** — connections import, warmth signal vector (RFC-020), POV cards, similarity; no interaction timeline / follow-up queue yet |
 | 5 — Daily Operator | **Partial** — `make-it-so`, watchlists, follow/overnight (RFC-018), and the morning digest with its what/why/who/evidence action list cover the daily loop; no scored three-action brief yet |
 | 6 — Drafting and Voice | **Partial** — purpose-shaped outreach briefs with evidence-validated talking points and intro bullets; the approval boundary (never sends, RFC-006) is structural; no per-message-type drafts or critic pass |
@@ -18,12 +18,12 @@ Each phase must leave Wingman in a usable state.
 | 9 — Outcome Post-Mortems | Not started |
 
 Shipped alongside the phases: MCP parity across the whole surface (RFC-008,
-45 tools; remote transport RFC-017), design-system PDF exports, backup/
+46 tools; remote transport RFC-017), design-system PDF exports, backup/
 restore, Keychain-backed keys (RFC-019), object rename/delete/fix for people
 and companies (RFC-021), unified ranked search with a semantic pass
 (RFC-022), opt-in local telemetry (RFC-023), gated feature-request capture
 (RFC-025). The decision ledger is [`docs/RFC.md`](docs/RFC.md)
-(RFC-001…028).
+(RFC-001…029).
 
 The competitive research pass is **done**: two independent landscape
 passes over ~30 comparators and the decisions drawn from them live in

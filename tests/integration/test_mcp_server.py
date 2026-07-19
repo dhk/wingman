@@ -38,6 +38,7 @@ def test_all_tools_are_registered() -> None:
         "evidence",
         "career_profile",
         "profile_manage",
+        "company_feed",
         "assess_job",
         "ingest_resume_text",
         "people_add",
