@@ -134,7 +134,7 @@ claude mcp add wingman -- wingman-mcp    # Claude Code, one line
 - [`ROADMAP.md`](ROADMAP.md): phased delivery plan and current status
 - [`AGENTS.md`](AGENTS.md): engineering and agent instructions
 - [`docs/DESIGN.md`](docs/DESIGN.md): architecture — what the system is
-- [`docs/RFC.md`](docs/RFC.md): the decision ledger (RFC-001…024) — why it is this way
+- [`docs/RFC.md`](docs/RFC.md): the decision ledger (RFC-001…025) — why it is this way
 - [`docs/EVALUATION.md`](docs/EVALUATION.md): how we measure that it's getting better
 - [`docs/RESEARCH-BRIEFING.md`](docs/RESEARCH-BRIEFING.md): competitive-landscape research brief
 

@@ -25,6 +25,12 @@ from wingman.application.focus import (
     overnight_run,
     render_follow_report,
 )
+from wingman.application.feature_request import (
+    file_feature_request,
+    get_feature_repo,
+    render_preview,
+    set_feature_repo,
+)
 from wingman.application.pack import build_application_pack
 from wingman.application.pipeline import MisoReport, make_it_so
 from wingman.application.people import (
@@ -128,6 +134,10 @@ keys_app = typer.Typer(help="API keys in the macOS Keychain — no plaintext fil
 app.add_typer(keys_app, name="keys")
 telemetry_app = typer.Typer(help="Opt-in local usage journal — never leaves the machine (RFC-023).")
 app.add_typer(telemetry_app, name="telemetry")
+feature_app = typer.Typer(
+    help="Feature requests: previewed, confirmed, filed to your repo via gh (RFC-025)."
+)
+app.add_typer(feature_app, name="feature")
 
 
 def _version_callback(value: bool) -> None:
@@ -2176,6 +2186,51 @@ def evidence(
         typer.echo(f"{number}. {hit.document.title} [{hit.document.source_type}]")
         typer.echo(f"   {hit.snippet}")
         typer.echo(f"   source: {hit.source_locator} (doc {hit.document.doc_id})")
+
+
+@feature_app.command("repo")
+def feature_repo_cmd(
+    repo: str = typer.Argument("", help="owner/name to file feature requests into; omit to show."),
+) -> None:
+    """Set (or show) the repo that 'wingman feature request' files issues into."""
+    configure_logging()
+    config = load_config()
+    if not repo:
+        current = get_feature_repo(config)
+        typer.echo(current or "No feature-request repo set — 'wingman feature repo <owner/name>'.")
+        return
+    try:
+        stored = set_feature_repo(config, repo)
+    except IngestError as exc:
+        typer.echo(f"feature repo failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Feature requests will be filed to {stored}.")
+
+
+@feature_app.command("request")
+def feature_request_cmd(
+    title: str = typer.Argument(..., help="One-line title for the issue."),
+    body: str = typer.Option("", "--body", help="Issue body (markdown)."),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
+) -> None:
+    """File a feature request as a GitHub issue — previewed and confirmed first.
+
+    Wingman's one gated external write (RFC-025): the exact issue is shown,
+    nothing leaves the machine until you confirm, and filing uses your own
+    'gh' CLI and auth against the repo set via 'wingman feature repo'.
+    """
+    configure_logging()
+    config = load_config()
+    typer.echo(render_preview(get_feature_repo(config), title, body))
+    if not yes and not typer.confirm("File this issue?", default=False):
+        typer.echo("Nothing was filed.")
+        raise typer.Exit(code=1)
+    try:
+        filed = file_feature_request(config, title, body)
+    except IngestError as exc:
+        typer.echo(f"feature request failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Filed: {filed.url}")
 
 
 @telemetry_app.command("on")
