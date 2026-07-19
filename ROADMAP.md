@@ -2,32 +2,44 @@
 
 Each phase must leave Wingman in a usable state.
 
-## Where we are (2026-07-18)
+## Where we are (2026-07-19, v0.3.0)
 
 | Phase | Status |
 |---|---|
-| 0 — Foundation | **Delivered** (init/doctor/status, storage, logging, provenance, CI) |
-| 1 — Career Brain | **Delivered** (resume formats incl. PDF/DOCX/LaTeX/Google URLs, LinkedIn import, career.md/json) |
-| 2 — Opportunity Inbox | **Delivered** (cited fit briefs via `wingman assess`) |
+| 0 — Foundation | **Delivered** (init/doctor/status, storage, logging, provenance, CI, version stamping) |
+| 1 — Career Brain | **Delivered** (resume formats incl. PDF/DOCX/LaTeX/Google URLs with Markdown normalization RFC-026, LinkedIn import, career.md/json) |
+| 2 — Opportunity Inbox | **Delivered** (cited fit briefs via `wingman assess`, posting fetch via `assess --url`, application packs RFC-024) |
 | 3 — Company Research | **Delivered** (dossiers RFC-012, approved-source research RFC-015, synthesized themes RFC-016) |
-| 4 — Relationship Intelligence | **Partial** — connections import, transparent warmth score, POV cards, similarity; no interaction timeline / follow-up queue yet |
-| 5 — Daily Operator | **Partial** — `make-it-so`, watchlists, and the overnight digest (RFC-018) cover the daily loop; no scored three-action brief yet |
+| 4 — Relationship Intelligence | **Partial** — connections import, warmth signal vector (RFC-020), POV cards, similarity; no interaction timeline / follow-up queue yet |
+| 5 — Daily Operator | **Partial** — `make-it-so`, watchlists, follow/overnight (RFC-018), and the morning digest with its what/why/who/evidence action list cover the daily loop; no scored three-action brief yet |
 | 6 — Drafting and Voice | **Partial** — purpose-shaped outreach briefs with evidence-validated talking points and intro bullets; the approval boundary (never sends, RFC-006) is structural; no per-message-type drafts or critic pass |
-| 7 — Interview Preparation | Not started |
+| 7 — Interview Preparation | Not started (the decision memo's strongest near-term build) |
 | 8 — Controlled Connectors | Not started (explicit imports only, by design so far) |
 | 9 — Outcome Post-Mortems | Not started |
 
 Shipped alongside the phases: MCP parity across the whole surface (RFC-008,
-37 tools; remote transport RFC-017), design-system PDF exports, backup/
+44 tools; remote transport RFC-017), design-system PDF exports, backup/
 restore, Keychain-backed keys (RFC-019), object rename/delete/fix for people
-and companies (RFC-021). The decision ledger is
-[`docs/RFC.md`](docs/RFC.md) (RFC-001…025).
+and companies (RFC-021), unified ranked search with a semantic pass
+(RFC-022), opt-in local telemetry (RFC-023), gated feature-request capture
+(RFC-025). The decision ledger is [`docs/RFC.md`](docs/RFC.md)
+(RFC-001…026).
 
-**Current backlog, in order:** (1) unified ranked search across
-corpus/people/companies/news/research; (2) execute the competitive research
-brief ([`docs/RESEARCH-BRIEFING.md`](docs/RESEARCH-BRIEFING.md)) and shape
-v0.3–v0.5 from its memo; (3) hosted deployment tiers (assessment recorded;
-RFC candidate).
+The competitive research pass is **done**: two independent landscape
+passes over ~30 comparators and the decisions drawn from them live in
+[`docs/research/DECISION-MEMO-2026-07-18.md`](docs/research/DECISION-MEMO-2026-07-18.md).
+
+**Current backlog, in order:** (1) Phase 5 scored daily brief — rank
+everything the workspace knows each morning into three cited actions,
+composing the pieces that now exist (fit verdicts, warmth vector, digest
+actions); (2) Phase 7 interview preparation (the decision memo's strongest
+near-term build); (3) multi-engine research council — query OpenAI,
+Anthropic, Gemini, and Perplexity in parallel and synthesize a layered
+agreement/disagreement/novelty report, with an optional steelman/strawman/
+adversarial pressure-test pass (design recorded in
+[`docs/RESEARCH-COUNCIL-DESIGN.md`](docs/RESEARCH-COUNCIL-DESIGN.md); RFC
+candidate); (4) hosted deployment tiers (assessment recorded; RFC
+candidate).
 
 ## Phase 0 — Repository and Safety Foundation
 
