@@ -9,8 +9,11 @@ import pytest
 from wingman.application.ingest import IngestError
 from wingman.application.people import (
     add_person,
+    delete_person,
     fetch_person_feed,
     find_people_evidence,
+    fix_person,
+    rename_person,
     seed_from_connections,
 )
 from wingman.domain.person import PersonOrigin
@@ -227,3 +230,72 @@ def test_add_person_email_and_linkedin_are_validated_and_upserted(workspace: Pat
             add_person("Bad Email", storage, email="not-an-email")
         with pytest.raises(IngestError, match="https"):
             add_person("Bad Link", storage, linkedin_url="http://linkedin.com/in/x")
+
+
+def test_rename_person_keeps_person_id_and_data(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Ed Wong", storage, company="OpenAI")
+        renamed = rename_person("Ed Wong", "Edmund Wong", storage)
+        assert renamed.person_id == person.person_id
+        assert renamed.name == "Edmund Wong"
+        assert renamed.company == "OpenAI"
+        assert storage.find_person_by_name_key("ed wong") is None
+        assert storage.find_person_by_name_key("edmund wong") is not None
+
+
+def test_rename_person_rejects_collision_with_existing_name(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_person("Ed Wong", storage)
+        add_person("Edmund Wong", storage)
+        with pytest.raises(IngestError, match="already exists"):
+            rename_person("Ed Wong", "Edmund Wong", storage)
+
+
+def test_fix_person_merges_into_existing_correct_name(workspace: Path) -> None:
+    """The reported real case: a placeholder 'Ed Wong' and a fuller 'Edmund Wong' both
+    exist; fixing the former corrects it by merging into the latter, not colliding."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        stub, _ = add_person("Ed Wong", storage, company="OpenAI")
+        full, _ = add_person(
+            "Edmund Wong", storage, linkedin_url="https://linkedin.com/in/elwong"
+        )
+        merged, was_merged = fix_person("Ed Wong", "Edmund Wong", storage)
+        assert was_merged
+        assert merged.person_id == full.person_id
+        assert merged.name == "Edmund Wong"
+        assert merged.linkedin_url == "https://linkedin.com/in/elwong"
+        assert merged.company == "OpenAI"  # filled from the absorbed stub
+        assert storage.get_person(stub.person_id) is None
+        assert storage.count_people() == 1
+
+
+def test_fix_person_plain_renames_when_target_name_is_new(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Rushil", storage, company="Anthropic")
+        fixed, was_merged = fix_person("Rushil", "Rushil Ram", storage)
+        assert not was_merged
+        assert fixed.person_id == person.person_id
+        assert fixed.name == "Rushil Ram"
+        assert storage.count_people() == 1
+
+
+def test_delete_person_removes_everything_keyed_to_them(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Temp Contact", storage, company="Acme")
+        storage.watchlist_add("AI Target Companies", "person", person.name)
+        deleted = delete_person("Temp Contact", storage)
+        assert deleted.person_id == person.person_id
+        assert storage.get_person(person.person_id) is None
+        assert storage.watchlist_members("AI Target Companies") == []
+
+
+def test_delete_person_not_found_raises(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        with pytest.raises(IngestError, match="no person matching"):
+            delete_person("Nobody Here", storage)

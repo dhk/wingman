@@ -22,17 +22,20 @@ from wingman.application.pipeline import MisoReport, make_it_so
 from wingman.application.people import (
     add_person,
     attach_feed,
+    delete_person,
     discover_feed,
     discover_recommendations,
     fetch_person_feed,
     find_people_evidence,
+    fix_person,
     match_people,
+    rename_person,
     seed_from_connections,
 )
 from wingman.domain.person import Person
 from wingman.reporting.export import export_career, export_company, export_person
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
-from wingman.application.dossier import build_company_dossier
+from wingman.application.dossier import build_company_dossier, delete_dossier_reports
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import (
@@ -45,8 +48,10 @@ from wingman.application.pov import (
 )
 from wingman.application.research import (
     add_company_source,
+    delete_company,
     list_company_sources,
     remove_company_source,
+    rename_company,
     render_research_report,
     research_company,
 )
@@ -746,6 +751,64 @@ def people_add(
     verb = "Added" if created else "Updated"
     feed = f"  substack: {person.substack_url}" if person.substack_url else ""
     typer.echo(f"{verb} {person.name} ({person.person_id}){feed}")
+
+
+@people_app.command("rename")
+def people_rename(
+    current: str = typer.Argument(..., help="The person's current name (or a unique partial)."),
+    new_name: str = typer.Argument(..., help="Their corrected name."),
+) -> None:
+    """Rename a watchlist person in place. Fails if new_name is already someone else's —
+    use 'fix' if you want to merge into them instead."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "renamed")
+    try:
+        with Storage(config.db_path) as storage:
+            person = rename_person(current, new_name, storage)
+    except IngestError as exc:
+        typer.echo(f"people rename failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Renamed to {person.name} ({person.person_id})")
+
+
+@people_app.command("fix")
+def people_fix(
+    current: str = typer.Argument(..., help="The person's current (wrong) name."),
+    correct_name: str = typer.Argument(..., help="Their correct name."),
+) -> None:
+    """Correct a person's name. If correct_name already belongs to someone else, current
+    is merged into them (blank fields filled in, documents/POV card/outreach brief moved)
+    rather than left as a duplicate — e.g. 'Ed Wong is actually Edmund Wong'."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "fixed")
+    try:
+        with Storage(config.db_path) as storage:
+            person, merged = fix_person(current, correct_name, storage)
+    except IngestError as exc:
+        typer.echo(f"people fix failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    verb = "Merged into" if merged else "Renamed to"
+    typer.echo(f"{verb} {person.name} ({person.person_id})")
+
+
+@people_app.command("delete")
+def people_delete(
+    name: str = typer.Argument(..., help="Person to delete (or a unique partial name)."),
+) -> None:
+    """Delete a watchlist person and everything keyed to them — documents, POV card,
+    news, outreach brief, watchlist memberships. Not reversible."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "deleted")
+    try:
+        with Storage(config.db_path) as storage:
+            person = delete_person(name, storage)
+    except IngestError as exc:
+        typer.echo(f"people delete failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Deleted {person.name} ({person.person_id})")
 
 
 @people_app.command("list")
@@ -1876,6 +1939,61 @@ def company_like(
             f"{number}. {entry.name}  score {entry.score:.3f}  "
             f"[{entry.people} people, {entry.documents} docs]"
         )
+
+
+@company_app.command("rename")
+def company_rename(
+    current: str = typer.Argument(..., help="The company's current name."),
+    new_name: str = typer.Argument(..., help="Its corrected name."),
+) -> None:
+    """Re-key a company's sources, research snapshots, POV card, and watchlist
+    memberships to a new name."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "renamed")
+    try:
+        with Storage(config.db_path) as storage:
+            moved = rename_company(current, new_name, storage)
+    except IngestError as exc:
+        typer.echo(f"company rename failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Renamed {current!r} to {new_name!r} ({moved} source(s) moved)")
+
+
+@company_app.command("delete")
+def company_delete(
+    name: str = typer.Argument(..., help="Company to delete."),
+) -> None:
+    """Delete a company's approved sources, research snapshots, POV card, and
+    watchlist memberships. Generated dossier files are untouched — see 'delete-dossier'.
+    Not reversible."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "deleted")
+    with Storage(config.db_path) as storage:
+        removed = delete_company(name, storage)
+    if not removed:
+        typer.echo(f"Nothing found for {name!r}.")
+        return
+    typer.echo(f"Deleted {name!r} (sources, research, POV card, watchlist memberships).")
+
+
+@company_app.command("delete-dossier")
+def company_delete_dossier(
+    name: str = typer.Argument(..., help="Company whose generated dossier files to remove."),
+) -> None:
+    """Delete every generated dossier report for a company. Only removes the rendered
+    Markdown under reports/companies/ — sources and research are untouched."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "deleted")
+    removed = delete_dossier_reports(name, config)
+    if not removed:
+        typer.echo(f"No dossier files found for {name!r}.")
+        return
+    typer.echo(f"Deleted {len(removed)} dossier file(s):")
+    for path in removed:
+        typer.echo(f"  {path}")
 
 
 @app.command()

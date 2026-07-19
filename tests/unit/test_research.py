@@ -7,9 +7,11 @@ import pytest
 from wingman.application.ingest import IngestError
 from wingman.application.research import (
     add_company_source,
+    delete_company,
     extract_page,
     list_company_sources,
     remove_company_source,
+    rename_company,
     render_research_report,
     research_company,
 )
@@ -132,3 +134,36 @@ def test_dossier_renders_research_section(tmp_path: Path, monkeypatch: pytest.Mo
         after = build_company_dossier("Acme", config, storage).markdown
         assert "2 links, snapshot" in after
         assert "no approved research sources" not in after  # gap line gone
+
+
+def test_rename_company_moves_sources_and_watchlist(storage: Storage) -> None:
+    add_company_source("Synctera", "https://synctera.com/careers", storage, label="careers")
+    storage.watchlist_add("overnight", "company", "Synctera")
+    moved = rename_company("Synctera", "Synctera Inc.", storage)
+    assert moved == 1
+    assert list_company_sources("Synctera", storage) == []
+    renamed_sources = list_company_sources("Synctera Inc.", storage)
+    assert len(renamed_sources) == 1
+    assert renamed_sources[0].company_name == "Synctera Inc."
+    assert storage.watchlist_members("overnight") == [("company", "Synctera Inc.")]
+
+
+def test_rename_company_same_key_is_rejected(storage: Storage) -> None:
+    add_company_source("Acme", "https://acme.example.com/careers", storage)
+    with pytest.raises(IngestError, match="nothing to rename"):
+        rename_company("Acme", "  ACME  ", storage)
+
+
+def test_delete_company_removes_sources_snapshots_and_watchlist(storage: Storage) -> None:
+    add_company_source("Acme", "https://acme.example.com/careers", storage)
+    research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+    storage.watchlist_add("AI Target Companies", "company", "Acme")
+    removed = delete_company("Acme", storage)
+    assert removed
+    assert list_company_sources("Acme", storage) == []
+    assert storage.get_research_snapshot("acme", "https://acme.example.com/careers") is None
+    assert storage.watchlist_members("AI Target Companies") == []
+
+
+def test_delete_company_nothing_found_returns_false(storage: Storage) -> None:
+    assert delete_company("Nobody Corp", storage) is False

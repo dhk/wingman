@@ -369,6 +369,85 @@ class Storage:
         count: int = cursor.fetchone()[0]
         return count
 
+    def rename_person(self, person_id: str, new_name: str) -> Person:
+        """Rename in place — person_id and every person_id-keyed record are untouched.
+
+        Raises DuplicateRecordError if new_name already belongs to a different person.
+        """
+        person = self.get_person(person_id)
+        if person is None:
+            raise KeyError(f"person {person_id} does not exist")
+        new_key = " ".join(new_name.lower().split())
+        existing = self.find_person_by_name_key(new_key)
+        if existing is not None and existing.person_id != person_id:
+            raise DuplicateRecordError(f"a person named {new_name!r} already exists")
+        old_name = person.name
+        renamed = person.model_copy(update={"name": new_name.strip()})
+        self.update_person(renamed)
+        self.watchlist_rename_member("person", old_name, renamed.name)
+        return renamed
+
+    def delete_person(self, person_id: str) -> bool:
+        """Delete a person and everything keyed to them: documents (+FTS+embeddings),
+        POV card, news, outreach brief, and any watchlist membership."""
+        person = self.get_person(person_id)
+        if person is None:
+            return False
+        for doc in self.list_external_documents(person_id):
+            self._conn.execute("DELETE FROM external_documents WHERE doc_id = ?", (doc.doc_id,))
+            self._conn.execute("DELETE FROM external_fts WHERE doc_id = ?", (doc.doc_id,))
+            self._conn.execute("DELETE FROM embeddings WHERE doc_id = ?", (doc.doc_id,))
+        self._conn.execute("DELETE FROM pov_cards WHERE person_id = ?", (person_id,))
+        self._conn.execute("DELETE FROM news_items WHERE person_id = ?", (person_id,))
+        self._conn.execute("DELETE FROM outreach_briefs WHERE person_id = ?", (person_id,))
+        self._conn.execute("DELETE FROM people WHERE person_id = ?", (person_id,))
+        self._conn.commit()
+        self.watchlist_delete_member("person", person.name)
+        return True
+
+    def merge_person(self, keep_id: str, absorb_id: str) -> Person:
+        """Merge absorb_id into keep_id: keep_id's blank fields are filled from absorb_id,
+        absorb_id's documents/news reassign to keep_id, its POV card and outreach brief move
+        over only if keep_id doesn't already have one, then absorb_id is deleted."""
+        keep = self.get_person(keep_id)
+        absorb = self.get_person(absorb_id)
+        if keep is None or absorb is None:
+            raise KeyError("both people must exist to merge")
+        if keep_id == absorb_id:
+            raise ValueError("cannot merge a person into themself")
+        filled = {
+            field: getattr(absorb, field)
+            for field in ("company", "position", "linkedin_url", "email", "substack_url")
+            if not getattr(keep, field) and getattr(absorb, field)
+        }
+        merged = keep.model_copy(update=filled) if filled else keep
+        if filled:
+            self.update_person(merged)
+        self._conn.execute(
+            "UPDATE external_documents SET person_id = ? WHERE person_id = ?",
+            (keep_id, absorb_id),
+        )
+        self._conn.execute(
+            "UPDATE news_items SET person_id = ? WHERE person_id = ?", (keep_id, absorb_id)
+        )
+        if self.get_pov_card(keep_id) is None:
+            self._conn.execute(
+                "UPDATE pov_cards SET person_id = ? WHERE person_id = ?", (keep_id, absorb_id)
+            )
+        else:
+            self._conn.execute("DELETE FROM pov_cards WHERE person_id = ?", (absorb_id,))
+        if self.get_outreach_brief(keep_id) is None:
+            self._conn.execute(
+                "UPDATE outreach_briefs SET person_id = ? WHERE person_id = ?",
+                (keep_id, absorb_id),
+            )
+        else:
+            self._conn.execute("DELETE FROM outreach_briefs WHERE person_id = ?", (absorb_id,))
+        self._conn.execute("DELETE FROM people WHERE person_id = ?", (absorb_id,))
+        self._conn.commit()
+        self.watchlist_delete_member("person", absorb.name)
+        return merged
+
     def add_external_document(self, document: ExternalDocument, body: str) -> None:
         try:
             self._conn.execute(
@@ -486,6 +565,25 @@ class Storage:
         )
         return [(row[0], row[1]) for row in cursor.fetchall()]
 
+    def watchlist_rename_member(self, member_kind: str, old_name: str, new_name: str) -> int:
+        """Rename a member across every list it's on; returns the number of lists touched."""
+        cursor = self._conn.execute(
+            "UPDATE watchlist_members SET member_name = ?"
+            " WHERE member_kind = ? AND member_name = ?",
+            (new_name, member_kind, old_name),
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
+    def watchlist_delete_member(self, member_kind: str, name: str) -> int:
+        """Remove a member from every list it's on; returns the number of lists touched."""
+        cursor = self._conn.execute(
+            "DELETE FROM watchlist_members WHERE member_kind = ? AND member_name = ?",
+            (member_kind, name),
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
     def replace_person_news(self, person_id: str, items: list[NewsItem]) -> None:
         """News is a refreshed snapshot, not an archive: old items are replaced."""
         self._conn.execute("DELETE FROM news_items WHERE person_id = ?", (person_id,))
@@ -588,6 +686,65 @@ class Storage:
         )
         row: tuple[str] | None = cursor.fetchone()
         return ResearchSnapshot.model_validate_json(row[0]) if row else None
+
+    def move_company_sources(self, old_key: str, new_key: str, new_name: str) -> int:
+        """Re-key every company_sources/research_snapshots row from old_key to new_key,
+        renaming the denormalized display name. A row already present at new_key for the
+        same url is left as-is (no overwrite). Returns the number of sources moved."""
+        moved = 0
+        for url, payload in self._conn.execute(
+            "SELECT url, payload FROM company_sources WHERE company_key = ?", (old_key,)
+        ).fetchall():
+            source = CompanySource.model_validate_json(payload)
+            renamed = source.model_copy(update={"company_key": new_key, "company_name": new_name})
+            try:
+                self._conn.execute(
+                    "INSERT INTO company_sources (company_key, url, payload, added_at)"
+                    " VALUES (?, ?, ?, ?)",
+                    (new_key, url, renamed.model_dump_json(), renamed.added_at.isoformat()),
+                )
+                moved += 1
+            except sqlite3.IntegrityError:
+                pass
+        self._conn.execute("DELETE FROM company_sources WHERE company_key = ?", (old_key,))
+        for url, payload in self._conn.execute(
+            "SELECT url, payload FROM research_snapshots WHERE company_key = ?", (old_key,)
+        ).fetchall():
+            self._conn.execute(
+                "INSERT INTO research_snapshots (company_key, url, payload, fetched_at)"
+                " VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(company_key, url) DO NOTHING",
+                (new_key, url, payload, datetime.now(UTC).isoformat()),
+            )
+        self._conn.execute("DELETE FROM research_snapshots WHERE company_key = ?", (old_key,))
+        self._conn.commit()
+        return moved
+
+    def delete_company_sources(self, company_key: str) -> int:
+        """Delete every approved source and research snapshot for a company."""
+        cursor = self._conn.execute(
+            "DELETE FROM company_sources WHERE company_key = ?", (company_key,)
+        )
+        self._conn.execute("DELETE FROM research_snapshots WHERE company_key = ?", (company_key,))
+        self._conn.commit()
+        return cursor.rowcount
+
+    def move_pov_card(self, old_id: str, new_id: str) -> bool:
+        """Re-key a stored card's identity (company rename). If a card already exists at
+        new_id, the old one is dropped instead of overwriting it."""
+        card = self.get_pov_card(old_id)
+        if card is None:
+            return False
+        if self.get_pov_card(new_id) is None:
+            self.save_pov_card(card.model_copy(update={"person_id": new_id}))
+        self._conn.execute("DELETE FROM pov_cards WHERE person_id = ?", (old_id,))
+        self._conn.commit()
+        return True
+
+    def delete_pov_card(self, subject_id: str) -> bool:
+        cursor = self._conn.execute("DELETE FROM pov_cards WHERE person_id = ?", (subject_id,))
+        self._conn.commit()
+        return cursor.rowcount > 0
 
     def has_external_url(self, url: str) -> bool:
         cursor = self._conn.execute(

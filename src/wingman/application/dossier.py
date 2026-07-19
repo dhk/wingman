@@ -234,3 +234,20 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
         path,
     )
     return DossierReport(company=display, path=str(path), markdown=markdown)
+
+
+def delete_dossier_reports(name: str, config: Config) -> list[str]:
+    """Delete every generated dossier file for a company (all dated snapshots).
+
+    This only removes the rendered Markdown reports under reports/companies/ — the
+    underlying sources, research snapshots, and POV card are untouched (see
+    research.delete_company for those). Returns the paths removed.
+    """
+    directory = config.reports_dir / "companies"
+    if not directory.exists():
+        return []
+    removed = []
+    for path in sorted(directory.glob(f"{_slug(name)}-*.md")):
+        path.unlink()
+        removed.append(str(path))
+    return removed

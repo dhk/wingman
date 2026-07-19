@@ -69,6 +69,8 @@ def test_all_tools_are_registered() -> None:
         "company_pov",
         "company_follow",
         "overnight",
+        "people_manage",
+        "company_manage",
     }
 
 

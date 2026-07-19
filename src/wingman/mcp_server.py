@@ -38,14 +38,17 @@ from wingman.application.pipeline import make_it_so as make_it_so_use_case
 from wingman.application.people import (
     add_person,
     attach_feed,
+    delete_person,
     discover_feed,
     discover_recommendations,
     fetch_person_feed,
     find_people_evidence,
+    fix_person,
     match_people,
+    rename_person,
     seed_from_connections,
 )
-from wingman.application.dossier import build_company_dossier
+from wingman.application.dossier import build_company_dossier, delete_dossier_reports
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import (
@@ -58,8 +61,10 @@ from wingman.application.pov import (
 )
 from wingman.application.research import (
     add_company_source,
+    delete_company,
     list_company_sources,
     remove_company_source,
+    rename_company,
     render_research_report,
     research_company,
 )
@@ -312,6 +317,37 @@ def people_add(
     verb = "Added" if created else "Updated"
     sources = ", ".join(source.url for source in person.sources) or "no sources yet"
     return f"{verb} {person.name}. Sources: {sources}"
+
+
+@server.tool()
+def people_manage(action: str, name: str, new_name: str = "") -> str:
+    """Rename, delete, or fix a watchlist person. action is 'rename', 'delete', or 'fix'.
+
+    'rename' changes name in place (person_id and all their data are untouched); it fails
+    if new_name already belongs to someone else. 'fix' also corrects a name, but merges
+    into an existing person of that name instead of failing — e.g. fix('Ed Wong', 'Edmund
+    Wong') merges the 'Ed Wong' record into 'Edmund Wong' if that person already exists,
+    filling any blank fields and moving documents/POV card/outreach brief over. 'delete'
+    removes the person and everything keyed to them (not reversible).
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "rename":
+                person = rename_person(name, new_name, storage)
+                return f"Renamed to {person.name} ({person.person_id})"
+            if action == "fix":
+                person, merged = fix_person(name, new_name, storage)
+                verb = "Merged into" if merged else "Renamed to"
+                return f"{verb} {person.name} ({person.person_id})"
+            if action == "delete":
+                person = delete_person(name, storage)
+                return f"Deleted {person.name} ({person.person_id})"
+    except IngestError as exc:
+        return f"people {action} failed: {exc}"
+    return f"unknown action {action!r}; use rename, delete, or fix."
 
 
 @server.tool()
@@ -874,6 +910,41 @@ def company_source(action: str, name: str, url: str = "", label: str = "") -> st
     except IngestError as exc:
         return f"company_source failed: {exc}"
     return f"unknown action {action!r}; use add, remove, or list."
+
+
+@server.tool()
+def company_manage(action: str, name: str, new_name: str = "") -> str:
+    """Rename or delete a company. action is 'rename', 'delete', or 'delete-dossier'.
+
+    'rename' re-keys approved sources, research snapshots, the POV card, and watchlist
+    memberships to new_name. 'delete' removes all of those for a company (not reversible,
+    but leaves any generated dossier files on disk). 'delete-dossier' removes only the
+    generated dossier report files, leaving the underlying sources/research/POV card
+    untouched — use it to clear out a dossier before regenerating one.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "rename":
+                moved = rename_company(name, new_name, storage)
+                return f"Renamed {name!r} to {new_name!r} ({moved} source(s) moved)"
+            if action == "delete":
+                removed = delete_company(name, storage)
+                return (
+                    f"Deleted {name!r} (sources, research, POV card, watchlist memberships)."
+                    if removed
+                    else f"Nothing found for {name!r}."
+                )
+    except IngestError as exc:
+        return f"company_manage {action} failed: {exc}"
+    if action == "delete-dossier":
+        removed_paths = delete_dossier_reports(name, config)
+        if not removed_paths:
+            return f"No dossier files found for {name!r}."
+        return f"Deleted {len(removed_paths)} dossier file(s): {', '.join(removed_paths)}"
+    return f"unknown action {action!r}; use rename, delete, or delete-dossier."
 
 
 @server.tool()

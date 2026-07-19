@@ -21,6 +21,7 @@ from urllib.parse import urljoin
 from pydantic import BaseModel, Field
 
 from wingman.application.ingest import IngestError
+from wingman.application.pov import company_card_id
 from wingman.application.similarity import company_key
 from wingman.domain.research import CompanySource, ResearchSnapshot
 from wingman.infrastructure.fetch import FetchError, fetch_url
@@ -106,6 +107,29 @@ def remove_company_source(name: str, url: str, storage: Storage) -> bool:
 
 def list_company_sources(name: str, storage: Storage) -> list[CompanySource]:
     return storage.list_company_sources(_resolve_company(name))
+
+
+def rename_company(old_name: str, new_name: str, storage: Storage) -> int:
+    """Re-key a company's sources, research snapshots, POV card, and watchlist
+    memberships to a new name. Returns the number of approved sources moved."""
+    old_key = _resolve_company(old_name)
+    new_key = _resolve_company(new_name)
+    if old_key == new_key:
+        raise IngestError("new name normalizes to the same company — nothing to rename.")
+    moved = storage.move_company_sources(old_key, new_key, new_name.strip())
+    storage.move_pov_card(company_card_id(old_key), company_card_id(new_key))
+    storage.watchlist_rename_member("company", old_name.strip(), new_name.strip())
+    return moved
+
+
+def delete_company(name: str, storage: Storage) -> bool:
+    """Delete a company's approved sources, research snapshots, POV card, and any
+    watchlist memberships under this exact name. Returns whether anything existed."""
+    key = _resolve_company(name)
+    removed_sources = storage.delete_company_sources(key) > 0
+    removed_card = storage.delete_pov_card(company_card_id(key))
+    removed_watchlist = storage.watchlist_delete_member("company", name.strip()) > 0
+    return removed_sources or removed_card or removed_watchlist
 
 
 class SourceResult(BaseModel):

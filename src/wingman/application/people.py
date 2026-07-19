@@ -49,7 +49,7 @@ from wingman.domain.person import (
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.fetch import FetchError, fetch_url
 from wingman.infrastructure.logs import get_logger
-from wingman.infrastructure.storage import Storage
+from wingman.infrastructure.storage import DuplicateRecordError, Storage
 
 _logger = get_logger("application.people")
 
@@ -150,6 +150,52 @@ def match_people(storage: Storage, query: str) -> list[Person]:
         if query_key in person.name_key or tokens <= set(person.name_key.split())
     ]
     return sorted(matches, key=lambda person: person.name)
+
+
+def _require_single_match(storage: Storage, query: str) -> Person:
+    matches = match_people(storage, query)
+    if not matches:
+        raise IngestError(f"no person matching {query!r}.")
+    if len(matches) > 1:
+        names = ", ".join(person.name for person in matches[:5])
+        raise IngestError(f"{query!r} matches multiple people: {names}. Use the full name.")
+    return matches[0]
+
+
+def rename_person(current: str, new_name: str, storage: Storage) -> Person:
+    """Rename a watchlist person in place; person_id and all their data are untouched."""
+    person = _require_single_match(storage, current)
+    new_name = new_name.strip()
+    if not new_name:
+        raise IngestError("new name is empty.")
+    try:
+        return storage.rename_person(person.person_id, new_name)
+    except DuplicateRecordError as exc:
+        raise IngestError(
+            f"{exc} — use 'fix' instead of 'rename' if you want to merge into them."
+        ) from exc
+
+
+def delete_person(current: str, storage: Storage) -> Person:
+    """Delete a watchlist person and everything keyed to them."""
+    person = _require_single_match(storage, current)
+    storage.delete_person(person.person_id)
+    return person
+
+
+def fix_person(current: str, correct_name: str, storage: Storage) -> tuple[Person, bool]:
+    """Correct a person's name. If `correct_name` already belongs to someone else,
+    `current` is merged into them (their blank fields filled, documents/POV card/outreach
+    brief moved over) instead of creating a name collision. Returns (final_person, merged)."""
+    person = _require_single_match(storage, current)
+    correct_name = correct_name.strip()
+    if not correct_name:
+        raise IngestError("correct name is empty.")
+    target_key = " ".join(correct_name.lower().split())
+    target = storage.find_person_by_name_key(target_key)
+    if target is not None and target.person_id != person.person_id:
+        return storage.merge_person(keep_id=target.person_id, absorb_id=person.person_id), True
+    return storage.rename_person(person.person_id, correct_name), False
 
 
 def _connections_rows(raw: str) -> list[dict[str, str]]:

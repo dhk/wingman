@@ -15,11 +15,13 @@ Each phase must leave Wingman in a usable state.
 | 6 — Drafting and Voice | **Partial** — purpose-shaped outreach briefs with evidence-validated talking points and intro bullets; the approval boundary (never sends, RFC-006) is structural; no per-message-type drafts or critic pass |
 | 7 — Interview Preparation | Not started |
 | 8 — Controlled Connectors | Not started (explicit imports only, by design so far) |
+| 9 — Outcome Post-Mortems | Not started |
 
 Shipped alongside the phases: MCP parity across the whole surface (RFC-008,
-35 tools; remote transport RFC-017), design-system PDF exports, backup/
-restore, Keychain-backed keys (RFC-019). The decision ledger is
-[`docs/RFC.md`](docs/RFC.md) (RFC-001…019).
+37 tools; remote transport RFC-017), design-system PDF exports, backup/
+restore, Keychain-backed keys (RFC-019), object rename/delete/fix for people
+and companies (RFC-021). The decision ledger is
+[`docs/RFC.md`](docs/RFC.md) (RFC-001…021).
 
 **Current backlog, in order:** (1) unified ranked search across
 corpus/people/companies/news/research; (2) execute the competitive research
@@ -159,6 +161,19 @@ Add read-only connectors first:
 - approved job and company sources.
 
 Write capabilities require a separate architecture decision and approval UX.
+
+## Phase 9 — Outcome Post-Mortems
+
+**Usable outcome:** close the loop — record what actually happened to an opportunity and see whether your own fit/gap verdicts predicted it.
+
+Deliver:
+
+- outcome status per opportunity (advanced, rejected, withdrawn, ghosted, offer, declined);
+- verbatim feedback capture — quoted from the recruiter/interviewer's own words, never paraphrased into a claim;
+- a dated post-mortem note per closed opportunity;
+- a verdict-to-outcome report: deterministic arithmetic over met/partial/gap history versus the stage actually reached, across closed opportunities;
+- pattern surfacing (which requirement types most often preceded a stall) computed from stored verdicts, not inferred causation;
+- no cause is asserted without a user-supplied note or a verbatim-quoted reason — an unexplained rejection stays unexplained.
 
 ## Initial Vertical-Slice Backlog
 
