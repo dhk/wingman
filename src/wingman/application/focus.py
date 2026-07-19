@@ -20,12 +20,15 @@ the user's act, on their machine (RFC-006 untouched: nothing is ever sent).
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from collections.abc import Callable
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
 from wingman.application.ingest import IngestError
+from wingman.application.people import match_people
 from wingman.application.pipeline import MisoReport, make_it_so
 from wingman.application.research import add_company_source, research_company
 from wingman.application.similarity import company_key, similar_companies
@@ -164,14 +167,31 @@ class OvernightTarget(BaseModel):
     lines: list[str] = Field(default_factory=list)
 
 
+class ActionItem(BaseModel):
+    """One morning action: what to do, why now, about whom, on what evidence."""
+
+    what: str
+    why: str
+    who: str
+    evidence: list[str] = Field(default_factory=list)
+
+
 class OvernightReport(BaseModel):
     digest_path: str
     processed: int
     failed: int
     targets: list[OvernightTarget] = Field(default_factory=list)
+    actions: list[ActionItem] = Field(default_factory=list)
 
 
-def _company_deep(name: str, config: Config, storage: Storage) -> OvernightTarget:
+_JOBISH = ("job", "career", "opening", "position", "role")
+_MAX_ACTIONS = 10
+_MAX_ACTION_EVIDENCE = 3
+
+
+def _company_deep(
+    name: str, config: Config, storage: Storage, actions: list[ActionItem]
+) -> OvernightTarget:
     from wingman.application.pov import build_company_pov
     from wingman.providers.base import CapabilityClass
     from wingman.providers.router import get_provider
@@ -182,6 +202,34 @@ def _company_deep(name: str, config: Config, storage: Storage) -> OvernightTarge
         for result in research.results:
             target.lines.append(f"research {result.url}: {result.detail}")
             target.lines.extend(f"  new: {link}" for link in result.new_links)
+            if result.new_links:
+                jobish = [
+                    link
+                    for link in result.new_links
+                    if any(word in link.lower() for word in _JOBISH)
+                ]
+                what = (
+                    f"Assess the new opening(s) at {name}"
+                    if jobish
+                    else f"Review what changed on {name}'s {result.label or 'watched'} page"
+                )
+                actions.append(
+                    ActionItem(
+                        what=what,
+                        why=result.detail + f" ({result.url})",
+                        who=name,
+                        evidence=(jobish or result.new_links)[:_MAX_ACTION_EVIDENCE],
+                    )
+                )
+            elif result.status == "failed":
+                actions.append(
+                    ActionItem(
+                        what=f"Fix the research source for {name}",
+                        why=result.detail,
+                        who=name,
+                        evidence=[result.url],
+                    )
+                )
     except IngestError as exc:
         target.lines.append(f"research skipped: {exc}")
     try:
@@ -199,13 +247,52 @@ def _company_deep(name: str, config: Config, storage: Storage) -> OvernightTarge
     return target
 
 
-def _person_deep(name: str, config: Config, storage: Storage) -> OvernightTarget:
+def _person_deep(
+    name: str, config: Config, storage: Storage, actions: list[ActionItem]
+) -> OvernightTarget:
     target = OvernightTarget(name=name, kind="person", status="ok")
     try:
         miso: MisoReport = make_it_so(name, config, storage, kind="person")
         target.lines.extend(f"{step.name}: {step.status} — {step.detail}" for step in miso.steps)
         if any(step.status == "failed" for step in miso.steps):
             target.status = "failed"
+        steps = {step.name: step for step in miso.steps}
+        matches = match_people(storage, name)
+        person = matches[0] if len(matches) == 1 else None
+        fetch = steps.get("fetch")
+        added = 0
+        if fetch is not None and fetch.status == "ok":
+            match = re.search(r"(\d+) added", fetch.detail)
+            added = int(match.group(1)) if match else 0
+        if added:
+            newest = storage.list_external_documents(person.person_id) if person else []
+            newest_titled = [
+                f"{doc.title} — {doc.url}" if doc.url else doc.title
+                for doc in newest[-_MAX_ACTION_EVIDENCE:]
+            ]
+            brief = storage.get_outreach_brief(person.person_id) if person else None
+            what = (
+                f"Compose outreach to {name} in your voice (material is fresh)"
+                if brief is not None
+                else f"Read {name}'s new writing"
+            )
+            why = f"{added} new post(s) fetched overnight" + (
+                "; outreach brief refreshed" if brief is not None else ""
+            )
+            actions.append(ActionItem(what=what, why=why, who=name, evidence=newest_titled))
+        news = steps.get("news")
+        if news is not None and news.status == "ok":
+            items = storage.list_person_news(person.person_id) if person else []
+            if items:
+                top = items[-1]
+                actions.append(
+                    ActionItem(
+                        what=f"Skim the news snapshot for {name}",
+                        why=news.detail + " in the refreshed snapshot",
+                        who=name,
+                        evidence=[f"{top.title} — {top.url}"],
+                    )
+                )
     except IngestError as exc:
         target.status = "failed"
         target.lines.append(str(exc))
@@ -236,7 +323,7 @@ def _suggestions(storage: Storage, companies: list[str]) -> list[str]:
     return lines
 
 
-def overnight_run(config: Config, storage: Storage) -> OvernightReport:
+def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None) -> OvernightReport:
     """Deep-refresh every enrolled target and write the dated digest.
 
     The explicit spend-the-tokens command: model calls (POV cards, themes,
@@ -251,12 +338,14 @@ def overnight_run(config: Config, storage: Storage) -> OvernightReport:
         )
     targets: list[OvernightTarget] = []
     companies: list[str] = []
+    actions: list[ActionItem] = []
     for member_kind, member_name in members:
         if member_kind == "company":
             companies.append(member_name)
-            targets.append(_company_deep(member_name, config, storage))
+            targets.append(_company_deep(member_name, config, storage, actions))
         else:
-            targets.append(_person_deep(member_name, config, storage))
+            targets.append(_person_deep(member_name, config, storage, actions))
+    actions = actions[:_MAX_ACTIONS]
 
     failed = sum(1 for target in targets if target.status == "failed")
     now = datetime.now(UTC)
@@ -275,11 +364,38 @@ def overnight_run(config: Config, storage: Storage) -> OvernightReport:
         lines.extend(["", "## Consider following", ""])
         lines.extend(f"- {entry}" for entry in suggestion_lines)
 
-    digest_dir = config.reports_dir / "digests"
+    # The morning's marching orders, last so they are the takeaway.
+    lines.extend(["", "## Action list", ""])
+    if actions:
+        for number, action in enumerate(actions, start=1):
+            lines.append(f"{number}. **{action.what}**")
+            lines.append(f"   - why: {action.why}")
+            lines.append(f"   - who: {action.who}")
+            lines.extend(f"   - evidence: {item}" for item in action.evidence)
+    else:
+        lines.append("Nothing changed enough to act on — no new links, posts, or news.")
+
+    digest_dir = (out_dir.expanduser() if out_dir else config.reports_dir / "digests").resolve()
     digest_dir.mkdir(parents=True, exist_ok=True)
     digest_path = digest_dir / f"overnight-{now.strftime('%Y%m%dT%H%M%SZ')}.md"
-    digest_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    content = "\n".join(lines) + "\n"
+    digest_path.write_text(content, encoding="utf-8")
+    # A stable pointer for editors, scripts, and habit: always the newest digest.
+    (digest_dir / "latest.md").write_text(content, encoding="utf-8")
     _logger.info("overnight targets=%d failed=%d digest=%s", len(targets), failed, digest_path)
     return OvernightReport(
-        digest_path=str(digest_path), processed=len(targets), failed=failed, targets=targets
+        digest_path=str(digest_path),
+        processed=len(targets),
+        failed=failed,
+        targets=targets,
+        actions=actions,
     )
+
+
+def latest_digest(config: Config) -> Path | None:
+    """The newest dated digest in the default location, or None."""
+    digest_dir = config.reports_dir / "digests"
+    if not digest_dir.exists():
+        return None
+    candidates = sorted(digest_dir.glob("overnight-*.md"))
+    return candidates[-1] if candidates else None

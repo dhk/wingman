@@ -19,7 +19,12 @@ from wingman.application.corpus import add_to_corpus, find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
 from wingman.application.news import fetch_person_news
-from wingman.application.focus import follow_company, overnight_run, render_follow_report
+from wingman.application.focus import (
+    follow_company,
+    latest_digest,
+    overnight_run,
+    render_follow_report,
+)
 from wingman.application.pipeline import MisoReport, make_it_so
 from wingman.application.people import (
     add_person,
@@ -1760,7 +1765,14 @@ def keys_unset(
 
 
 @app.command()
-def overnight() -> None:
+def overnight(
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        help="Where the digest lands (default: the workspace's reports/digests/). "
+        "Point it somewhere you actually look — Desktop, a synced folder.",
+    ),
+) -> None:
     """Deep-refresh every followed company and person; write the dated digest (RFC-018).
 
     The explicit spend-the-tokens command — deliberately expensive: research
@@ -1776,17 +1788,46 @@ def overnight() -> None:
     _require_workspace(config, "refreshed")
     try:
         with Storage(config.db_path) as storage:
-            report = overnight_run(config, storage)
+            report = overnight_run(config, storage, out_dir=out)
     except IngestError as exc:
         typer.echo(f"overnight failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     for target in report.targets:
         marker = "✓" if target.status == "ok" else "✗"
         typer.echo(f"{marker} {target.name} ({target.kind})")
-    typer.echo(f"{report.processed} targets, {report.failed} with failures.")
+    typer.echo(
+        f"{report.processed} targets, {report.failed} with failures, {len(report.actions)} actions."
+    )
     typer.echo(f"Digest: {report.digest_path}")
+    typer.echo("Read it any time with: wingman digest")
     if report.failed:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def digest(
+    path_only: bool = typer.Option(False, "--path", help="Print only the path."),
+    open_it: bool = typer.Option(False, "--open", help="Open it with the system viewer."),
+) -> None:
+    """Show the newest overnight digest — the morning read, one word away."""
+    configure_logging()
+    config = load_config()
+    newest = latest_digest(config)
+    if newest is None:
+        typer.echo(
+            "No digests yet — 'wingman overnight' writes one per run "
+            "(enroll targets first with 'wingman company follow').",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if path_only:
+        typer.echo(str(newest))
+        return
+    if open_it:
+        typer.launch(str(newest))
+        typer.echo(f"Opened {newest}")
+        return
+    typer.echo(newest.read_text(encoding="utf-8"))
 
 
 @company_app.command("pov")

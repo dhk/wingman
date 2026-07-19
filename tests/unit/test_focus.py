@@ -123,6 +123,15 @@ def test_overnight_runs_targets_and_writes_digest(
     # no synthesize model in tests: model steps skipped honestly, run not fatal
     assert "themes skipped" in text
     assert "fetch: ok" in text
+    # the action list closes the digest: fresh writing -> a read/outreach action
+    assert "## Action list" in text
+    assert text.index("## Action list") > text.index("Jane Author (person)")
+    assert "Read Jane Author's new writing" in text
+    assert "why: 1 new post(s) fetched overnight" in text
+    assert "evidence: On Evals — https://jane.substack.com/p/on-evals" in text
+    # latest.md mirrors the newest digest
+    latest = digest.parent / "latest.md"
+    assert latest.exists() and latest.read_text(encoding="utf-8") == text
 
 
 def test_overnight_reports_failures_without_dying(
@@ -147,3 +156,60 @@ def test_overnight_reports_failures_without_dying(
     assert "research skipped" in text  # no approved sources, said so
     assert "fetch: failed" in text  # feed failure reported per-step
     assert report.processed == 2
+
+
+def test_second_run_actions_carry_new_link_evidence(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import wingman.application.news as news_module
+    import wingman.application.people as people_module
+    import wingman.application.research as research_module
+
+    config = load_config()
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(news_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(research_module, "fetch_url", lambda url: CAREERS_PAGE)
+    grown = (
+        b'<html><body><a href="/jobs/researcher">R</a><a href="/jobs/staff-mle">S</a></body></html>'
+    )
+    with Storage(config.db_path) as storage:
+        follow_company(
+            "Acme",
+            storage,
+            url="https://acme.example.com",
+            fetcher=lambda url: (
+                CAREERS_PAGE
+                if url.endswith("/careers")
+                else (_ for _ in ()).throw(FetchError("404"))
+            ),
+        )
+        overnight_run(config, storage)  # baseline snapshot
+        monkeypatch.setattr(research_module, "fetch_url", lambda url: grown)
+        report = overnight_run(config, storage)
+    action = next(a for a in report.actions if "opening" in a.what)
+    assert action.who == "Acme"
+    assert "1 new link since" in action.why
+    assert action.evidence == ["https://acme.example.com/jobs/staff-mle"]
+    text = Path(report.digest_path).read_text(encoding="utf-8")
+    assert "**Assess the new opening(s) at Acme**" in text
+
+
+def test_latest_digest_and_out_dir(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from wingman.application.focus import latest_digest
+
+    import wingman.application.news as news_module
+    import wingman.application.people as people_module
+
+    config = load_config()
+    assert latest_digest(config) is None
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(news_module, "fetch_url", lambda url: FEED)
+    custom = Path(str(workspace)) / "desk"
+    with Storage(config.db_path) as storage:
+        add_person("Jane Author", storage, substack_url="https://jane.substack.com")
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Jane Author")
+        report = overnight_run(config, storage, out_dir=custom)
+    assert Path(report.digest_path).parent == custom.resolve()
+    assert (custom / "latest.md").exists()
+    # default-location helper ignores custom out_dirs (they are the user's copy)
+    assert latest_digest(config) is None

@@ -73,6 +73,7 @@ def test_all_tools_are_registered() -> None:
         "company_manage",
         "search",
         "telemetry",
+        "digest",
     }
 
 
