@@ -26,7 +26,8 @@ This document describes what the system is. Rationale for engineering decisions 
 ## Architecture
 
 ```text
-Presentation (CLI + local MCP server, RFC-008; further surfaces need a durable RFC entry)
+Presentation (CLI + MCP server — stdio locally, opt-in loopback HTTP behind a
+              user-managed tunnel, RFC-008/017; further surfaces need a durable RFC entry)
     |
 Application Services
     |
@@ -68,6 +69,11 @@ Entities:
 - **Opportunity** — a role under consideration: extracted requirements, fit assessment, status, next action.
 - **CorpusDocument** — one document of the user's own writing (essay, README, export entry), backed by a SourceRecord and indexed for full-text search (RFC-007); the unit of quotation for drafting and evidence lookup.
 - **Person** and **Interaction** — relationship records built from explicit imports.
+- **ExternalDocument** — one stored post of a watched person's public writing (or an org-attributed feed's), the unit of quotation for POV validation; kept strictly separate from news mentions about a person (RFC-014).
+- **PovCard** — validated stances (verbatim quote + source doc each, dimensioned values/attitude/technical/strategy) for a person, the user's corpus (`__corpus__`), or a company's document pool (`__company__<key>`, RFC-016).
+- **OutreachBrief** — purpose-shaped talking points (each citing a card stance exactly and quoting the user's corpus verbatim) plus intro bullets.
+- **CompanySource** and **ResearchSnapshot** — user-approved research URLs and their fetched text-hash/link-set snapshots; findings are diffs (RFC-015).
+- **Watchlist membership** — named groups of people/companies; the reserved `overnight` list is the standing-consent record for scheduled deep refreshes (RFC-018).
 - **Recommendation** — a proposed action with its decomposed score, evidence references, and outcome feedback.
 
 Every entity that can influence a recommendation carries the full provenance metadata of RFC-005 (stable ID, source references, transformation history, confidence, fact/inference/hypothesis classification, user-override metadata). Claims in generated artifacts must trace through this chain back to a SourceRecord — that traceability is what [`EVALUATION.md`](EVALUATION.md) validates.
@@ -98,7 +104,8 @@ The pattern is fixed: deterministic ingestion and validation bracket every model
 - Raw imported artifacts land in the workspace's `inbox/` directory before ingestion and are referenced by SourceRecords.
 - Prompt templates are versioned files shipped inside the package (`src/wingman/prompts/`, e.g. `profile_extraction_v1.md`) so installed CLIs carry them; every score and generated artifact is attributable to an exact prompt version ([`EVALUATION.md`](EVALUATION.md)). Schemas have no separate directory — the Pydantic models in code are the schema source of truth.
 - The workspace's `models.toml` (written by `wingman init`) maps capability classes to concrete providers and models (RFC-004) — the one place runtime model names live.
-- No remote persistence, no telemetry. Backup and migration design is deferred (see Open Questions).
+- No remote persistence, no telemetry. Backups are dated tarballs (`wingman backup`/`restore`): a consistent SQLite snapshot plus inbox/reports, with retention pruning and a refuse-to-clobber restore.
+- API keys live in the macOS Keychain (`wingman keys`, RFC-019) and hydrate the environment at startup; an exported environment variable always wins.
 
 ## Approval Flow
 
@@ -131,7 +138,6 @@ Delivery order and per-phase deliverables live in [`../ROADMAP.md`](../ROADMAP.m
 Deliberately undecided; each gets designed (and, where durable, an RFC entry marked Durable) in the phase that needs it:
 
 - **Failure and recovery model** — partial ingestion failures, corrupted records, interrupted runs (Phase 1, first real ingestion).
-- **Backup and migration** — schema versioning and user data portability (Phase 1–2, once the schema stabilizes).
 - **Scoring internals** — component set and weights for opportunity and action scores (Phase 2 and 5; the decomposability contract is already fixed in AGENTS.md §Scoring and Recommendations).
 - **Connector architecture** — auth, scope grants, and sync model for read-only connectors (Phase 8; durable RFC entry required).
 - **Write-capable connectors and approval UX** — separate architecture decision, explicitly out of scope until after Phase 8.

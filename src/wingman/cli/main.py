@@ -328,7 +328,7 @@ def demo() -> None:
         "  wingman people import-connections <export.zip> # your network\n"
         "  wingman corpus add <your-writing>              # your evidence\n"
         "  wingman people add / fetch / similar           # your watchlist\n"
-        f"Full guide: docs/SETUP.md. The demo lived in {config.data_dir} — "
+        f"Full guide: docs/WALKTHROUGH.md. The demo lived in {config.data_dir} — "
         "delete that folder to remove every trace."
     )
 
