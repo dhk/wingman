@@ -105,10 +105,18 @@ def loaded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Storage:
 
 
 def test_search_sweeps_every_store(loaded: Storage) -> None:
-    report = search_workspace("semantic", loaded, limit=20)
+    report = search_workspace("semantic", loaded, load_config(), limit=20)
     kinds = {hit.kind for hit in report.hits}
     assert kinds == {"corpus", "writing", "stance", "news", "research-link", "brief"}
-    assert report.searched == ["corpus", "writing", "stances", "news", "research", "briefs"]
+    assert report.searched == [
+        "corpus",
+        "writing",
+        "semantic",
+        "stances",
+        "news",
+        "research",
+        "briefs",
+    ]
     by_kind = {hit.kind: hit for hit in report.hits}
     assert by_kind["corpus"].who == "you"
     assert by_kind["writing"].who == "Jane Author"
@@ -123,28 +131,70 @@ def test_search_sweeps_every_store(loaded: Storage) -> None:
 
 
 def test_search_is_selective_and_honest_when_empty(loaded: Storage) -> None:
-    report = search_workspace("blockchain", loaded)
+    report = search_workspace("blockchain", loaded, load_config())
     assert report.hits == []
     rendered = render_search_report(report)
     assert "Nothing in the workspace matches" in rendered
     assert "corpus" in rendered  # says what it searched
 
-    narrower = search_workspace("jobs", loaded, limit=20)
+    narrower = search_workspace("jobs", loaded, load_config(), limit=20)
     assert {hit.kind for hit in narrower.hits} == {"research-link"}
 
 
 def test_search_and_semantics_and_errors(loaded: Storage) -> None:
     # AND semantics: both tokens must appear
-    both = search_workspace("semantic meaning", loaded, limit=20)
+    both = search_workspace("semantic meaning", loaded, load_config(), limit=20)
     assert all("meaning" in (hit.title + hit.snippet).lower() for hit in both.hits)
     with pytest.raises(IngestError, match="empty"):
-        search_workspace("   ", loaded)
+        search_workspace("   ", loaded, load_config())
     with pytest.raises(IngestError, match="search failed"):
-        search_workspace('"unbalanced', loaded)
+        search_workspace('"unbalanced', loaded, load_config())
+
+
+@pytest.fixture
+def embedded(loaded: Storage) -> Storage:
+    """The loaded workspace with keyless local (hashed) embeddings built."""
+    from wingman.application.similarity import embed_missing
+    from wingman.providers.router import get_embedding_provider
+
+    config = load_config()
+    config.models_config_path.write_text(
+        '[models.embed_semantic]\nprovider = "hashed"\n', encoding="utf-8"
+    )
+    embed_missing(loaded, get_embedding_provider(config))
+    return loaded
+
+
+def test_semantic_pass_finds_meaning_matches(embedded: Storage) -> None:
+    # 'ontology' appears in no document, so keyword AND matching finds
+    # nothing anywhere — the semantic pass still surfaces both documents
+    # through their shared-meaning overlap with 'semantic'.
+    report = search_workspace("semantic ontology", embedded, load_config(), limit=20)
+    assert {hit.kind for hit in report.hits} == {"semantic"}
+    assert {hit.title for hit in report.hits} == {"My Take", "Semantic Layers"}
+    assert all("similarity 0." in hit.snippet for hit in report.hits)
+    assert report.notes == []  # the pass ran; nothing to explain
+    # a genuinely unrelated query stays empty — the threshold holds
+    assert search_workspace("blockchain", embedded, load_config()).hits == []
+
+
+def test_semantic_pass_dedupes_keyword_hits(embedded: Storage) -> None:
+    # both documents already match 'semantic' by keyword, so the semantic
+    # column adds nothing — no duplicate rows for the same document
+    report = search_workspace("semantic", embedded, load_config(), limit=20)
+    assert not any(hit.kind == "semantic" for hit in report.hits)
+    titles = [hit.title for hit in report.hits if hit.kind in {"corpus", "writing"}]
+    assert len(titles) == len(set(titles))
+
+
+def test_semantic_pass_skips_visibly_without_embeddings(loaded: Storage) -> None:
+    report = search_workspace("semantic", loaded, load_config(), limit=20)
+    assert any("semantic pass skipped" in note for note in report.notes)
+    assert "semantic pass skipped" in render_search_report(report)
 
 
 def test_render_lists_attribution_and_sources(loaded: Storage) -> None:
-    rendered = render_search_report(search_workspace("semantic", loaded, limit=20))
+    rendered = render_search_report(search_workspace("semantic", loaded, load_config(), limit=20))
     assert "[stance]" in rendered and "[news]" in rendered
     assert "Jane Author" in rendered
     assert "https://news.example.com/acme-semantic" in rendered

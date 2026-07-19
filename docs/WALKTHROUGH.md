@@ -192,7 +192,8 @@ anything.
   schedule it and wake up to answers ([`INSTALL.md`](INSTALL.md) §5).
 - **Ask the workspace anything** — `wingman search "semantic layers"`
   sweeps every store (corpus, writing, stances, news, research, briefs)
-  into one ranked, cited list; from Claude, the `search` tool is the
+  into one ranked, cited list, including `[semantic]` hits that match by
+  meaning rather than keywords; from Claude, the `search` tool is the
   starting point for any "what do we know about…" question.
 - **Assess a role** — `wingman assess job.md` → a cited fit brief.
 - **Company intelligence** — `company dossier`, `company pov`,

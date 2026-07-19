@@ -83,8 +83,11 @@ answers (RFC-018).
 **Search.** `wingman search "semantic layers"` answers "what does the
 workspace know about X" in one call — corpus, people's writing, POV
 stances, news, research links, and briefs in a single ranked list, every
-hit attributed, dated, and sourced. Fully local: the query never leaves
-the machine (RFC-020).
+hit attributed, dated, and sourced. Keyword matching plus a semantic pass
+that finds documents matching by meaning (`[semantic]` hits carry their
+similarity score). The semantic pass embeds the query — with voyage
+configured that text goes to the provider, the same egress as `embed`;
+with the local `hashed` provider nothing leaves the machine (RFC-020).
 
 **Delivery.** Print-ready US-Letter exports styled by the site design
 system: career one-pager, company dossier, and a landscape 2×2 person

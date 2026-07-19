@@ -2005,14 +2005,18 @@ def search(
     """Search everything: corpus, people's writing, POV stances, news, research, briefs.
 
     One ranked list; every hit says what it is, whose it is, when, and where
-    it came from. Fully local — the query never leaves the machine (RFC-020).
+    it came from. Keyword matching plus a semantic pass that finds documents
+    matching by meaning (RFC-020). Egress, stated plainly: with a remote
+    embeddings provider configured (voyage), the query text is sent to it;
+    with the local 'hashed' provider or no embeddings, nothing leaves the
+    machine and the semantic pass says it was skipped.
     """
     configure_logging()
     config = load_config()
     _require_workspace(config, "searched")
     try:
         with Storage(config.db_path) as storage:
-            report = search_workspace(query, storage, limit=limit)
+            report = search_workspace(query, storage, config, limit=limit)
     except IngestError as exc:
         typer.echo(f"search failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc

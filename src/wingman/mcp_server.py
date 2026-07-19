@@ -126,7 +126,11 @@ def search(query: str, limit: int = 12) -> str:
 
     START HERE for any question about what the workspace knows ("what do we
     know about X", "who said anything about Y") before reaching for the
-    narrower per-store tools. Fully local: the query never leaves the machine.
+    narrower per-store tools. Keyword matching plus a semantic pass that
+    surfaces documents matching by meaning; with a remote embeddings provider
+    configured, the query text is sent to it (the same egress as 'embed') —
+    with the local 'hashed' provider or no embeddings, nothing leaves the
+    machine and the skip is reported.
     """
     config = _ready_config()
     if config is None:
@@ -134,7 +138,7 @@ def search(query: str, limit: int = 12) -> str:
     limit = max(1, min(limit, 50))
     try:
         with Storage(config.db_path) as storage:
-            report = search_workspace(query, storage, limit=limit)
+            report = search_workspace(query, storage, config, limit=limit)
     except IngestError as exc:
         return f"search failed: {exc}"
     return render_search_report(report)
