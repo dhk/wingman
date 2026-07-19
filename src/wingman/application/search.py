@@ -1,4 +1,4 @@
-"""Unified search across everything the workspace knows (RFC-020).
+"""Unified search across everything the workspace knows (RFC-022).
 
 One query, every store: your corpus, watched people's writing, POV stances
 and company themes, news snapshots, research links, and outreach briefs —

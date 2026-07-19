@@ -1,4 +1,4 @@
-"""Unified search (RFC-020): one query, every store, honest attribution."""
+"""Unified search (RFC-022): one query, every store, honest attribution."""
 
 from datetime import UTC, datetime
 from pathlib import Path

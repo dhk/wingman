@@ -2006,7 +2006,7 @@ def search(
 
     One ranked list; every hit says what it is, whose it is, when, and where
     it came from. Keyword matching plus a semantic pass that finds documents
-    matching by meaning (RFC-020). Egress, stated plainly: with a remote
+    matching by meaning (RFC-022). Egress, stated plainly: with a remote
     embeddings provider configured (voyage), the query text is sent to it;
     with the local 'hashed' provider or no embeddings, nothing leaves the
     machine and the semantic pass says it was skipped.
