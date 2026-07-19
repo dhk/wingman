@@ -2,6 +2,31 @@
 
 Each phase must leave Wingman in a usable state.
 
+## Where we are (2026-07-18)
+
+| Phase | Status |
+|---|---|
+| 0 — Foundation | **Delivered** (init/doctor/status, storage, logging, provenance, CI) |
+| 1 — Career Brain | **Delivered** (resume formats incl. PDF/DOCX/LaTeX/Google URLs, LinkedIn import, career.md/json) |
+| 2 — Opportunity Inbox | **Delivered** (cited fit briefs via `wingman assess`) |
+| 3 — Company Research | **Delivered** (dossiers RFC-012, approved-source research RFC-015, synthesized themes RFC-016) |
+| 4 — Relationship Intelligence | **Partial** — connections import, transparent warmth score, POV cards, similarity; no interaction timeline / follow-up queue yet |
+| 5 — Daily Operator | **Partial** — `make-it-so`, watchlists, and the overnight digest (RFC-018) cover the daily loop; no scored three-action brief yet |
+| 6 — Drafting and Voice | **Partial** — purpose-shaped outreach briefs with evidence-validated talking points and intro bullets; the approval boundary (never sends, RFC-006) is structural; no per-message-type drafts or critic pass |
+| 7 — Interview Preparation | Not started |
+| 8 — Controlled Connectors | Not started (explicit imports only, by design so far) |
+
+Shipped alongside the phases: MCP parity across the whole surface (RFC-008,
+35 tools; remote transport RFC-017), design-system PDF exports, backup/
+restore, Keychain-backed keys (RFC-019). The decision ledger is
+[`docs/RFC.md`](docs/RFC.md) (RFC-001…019).
+
+**Current backlog, in order:** (1) unified ranked search across
+corpus/people/companies/news/research; (2) execute the competitive research
+brief ([`docs/RESEARCH-BRIEFING.md`](docs/RESEARCH-BRIEFING.md)) and shape
+v0.3–v0.5 from its memo; (3) hosted deployment tiers (assessment recorded;
+RFC candidate).
+
 ## Phase 0 — Repository and Safety Foundation
 
 **Usable outcome:** a reliable local application skeleton.
