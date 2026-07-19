@@ -25,6 +25,7 @@ from wingman.agents.opportunity_analyst import (
     parse_assessments,
     parse_requirements,
 )
+from wingman.application.evidence import fold_whitespace
 from wingman.application.ingest import IngestError, RejectedItem
 from wingman.domain import SourceRecord
 from wingman.domain.opportunity import (
@@ -118,9 +119,15 @@ def _extract_requirements(
     proposal = parse_requirements(response.text)
     requirements: list[Requirement] = []
     rejected: list[RejectedItem] = []
+    # Verbatim modulo whitespace (RFC-026): job postings arrive hard-wrapped.
+    folded_text = fold_whitespace(text)
     for proposed in proposal.requirements:
         blank = any(not quote.strip() for quote in proposed.quotes)
-        missing = [quote for quote in proposed.quotes if quote.strip() and quote not in text]
+        missing = [
+            quote
+            for quote in proposed.quotes
+            if quote.strip() and fold_whitespace(quote) not in folded_text
+        ]
         if blank or missing:
             reason = (
                 "empty evidence quote"

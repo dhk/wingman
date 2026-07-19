@@ -21,6 +21,7 @@ from wingman.agents.outreach_writer import (
     build_prompt,
     parse_outreach_proposal,
 )
+from wingman.application.evidence import fold_whitespace
 from wingman.application.ingest import IngestError
 from wingman.application.similarity import corpus_alignment
 from wingman.domain.corpus import CorpusDocument
@@ -175,6 +176,8 @@ def build_outreach_brief(
 
     points: list[TalkingPoint] = []
     rejected: list[RejectedTalkingPoint] = []
+    # Verbatim modulo whitespace (RFC-026): corpus bodies are hard-wrapped.
+    folded_bodies = {doc_id: fold_whitespace(body) for doc_id, body in bodies.items()}
     for proposed in proposal.talking_points:
         # Outer whitespace is trimmed before the exact checks below: the value
         # that gets stored still matches a card stance (or appears in the
@@ -214,7 +217,7 @@ def build_outreach_brief(
                 )
             )
             continue
-        if not quote or quote not in bodies[document.doc_id]:
+        if not quote or fold_whitespace(quote) not in folded_bodies[document.doc_id]:
             rejected.append(
                 RejectedTalkingPoint(
                     point=point,
@@ -244,8 +247,8 @@ def build_outreach_brief(
     # anything the model puts in quotation marks CLAIMS to be a citation, and
     # a fabricated citation is checkable: every quoted span must appear
     # verbatim in the card's stances/quotes or the supplied corpus (#67).
-    grounding = [card_stance.statement for card_stance in card.stances] + [
-        card_stance.quote for card_stance in card.stances
+    grounding = [fold_whitespace(card_stance.statement) for card_stance in card.stances] + [
+        fold_whitespace(card_stance.quote) for card_stance in card.stances
     ]
     intro_points: list[str] = []
     for bullet in proposal.intro_points:
@@ -258,8 +261,8 @@ def build_outreach_brief(
         ungrounded = [
             span
             for span in spans
-            if not any(span in text for text in grounding)
-            and not any(span in body for body in bodies.values())
+            if not any(fold_whitespace(span) in text for text in grounding)
+            and not any(fold_whitespace(span) in body for body in folded_bodies.values())
         ]
         if ungrounded:
             rejected.append(

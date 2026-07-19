@@ -6,6 +6,12 @@ every downstream evidence check ('quote appears verbatim') operates on the
 same text the model saw.
 
 Format notes:
+- Markdown via a deterministic normalizer: hard-wrapped lines are joined
+  back into their sentence, blockquote/bold/backtick markers are dropped,
+  horizontal rules vanish. Block structure (headings, bullets, tables,
+  paragraphs, fenced code) is preserved. The point (RFC-026): the model
+  quotes the document as it reads, sentence by sentence, so the text it
+  quotes against must not have presentation line breaks inside sentences.
 - PDF via pypdf (the one format that genuinely needs a dependency).
 - DOCX via the standard library: a .docx is a zip whose word/document.xml
   carries every visible run of text.
@@ -136,6 +142,53 @@ def latex_text(source: str, name: str) -> str:
     return text
 
 
+_MD_BLOCKQUOTE = re.compile(r"^(?:\s*>)+\s?")
+_MD_HRULE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
+_MD_FENCE = re.compile(r"^\s*(?:```|~~~)")
+# A line that opens its own block never joins the line above it.
+_MD_BLOCK_START = re.compile(r"^\s*(?:#{1,6}\s|[-*+•]\s|\d+[.)]\s|\|)")
+# Headings and table rows end at their line break; prose never joins them.
+_MD_BLOCK_LINE = re.compile(r"^\s*(?:#{1,6}\s|\|)")
+
+
+def markdown_text(source: str) -> str:
+    """Normalize Markdown to the prose a reader sees (deterministic; lossy
+    about presentation only).
+
+    Lines hard-wrapped mid-sentence are joined back into their sentence,
+    blockquote prefixes and bold/backtick markers are dropped, horizontal
+    rules become paragraph breaks. Headings, bullets, numbered items,
+    tables, paragraph breaks, and fenced code blocks keep their shape.
+    """
+    lines: list[str] = []
+    in_fence = False
+    for raw in source.splitlines():
+        if _MD_FENCE.match(raw):
+            in_fence = not in_fence
+            lines.append(raw.rstrip())
+            continue
+        if in_fence:
+            lines.append(raw)
+            continue
+        line = _MD_BLOCKQUOTE.sub("", raw.rstrip())
+        if _MD_HRULE.match(line):
+            line = ""
+        line = line.replace("**", "").replace("`", "")
+        joinable = (
+            bool(line.strip())
+            and bool(lines)
+            and bool(lines[-1].strip())
+            and not _MD_BLOCK_START.match(line)
+            and not _MD_BLOCK_LINE.match(lines[-1])
+            and not _MD_FENCE.match(lines[-1])
+        )
+        if joinable:
+            lines[-1] = lines[-1] + " " + line.strip()
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
 def sniff_resume_text(data: bytes, name: str) -> str:
     """Bytes of unknown format -> text, by magic numbers (PDF, DOCX zip, else UTF-8)."""
     if data.startswith(b"%PDF"):
@@ -176,6 +229,8 @@ def extract_resume_text(path: Path) -> str:
         ) from exc
     if suffix == ".tex":
         return latex_text(text, path.name)
+    if suffix in {".md", ".markdown"}:
+        return markdown_text(text)
     return text
 
 
