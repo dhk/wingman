@@ -147,9 +147,14 @@ def test_empty_resume_fails_visibly(workspace: Config, tmp_path: Path) -> None:
 
 
 def test_resume_copied_into_inbox(workspace: Config, tmp_path: Path) -> None:
+    from wingman.application.resume_formats import extract_resume_text
+
+    resume = _resume_file(tmp_path)
+    # The hash covers the extracted text — for .md, the normalized form (RFC-026).
+    extracted = extract_resume_text(resume)
     with Storage(workspace.db_path) as storage:
-        ingest_resume(_resume_file(tmp_path), workspace, storage, RecordedProvider(RESPONSE))
-        record = storage.get_source_record_by_hash(hashlib.sha256(RESUME.encode()).hexdigest())
+        ingest_resume(resume, workspace, storage, RecordedProvider(RESPONSE))
+        record = storage.get_source_record_by_hash(hashlib.sha256(extracted.encode()).hexdigest())
     assert record is not None
     assert record.source_locator.startswith("inbox/")
     assert (workspace.data_dir / record.source_locator).read_text(encoding="utf-8") == RESUME

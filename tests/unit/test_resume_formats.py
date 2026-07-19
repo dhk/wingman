@@ -13,6 +13,7 @@ from wingman.application.resume_formats import (
     extract_resume_text,
     fetch_resume_bytes,
     latex_text,
+    markdown_text,
     pdf_text,
     sniff_resume_text,
     suffix_for_bytes,
@@ -127,6 +128,67 @@ def test_extract_dispatches_on_suffix(tmp_path: Path) -> None:
     binary.write_bytes(b"\xff\xfe garbage")
     with pytest.raises(IngestError, match="not UTF-8"):
         extract_resume_text(binary)
+
+
+WRAPPED_MARKDOWN = """\
+# Dave — Source of Truth
+
+> Purpose: canonical reference document used by Wingman to match against job
+> opportunities, corrected and merged.
+
+---
+
+### Infinitus Systems
+**Head of Data (Leader & Hands-On IC) • 2024–Present**
+- Redesigned outreach scheduling with probabilistic outcome modeling; completion
+  rate 0.89% → 4.95% across 100K+ member interactions.
+- Built a therapeutic coverage intelligence platform integrating internal, FDA
+  NDC, and CMS data for drug-level RFP responses.
+
+Skills: SQL • Python • `dbt`
+
+| year | role |
+| 2024 | Head of Data |
+
+```
+wrapped code
+  stays **verbatim**
+```
+"""
+
+
+def test_markdown_unwraps_hard_wrapped_sentences() -> None:
+    text = markdown_text(WRAPPED_MARKDOWN)
+    assert (
+        "- Redesigned outreach scheduling with probabilistic outcome modeling; "
+        "completion rate 0.89% → 4.95% across 100K+ member interactions." in text
+    )
+    assert (
+        "- Built a therapeutic coverage intelligence platform integrating "
+        "internal, FDA NDC, and CMS data for drug-level RFP responses." in text
+    )
+
+
+def test_markdown_strips_presentation_markers() -> None:
+    text = markdown_text(WRAPPED_MARKDOWN)
+    assert (
+        "Purpose: canonical reference document used by Wingman to match "
+        "against job opportunities, corrected and merged." in text
+    )  # blockquote unwrapped, '>' markers gone
+    assert "Head of Data (Leader & Hands-On IC) • 2024–Present" in text
+    assert "**" not in text.split("```")[0]  # bold markers gone outside the fence
+    assert "Skills: SQL • Python • dbt" in text  # backticks gone
+
+
+def test_markdown_preserves_block_structure() -> None:
+    text = markdown_text(WRAPPED_MARKDOWN)
+    lines = text.splitlines()
+    assert "# Dave — Source of Truth" in lines  # heading intact, nothing joined to it
+    assert "### Infinitus Systems" in lines
+    assert "| year | role |" in lines  # table rows never join
+    assert "| 2024 | Head of Data |" in lines
+    assert not any(line.strip() == "---" for line in lines)  # hrule dropped
+    assert "wrapped code" in lines and "  stays **verbatim**" in lines  # fence untouched
 
 
 def test_google_urls_map_to_export_endpoints() -> None:

@@ -21,6 +21,7 @@ from wingman.agents.profile_curator import (
     build_prompt,
     parse_proposal,
 )
+from wingman.application.evidence import fold_whitespace
 from wingman.application.profile_store import persist_items
 from wingman.domain import SourceRecord
 from wingman.domain.extraction import ProposedItem
@@ -101,11 +102,16 @@ def _persist_source(
 def _validate_evidence(
     proposed: ProposedItem, source_text: str, record: SourceRecord
 ) -> ProfileItem | RejectedItem:
-    """Deterministic check: every quote must be non-blank and appear verbatim in the source."""
+    """Deterministic check: every quote must be non-blank and appear verbatim in the source.
+
+    Verbatim modulo whitespace (RFC-026): line wrapping is presentation,
+    not content, so a quote spanning a hard-wrapped line still resolves.
+    """
+    folded_source = fold_whitespace(source_text)
     for quote in proposed.quotes:
         if not quote.strip():
             return RejectedItem(name=proposed.name, reason="empty evidence quote")
-        if quote not in source_text:
+        if fold_whitespace(quote) not in folded_source:
             return RejectedItem(
                 name=proposed.name,
                 reason=f"evidence quote not found verbatim in source: {quote[:80]!r}",

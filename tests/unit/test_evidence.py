@@ -1,0 +1,131 @@
+"""Whitespace-tolerant evidence matching (RFC-026).
+
+The trigger: a hand-maintained source-of-truth resume whose bullets are
+hard-wrapped mid-sentence. The model quotes the sentence it reads; the
+byte-for-byte verbatim check couldn't find it across the line break, and
+the import rejected the strongest achievements. Every verbatim gate now
+folds whitespace on both sides — content still matches character for
+character, only wrapping and indentation are forgiven.
+"""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from wingman.application.evidence import fold_whitespace
+from wingman.application.ingest import ingest_resume
+from wingman.application.pov import _validate_proposal
+from wingman.domain.pov import PovProposal, ProposedStance
+from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
+from wingman.infrastructure.storage import Storage
+from wingman.providers.recorded import RecordedProvider
+
+WRAPPED_SOURCE = """\
+# Dave — Wingman Source of Truth
+
+### Infinitus Systems — AI Healthcare Automation
+**Head of Data (Leader & Hands-On IC) • 2024–Present**
+- Redesigned outreach scheduling with probabilistic outcome modeling; completion
+  rate 0.89% → 4.95% across 100K+ member interactions.
+
+### Synctera — Banking-as-a-Service Platform
+- Architected financial data integrity platform supporting $100B+ in ledger
+  activity; to-the-penny reconciliation across banking partners.
+"""
+
+# The quotes a model actually produces: the sentence as read, unwrapped.
+RESPONSE = json.dumps(
+    {
+        "items": [
+            {
+                "kind": "achievement",
+                "name": "Outreach scheduling redesign",
+                "detail": "Probabilistic outcome modeling at Infinitus.",
+                "classification": "fact",
+                "confidence": 0.9,
+                "quotes": [
+                    "Redesigned outreach scheduling with probabilistic outcome "
+                    "modeling; completion rate 0.89% → 4.95% across 100K+ "
+                    "member interactions."
+                ],
+            },
+            {
+                "kind": "achievement",
+                "name": "Financial data integrity platform",
+                "detail": "Ledger reconciliation at Synctera.",
+                "classification": "fact",
+                "confidence": 0.9,
+                "quotes": [
+                    "Architected financial data integrity platform supporting "
+                    "$100B+ in ledger activity; to-the-penny reconciliation "
+                    "across banking partners."
+                ],
+            },
+            {
+                "kind": "achievement",
+                "name": "Fabricated claim",
+                "detail": "Should still be rejected.",
+                "classification": "fact",
+                "confidence": 0.9,
+                "quotes": ["Single-handedly rebuilt the entire company."],
+            },
+        ]
+    }
+)
+
+
+def _workspace(tmp_path: Path) -> Config:
+    config = load_config(env={ENV_DATA_DIR: str(tmp_path / "ws")})
+    for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
+        directory.mkdir(parents=True)
+    return config
+
+
+def test_fold_whitespace() -> None:
+    assert fold_whitespace("a  b\n   c\td") == "a b c d"
+    assert fold_whitespace("  edges  ") == "edges"
+    assert fold_whitespace("") == ""
+    # content differences are never forgiven
+    assert fold_whitespace("0.89%") != fold_whitespace("0.89 %")
+
+
+@pytest.mark.parametrize("suffix", [".md", ".txt"])
+def test_hard_wrapped_source_of_truth_ingests(tmp_path: Path, suffix: str) -> None:
+    """The regression: quotes spanning a hard wrap used to be rejected.
+
+    .md exercises the Markdown normalizer; .txt (no normalization, the
+    shape PDF extraction also produces) exercises the whitespace fold.
+    """
+    config = _workspace(tmp_path)
+    resume = tmp_path / f"source_of_truth{suffix}"
+    resume.write_text(WRAPPED_SOURCE, encoding="utf-8")
+    with Storage(config.db_path) as storage:
+        report = ingest_resume(resume, config, storage, RecordedProvider(RESPONSE))
+    assert report.accepted == 2
+    assert [item.name for item in report.rejected] == ["Fabricated claim"]
+    assert "not found verbatim" in report.rejected[0].reason
+
+
+def test_pov_quote_across_wrapped_corpus_body() -> None:
+    proposal = PovProposal(
+        stances=[
+            ProposedStance(
+                statement="Ships small and reversible changes.",
+                quote="we ship small, reversible changes every single day",
+                doc_id="d1",
+            ),
+            ProposedStance(
+                statement="Invented position.",
+                quote="text that appears nowhere",
+                doc_id="d1",
+            ),
+        ]
+    )
+    docs = {"d1": ("Ship Small", "r1", None)}
+    bodies = {"d1": "On process: we ship small,\n  reversible changes\nevery single day.\n"}
+    stances, rejected = _validate_proposal(proposal, docs, bodies)
+    assert [stance.statement for stance in stances] == ["Ships small and reversible changes."]
+    assert [entry.reason for entry in rejected] == [
+        "quote does not appear verbatim in 'Ship Small'"
+    ]

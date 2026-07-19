@@ -20,6 +20,7 @@ from wingman.agents.pov_analyst import (
     build_prompt,
     parse_pov_proposal,
 )
+from wingman.application.evidence import fold_whitespace
 from wingman.application.ingest import IngestError
 from wingman.application.similarity import company_key
 from wingman.domain.corpus import CorpusDocument
@@ -98,6 +99,8 @@ def _validate_proposal(
     """
     stances: list[Stance] = []
     rejected: list[RejectedStance] = []
+    # Verbatim modulo whitespace (RFC-026): stored documents are hard-wrapped.
+    folded_bodies = {doc_id: fold_whitespace(body) for doc_id, body in bodies.items()}
     for proposed in proposal.stances:
         statement = proposed.statement.strip()
         quote = proposed.quote.strip()
@@ -122,7 +125,7 @@ def _validate_proposal(
             )
             continue
         title, source_record_id, organization = entry
-        if not quote or quote not in bodies[proposed.doc_id]:
+        if not quote or fold_whitespace(quote) not in folded_bodies[proposed.doc_id]:
             rejected.append(
                 RejectedStance(
                     statement=statement,
