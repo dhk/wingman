@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -74,6 +76,26 @@ from wingman.infrastructure.keys import (
     unset_key,
 )
 from wingman.infrastructure.logs import configure_logging
+from wingman.infrastructure.telemetry import (
+    count_events as telemetry_count,
+)
+from wingman.infrastructure.telemetry import (
+    is_enabled as telemetry_is_enabled,
+)
+from wingman.infrastructure.telemetry import (
+    iter_events as telemetry_iter,
+)
+from wingman.infrastructure.telemetry import (
+    list_events as telemetry_list,
+)
+from wingman.infrastructure.telemetry import (
+    record_event,
+    redact_argv,
+)
+from wingman.infrastructure.telemetry import (
+    set_enabled as telemetry_set_enabled,
+)
+from wingman.application.telemetry_harvest import harvest_transcript
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.providers.base import CapabilityClass, ProviderError
 from wingman.providers.embeddings import EmbeddingError
@@ -97,6 +119,8 @@ watchlist_app = typer.Typer(help="Named groups of people and companies to cycle 
 app.add_typer(watchlist_app, name="watchlist")
 keys_app = typer.Typer(help="API keys in the macOS Keychain — no plaintext files (RFC-019).")
 app.add_typer(keys_app, name="keys")
+telemetry_app = typer.Typer(help="Opt-in local usage journal — never leaves the machine (RFC-023).")
+app.add_typer(telemetry_app, name="telemetry")
 
 
 @app.callback()
@@ -2047,5 +2071,132 @@ def evidence(
         typer.echo(f"   source: {hit.source_locator} (doc {hit.document.doc_id})")
 
 
+@telemetry_app.command("on")
+def telemetry_on() -> None:
+    """Turn the local usage journal on (a conscious opt-in; default is off).
+
+    Records CLI invocations, MCP tool calls with arguments and results, and
+    harvested transcripts — into the workspace database, nowhere else.
+    Wingman ships no transmitter for it (RFC-023).
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "enabled")
+    telemetry_set_enabled(config, True)
+    typer.echo("Telemetry is ON — local journal in the workspace database only.")
+
+
+@telemetry_app.command("off")
+def telemetry_off() -> None:
+    """Turn the usage journal off (recorded events are kept until you delete them)."""
+    configure_logging()
+    config = load_config()
+    telemetry_set_enabled(config, False)
+    typer.echo("Telemetry is OFF.")
+
+
+@telemetry_app.command("status")
+def telemetry_status() -> None:
+    """Whether the journal is recording, and how much it holds."""
+    configure_logging()
+    config = load_config()
+    state = "ON" if telemetry_is_enabled(config) else "OFF"
+    typer.echo(f"Telemetry: {state}  events: {telemetry_count(config)}")
+
+
+@telemetry_app.command("show")
+def telemetry_show(
+    limit: int = typer.Option(20, "--limit", help="How many recent events to show."),
+) -> None:
+    """The most recent events, newest first."""
+    configure_logging()
+    config = load_config()
+    events = telemetry_list(config, limit=limit)
+    if not events:
+        typer.echo("No telemetry events recorded.")
+        return
+    for event in events:
+        duration = f"  {event['duration_ms']}ms" if event["duration_ms"] is not None else ""
+        typer.echo(
+            f"{event['ts']}  [{event['surface']}] {event['name']} ({event['outcome']}){duration}"
+        )
+        payload = json.dumps(event["payload"], ensure_ascii=False)
+        typer.echo(f"   {payload[:200]}{'…' if len(payload) > 200 else ''}")
+
+
+@telemetry_app.command("export")
+def telemetry_export(
+    out: Path | None = typer.Option(
+        None, "--out", help="Destination file (default: reports/telemetry-export.jsonl)."
+    ),
+) -> None:
+    """Dump every event as JSONL for analysis. Local file; nothing is sent."""
+    configure_logging()
+    config = load_config()
+    destination = (out or (config.reports_dir / "telemetry-export.jsonl")).expanduser()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with destination.open("w", encoding="utf-8") as handle:
+        for event in telemetry_iter(config):
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+            count += 1
+    typer.echo(f"Exported {count} events to {destination}")
+
+
+@telemetry_app.command("harvest-transcript")
+def telemetry_harvest(
+    transcript: Path = typer.Argument(
+        ...,
+        help="A Claude Code session .jsonl (see ~/.claude/projects/<project>/).",
+    ),
+) -> None:
+    """Import a Claude Code session transcript into the journal (RFC-023).
+
+    Harvests conversation text (user and assistant messages), every Bash
+    invocation mentioning wingman, and every wingman MCP tool call — with
+    their original timestamps. Requires telemetry to be on.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "harvested")
+    try:
+        report = harvest_transcript(transcript, config)
+    except IngestError as exc:
+        typer.echo(f"harvest failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Harvested {report.imported} events from {report.source}")
+    for kind, count in sorted(report.by_kind.items()):
+        typer.echo(f"  {kind}: {count}")
+    if report.skipped_lines:
+        typer.echo(f"  (skipped {report.skipped_lines} unparseable lines)")
+
+
+def run() -> None:
+    """Console-script entry: the CLI, wrapped in the opt-in usage journal."""
+    argv = sys.argv[1:]
+    started = time.monotonic()
+    code = 0
+    try:
+        app()
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        raise
+    except Exception:
+        code = 1
+        raise
+    finally:
+        try:
+            record_event(
+                load_config(),
+                "cli",
+                argv[0] if argv else "(no-command)",
+                {"argv": redact_argv(argv)},
+                outcome="ok" if code == 0 else f"exit-{code}",
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+        except Exception:  # noqa: BLE001, S110 — the journal never breaks the CLI
+            pass
+
+
 if __name__ == "__main__":
-    app()
+    run()

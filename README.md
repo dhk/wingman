@@ -99,7 +99,10 @@ with `npx md-to-pdf` — every export prints its exact render command.
 every entrypoint hydrates them at startup — no secrets in config files
 (RFC-019). `wingman backup` / `restore` move the workspace as dated,
 retention-pruned tarballs safe to put in a synced folder. `wingman sync`
-is the light daily fetch-and-embed.
+is the light daily fetch-and-embed. `wingman telemetry on` starts an
+opt-in, local-only usage journal (CLI invocations, MCP tool traffic,
+harvested Claude transcripts — RFC-023); `telemetry show/export` read it
+back. Default off; nothing is ever transmitted.
 
 ## Use from Claude (MCP)
 
@@ -123,7 +126,7 @@ claude mcp add wingman -- wingman-mcp    # Claude Code, one line
 - [`ROADMAP.md`](ROADMAP.md): phased delivery plan and current status
 - [`AGENTS.md`](AGENTS.md): engineering and agent instructions
 - [`docs/DESIGN.md`](docs/DESIGN.md): architecture — what the system is
-- [`docs/RFC.md`](docs/RFC.md): the decision ledger (RFC-001…022) — why it is this way
+- [`docs/RFC.md`](docs/RFC.md): the decision ledger (RFC-001…023) — why it is this way
 - [`docs/EVALUATION.md`](docs/EVALUATION.md): how we measure that it's getting better
 - [`docs/RESEARCH-BRIEFING.md`](docs/RESEARCH-BRIEFING.md): competitive-landscape research brief
 
