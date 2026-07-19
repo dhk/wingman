@@ -37,6 +37,11 @@ from wingman.application.pack import build_application_pack
 from wingman.application.backup import create_backup
 from wingman.application.corpus import find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
+from wingman.application.feature_request import (
+    file_feature_request,
+    get_feature_repo,
+    render_preview,
+)
 from wingman.application.focus import (
     follow_company,
     latest_digest,
@@ -962,6 +967,45 @@ def pack(query: str, company: str = "", out_dir: str = "") -> str:
     except IngestError as exc:
         return f"pack failed: {exc}"
     return report.markdown
+
+
+@server.tool()
+def feature_request(title: str = "", body: str = "", confirmed: bool = False) -> str:
+    """File a Wingman feature request as a GitHub issue — the RFC-025 protocol.
+
+    PROTOCOL — when the user says "feature request: <idea>" (or similar):
+    1. Read what they wrote. If anything material is ambiguous — the problem
+       being solved, the desired behavior, scope — ask clarifying questions
+       FIRST, in conversation. Skip the questions when the request is clear.
+    2. Compose a crisp title and a body with: the problem, the requested
+       behavior, and any acceptance criteria the user gave.
+    3. Call this tool with confirmed=false: it returns the EXACT issue
+       preview. Show it to the user and ask whether to file it.
+    4. Only after the user explicitly says yes, call again with
+       confirmed=true. Never set confirmed=true without that explicit yes —
+       this is Wingman's one external write, and the confirmation IS the
+       approval gate (RFC-006).
+
+    Filing uses the user's own gh CLI and auth, into the repo they set with
+    'wingman feature repo'. A missing repo or gh failure is reported, never
+    silent.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    if not title.strip():
+        return "feature_request needs a title. Gather the idea first (see the protocol)."
+    if not confirmed:
+        return (
+            render_preview(get_feature_repo(config), title, body)
+            + "\n\nNot filed. Show this preview to the user; call again with "
+            "confirmed=true only after they explicitly approve."
+        )
+    try:
+        filed = file_feature_request(config, title, body)
+    except IngestError as exc:
+        return f"feature request failed: {exc}"
+    return f"Filed: {filed.url}"
 
 
 @server.tool()
