@@ -21,7 +21,7 @@ Shipped alongside the phases: MCP parity across the whole surface (RFC-008,
 37 tools; remote transport RFC-017), design-system PDF exports, backup/
 restore, Keychain-backed keys (RFC-019), object rename/delete/fix for people
 and companies (RFC-021). The decision ledger is
-[`docs/RFC.md`](docs/RFC.md) (RFC-001…021).
+[`docs/RFC.md`](docs/RFC.md) (RFC-001…022).
 
 **Current backlog, in order:** (1) unified ranked search across
 corpus/people/companies/news/research; (2) execute the competitive research

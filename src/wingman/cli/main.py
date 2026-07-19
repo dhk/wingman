@@ -46,6 +46,7 @@ from wingman.application.pov import (
     company_card_id,
     render_pov_card,
 )
+from wingman.application.search import render_search_report, search_workspace
 from wingman.application.research import (
     add_company_source,
     delete_company,
@@ -1994,6 +1995,32 @@ def company_delete_dossier(
     typer.echo(f"Deleted {len(removed)} dossier file(s):")
     for path in removed:
         typer.echo(f"  {path}")
+
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Words to find anywhere the workspace knows about."),
+    limit: int = typer.Option(12, "--limit", help="Maximum hits across all stores."),
+) -> None:
+    """Search everything: corpus, people's writing, POV stances, news, research, briefs.
+
+    One ranked list; every hit says what it is, whose it is, when, and where
+    it came from. Keyword matching plus a semantic pass that finds documents
+    matching by meaning (RFC-022). Egress, stated plainly: with a remote
+    embeddings provider configured (voyage), the query text is sent to it;
+    with the local 'hashed' provider or no embeddings, nothing leaves the
+    machine and the semantic pass says it was skipped.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "searched")
+    try:
+        with Storage(config.db_path) as storage:
+            report = search_workspace(query, storage, config, limit=limit)
+    except IngestError as exc:
+        typer.echo(f"search failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_search_report(report))
 
 
 @app.command()

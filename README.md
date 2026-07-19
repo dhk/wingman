@@ -80,6 +80,15 @@ standing focus in one act, and `wingman overnight` deep-refreshes
 everything followed into a dated digest — schedule it and wake up to
 answers (RFC-018).
 
+**Search.** `wingman search "semantic layers"` answers "what does the
+workspace know about X" in one call — corpus, people's writing, POV
+stances, news, research links, and briefs in a single ranked list, every
+hit attributed, dated, and sourced. Keyword matching plus a semantic pass
+that finds documents matching by meaning (`[semantic]` hits carry their
+similarity score). The semantic pass embeds the query — with voyage
+configured that text goes to the provider, the same egress as `embed`;
+with the local `hashed` provider nothing leaves the machine (RFC-022).
+
 **Delivery.** Print-ready US-Letter exports styled by the site design
 system: career one-pager, company dossier, and a landscape 2×2 person
 briefing dock (brief | POV | background | news) with clickable sources;
@@ -114,7 +123,7 @@ claude mcp add wingman -- wingman-mcp    # Claude Code, one line
 - [`ROADMAP.md`](ROADMAP.md): phased delivery plan and current status
 - [`AGENTS.md`](AGENTS.md): engineering and agent instructions
 - [`docs/DESIGN.md`](docs/DESIGN.md): architecture — what the system is
-- [`docs/RFC.md`](docs/RFC.md): the decision ledger (RFC-001…019) — why it is this way
+- [`docs/RFC.md`](docs/RFC.md): the decision ledger (RFC-001…022) — why it is this way
 - [`docs/EVALUATION.md`](docs/EVALUATION.md): how we measure that it's getting better
 - [`docs/RESEARCH-BRIEFING.md`](docs/RESEARCH-BRIEFING.md): competitive-landscape research brief
 

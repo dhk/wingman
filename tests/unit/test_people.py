@@ -259,9 +259,7 @@ def test_fix_person_merges_into_existing_correct_name(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
         stub, _ = add_person("Ed Wong", storage, company="OpenAI")
-        full, _ = add_person(
-            "Edmund Wong", storage, linkedin_url="https://linkedin.com/in/elwong"
-        )
+        full, _ = add_person("Edmund Wong", storage, linkedin_url="https://linkedin.com/in/elwong")
         merged, was_merged = fix_person("Ed Wong", "Edmund Wong", storage)
         assert was_merged
         assert merged.person_id == full.person_id
