@@ -13,17 +13,17 @@ Each phase must leave Wingman in a usable state.
 | 4 — Relationship Intelligence | **Partial** — connections import, warmth signal vector (RFC-020), POV cards, similarity; no interaction timeline / follow-up queue yet |
 | 5 — Daily Operator | **Partial** — `make-it-so`, watchlists, follow/overnight (RFC-018), and the morning digest with its what/why/who/evidence action list cover the daily loop; no scored three-action brief yet |
 | 6 — Drafting and Voice | **Partial** — purpose-shaped outreach briefs with evidence-validated talking points and intro bullets; the approval boundary (never sends, RFC-006) is structural; no per-message-type drafts or critic pass |
-| 7 — Interview Preparation | Not started (the decision memo's strongest near-term build) |
+| 7 — Interview Preparation | **Partial** — the application answer bank (RFC-030): refined Q+A+context accumulates and is recalled across applications; prep packets and mock interviews not started |
 | 8 — Controlled Connectors | Not started (explicit imports only, by design so far) |
 | 9 — Outcome Post-Mortems | Not started |
 
 Shipped alongside the phases: MCP parity across the whole surface (RFC-008,
-46 tools; remote transport RFC-017), design-system PDF exports, backup/
+47 tools; remote transport RFC-017), design-system PDF exports, backup/
 restore, Keychain-backed keys (RFC-019), object rename/delete/fix for people
 and companies (RFC-021), unified ranked search with a semantic pass
 (RFC-022), opt-in local telemetry (RFC-023), gated feature-request capture
 (RFC-025). The decision ledger is [`docs/RFC.md`](docs/RFC.md)
-(RFC-001…029).
+(RFC-001…030).
 
 The competitive research pass is **done**: two independent landscape
 passes over ~30 comparators and the decisions drawn from them live in

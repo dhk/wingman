@@ -108,6 +108,14 @@ from wingman.infrastructure.telemetry import (
 from wingman.infrastructure.telemetry import (
     set_enabled as telemetry_set_enabled,
 )
+from wingman.application.answers import (
+    find_answer,
+    find_similar,
+    remove_answer,
+    render_answer,
+    render_answer_listing,
+    save_answer,
+)
 from wingman.application.company_feeds import (
     attach_company_feed,
     fetch_company_feeds,
@@ -155,6 +163,10 @@ profile_app = typer.Typer(
     help="Manage the career profile: list, remove, resolve conflicts, clear (RFC-027)."
 )
 app.add_typer(profile_app, name="profile")
+answers_app = typer.Typer(
+    help="The application answer bank: refined Q+A+context, reused across applications (RFC-030)."
+)
+app.add_typer(answers_app, name="answers")
 
 
 def _version_callback(value: bool) -> None:
@@ -2445,6 +2457,98 @@ def telemetry_harvest(
         typer.echo(f"  {kind}: {count}")
     if report.skipped_lines:
         typer.echo(f"  (skipped {report.skipped_lines} unparseable lines)")
+
+
+@answers_app.command("save")
+def answers_save(
+    question: str = typer.Argument(..., help="The question, as asked."),
+    answer: str = typer.Argument(..., help="The refined answer (iterate first; save the result)."),
+    company: str = typer.Option("", "--company", help="Application context: company."),
+    role: str = typer.Option("", "--role", help="Application context: role title."),
+    date: str = typer.Option("", "--date", help="Application context: date asked."),
+    answer_id: str = typer.Option("", "--id", help="Revise this existing entry (id prefix)."),
+) -> None:
+    """Bank a refined answer with its application context (RFC-030)."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "saved")
+    try:
+        with Storage(config.db_path) as storage:
+            record, created = save_answer(
+                question,
+                answer,
+                storage,
+                company=company,
+                role_title=role,
+                asked_on=date,
+                answer_id=answer_id,
+            )
+    except IngestError as exc:
+        typer.echo(f"answers save failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{'Saved' if created else 'Revised'} [{record.answer_id[:8]}] — {record.context}")
+
+
+@answers_app.command("find")
+def answers_find(
+    question: str = typer.Argument(..., help="A question to match against banked answers."),
+) -> None:
+    """Surface previously refined answers similar to a question — the recall step."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "searched")
+    with Storage(config.db_path) as storage:
+        hits = find_similar(question, storage)
+    if not hits:
+        typer.echo("No similar answers banked yet.")
+        return
+    for record, snippet in hits:
+        typer.echo(render_answer(record))
+        typer.echo(f"  match: {snippet}")
+        typer.echo("")
+
+
+@answers_app.command("list")
+def answers_list() -> None:
+    """Every banked answer with its id and context."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        typer.echo(render_answer_listing(storage.list_answers()))
+
+
+@answers_app.command("show")
+def answers_show(
+    answer_id: str = typer.Argument(..., help="Answer id (any unambiguous prefix)."),
+) -> None:
+    """One banked answer in full."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "shown")
+    try:
+        with Storage(config.db_path) as storage:
+            typer.echo(render_answer(find_answer(answer_id, storage)))
+    except IngestError as exc:
+        typer.echo(f"answers show failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@answers_app.command("rm")
+def answers_rm(
+    answer_id: str = typer.Argument(..., help="Answer id (any unambiguous prefix) to delete."),
+) -> None:
+    """Delete one banked answer."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "removed")
+    try:
+        with Storage(config.db_path) as storage:
+            record = remove_answer(answer_id, storage)
+    except IngestError as exc:
+        typer.echo(f"answers rm failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Removed [{record.answer_id[:8]}] {record.question[:60]!r}")
 
 
 @profile_app.command("list")

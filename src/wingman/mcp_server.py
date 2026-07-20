@@ -75,6 +75,14 @@ from wingman.application.pov import (
     company_card_id,
     render_pov_card,
 )
+from wingman.application.answers import (
+    find_answer,
+    find_similar,
+    remove_answer,
+    render_answer,
+    render_answer_listing,
+    save_answer,
+)
 from wingman.application.company_feeds import (
     attach_company_feed,
     fetch_company_feeds,
@@ -229,6 +237,69 @@ def career_profile() -> str:
             "('wingman ingest') or a LinkedIn export ('wingman ingest-linkedin') first."
         )
     return career_md.read_text(encoding="utf-8")
+
+
+@server.tool()
+def answer_bank(
+    action: str,
+    question: str = "",
+    answer: str = "",
+    company: str = "",
+    role_title: str = "",
+    asked_on: str = "",
+    answer_id: str = "",
+) -> str:
+    """The application answer bank (RFC-030): refined Q+A+context, reused across applications.
+
+    action is 'find', 'save', 'list', 'show', or 'remove'.
+
+    Protocol when the user is working through a job application: they
+    announce the context (company, role title, date) and paste the
+    questions. For EACH question: (1) call find first — surface any
+    previously refined answer for a similar question and offer it as the
+    starting point; (2) interview the user and iterate on the wording —
+    use the AskUserQuestion tool where available to offer concrete
+    refinement choices — until THEY confirm the answer is concise and
+    sounds like them (never save a one-shot draft); (3) only then save
+    with question, answer, and the announced context. Pass answer_id to
+    revise an existing entry instead of duplicating it. The bank is
+    local, persistent, and searched by 'find' and workspace search.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "find":
+                hits = find_similar(question, storage)
+                if not hits:
+                    return "No similar answers banked yet."
+                blocks = [
+                    f"{render_answer(record)}\n  match: {snippet}" for record, snippet in hits
+                ]
+                return "\n\n".join(blocks)
+            if action == "save":
+                record, created = save_answer(
+                    question,
+                    answer,
+                    storage,
+                    company=company,
+                    role_title=role_title,
+                    asked_on=asked_on,
+                    answer_id=answer_id,
+                )
+                verb = "Saved" if created else "Revised"
+                return f"{verb} [{record.answer_id[:8]}] — {record.context}"
+            if action == "list":
+                return render_answer_listing(storage.list_answers())
+            if action == "show":
+                return render_answer(find_answer(answer_id, storage))
+            if action == "remove":
+                record = remove_answer(answer_id, storage)
+                return f"Removed [{record.answer_id[:8]}] {record.question[:60]!r}"
+    except IngestError as exc:
+        return f"answer bank {action} failed: {exc}"
+    return f"unknown action {action!r}; use find, save, list, show, or remove."
 
 
 @server.tool()
