@@ -207,7 +207,7 @@ def _company_deep(
         research = research_company(name, storage)
         for result in research.results:
             target.lines.append(f"research {result.url}: {result.detail}")
-            target.lines.extend(f"  new: {link}" for link in result.new_links)
+            target.lines.extend(f"  new: [link]({link})" for link in result.new_links)
             if result.new_links:
                 jobish = [
                     link
@@ -219,7 +219,13 @@ def _company_deep(
                     if jobish
                     else f"Review what changed on {name}'s {result.label or 'watched'} page"
                 )
-                evidence = (jobish or result.new_links)[:_MAX_ACTION_EVIDENCE]
+                # Long URLs (job boards, trackers) read as noise: markdown
+                # links keep the line scannable; the runnable command below
+                # keeps the raw URL where it's needed verbatim.
+                evidence = [
+                    f"[link]({link})"
+                    for link in (jobish or result.new_links)[:_MAX_ACTION_EVIDENCE]
+                ]
                 if jobish:
                     evidence = evidence + [f'run: wingman assess --url "{jobish[0]}"']
                 actions.append(
@@ -301,7 +307,7 @@ def _person_deep(
         if added:
             newest = storage.list_external_documents(person.person_id) if person else []
             newest_titled = [
-                f"{doc.title} — {doc.url}" if doc.url else doc.title
+                f"[{doc.title}]({doc.url})" if doc.url else doc.title
                 for doc in newest[-_MAX_ACTION_EVIDENCE:]
             ]
             brief = storage.get_outreach_brief(person.person_id) if person else None
@@ -332,7 +338,7 @@ def _person_deep(
                         what=f"Skim the news snapshot for {name}",
                         why=news.detail + " in the refreshed snapshot",
                         who=name,
-                        evidence=[f"{top.title} — {top.url}"],
+                        evidence=[f"[{top.title}]({top.url})" if top.url else top.title],
                     )
                 )
     except IngestError as exc:

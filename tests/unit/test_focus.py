@@ -128,7 +128,7 @@ def test_overnight_runs_targets_and_writes_digest(
     assert text.index("## Action list") > text.index("Jane Author (person)")
     assert "Read Jane Author's new writing" in text
     assert "why: 1 new post(s) fetched overnight" in text
-    assert "evidence: On Evals — https://jane.substack.com/p/on-evals" in text
+    assert "evidence: [On Evals](https://jane.substack.com/p/on-evals)" in text
     # latest.md mirrors the newest digest
     latest = digest.parent / "latest.md"
     assert latest.exists() and latest.read_text(encoding="utf-8") == text
@@ -190,7 +190,7 @@ def test_second_run_actions_carry_new_link_evidence(
     assert action.who == "Acme"
     assert "1 new link since" in action.why
     assert action.evidence == [
-        "https://acme.example.com/jobs/staff-mle",
+        "[link](https://acme.example.com/jobs/staff-mle)",
         'run: wingman assess --url "https://acme.example.com/jobs/staff-mle"',
     ]
     text = Path(report.digest_path).read_text(encoding="utf-8")
