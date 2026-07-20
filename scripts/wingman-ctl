@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# wingman-ctl — manage wingman processes: what's running, start/stop, upgrade.
+#
+# The two kinds of wingman-mcp process, and why they're treated differently:
+#   * the HTTP server ('wingman-mcp --http'): YOURS. Started here, stopped
+#     here, tracked by a verified pidfile ('wingman mcp status|stop', RFC-032).
+#   * stdio servers (no --http): spawned by Claude Desktop / Claude CLI
+#     sessions, one each. They belong to those clients — killing one breaks
+#     its session's tools until the client restarts. stop-all does kill them
+#     (that's the point, at upgrade time), and says what must be restarted.
+set -u
+
+REPO="${WINGMAN_REPO:-$HOME/Documents/dev/wingman}"
+case "$(uname -s)" in
+  Darwin) LOG="${WINGMAN_LOG:-$HOME/Library/Logs/wingman-mcp.log}" ;;
+  *)      LOG="${WINGMAN_LOG:-$HOME/.local/state/wingman-mcp.log}" ;;
+esac
+
+say() { printf '%s\n' "$*"; }
+
+http_running() { wingman mcp status 2>/dev/null | grep -q 'is running'; }
+
+stdio_pids() {
+  # wingman-mcp processes WITHOUT --http: the client-owned stdio servers.
+  pgrep -f 'wingman-mcp' 2>/dev/null | while read -r pid; do
+    cmd=$(ps -p "$pid" -o command= 2>/dev/null)
+    case "$cmd" in
+      *wingman-mcp*--http*) ;;                 # ours; managed via the pidfile
+      *wingman-mcp*) printf '%s\n' "$pid" ;;
+    esac
+  done
+}
+
+owner_of() {
+  tty=$(ps -p "$1" -o tty= 2>/dev/null | tr -d ' ')
+  case "$tty" in
+    '??'|'?'|'') say "Claude Desktop (GUI-spawned)" ;;
+    *)           say "a Claude CLI session on $tty" ;;
+  esac
+}
+
+cmd_status() {
+  say "wingman $(wingman --version 2>/dev/null | awk '{print $2}')"
+  say ""
+  say "HTTP server (yours):"
+  say "  $(wingman mcp status 2>/dev/null || say 'wingman not installed?')"
+  say ""
+  say "Client-owned stdio servers:"
+  found=0
+  for pid in $(stdio_pids); do
+    found=1
+    say "  pid $pid — owned by $(owner_of "$pid")"
+  done
+  [ "$found" = 0 ] && say "  none"
+  say ""
+  say "Safe to stop? 'wingman mcp stop' / '$0 stop' touch only the HTTP server."
+  say "'$0 stop-all' also kills the client-owned ones — their sessions lose"
+  say "wingman until you restart that client (Desktop: reopen app; CLI: /exit + relaunch)."
+}
+
+cmd_start() {
+  if http_running; then
+    wingman mcp status
+    return 0
+  fi
+  mkdir -p "$(dirname "$LOG")"
+  nohup wingman-mcp --http >"$LOG" 2>&1 &
+  disown 2>/dev/null || true
+  sleep 1
+  wingman mcp status
+  say "log: $LOG"
+}
+
+cmd_stop() { wingman mcp stop; }
+
+cmd_stop_all() {
+  force="${1:-}"
+  pids=$(stdio_pids)
+  if [ -n "$pids" ] && [ "$force" != "-y" ]; then
+    say "This will also kill client-owned servers:"
+    for pid in $pids; do say "  pid $pid — $(owner_of "$pid")"; done
+    say "Those clients lose wingman until restarted. Continue? [y/N]"
+    read -r answer
+    case "$answer" in y|Y) ;; *) say "aborted; only run '$0 stop' for the HTTP server."; return 1 ;; esac
+  fi
+  wingman mcp stop 2>/dev/null || true
+  if [ -n "$pids" ]; then
+    for pid in $pids; do kill "$pid" 2>/dev/null; done
+    sleep 2
+    for pid in $pids; do kill -9 "$pid" 2>/dev/null; done
+    say "stdio servers stopped — restart Claude Desktop / CLI sessions to reconnect."
+  fi
+}
+
+cmd_upgrade() {
+  was_running=0; http_running && was_running=1
+  say "→ refreshing $REPO from github…"
+  ( cd "$REPO" && git pull --ff-only ) || { say "pull failed — nothing was touched"; return 1; }
+  say "→ reinstalling…"
+  ( cd "$REPO" && uv tool install --reinstall . ) || { say "reinstall failed — nothing was killed"; return 1; }
+  say "→ stopping everything on the old build…"
+  cmd_stop_all -y
+  if [ "$was_running" = 1 ]; then
+    say "→ restarting the HTTP server on the new build…"
+    cmd_start
+  fi
+  say ""
+  wingman --version
+  say "Done. Restart Claude Desktop and any CLI sessions to reconnect on the new build."
+}
+
+case "${1:-}" in
+  status)   cmd_status ;;
+  start)    cmd_start ;;
+  stop)     cmd_stop ;;
+  stop-all) cmd_stop_all "${2:-}" ;;
+  upgrade)  cmd_upgrade ;;
+  *)
+    say "usage: $0 status|start|stop|stop-all [-y]|upgrade"
+    say "  status    what's running, who owns each process, what's safe to stop"
+    say "  start     the HTTP server (wingman-mcp --http), backgrounded + logged"
+    say "  stop      the HTTP server only (pidfile-verified; never touches clients)"
+    say "  stop-all  HTTP + client-owned stdio servers (asks first; -y skips)"
+    say "  upgrade   pull → reinstall → stop-all → restart HTTP if it was running"
+    exit 2 ;;
+esac

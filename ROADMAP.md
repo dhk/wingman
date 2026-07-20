@@ -23,7 +23,7 @@ restore, Keychain-backed keys (RFC-019), object rename/delete/fix for people
 and companies (RFC-021), unified ranked search with a semantic pass
 (RFC-022), opt-in local telemetry (RFC-023), gated feature-request capture
 (RFC-025). The decision ledger is [`docs/RFC.md`](docs/RFC.md)
-(RFC-001…031).
+(RFC-001…032).
 
 The competitive research pass is **done**: two independent landscape
 passes over ~30 comparators and the decisions drawn from them live in
