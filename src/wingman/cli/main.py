@@ -108,6 +108,7 @@ from wingman.infrastructure.telemetry import (
 from wingman.infrastructure.telemetry import (
     set_enabled as telemetry_set_enabled,
 )
+from wingman.infrastructure.mcp_process import server_status, stop_server
 from wingman.application.triage import (
     mute_action,
     render_verdicts,
@@ -177,6 +178,10 @@ actions_app = typer.Typer(
     help="Triage digest actions: mute/snooze what should stop rolling over (RFC-031)."
 )
 app.add_typer(actions_app, name="actions")
+mcp_app = typer.Typer(
+    help="The HTTP MCP server process: status and stop, via its pidfile (RFC-032)."
+)
+app.add_typer(mcp_app, name="mcp")
 
 
 def _version_callback(value: bool) -> None:
@@ -2467,6 +2472,31 @@ def telemetry_harvest(
         typer.echo(f"  {kind}: {count}")
     if report.skipped_lines:
         typer.echo(f"  (skipped {report.skipped_lines} unparseable lines)")
+
+
+@mcp_app.command("status")
+def mcp_status() -> None:
+    """Whether the HTTP MCP server ('wingman-mcp --http') is running."""
+    configure_logging()
+    config = load_config()
+    typer.echo(server_status(config))
+
+
+@mcp_app.command("stop")
+def mcp_stop() -> None:
+    """Stop the HTTP MCP server — and ONLY it (RFC-032).
+
+    Deterministic via the server's pidfile: never pattern-matches the
+    process table, never touches the stdio servers Claude Desktop and
+    Claude CLI sessions spawn for themselves (those belong to their
+    clients; restart the client to restart them).
+    """
+    configure_logging()
+    config = load_config()
+    stopped, detail = stop_server(config)
+    typer.echo(detail)
+    if not stopped:
+        raise typer.Exit(code=1)
 
 
 @actions_app.command("mute")

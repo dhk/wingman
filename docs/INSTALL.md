@@ -127,6 +127,15 @@ wingman watchlist run targets       # cycle a named group through make-it-so
 wingman overnight                   # deep-refresh everything followed → dated digest
 ```
 
+**Process management (RFC-032).** `wingman mcp status|stop` manages the
+HTTP server you start (pidfile-verified — it never touches the stdio
+servers Claude clients spawn for themselves). `scripts/wingman-ctl` is
+the full operator: `status` explains every running wingman process and
+what's safe to stop, `start`/`stop` handle the HTTP server, `stop-all`
+also stops client-owned servers (with consent — those clients then need
+a restart), and `upgrade` does pull → reinstall → stop-all → restart in
+the order that guarantees everything comes back on the new build.
+
 **Scheduling (RFC-018).** Wingman runs no daemon; you own the schedule.
 Enrollment via `wingman company follow` is the standing consent record —
 `wingman watchlist show overnight` lists exactly what a run touches,

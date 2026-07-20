@@ -20,6 +20,7 @@ conversation).
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import logging
 import secrets
@@ -127,6 +128,7 @@ from wingman.domain.person import FeedAttribution, FeedKind, FeedSource, Person
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.keys import ensure_env
 from wingman.infrastructure.logs import configure_logging, get_logger
+from wingman.infrastructure.mcp_process import clear_pidfile, write_pidfile
 from wingman.version import wingman_version
 from wingman.infrastructure.telemetry import (
     count_events as telemetry_count,
@@ -1752,6 +1754,10 @@ def main(argv: list[str] | None = None) -> None:
     # The capability token lives in the URL path; uvicorn's access log would
     # write it on every request, silently defeating rotation-as-revocation (#70).
     logging.getLogger("uvicorn.access").disabled = True
+    # Pidfile so 'wingman mcp status|stop' can manage exactly this process
+    # (RFC-032); cleared on clean exit, verified-then-ignored if we crash.
+    write_pidfile(config)
+    atexit.register(clear_pidfile, config)
     server.run(transport="streamable-http")
 
 
