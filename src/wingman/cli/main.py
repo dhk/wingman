@@ -1893,6 +1893,9 @@ def overnight(
         f"{report.processed} targets, {report.failed} with failures, {len(report.actions)} actions."
     )
     typer.echo(f"Digest: {report.digest_path}")
+    pretty = Path(report.digest_path).with_suffix(".html")
+    if pretty.exists():
+        typer.echo(f"Pretty: {pretty}  (wingman digest --open)")
     typer.echo("Read it any time with: wingman digest")
     if report.failed:
         raise typer.Exit(code=1)
@@ -1918,8 +1921,12 @@ def digest(
         typer.echo(str(newest))
         return
     if open_it:
-        typer.launch(str(newest))
-        typer.echo(f"Opened {newest}")
+        # Prefer the styled HTML twin when the run wrote one — it opens in
+        # the browser; the markdown remains the canonical artifact.
+        pretty = newest.with_suffix(".html")
+        target = pretty if pretty.exists() else newest
+        typer.launch(str(target))
+        typer.echo(f"Opened {target}")
         return
     typer.echo(newest.read_text(encoding="utf-8"))
 

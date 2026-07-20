@@ -440,6 +440,13 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     digest_path.write_text(content, encoding="utf-8")
     # A stable pointer for editors, scripts, and habit: always the newest digest.
     (digest_dir / "latest.md").write_text(content, encoding="utf-8")
+    # The pretty twin: same run data in the design system, action list first.
+    # Markdown stays canonical (greppable, searchable); HTML is for reading.
+    from wingman.reporting.digest_html import render_digest_html
+
+    html_content = render_digest_html(now, targets, actions, suppressed, suggestion_lines)
+    digest_path.with_suffix(".html").write_text(html_content, encoding="utf-8")
+    (digest_dir / "latest.html").write_text(html_content, encoding="utf-8")
     _logger.info("overnight targets=%d failed=%d digest=%s", len(targets), failed, digest_path)
     return OvernightReport(
         digest_path=str(digest_path),
