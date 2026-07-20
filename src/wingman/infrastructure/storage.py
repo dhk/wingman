@@ -10,6 +10,7 @@ from types import TracebackType
 from typing import Self
 
 from wingman.domain import SourceRecord
+from wingman.domain.answer import AnswerRecord
 from wingman.domain.source_record import derive_document_key
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.opportunity import Opportunity
@@ -74,6 +75,12 @@ CREATE TABLE IF NOT EXISTS pov_cards (
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS answers (
+    answer_id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS answers_fts USING fts5(answer_id UNINDEXED, question, answer);
 CREATE TABLE IF NOT EXISTS watchlist_members (
     list_key TEXT NOT NULL,
     list_name TEXT NOT NULL,
@@ -460,6 +467,51 @@ class Storage:
         self._conn.commit()
         self.watchlist_delete_member("person", person.name)
         return True
+
+    def save_answer(self, record: "AnswerRecord") -> None:
+        """Insert or replace one answer-bank record and resync its FTS row (RFC-030)."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO answers (answer_id, payload, created_at) VALUES (?, ?, ?)",
+            (record.answer_id, record.model_dump_json(), record.created_at.isoformat()),
+        )
+        self._conn.execute("DELETE FROM answers_fts WHERE answer_id = ?", (record.answer_id,))
+        self._conn.execute(
+            "INSERT INTO answers_fts (answer_id, question, answer) VALUES (?, ?, ?)",
+            (record.answer_id, record.question, record.answer),
+        )
+        self._conn.commit()
+
+    def get_answer(self, answer_id: str) -> "AnswerRecord | None":
+        cursor = self._conn.execute("SELECT payload FROM answers WHERE answer_id = ?", (answer_id,))
+        row: tuple[str] | None = cursor.fetchone()
+        return AnswerRecord.model_validate_json(row[0]) if row else None
+
+    def list_answers(self) -> "list[AnswerRecord]":
+        cursor = self._conn.execute("SELECT payload FROM answers ORDER BY created_at, answer_id")
+        return [AnswerRecord.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def delete_answer(self, answer_id: str) -> bool:
+        cursor = self._conn.execute("DELETE FROM answers WHERE answer_id = ?", (answer_id,))
+        self._conn.execute("DELETE FROM answers_fts WHERE answer_id = ?", (answer_id,))
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def search_answers(self, query: str, limit: int = 5) -> "list[tuple[AnswerRecord, str]]":
+        """Full-text search over questions and answers; (record, snippet) by relevance."""
+        try:
+            cursor = self._conn.execute(
+                "SELECT a.payload, snippet(answers_fts, 1, '[', ']', ' … ', 16)"
+                " FROM answers_fts JOIN answers a ON a.answer_id = answers_fts.answer_id"
+                " WHERE answers_fts MATCH ? ORDER BY rank LIMIT ?",
+                (query, limit),
+            )
+            rows: list[tuple[str, str]] = cursor.fetchall()
+        except sqlite3.OperationalError as exc:
+            raise CorpusSearchError(
+                f"search query {query!r} could not be parsed ({exc}). "
+                "Use plain words, quoted phrases, or AND/OR/NOT."
+            ) from exc
+        return [(AnswerRecord.model_validate_json(payload), snippet) for payload, snippet in rows]
 
     def move_person_content(self, old_person_id: str, new_person_id: str) -> None:
         """Reassign documents and news to a new person id (RFC-029 anchor re-key)."""

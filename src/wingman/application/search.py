@@ -366,6 +366,24 @@ def search_workspace(query: str, storage: Storage, config: Config, limit: int = 
     report.searched.append("briefs")
     columns.append(brief_hits[:per_store])
 
+    # Banked application answers (RFC-030)
+    answer_hits: list[SearchHit] = []
+    for record in storage.list_answers():
+        if _matches(tokens, f"{record.question} {record.answer}"):
+            answer_hits.append(
+                SearchHit(
+                    kind="answer",
+                    title=_clip(record.question),
+                    snippet=_clip(record.answer),
+                    who=record.context,
+                    when=record.updated_at.date().isoformat(),
+                    source=f"answer bank [{record.answer_id[:8]}]",
+                    rank=len(answer_hits) + 1,
+                )
+            )
+    report.searched.append("answers")
+    columns.append(answer_hits[:per_store])
+
     # Interleave by per-store rank: every store's best answer surfaces before
     # any store's third-best. Deterministic tie-break by column order above.
     interleaved: list[SearchHit] = []

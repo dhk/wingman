@@ -117,6 +117,7 @@ def test_search_sweeps_every_store(loaded: Storage) -> None:
         "research",
         "digests",
         "briefs",
+        "answers",
     ]
     by_kind = {hit.kind: hit for hit in report.hits}
     assert by_kind["corpus"].who == "you"
