@@ -75,6 +75,12 @@ from wingman.application.pov import (
     company_card_id,
     render_pov_card,
 )
+from wingman.application.triage import (
+    mute_action,
+    render_verdicts,
+    snooze_action,
+    unmute_action,
+)
 from wingman.application.answers import (
     find_answer,
     find_similar,
@@ -237,6 +243,43 @@ def career_profile() -> str:
             "('wingman ingest') or a LinkedIn export ('wingman ingest-linkedin') first."
         )
     return career_md.read_text(encoding="utf-8")
+
+
+@server.tool()
+def action_triage(action: str, key: str = "", days: int = 7) -> str:
+    """Triage the morning digest's action list: the user's verdicts persist (RFC-031).
+
+    action is 'mute' (never show this action key again), 'snooze' (hide it
+    for `days` days), 'unmute' (clear a verdict), or 'list' (standing
+    verdicts). Every digest action carries its key on a 'key:' line.
+
+    Protocol when the user asks to triage or clean up their digest: read
+    the latest digest (the digest tool), then walk the action list item by
+    item with AskUserQuestion where available — offer Keep / Mute forever /
+    Snooze — and record each verdict here. Never mute on your own
+    judgement: what counts as uninteresting is the user's call, made one
+    verdict at a time, and their answers ARE the filtering logic.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "mute":
+                mute_action(key, storage)
+                return f"Muted {key} — it will not appear in future digests."
+            if action == "snooze":
+                until = snooze_action(key, storage, days=days)
+                return f"Snoozed {key} until {until}."
+            if action == "unmute":
+                if unmute_action(key, storage):
+                    return f"Unmuted {key}."
+                return f"No verdict recorded for {key}."
+            if action == "list":
+                return render_verdicts(storage)
+    except IngestError as exc:
+        return f"action triage {action} failed: {exc}"
+    return f"unknown action {action!r}; use mute, snooze, unmute, or list."
 
 
 @server.tool()

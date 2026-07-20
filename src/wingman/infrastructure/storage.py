@@ -81,6 +81,12 @@ CREATE TABLE IF NOT EXISTS answers (
     created_at TEXT NOT NULL
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS answers_fts USING fts5(answer_id UNINDEXED, question, answer);
+CREATE TABLE IF NOT EXISTS action_verdicts (
+    action_key TEXT PRIMARY KEY,
+    verdict TEXT NOT NULL,
+    until TEXT,
+    noted_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS watchlist_members (
     list_key TEXT NOT NULL,
     list_name TEXT NOT NULL,
@@ -467,6 +473,31 @@ class Storage:
         self._conn.commit()
         self.watchlist_delete_member("person", person.name)
         return True
+
+    def set_action_verdict(self, action_key: str, verdict: str, until: str | None = None) -> None:
+        """Record a triage verdict for a digest action key (RFC-031)."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO action_verdicts (action_key, verdict, until, noted_at)"
+            " VALUES (?, ?, ?, ?)",
+            (action_key, verdict, until, datetime.now(UTC).isoformat()),
+        )
+        self._conn.commit()
+
+    def clear_action_verdict(self, action_key: str) -> bool:
+        cursor = self._conn.execute(
+            "DELETE FROM action_verdicts WHERE action_key = ?", (action_key,)
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def list_action_verdicts(self) -> list[dict[str, str | None]]:
+        cursor = self._conn.execute(
+            "SELECT action_key, verdict, until, noted_at FROM action_verdicts ORDER BY noted_at"
+        )
+        return [
+            {"action_key": row[0], "verdict": row[1], "until": row[2], "noted_at": row[3]}
+            for row in cursor.fetchall()
+        ]
 
     def save_answer(self, record: "AnswerRecord") -> None:
         """Insert or replace one answer-bank record and resync its FTS row (RFC-030)."""

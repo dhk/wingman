@@ -168,12 +168,18 @@ class OvernightTarget(BaseModel):
 
 
 class ActionItem(BaseModel):
-    """One morning action: what to do, why now, about whom, on what evidence."""
+    """One morning action: what to do, why now, about whom, on what evidence.
+
+    key is the action's stable identity for triage (RFC-031): the same
+    kind of action about the same subject keeps the same key across runs,
+    so a mute/snooze verdict applies to every future digest.
+    """
 
     what: str
     why: str
     who: str
     evidence: list[str] = Field(default_factory=list)
+    key: str = ""
 
 
 class OvernightReport(BaseModel):
@@ -222,6 +228,7 @@ def _company_deep(
                         why=result.detail + f" ({result.url})",
                         who=name,
                         evidence=evidence,
+                        key=f"research:{company_key(name)}:{result.url}",
                     )
                 )
             elif result.status == "failed":
@@ -230,6 +237,7 @@ def _company_deep(
                         what=f"Fix the research source for {name}",
                         why=result.detail,
                         who=name,
+                        key=f"fix-source:{company_key(name)}:{result.url}",
                         evidence=[result.url],
                     )
                 )
@@ -253,6 +261,7 @@ def _company_deep(
                         why=f"{feeds.added} new company post(s) fetched overnight",
                         who=name,
                         evidence=feeds.titles[:_MAX_ACTION_EVIDENCE],
+                        key=f"company-posts:{company_key(name)}",
                     )
                 )
         except IngestError as exc:
@@ -304,7 +313,15 @@ def _person_deep(
             why = f"{added} new post(s) fetched overnight" + (
                 "; outreach brief refreshed" if brief is not None else ""
             )
-            actions.append(ActionItem(what=what, why=why, who=name, evidence=newest_titled))
+            actions.append(
+                ActionItem(
+                    what=what,
+                    why=why,
+                    who=name,
+                    evidence=newest_titled,
+                    key=f"person-posts:{' '.join(name.lower().split())}",
+                )
+            )
         news = steps.get("news")
         if news is not None and news.status == "ok":
             items = storage.list_person_news(person.person_id) if person else []
@@ -370,6 +387,12 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
             targets.append(_company_deep(member_name, config, storage, actions))
         else:
             targets.append(_person_deep(member_name, config, storage, actions))
+    # Standing triage verdicts (RFC-031): what the user muted or snoozed
+    # never reaches the digest — applied before the cap so a suppressed
+    # item can't crowd out a live one.
+    from wingman.application.triage import filter_actions
+
+    actions, suppressed = filter_actions(actions, storage)
     actions = actions[:_MAX_ACTIONS]
 
     failed = sum(1 for target in targets if target.status == "failed")
@@ -397,8 +420,18 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
             lines.append(f"   - why: {action.why}")
             lines.append(f"   - who: {action.who}")
             lines.extend(f"   - evidence: {item}" for item in action.evidence)
+            if action.key:
+                lines.append(f"   - key: {action.key}")
     else:
         lines.append("Nothing changed enough to act on — no new links, posts, or news.")
+    if suppressed:
+        lines.extend(
+            [
+                "",
+                f"({suppressed} action(s) suppressed by your triage verdicts — "
+                "'wingman actions list' shows them, 'wingman actions unmute <key>' reverses.)",
+            ]
+        )
 
     digest_dir = (out_dir.expanduser() if out_dir else config.reports_dir / "digests").resolve()
     digest_dir.mkdir(parents=True, exist_ok=True)

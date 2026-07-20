@@ -108,6 +108,12 @@ from wingman.infrastructure.telemetry import (
 from wingman.infrastructure.telemetry import (
     set_enabled as telemetry_set_enabled,
 )
+from wingman.application.triage import (
+    mute_action,
+    render_verdicts,
+    snooze_action,
+    unmute_action,
+)
 from wingman.application.answers import (
     find_answer,
     find_similar,
@@ -167,6 +173,10 @@ answers_app = typer.Typer(
     help="The application answer bank: refined Q+A+context, reused across applications (RFC-030)."
 )
 app.add_typer(answers_app, name="answers")
+actions_app = typer.Typer(
+    help="Triage digest actions: mute/snooze what should stop rolling over (RFC-031)."
+)
+app.add_typer(actions_app, name="actions")
 
 
 def _version_callback(value: bool) -> None:
@@ -2457,6 +2467,68 @@ def telemetry_harvest(
         typer.echo(f"  {kind}: {count}")
     if report.skipped_lines:
         typer.echo(f"  (skipped {report.skipped_lines} unparseable lines)")
+
+
+@actions_app.command("mute")
+def actions_mute(
+    key: str = typer.Argument(..., help="Action key (shown under each digest action)."),
+) -> None:
+    """Never show this action again — for the recurring items you'll never act on."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "muted")
+    try:
+        with Storage(config.db_path) as storage:
+            mute_action(key, storage)
+    except IngestError as exc:
+        typer.echo(f"mute failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Muted {key} — it will not appear in future digests.")
+
+
+@actions_app.command("snooze")
+def actions_snooze(
+    key: str = typer.Argument(..., help="Action key (shown under each digest action)."),
+    days: int = typer.Option(7, "--days", help="Hide it for this many days."),
+) -> None:
+    """Hide this action for a while — for 'not now', not 'never'."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "snoozed")
+    try:
+        with Storage(config.db_path) as storage:
+            until = snooze_action(key, storage, days=days)
+    except IngestError as exc:
+        typer.echo(f"snooze failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Snoozed {key} until {until}.")
+
+
+@actions_app.command("unmute")
+def actions_unmute(
+    key: str = typer.Argument(..., help="Action key to reinstate."),
+) -> None:
+    """Clear a mute or snooze — the action reaches digests again."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "unmuted")
+    with Storage(config.db_path) as storage:
+        cleared = unmute_action(key, storage)
+    if cleared:
+        typer.echo(f"Unmuted {key}.")
+    else:
+        typer.echo(f"No verdict recorded for {key}.", err=True)
+        raise typer.Exit(code=1)
+
+
+@actions_app.command("list")
+def actions_list() -> None:
+    """Every standing triage verdict (expired snoozes clear themselves)."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        typer.echo(render_verdicts(storage))
 
 
 @answers_app.command("save")
