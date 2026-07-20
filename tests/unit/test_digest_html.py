@@ -28,7 +28,11 @@ def test_render_escapes_and_structures() -> None:
             what="Assess the new opening at Acme <&> Co",
             why="1 new link",
             who="Acme <&> Co",
-            evidence=['run: wingman assess --url "https://acme.example.com/jobs/x"'],
+            evidence=[
+                "[link](https://acme.example.com/jobs/x?tracking=very-long-blob)",
+                "[Supersimple raises $2.2M <PR>](https://news.google.com/rss/articles/CBMi)",
+                'run: wingman assess --url "https://acme.example.com/jobs/x"',
+            ],
             key="research:acme & co:https://acme.example.com/careers",
         )
     ]
@@ -40,6 +44,13 @@ def test_render_escapes_and_structures() -> None:
     assert "2 targets" in page and "1 failures" in page and "1 actions" in page
     assert "Action list" in page and page.index("Action list") < page.index("Targets")
     assert "<code>research:acme &amp; co:https://acme.example.com/careers</code>" in page
+    # markdown links render as anchors, escaped titles intact, raw commands untouched
+    assert '<a href="https://acme.example.com/jobs/x?tracking=very-long-blob">link</a>' in page
+    assert (
+        '<a href="https://news.google.com/rss/articles/CBMi">'
+        "Supersimple raises $2.2M &lt;PR&gt;</a>" in page
+    )
+    assert "run: wingman assess --url &quot;https://acme.example.com/jobs/x&quot;" in page
     assert "2 action(s) suppressed" in page
     assert "Consider following" in page and "blog.example.com" in page
     assert "<link" not in page and 'stylesheet: "' not in page  # fully self-contained

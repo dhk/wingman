@@ -10,6 +10,7 @@ so it opens anywhere and attaches cleanly.
 from __future__ import annotations
 
 import html
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -39,6 +40,15 @@ def _e(text: str) -> str:
     return html.escape(text, quote=True)
 
 
+# Digest lines carry markdown links ('[title](https://…)') so long URLs stay
+# readable; rendered here as anchors. Matching runs on already-escaped text.
+_MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+
+
+def _rich(text: str) -> str:
+    return _MD_LINK.sub(r'<a href="\2">\1</a>', _e(text))
+
+
 def _chip(label: str, kind: str = "fact") -> str:
     return f'<span class="tag tag-{kind}">{_e(label)}</span>'
 
@@ -53,7 +63,7 @@ def _target_section(target: "OvernightTarget") -> list[str]:
     ]
     for line in target.lines:
         css = ' class="sub"' if line.startswith(("  ", "new: ")) else ""
-        parts.append(f"<li{css}>{_e(line)}</li>")
+        parts.append(f"<li{css}>{_rich(line)}</li>")
     parts.extend(["</ul>", "</div>"])
     return parts
 
@@ -66,7 +76,7 @@ def _action_block(number: int, action: "ActionItem") -> list[str]:
         f'<p class="line"><b>why</b>{_e(action.why)}</p>',
         f'<p class="line"><b>who</b>{_e(action.who)}</p>',
     ]
-    parts.extend(f'<p class="line"><b>evidence</b>{_e(item)}</p>' for item in action.evidence)
+    parts.extend(f'<p class="line"><b>evidence</b>{_rich(item)}</p>' for item in action.evidence)
     if action.key:
         parts.append(f'<p class="line"><b>key</b><code>{_e(action.key)}</code></p>')
     parts.append("</div>")
