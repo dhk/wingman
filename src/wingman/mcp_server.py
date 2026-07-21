@@ -1726,6 +1726,13 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Generate a fresh capability token before serving (revokes every old URL).",
     )
+    parser.add_argument(
+        "--prefix",
+        default="",
+        help="Native path prefix for --http (e.g. /trent): the server itself listens on "
+        "<prefix>/mcp/… and <prefix>/ui/…. For pass-through fronts (nginx, Caddy, direct "
+        "access); do NOT combine with a stripping proxy like 'tailscale serve --set-path'.",
+    )
     args = parser.parse_args(argv)
     configure_logging()
     get_logger("mcp").info("wingman-mcp %s starting", wingman_version())
@@ -1739,9 +1746,12 @@ def main(argv: list[str] | None = None) -> None:
         return
     config = load_config()
     token = _http_token(config, rotate=args.rotate_token)
+    from wingman.webui import normalize_prefix
+
+    prefix = normalize_prefix(args.prefix)
     server.settings.host = args.host
     server.settings.port = args.port
-    server.settings.streamable_http_path = f"/mcp/{token}"
+    server.settings.streamable_http_path = f"{prefix}/mcp/{token}"
     if args.host not in _LOOPBACK_HOSTS:
         print(
             f"WARNING: binding {args.host} exposes the whole workspace (and its fetch/model "
@@ -1751,9 +1761,9 @@ def main(argv: list[str] | None = None) -> None:
         )
     from wingman.webui import register_ui
 
-    register_ui(server)
-    print(f"MCP over HTTP: http://{args.host}:{args.port}/mcp/{token}")
-    print(f"Web UI (read + upload): http://{args.host}:{args.port}/ui/{token}")
+    register_ui(server, prefix=prefix)
+    print(f"MCP over HTTP: http://{args.host}:{args.port}{prefix}/mcp/{token}")
+    print(f"Web UI (read + upload): http://{args.host}:{args.port}{prefix}/ui/{token}")
     print("The URL is a capability — anyone holding it can use the workspace.")
     print("Revoke it any time: wingman-mcp --http --rotate-token")
     print(f"Reach it from elsewhere via your own tunnel, e.g.: tailscale serve {args.port}")

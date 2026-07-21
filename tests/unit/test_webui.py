@@ -203,3 +203,23 @@ def test_ui_is_path_mount_agnostic(client: tuple[TestClient, str]) -> None:
     assert 'action="upload"' in page and 'action="keys"' in page
     # wrong token gets no redirect breadcrumb either
     assert http.get(f"/ui/{token}x", follow_redirects=False).status_code == 404
+
+
+def test_native_prefix_serves_and_root_unaffected(client: tuple[TestClient, str]) -> None:
+    """--prefix /trent: the server itself listens on the folder (RFC-033 addendum)."""
+    http, token = client
+    register_ui(server, prefix="/trent")  # coexists with the root registration
+    http2 = TestClient(server.streamable_http_app())
+    page = http2.get(f"/trent/ui/{token}/")
+    assert page.status_code == 200 and "Wingman" in page.text
+    assert 'href="/' not in page.text  # still only relative URLs
+    bare = http2.get(f"/trent/ui/{token}", follow_redirects=False)
+    assert bare.status_code == 307 and bare.headers["location"] == f"{token}/"
+    assert http2.get("/trent/ui/wrong-token/").status_code == 404
+    assert http2.get(f"/ui/{token}/").status_code == 200  # root registration intact
+
+    from wingman.webui import normalize_prefix
+
+    assert normalize_prefix("trent") == "/trent"
+    assert normalize_prefix("/trent/") == "/trent"
+    assert normalize_prefix("") == "" and normalize_prefix("/") == ""

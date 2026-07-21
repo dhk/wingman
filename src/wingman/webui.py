@@ -381,17 +381,31 @@ async def ui_keys(request: Request) -> Response:
     return _page("Keys", back + blocks)
 
 
-_registered = False
+_registered_prefixes: set[str] = set()
 
 
-def register_ui(server: "FastMCP") -> None:
-    """Mount the read surface on the MCP server's HTTP app (idempotent)."""
-    global _registered
-    if _registered:
+def normalize_prefix(prefix: str) -> str:
+    """'' stays root; 'trent', '/trent', '/trent/' all become '/trent'."""
+    cleaned = prefix.strip().strip("/")
+    return f"/{cleaned}" if cleaned else ""
+
+
+def register_ui(server: "FastMCP", prefix: str = "") -> None:
+    """Mount the read surface, optionally under a native path prefix.
+
+    With prefix='/trent' the server itself listens on /trent/ui/… — for
+    pass-through fronts (nginx, Caddy, direct tailnet access) that forward
+    the full path. A stripping proxy (tailscale serve --set-path) must NOT
+    be combined with a prefix: it removes the mount segment before
+    forwarding, and the two prefixes would stack. Pages need no awareness
+    either way — every URL they emit is relative. Idempotent per prefix.
+    """
+    mount = normalize_prefix(prefix)
+    if mount in _registered_prefixes:
         return
-    _registered = True
-    server.custom_route("/ui/{token}", methods=["GET"])(ui_home_redirect)
-    server.custom_route("/ui/{token}/", methods=["GET"])(ui_home)
-    server.custom_route("/ui/{token}/file/{path:path}", methods=["GET"])(ui_file)
-    server.custom_route("/ui/{token}/upload", methods=["POST"])(ui_upload)
-    server.custom_route("/ui/{token}/keys", methods=["POST"])(ui_keys)
+    _registered_prefixes.add(mount)
+    server.custom_route(f"{mount}/ui/{{token}}", methods=["GET"])(ui_home_redirect)
+    server.custom_route(f"{mount}/ui/{{token}}/", methods=["GET"])(ui_home)
+    server.custom_route(f"{mount}/ui/{{token}}/file/{{path:path}}", methods=["GET"])(ui_file)
+    server.custom_route(f"{mount}/ui/{{token}}/upload", methods=["POST"])(ui_upload)
+    server.custom_route(f"{mount}/ui/{{token}}/keys", methods=["POST"])(ui_keys)
