@@ -19,6 +19,7 @@ the ordinary deterministic pipelines.
 from __future__ import annotations
 
 import html
+import re
 import secrets
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,23 +49,83 @@ _SERVE_TYPES = {
 _MAX_LISTED_PER_SECTION = 12
 
 _UI_CSS = """
-body { padding: 40px 24px; }
-.ui { max-width: 720px; margin: 0 auto; }
-.ui h2 { margin-top: 40px; }
-.ui ul { list-style: none; padding-left: 0; }
-.ui li { margin-bottom: 8px; }
-.ui .when { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);
-  margin-right: 10px; }
-.upload { background: var(--bg2); border: 1px solid var(--border);
-  border-radius: var(--border-radius); padding: 20px; margin-top: 16px; }
-.upload input[type=file] { margin: 8px 0 16px; display: block; }
-.upload button { font-family: var(--font-cond); font-size: 16px; padding: 6px 20px;
-  background: var(--accent); color: white; border: 0; border-radius: var(--border-radius);
-  cursor: pointer; }
-.report-box { background: var(--bg2); border-left: 3px solid var(--accent);
-  padding: 12px 16px; margin: 16px 0; white-space: pre-wrap;
-  font-family: var(--font-mono); font-size: 13px; }
+body { margin: 0; }
+.ui { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px;
+  display: flex; flex-direction: column; gap: 24px; }
+.hdr { display: flex; align-items: center; gap: 8px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.hdr .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--accent); }
+.hdr .wordmark { font-size: 18px; font-weight: 700; color: var(--text-head); }
+.hdr .meta { margin: 0; flex-basis: 100%; }
+.eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--text-dim); }
+.hero { display: flex; align-items: center; gap: 12px; border: 1px solid var(--accent);
+  background: var(--bg2); border-radius: var(--border-radius); padding: 16px;
+  min-height: 64px; text-decoration: none; color: var(--text);
+  transition: background .15s, border-color .15s; }
+.hero:hover { background: var(--bg3); }
+.hero .hbody { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.hero .title { font-size: 20px; font-weight: 600; color: var(--text-head); }
+.hero .sub { color: var(--text-muted); font-size: 14px; margin: 0; }
+.hero .arrow { color: var(--accent); font-size: 20px; }
+.group { display: flex; flex-direction: column; gap: 8px; }
+.divider { display: flex; align-items: center; gap: 12px; }
+.divider span { font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--text-dim); white-space: nowrap; }
+.divider::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+.rows { border: 1px solid var(--border); border-radius: var(--border-radius); overflow: hidden; }
+.row { display: grid; grid-template-columns: 62px 1fr auto; gap: 12px; align-items: center;
+  padding: 10px 12px; min-height: 44px; text-decoration: none; color: var(--text);
+  border-top: 1px solid var(--border-light); transition: background .15s; }
+.row:first-child { border-top: 0; }
+.row:hover { background: var(--bg3); }
+.row .when { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+.row .arrow { color: var(--text-dim); }
+.chip { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: .04em; padding: 2px 8px; border-radius: 999px; }
+.chip-digest { background: rgba(43, 80, 232, .12); color: var(--accent); }
+.chip-pack { background: rgba(107, 63, 212, .12); color: var(--accent-purple); }
+.chip-dossier { background: rgba(14, 149, 145, .12); color: var(--teal); }
+.chip-export { background: rgba(209, 102, 10, .12); color: var(--accent-orange); }
+.panel { border: 1px solid var(--border); background: var(--bg2);
+  border-radius: var(--border-radius); padding: 16px;
+  display: flex; flex-direction: column; gap: 16px; }
+.panel p { margin: 0; color: var(--text-muted); font-size: 14px; }
+.stepno { font-family: var(--font-mono); font-size: 11px; color: var(--accent);
+  letter-spacing: .04em; text-transform: uppercase; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--text-dim); }
+.field input { border: 1px solid var(--border); border-radius: var(--border-radius);
+  background: var(--bg); color: var(--text); padding: 10px 12px; font: inherit; }
+.field input[readonly] { color: var(--text-dim); background: var(--bg3); }
+.status { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+  font-size: 11px; color: var(--text-dim); }
+.status .sdot { width: 7px; height: 7px; border-radius: 999px; background: var(--text-dim); }
+.status.ok { color: var(--teal); }
+.status.ok .sdot { background: var(--teal); }
+.status.warn { color: var(--accent-orange); }
+.status.warn .sdot { background: var(--accent-orange); }
+.btn { font-family: var(--font-mono); font-size: 12px; text-transform: uppercase;
+  letter-spacing: .04em; min-height: 44px; width: 100%; border: 0;
+  border-radius: var(--border-radius); background: var(--accent); color: #fff;
+  cursor: pointer; transition: opacity .15s; }
+.btn:hover { opacity: .85; }
+.report-box { border-left: 3px solid var(--teal); background: var(--bg2);
+  border-radius: 0 var(--border-radius) var(--border-radius) 0; padding: 12px 16px;
+  white-space: pre-wrap; font-family: var(--font-mono); font-size: 13px; }
 .report-box.err { border-left-color: var(--accent-orange); }
+.empty { border: 1px dashed var(--border); background: var(--bg2);
+  border-radius: var(--border-radius); padding: 24px 16px; text-align: center;
+  display: flex; flex-direction: column; gap: 4px; }
+.empty b { color: var(--text-head); }
+details.manage > summary { cursor: pointer; font-family: var(--font-mono); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim);
+  padding: 10px 0; list-style: none; }
+details.manage > summary::-webkit-details-marker { display: none; }
+details.manage > summary::before { content: "\\25B8  "; }
+details.manage[open] > summary::before { content: "\\25BE  "; }
+details.manage > div { display: flex; flex-direction: column; gap: 16px; padding-top: 8px; }
 """
 
 
@@ -112,7 +173,7 @@ def _listed_files(root: Path) -> list[tuple[str, Path]]:
     # A digest's .md twin duplicates its .html: prefer the pretty one.
     htmls = {path.with_suffix(".md") for path in candidates if path.suffix == ".html"}
     for path in candidates:
-        if path in htmls or path.name == "latest.md":
+        if path in htmls or path.name in ("latest.md", "latest.html"):
             continue
         section = path.parent.relative_to(root).as_posix()
         sections.append(("reports" if section == "." else section, path))
@@ -135,64 +196,191 @@ async def ui_home_redirect(request: Request) -> Response:
     return RedirectResponse(url=f"{request.path_params['token']}/", status_code=307)
 
 
-async def ui_home(request: Request) -> Response:
-    config = _authorized(request)
-    if config is None:
-        return _not_found()
-    body: list[str] = ["<h1>Wingman</h1>"]
-    body.append(f'<div class="meta">workspace: {_e(str(config.data_dir))}</div>')
+# Directory -> humanized group name (issue #95: never raw directory names).
+_GROUP_NAMES = {
+    "digests": "Overnight digests",
+    "packs": "Application packs",
+    "dossiers": "Company dossiers",
+    "pdf": "Exports",
+    "reports": "Reports",
+}
+_STAMP = re.compile(r"(20\d{6})T(\d{2})(\d{2})\d*Z?")
+_ISO_DATE = re.compile(r"(20\d{2}-\d{2}-\d{2})")
 
-    latest = config.reports_dir / "digests" / "latest.html"
-    if latest.exists():
-        stamp = datetime.fromtimestamp(latest.stat().st_mtime, tz=UTC)
-        body.append(
-            f'<p><a href="file/digests/latest.html">Today&rsquo;s digest &rarr;</a> '
-            f'<span class="when">{stamp.strftime("%Y-%m-%d %H:%M UTC")}</span></p>'
-        )
+
+def _humanize(path: Path, now: datetime) -> tuple[str, str]:
+    """(date label, title) for an artifact — filenames never reach the page."""
+    stem = path.stem
+    label = ""
+    stamped = _STAMP.search(stem)
+    if stamped:
+        when = datetime.strptime(stamped.group(1), "%Y%m%d").replace(tzinfo=UTC)
+        hm = f"{stamped.group(2)}:{stamped.group(3)}"
+        label = f"Today · {hm}" if when.date() == now.date() else when.strftime("%d %b")
+        stem = _STAMP.sub("", stem)
     else:
-        body.append('<p class="dim">No digest yet — the first overnight run writes one.</p>')
+        dated = _ISO_DATE.search(stem)
+        if dated:
+            when = datetime.strptime(dated.group(1), "%Y-%m-%d").replace(tzinfo=UTC)
+            label = "Today" if when.date() == now.date() else when.strftime("%d %b")
+            stem = _ISO_DATE.sub("", stem)
+    words = [w for w in re.split(r"[-_.]+", stem) if w]
+    if words and words[0].lower() == "overnight":
+        title = "Overnight digest"
+    elif words and words[0].lower() == "pack":
+        rest = " ".join(w.capitalize() for w in words[1:])
+        title = rest or "Application pack"
+    else:
+        title = " ".join(w.capitalize() for w in words) or path.name
+    return label, title
 
+
+def _group_name(section: str) -> str:
+    return _GROUP_NAMES.get(section, section.replace("-", " ").replace("_", " ").title())
+
+
+def _header(config: Config) -> str:
+    return (
+        '<div class="hdr"><span class="dot"></span>'
+        '<span class="wordmark">Wingman</span>'
+        f'<div class="meta">{_e(str(config.data_dir))}</div></div>'
+    )
+
+
+def _artifact_sections(config: Config, now: datetime) -> list[str]:
     grouped: dict[str, list[Path]] = {}
     for section, path in _listed_files(config.reports_dir):
         grouped.setdefault(section, [])
         if len(grouped[section]) < _MAX_LISTED_PER_SECTION:
             grouped[section].append(path)
+    parts: list[str] = []
     for section in sorted(grouped):
-        body.append(f"<h2>{_e(section)}</h2><ul>")
+        parts.append(
+            f'<div class="group"><div class="divider"><span>{_e(_group_name(section))}</span></div>'
+        )
+        rows = []
         for path in grouped[section]:
             rel = path.relative_to(config.reports_dir).as_posix()
-            when = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).date().isoformat()
-            body.append(
-                f'<li><span class="when">{when}</span>'
-                f'<a href="file/{_e(rel)}">{_e(path.name)}</a></li>'
+            label, title = _humanize(path, now)
+            rows.append(
+                f'<a class="row" href="file/{_e(rel)}"><span class="when">{_e(label)}</span>'
+                f"<span>{_e(title)}</span>" + '<span class="arrow">\u2192</span></a>'
             )
-        body.append("</ul>")
+        parts.append('<div class="rows">' + "".join(rows) + "</div></div>")
+    return parts
 
-    body.append("<h2>Add to the workspace</h2>")
-    body.append(
-        '<div class="upload">'
+
+def _upload_panel(step: str = "") -> str:
+    lead = f'<span class="stepno">{_e(step)}</span>' if step else ""
+    return (
+        f'<div class="panel">{lead}'
         "<p>A LinkedIn data-export <b>.zip</b>, or a resume "
         "(<b>.md .txt .pdf .docx .tex</b>). It lands in the inbox and runs the "
         "ordinary ingest pipeline — nothing else is touched.</p>"
-        '<form method="post" enctype="multipart/form-data" action="upload">'
-        '<input type="file" name="file" required>'
-        "<button>Upload &amp; ingest</button></form></div>"
+        '<form method="post" enctype="multipart/form-data" action="upload" class="field">'
+        '<label>File</label><input type="file" name="file" required>'
+        '<button class="btn">Upload &amp; ingest</button></form></div>'
     )
 
-    body.append("<h2>API keys</h2>")
-    states = {short: state for short, _var, state in key_status_rows(config.data_dir)}
+
+def _key_field(short: str, env_var: str, source: str) -> str:
+    label = f"{short.capitalize()} key"
+    if source == "environment":
+        return (
+            f'<div class="field"><label>{_e(label)}</label>'
+            '<input type="password" value="********" readonly>'
+            f'<span class="status warn"><span class="sdot"></span>'
+            f"shadowed \u2014 {_e(env_var)} in the service environment wins</span></div>"
+        )
+    if source == "workspace file":
+        status = (
+            '<span class="status ok"><span class="sdot"></span>verified · workspace file</span>'
+        )
+    else:
+        status = '<span class="status"><span class="sdot"></span>not set</span>'
+    return (
+        f'<div class="field"><label>{_e(label)}</label>'
+        f'<input type="password" name="{_e(short)}" autocomplete="off">'
+        f"{status}</div>"
+    )
+
+
+def _keys_panel(config: Config, step: str = "") -> str:
+    lead = (
+        f'<span class="stepno">{_e(step)}</span>'
+        if step
+        else '<span class="stepno">API keys</span>'
+    )
+    fields = "".join(
+        _key_field(short, env_var, source)
+        for short, env_var, source in key_status_rows(config.data_dir)
+    )
+    return (
+        f'<div class="panel">{lead}'
+        "<p>Each key is <b>verified against its provider</b> before it is stored "
+        "(workspace file, owner-only). A key set in the service environment always "
+        "wins (RFC-019).</p>"
+        f'<form method="post" action="keys" class="field">{fields}'
+        '<button class="btn">Verify &amp; store</button></form></div>'
+    )
+
+
+async def ui_home(request: Request) -> Response:
+    config = _authorized(request)
+    if config is None:
+        return _not_found()
+    now = datetime.now(UTC)
+    has_workspace = config.db_path.exists()
+    latest = config.reports_dir / "digests" / "latest.html"
+    body: list[str] = [_header(config)]
+
+    if not has_workspace:
+        # State 2 — fresh: guided setup, nothing dead above the fold.
+        body.append("<h1>Set up your workspace</h1>")
+        body.append(
+            '<p class="dim">Two steps and Wingman is yours: a key it can spend, '
+            "and your data to reason over.</p>"
+        )
+        body.append(_keys_panel(config, step="01 \u2014 Add an API key"))
+        body.append(_upload_panel(step="02 \u2014 Upload your data"))
+        return _page("Wingman \u2014 setup", "\n".join(body))
+
+    if latest.exists():
+        # State 1 — daily: the digest is the fold.
+        stamp = datetime.fromtimestamp(latest.stat().st_mtime, tz=UTC)
+        eyebrow = (
+            f"Today · {stamp.strftime('%H:%M')} UTC"
+            if stamp.date() == now.date()
+            else stamp.strftime("%d %b · %H:%M UTC")
+        )
+        body.append(
+            '<a class="hero" href="file/digests/latest.html"><div class="hbody">'
+            f'<span class="eyebrow">{_e(eyebrow)}</span>'
+            '<span class="title">Overnight digest</span>'
+            '<p class="sub">Actions first, then everything that changed.</p>'
+            "</div>" + '<span class="arrow">\u2192</span></a>'
+        )
+        body.extend(_artifact_sections(config, now))
+        body.append(
+            '<details class="manage"><summary>Manage \u2014 keys &amp; uploads</summary><div>'
+            + _upload_panel()
+            + _keys_panel(config)
+            + "</div></details>"
+        )
+        return _page("Wingman", "\n".join(body))
+
+    # State 3 — degraded: workspace lives, no digest yet.
     body.append(
-        '<div class="upload">'
-        f"<p>Each key is <b>verified against its provider</b> before it is stored "
-        f"(workspace file, owner-only). A key set in the service environment always "
-        f"wins (RFC-019). Current: anthropic — <b>{_e(states.get('anthropic', '?'))}</b>, "
-        f"voyage — <b>{_e(states.get('voyage', '?'))}</b>.</p>"
-        '<form method="post" action="keys">'
-        '<label>Anthropic key <input type="password" name="anthropic" '
-        'autocomplete="off"></label><br>'
-        '<label>Voyage key <input type="password" name="voyage" '
-        'autocomplete="off"></label><br><br>'
-        "<button>Verify &amp; store</button></form></div>"
+        '<div class="empty"><span class="eyebrow" style="color: var(--accent-orange)">'
+        "No digest yet</span><b>The first overnight run writes one.</b>"
+        '<span class="dim">Run <code>wingman overnight</code> \u2014 or follow a company first.</span></div>'
+    )
+    body.extend(_artifact_sections(config, now))
+    body.append(
+        '<details class="manage" open><summary>Manage \u2014 keys &amp; uploads</summary><div>'
+        + _upload_panel()
+        + _keys_panel(config)
+        + "</div></details>"
     )
     return _page("Wingman", "\n".join(body))
 
@@ -236,12 +424,10 @@ async def ui_upload(request: Request) -> Response:
             f'{back}<div class="report-box err">Unsupported type {_e(suffix or name)}: '
             "send a LinkedIn export .zip or a resume (.md .txt .pdf .docx .tex).</div>",
         )
-    if not config.db_path.exists():
-        return _page(
-            "Upload",
-            f'{back}<div class="report-box err">The workspace is not initialized — '
-            "run 'wingman init' on the server first.</div>",
-        )
+    # A fresh workspace initializes on first upload (issue #95: the setup
+    # state must never present a dead control; Storage creates the schema).
+    for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
+        directory.mkdir(parents=True, exist_ok=True)
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
     stored = config.inbox_dir / f"{stamp}-{name}"
