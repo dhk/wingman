@@ -63,7 +63,9 @@ def test_home_lists_digest_and_reports(client: tuple[TestClient, str]) -> None:
     (config.reports_dir / "packs" / "pack-staff-mle.md").write_text("pack!", encoding="utf-8")
     page = http.get(f"/ui/{token}/").text
     assert "Today" in page and "file/digests/latest.html" in page
-    assert "pack-staff-mle.md" in page
+    assert 'href="file/packs/pack-staff-mle.md"' in page  # real path in href only
+    assert ">Staff Mle<" in page  # humanized link text (issue #95)
+    assert "Application packs" in page  # humanized group, never the raw dir name
     assert "Upload" in page  # the form is on the page
     served = http.get(f"/ui/{token}/file/digests/latest.html")
     assert served.status_code == 200 and "MARKER-DIGEST" in served.text
@@ -223,3 +225,42 @@ def test_native_prefix_serves_and_root_unaffected(client: tuple[TestClient, str]
     assert normalize_prefix("trent") == "/trent"
     assert normalize_prefix("/trent/") == "/trent"
     assert normalize_prefix("") == "" and normalize_prefix("/") == ""
+
+
+def test_spec_three_states_and_dark_tokens(client: tuple[TestClient, str]) -> None:
+    """Issue #95 acceptance: state machine, humanization, details, dark mode."""
+    http, token = client
+    config = load_config()
+    # fixture made the db but no digest -> State 3: degraded, Manage expanded
+    page = http.get(f"/ui/{token}/").text
+    assert "No digest yet" in page and "wingman overnight" in page
+    assert '<details class="manage" open>' in page
+    assert "prefers-color-scheme: dark" in page  # dark tokens ride every page
+    # a digest arrives -> State 1: hero first, Manage collapsed
+    digests = config.reports_dir / "digests"
+    digests.mkdir(parents=True, exist_ok=True)
+    (digests / "latest.html").write_text("<h1>d</h1>", encoding="utf-8")
+    (digests / "overnight-20260101T051500Z.html").write_text("<h1>old</h1>", encoding="utf-8")
+    page = http.get(f"/ui/{token}/").text
+    assert "Overnight digest" in page and 'class="hero"' in page
+    assert '<details class="manage"><summary>' in page  # closed by default
+    assert "Overnight digests" in page  # group label
+    assert "01 Jan" in page  # humanized date from the stamp
+    assert ">overnight-20260101T051500Z<" not in page  # raw filename never link text
+    assert "latest.html" in page and page.count("file/digests/latest.html") == 1  # hero only
+
+
+def test_spec_fresh_state_guides_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No database at all -> State 2: guided setup, no dead sections."""
+    monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "fresh-ws"))
+    config = load_config()
+    config.data_dir.mkdir(parents=True)
+    token = _http_token(config)
+    register_ui(server)
+    http = TestClient(server.streamable_http_app())
+    page = http.get(f"/ui/{token}/").text
+    assert "Set up your workspace" in page
+    assert "01" in page and "02" in page  # the two steps
+    assert "<details" not in page  # nothing collapsed away in setup
+    assert 'action="keys"' in page and 'action="upload"' in page
+    assert 'href="/' not in page  # still relative everywhere

@@ -39,26 +39,37 @@ STYLESHEET_NAME = "wingman-pdf.css"
 # Derived from the DHK website design system. US Letter (user decision, not
 # the site doc's A4); margins tuned for Letter's shorter page.
 WINGMAN_PDF_CSS = """\
-/* wingman-pdf.css — derived from the DHK website design-system tokens.
-   Fonts are expected locally; the stacks degrade honestly. */
+/* wingman design-system tokens — Electric Cobalt (issue #95 spec, canonical).
+   Light default; dark via prefers-color-scheme. No external requests: fonts
+   degrade through their stacks. Legacy variable names are kept so every
+   existing component reads the new palette without edits. */
 :root {
-  --bg: #f9f8f6; --bg2: #f2f1ee; --bg3: #eae9e5;
-  --border: #dddbd6; --border-light: #e8e6e1;
-  --text: #0a0a09; --text-head: #0a0a09; --text-muted: #111110; --text-dim: #5a5850;
-  --accent: #16a34a; --accent-blue: #2970d6;
-  --accent-purple: #7c5ce0; --accent-orange: #d94f2a;
-  --font-sans: Barlow, "Helvetica Neue", Arial, sans-serif;
-  --font-cond: "Barlow Condensed", "Arial Narrow", Barlow, sans-serif;
+  --bg: #f5f6fa; --bg2: #eceef5; --bg3: #e2e6f0;
+  --border: #c8cde0; --border-light: #dfe3ee;
+  --text: #14181f; --text-head: #14181f; --text-muted: #444b5c; --text-dim: #7b8298;
+  --accent: #2b50e8; --accent-hv: #1a3bd4; --accent-blue: #2b50e8;
+  --teal: #0e9591; --accent-purple: #6b3fd4; --accent-orange: #d1660a;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-cond: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --border-radius: 4px;
 }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1120; --bg2: #151a2e; --bg3: #1d2440;
+    --border: #2a3350; --border-light: #222a45;
+    --text: #e7ebf7; --text-head: #e7ebf7; --text-muted: #b3bad4; --text-dim: #8891b5;
+    --accent: #5b7cff; --accent-hv: #7d97ff; --accent-blue: #5b7cff;
+    --teal: #3fd0c4; --accent-purple: #9d7dff; --accent-orange: #f0954a;
+  }
+}
 body {
-  font-family: var(--font-sans); font-weight: 300; line-height: 1.75;
+  font-family: var(--font-sans); font-weight: 400; line-height: 1.75;
   color: var(--text); background: var(--bg); margin: 0;
 }
 .portrait { max-width: 680px; }
 h1 {
-  font-family: var(--font-cond); font-weight: 700; font-size: 42px;
+  font-family: var(--font-cond); font-weight: 700; font-size: clamp(32px, 5vw, 40px);
   letter-spacing: -0.01em; color: var(--text-head); margin: 0 0 8px;
 }
 h2 {
@@ -96,10 +107,10 @@ code {
   letter-spacing: 0.1em; padding: 2px 8px; border-radius: var(--border-radius);
   display: inline-block; vertical-align: middle;
 }
-.tag-fact { background: rgba(22, 163, 74, 0.10); color: #15803d; }
-.tag-inference { background: rgba(124, 92, 224, 0.10); color: var(--accent-purple); }
-.tag-warn { background: rgba(217, 79, 42, 0.10); color: var(--accent-orange); }
-.tag-skill { background: rgba(22, 163, 74, 0.10); color: #15803d; margin: 0 6px 6px 0; font-size: 10px; }
+.tag-fact { background: rgba(14, 149, 145, 0.12); color: var(--teal); }
+.tag-inference { background: rgba(107, 63, 212, 0.12); color: var(--accent-purple); }
+.tag-warn { background: rgba(209, 102, 10, 0.12); color: var(--accent-orange); }
+.tag-skill { background: rgba(14, 149, 145, 0.12); color: var(--teal); margin: 0 6px 6px 0; font-size: 10px; }
 .card { border-left: 3px solid var(--accent); padding: 2px 0 2px 16px; margin: 0 0 24px; }
 .card blockquote { border: none; padding: 0; margin: 8px 0 0; }
 .dim { color: var(--text-dim); }
@@ -125,10 +136,10 @@ code {
 .warmth-cool { color: var(--accent-blue); }
 .warmth-cold { color: var(--text-dim); }
 /* stance dimensions: what kind of concordance a point offers */
-.tag-values { background: rgba(22, 163, 74, 0.10); color: #15803d; }
-.tag-attitude { background: rgba(124, 92, 224, 0.10); color: var(--accent-purple); }
+.tag-values { background: rgba(14, 149, 145, 0.12); color: var(--teal); }
+.tag-attitude { background: rgba(107, 63, 212, 0.12); color: var(--accent-purple); }
 .tag-technical { background: rgba(41, 112, 214, 0.10); color: var(--accent-blue); }
-.tag-strategy { background: rgba(217, 79, 42, 0.10); color: var(--accent-orange); }
+.tag-strategy { background: rgba(209, 102, 10, 0.12); color: var(--accent-orange); }
 /* landscape density: one page, three columns — every rule below tightens */
 .sheet-page h1 { font-size: 32px; margin: 0 0 2px; }
 .sheet-page > .meta { margin: 0 0 14px; }
