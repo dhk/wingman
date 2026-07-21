@@ -1747,7 +1747,11 @@ def main(argv: list[str] | None = None) -> None:
             "Prefer 127.0.0.1 plus a tunnel.",
             file=sys.stderr,
         )
+    from wingman.webui import register_ui
+
+    register_ui(server)
     print(f"MCP over HTTP: http://{args.host}:{args.port}/mcp/{token}")
+    print(f"Web UI (read + upload): http://{args.host}:{args.port}/ui/{token}")
     print("The URL is a capability — anyone holding it can use the workspace.")
     print("Revoke it any time: wingman-mcp --http --rotate-token")
     print(f"Reach it from elsewhere via your own tunnel, e.g.: tailscale serve {args.port}")

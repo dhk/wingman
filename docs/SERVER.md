@@ -163,3 +163,11 @@ signal to revisit the hosted-tier assessment instead.
   journal; it is per-workspace and local-only (RFC-023).
 - **Sanity:** `wingman doctor` after any change; it reports version, keys
   seen (env), and workspace health.
+
+## 8. The web UI
+
+The HTTP server also serves `https://…/ui/<token>` (RFC-033): today's
+digest, every report, and an upload form for LinkedIn exports and
+resumes — the no-terminal onboarding path for a second user (see
+`MULTI-INSTANCE-DESIGN.md`). Same token, same tunnel, nothing extra to
+run; the startup banner prints the exact URL.
