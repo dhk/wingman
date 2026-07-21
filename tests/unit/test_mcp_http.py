@@ -71,3 +71,16 @@ def test_non_loopback_bind_warns(
 def test_rotate_token_requires_http(workspace: Path) -> None:
     with pytest.raises(SystemExit):
         main(["--rotate-token"])
+
+
+def test_prefix_serves_natively_on_the_folder(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--prefix /trent: the server itself owns the path segment (no proxy strip needed)."""
+    monkeypatch.setattr(server, "run", RunRecorder())
+    main(["--http", "--port", "9913", "--prefix", "trent/"])  # normalized either way
+    token = _http_token(load_config())
+    assert server.settings.streamable_http_path == f"/trent/mcp/{token}"
+    out = capsys.readouterr().out
+    assert f"http://127.0.0.1:9913/trent/mcp/{token}" in out
+    assert f"http://127.0.0.1:9913/trent/ui/{token}" in out

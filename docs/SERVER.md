@@ -173,17 +173,30 @@ path for a second user (see `MULTI-INSTANCE-DESIGN.md`). Same token,
 same tunnel, nothing extra to run; the startup banner prints the URL.
 
 **Virtual folders for multiple instances.** One hostname can front every
-instance with Tailscale path mounts — the UI emits only relative URLs
-and canonicalizes with a relative redirect, so it works unchanged behind
-a stripped prefix:
+instance as `/dhk/…`, `/trent/…` — two ways, and they must not be
+combined (the prefixes would stack):
+
+*Native prefix (preferred — the server owns its folder):* each instance
+listens on its path itself, so any pass-through front (nginx, Caddy,
+direct tailnet access to the port) works with no path rewriting:
+
+```ini
+ExecStart=%h/.local/bin/wingman-mcp --http --port 8788 --prefix /trent
+```
+
+*Tailscale path mounts (no other proxy needed):* `tailscale serve
+--set-path` **strips** the mount segment before forwarding, so with this
+front the instances run WITHOUT `--prefix`:
 
 ```bash
 sudo tailscale serve --bg --set-path /dhk   http://127.0.0.1:8787
 sudo tailscale serve --bg --set-path /trent http://127.0.0.1:8788
 ```
 
-Each person's bookmark is `https://<host>.<tailnet>.ts.net/<name>/ui/<their-token>/`
-and their MCP connector URL is `…/<name>/mcp/<their-token>`. The path
-segment is a label, not a boundary — the token (and, under `serve`,
-tailnet membership) is still the credential; isolation remains the Unix
-user + workspace, per the multi-instance design.
+Either way each person's bookmark is
+`https://<host>…/<name>/ui/<their-token>/` and their MCP connector URL is
+`…/<name>/mcp/<their-token>`; the UI emits only relative URLs, so pages
+work identically under both fronts. The path segment is a label, not a
+boundary — the token (and, under `serve`, tailnet membership) is still
+the credential; isolation remains the Unix user + workspace, per the
+multi-instance design.
