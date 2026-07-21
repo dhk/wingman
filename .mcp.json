@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "wingman": {
+      "type": "http",
+      "url": "${WINGMAN_MCP_URL}"
+    }
+  }
+}
