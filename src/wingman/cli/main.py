@@ -200,8 +200,8 @@ def _bootstrap(
         help="Print the installed build (git-derived) and exit.",
     ),
 ) -> None:
-    """Hydrate missing API keys from the Keychain before any command runs."""
-    ensure_env()
+    """Hydrate missing API keys (Keychain, then workspace key file) before any command."""
+    ensure_env(data_dir=load_config().data_dir)
 
 
 MIN_PYTHON = (3, 12)

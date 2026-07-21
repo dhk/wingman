@@ -131,3 +131,58 @@ def test_upload_rejects_junk(client: tuple[TestClient, str]) -> None:
     assert (
         http.post("/ui/bad/upload", files={"file": ("a.md", b"x", "text/plain")}).status_code == 404
     )
+
+
+def test_key_form_validates_before_storing(
+    client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    http, token = client
+    config = load_config()
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+    calls: list[tuple[str, str]] = []
+
+    def good(value: str) -> None:
+        calls.append(("ok", value))
+        return None
+
+    def bad(value: str) -> str:
+        calls.append(("bad", value))
+        return "rejected the key (authentication failed)."
+
+    monkeypatch.setitem(webui_module.VALIDATORS, "anthropic", good)
+    monkeypatch.setitem(webui_module.VALIDATORS, "voyage", bad)
+
+    page = http.get(f"/ui/{token}").text
+    assert "API keys" in page and "not set" in page
+
+    response = http.post(f"/ui/{token}/keys", data={"anthropic": "sk-ant-good", "voyage": "pa-bad"})
+    assert response.status_code == 200
+    assert "anthropic: verified and live now." in response.text
+    assert "voyage: rejected the key" in response.text and "Nothing was stored" in response.text
+
+    from wingman.infrastructure.keys import read_workspace_keys, workspace_keys_path
+
+    stored = read_workspace_keys(config.data_dir)
+    assert stored == {"ANTHROPIC_API_KEY": "sk-ant-good"}  # only the verified key
+    assert (workspace_keys_path(config.data_dir).stat().st_mode & 0o777) == 0o600
+    import os
+
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-good"  # live immediately
+
+    empty = http.post(f"/ui/{token}/keys", data={})
+    assert "No key was entered" in empty.text
+    assert http.post("/ui/nope/keys", data={"anthropic": "x"}).status_code == 404
+
+
+def test_env_always_shadows_workspace_key(
+    client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    http, token = client
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    monkeypatch.setitem(webui_module.VALIDATORS, "anthropic", lambda value: None)
+    response = http.post(f"/ui/{token}/keys", data={"anthropic": "sk-ant-newer"})
+    assert "environment variable wins" in response.text
+    import os
+
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-from-env"  # untouched

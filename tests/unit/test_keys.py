@@ -1,6 +1,7 @@
 """Keychain-backed keys (RFC-019): env wins, keychain fills gaps, no secrets shown."""
 
 import pytest
+from pathlib import Path
 
 from wingman.infrastructure import keys as keys_module
 from wingman.infrastructure.keys import (
@@ -91,3 +92,32 @@ def test_key_status_names_sources_not_values(
     assert ("anthropic", "ANTHROPIC_API_KEY", "environment") in rows
     assert ("voyage", "VOYAGE_API_KEY", "keychain") in rows
     assert not any("secret-value" in " ".join(row) for row in rows)
+
+
+def test_workspace_key_file_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """RFC-034: env > keychain > workspace keys.env, hydrated by ensure_env."""
+    from wingman.infrastructure.keys import (
+        ensure_env,
+        read_workspace_keys,
+        store_workspace_key,
+        workspace_keys_path,
+    )
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr("wingman.infrastructure.keys.keychain_available", lambda: False)
+    assert store_workspace_key(tmp_path, "anthropic", "sk-ant-stored") is True
+    assert read_workspace_keys(tmp_path) == {"ANTHROPIC_API_KEY": "sk-ant-stored"}
+    assert (workspace_keys_path(tmp_path).stat().st_mode & 0o777) == 0o600
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    hydrated = ensure_env(data_dir=tmp_path)
+    assert "ANTHROPIC_API_KEY" in hydrated
+    import os
+
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-stored"
+
+    # env wins: hydration never overwrites, storing reports shadowed
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+    assert ensure_env(data_dir=tmp_path) == []
+    assert store_workspace_key(tmp_path, "anthropic", "sk-ant-newer") is False
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-env"

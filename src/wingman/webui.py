@@ -164,6 +164,22 @@ async def ui_home(request: Request) -> Response:
         '<input type="file" name="file" required>'
         "<button>Upload &amp; ingest</button></form></div>"
     )
+
+    body.append("<h2>API keys</h2>")
+    states = {short: state for short, _var, state in key_status_rows(config.data_dir)}
+    body.append(
+        '<div class="upload">'
+        f"<p>Each key is <b>verified against its provider</b> before it is stored "
+        f"(workspace file, owner-only). A key set in the service environment always "
+        f"wins (RFC-019). Current: anthropic — <b>{_e(states.get('anthropic', '?'))}</b>, "
+        f"voyage — <b>{_e(states.get('voyage', '?'))}</b>.</p>"
+        f'<form method="post" action="/ui/{_e(token)}/keys">'
+        '<label>Anthropic key <input type="password" name="anthropic" '
+        'autocomplete="off"></label><br>'
+        '<label>Voyage key <input type="password" name="voyage" '
+        'autocomplete="off"></label><br><br>'
+        "<button>Verify &amp; store</button></form></div>"
+    )
     return _page("Wingman", "\n".join(body))
 
 
@@ -256,6 +272,103 @@ async def ui_upload(request: Request) -> Response:
     return _page("Upload", f'{back}<div class="report-box">{_e(summary)}</div>')
 
 
+def key_status_rows(data_dir: Path) -> list[tuple[str, str, str]]:
+    """(short, env var, source) per key: environment / workspace file / not set."""
+    from wingman.infrastructure.keys import KNOWN_KEYS, read_workspace_keys
+    import os
+
+    stored = read_workspace_keys(data_dir)
+    rows: list[tuple[str, str, str]] = []
+    for short, env_var in KNOWN_KEYS.items():
+        if os.environ.get(env_var, "").strip():
+            source = "environment"
+        elif env_var in stored:
+            source = "workspace file"
+        else:
+            source = "not set"
+        rows.append((short, env_var, source))
+    return rows
+
+
+def _validate_anthropic(value: str) -> str | None:
+    """A free, authenticated call: models.list succeeds only for a live key."""
+    import anthropic
+
+    try:
+        anthropic.Anthropic(api_key=value).models.list()
+    except anthropic.AuthenticationError:
+        return "Anthropic rejected the key (authentication failed)."
+    except Exception as exc:  # noqa: BLE001 — network shape varies; report, don't store
+        return f"could not verify the Anthropic key ({exc})."
+    return None
+
+
+def _validate_voyage(value: str) -> str | None:
+    """One tiny embed against the real endpoint; 401/403 means a bad key."""
+    import httpx
+
+    try:
+        response = httpx.post(
+            "https://api.voyageai.com/v1/embeddings",
+            headers={"Authorization": f"Bearer {value}"},
+            json={"input": ["ok"], "model": "voyage-3-lite"},
+            timeout=20,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"could not verify the Voyage key ({exc})."
+    if response.status_code in (401, 403):
+        return "Voyage rejected the key (authentication failed)."
+    if response.status_code >= 400:
+        return f"Voyage verification failed (HTTP {response.status_code})."
+    return None
+
+
+# Injectable for tests: short name -> validator(value) -> error | None.
+VALIDATORS = {"anthropic": _validate_anthropic, "voyage": _validate_voyage}
+
+
+async def ui_keys(request: Request) -> Response:
+    config = _authorized(request)
+    if config is None:
+        return _not_found()
+    token = str(request.path_params["token"])
+    back = f'<p><a href="/ui/{_e(token)}">&larr; back</a></p>'
+    from wingman.infrastructure.keys import KeyStoreError, store_workspace_key
+
+    form = await request.form()
+    lines: list[str] = []
+    failures: list[str] = []
+    for short in ("anthropic", "voyage"):
+        raw = form.get(short)
+        value = raw.strip() if isinstance(raw, str) else ""
+        if not value:
+            continue
+        error = VALIDATORS[short](value)
+        if error is not None:
+            failures.append(f"{short}: {error} Nothing was stored for it.")
+            continue
+        try:
+            live = store_workspace_key(config.data_dir, short, value)
+        except KeyStoreError as exc:
+            failures.append(f"{short}: {exc}")
+            continue
+        state = (
+            "verified and live now"
+            if live
+            else "verified and stored — the service environment variable wins until it changes"
+        )
+        lines.append(f"{short}: {state}.")
+        _logger.info("webui key stored short=%s live=%s", short, live)  # never the value
+    if not lines and not failures:
+        return _page("Keys", f'{back}<div class="report-box err">No key was entered.</div>')
+    blocks = ""
+    if lines:
+        blocks += f'<div class="report-box">{_e(chr(10).join(lines))}</div>'
+    if failures:
+        blocks += f'<div class="report-box err">{_e(chr(10).join(failures))}</div>'
+    return _page("Keys", back + blocks)
+
+
 _registered = False
 
 
@@ -268,3 +381,4 @@ def register_ui(server: "FastMCP") -> None:
     server.custom_route("/ui/{token}", methods=["GET"])(ui_home)
     server.custom_route("/ui/{token}/file/{path:path}", methods=["GET"])(ui_file)
     server.custom_route("/ui/{token}/upload", methods=["POST"])(ui_upload)
+    server.custom_route("/ui/{token}/keys", methods=["POST"])(ui_keys)

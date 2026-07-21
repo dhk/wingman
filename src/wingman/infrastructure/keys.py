@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import Callable
+from pathlib import Path
 
 from wingman.infrastructure.logs import get_logger
 
@@ -117,24 +118,77 @@ def unset_key(name: str, runner: Runner | None = None) -> bool:
     return code == 0
 
 
-def ensure_env(runner: Runner | None = None) -> list[str]:
-    """Hydrate absent env vars from the Keychain; env always wins when set.
+KEYS_FILENAME = "keys.env"
 
-    Returns the names of the variables that were hydrated. Safe to call
-    anywhere, any number of times; a no-op without a keychain.
+
+def workspace_keys_path(data_dir: Path) -> Path:
+    return data_dir / KEYS_FILENAME
+
+
+def read_workspace_keys(data_dir: Path) -> dict[str, str]:
+    """NAME=value lines from the workspace key file; unknown names ignored."""
+    path = workspace_keys_path(data_dir)
+    if not path.exists():
+        return {}
+    known = set(KNOWN_KEYS.values())
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        name, _, value = line.partition("=")
+        if name.strip() in known and value.strip():
+            values[name.strip()] = value.strip()
+    return values
+
+
+def store_workspace_key(data_dir: Path, name: str, value: str) -> bool:
+    """Store one key in the workspace file (0600) and hydrate it if env is unset.
+
+    Returns True when the key is live in this process now; False when an
+    already-set environment variable shadows it (env always wins, RFC-019).
     """
-    if not keychain_available():
-        return []
+    short = _require_name(name)
+    env_var = KNOWN_KEYS[short]
+    if not value.strip():
+        raise KeyStoreError("the key value is empty; nothing was stored.")
+    values = read_workspace_keys(data_dir)
+    values[env_var] = value.strip()
+    path = workspace_keys_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(f"{name}={val}\n" for name, val in sorted(values.items())), encoding="utf-8"
+    )
+    path.chmod(0o600)
+    _logger.info("workspace key stored var=%s", env_var)  # never the value
+    if os.environ.get(env_var, "").strip():
+        return False
+    os.environ[env_var] = value.strip()
+    return True
+
+
+def ensure_env(runner: Runner | None = None, data_dir: Path | None = None) -> list[str]:
+    """Hydrate absent env vars from the Keychain, then the workspace key file.
+
+    Resolution order (RFC-019/034): a set environment variable always wins;
+    the macOS Keychain fills gaps; the workspace 'keys.env' (written by the
+    web UI's validated key form) fills what remains. Returns the hydrated
+    variable names. Safe to call anywhere, any number of times.
+    """
     hydrated: list[str] = []
-    for short_name, env_var in KNOWN_KEYS.items():
-        if os.environ.get(env_var, "").strip():
-            continue
-        value = get_key(short_name, runner=runner)
-        if value is not None:
+    if keychain_available():
+        for short_name, env_var in KNOWN_KEYS.items():
+            if os.environ.get(env_var, "").strip():
+                continue
+            value = get_key(short_name, runner=runner)
+            if value is not None:
+                os.environ[env_var] = value
+                hydrated.append(env_var)
+    if data_dir is not None:
+        for env_var, value in read_workspace_keys(data_dir).items():
+            if os.environ.get(env_var, "").strip():
+                continue
             os.environ[env_var] = value
             hydrated.append(env_var)
     if hydrated:
-        _logger.info("keychain hydrated %s", ",".join(hydrated))
+        _logger.info("keys hydrated %s", ",".join(hydrated))
     return hydrated
 
 
