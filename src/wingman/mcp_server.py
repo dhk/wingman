@@ -1729,7 +1729,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     configure_logging()
     get_logger("mcp").info("wingman-mcp %s starting", wingman_version())
-    ensure_env()  # hydrate missing API keys from the macOS Keychain (RFC-019)
+    # Hydrate missing API keys: Keychain (RFC-019), then the workspace
+    # key file written by the web UI's validated form (RFC-034).
+    ensure_env(data_dir=load_config().data_dir)
     if not args.http:
         if args.rotate_token:
             parser.error("--rotate-token only makes sense with --http")
