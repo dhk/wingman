@@ -23,14 +23,18 @@ import argparse
 import atexit
 import json
 import logging
+import os
 import secrets
+import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job as assess_job_use_case
@@ -1621,6 +1625,68 @@ def _http_token(config: Config, rotate: bool = False) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+def _tailscale_dns_name(runner: Callable[..., Any] = subprocess.run) -> str | None:
+    """This machine's Tailscale hostname (host.tailnet.ts.net), or None.
+
+    Best-effort by design: no tailscale binary, daemon down, or odd output
+    all mean None — the server must come up fine on a box without Tailscale.
+    """
+    try:
+        proc = runner(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5)
+        name = json.loads(proc.stdout)["Self"]["DNSName"]
+    except Exception:
+        return None
+    return str(name).rstrip(".") or None
+
+
+def _extra_allowed_hosts(
+    cli_hosts: Sequence[str] | None,
+    env: Mapping[str, str] | None = None,
+    tailscale: Callable[[], str | None] = _tailscale_dns_name,
+) -> list[str]:
+    """Front-door hostnames the HTTP transport should accept beyond loopback (#100).
+
+    Merged, in order: --allowed-host flags, the WINGMAN_ALLOWED_HOSTS env var
+    (comma-separated; systemd-friendly), and the machine's own Tailscale name —
+    auto-detected so the documented serve/funnel workflow needs no extra config.
+    """
+    env = os.environ if env is None else env
+    merged = list(cli_hosts or [])
+    merged.extend(env.get("WINGMAN_ALLOWED_HOSTS", "").split(","))
+    detected = tailscale()
+    if detected:
+        merged.append(detected)
+    ordered: dict[str, None] = {}
+    for entry in merged:
+        # tolerate a pasted URL: strip scheme, path, trailing slash
+        host = entry.strip().removeprefix("https://").removeprefix("http://").split("/", 1)[0]
+        if host:
+            ordered.setdefault(host, None)
+    return list(ordered)
+
+
+def build_transport_security(extra_hosts: Sequence[str]) -> TransportSecuritySettings:
+    """DNS-rebinding settings for a loopback bind: the SDK's loopback allow-list
+    plus each extra hostname (#100). Protection stays ON — a tunnel widens the
+    list; it never switches the check off.
+    """
+    allowed_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    allowed_origins = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+    for host in extra_hosts:
+        allowed_hosts += [host, f"{host}:*"]
+        allowed_origins += [
+            f"https://{host}",
+            f"https://{host}:*",
+            f"http://{host}",
+            f"http://{host}:*",
+        ]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+
 @server.tool()
 def telemetry(action: str = "status", limit: int = 20) -> str:
     """The opt-in local usage journal (RFC-023): action is 'status' or 'show'.
@@ -1733,6 +1799,15 @@ def main(argv: list[str] | None = None) -> None:
         "<prefix>/mcp/… and <prefix>/ui/…. For pass-through fronts (nginx, Caddy, direct "
         "access); do NOT combine with a stripping proxy like 'tailscale serve --set-path'.",
     )
+    parser.add_argument(
+        "--allowed-host",
+        action="append",
+        metavar="HOST",
+        help="Extra Host header to accept over --http (repeatable) — the hostname of "
+        "whatever fronts the loopback port. Merged with WINGMAN_ALLOWED_HOSTS "
+        "(comma-separated) and this machine's Tailscale name, which is auto-detected, "
+        "so 'tailscale serve/funnel' needs no flag.",
+    )
     args = parser.parse_args(argv)
     configure_logging()
     get_logger("mcp").info("wingman-mcp %s starting", wingman_version())
@@ -1752,6 +1827,18 @@ def main(argv: list[str] | None = None) -> None:
     server.settings.host = args.host
     server.settings.port = args.port
     server.settings.streamable_http_path = f"{prefix}/mcp/{token}"
+    # The SDK bakes a loopback-only Host allow-list into FastMCP at import
+    # time, which rejects every request arriving through a tunnel with
+    # "Invalid Host header" (#100). Rebuild it: loopback + the tunnel names
+    # for a loopback bind; off for a non-loopback bind (the SDK's own
+    # semantics for that case — the warning below covers the trade).
+    extra_hosts = _extra_allowed_hosts(args.allowed_host)
+    if args.host in _LOOPBACK_HOSTS:
+        server.settings.transport_security = build_transport_security(extra_hosts)
+    else:
+        server.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        )
     if args.host not in _LOOPBACK_HOSTS:
         print(
             f"WARNING: binding {args.host} exposes the whole workspace (and its fetch/model "
@@ -1767,6 +1854,8 @@ def main(argv: list[str] | None = None) -> None:
     print("The URL is a capability — anyone holding it can use the workspace.")
     print("Revoke it any time: wingman-mcp --http --rotate-token")
     print(f"Reach it from elsewhere via your own tunnel, e.g.: tailscale serve {args.port}")
+    if extra_hosts:
+        print(f"Accepting tunnel Host headers: {', '.join(extra_hosts)}")
     # The capability token lives in the URL path; uvicorn's access log would
     # write it on every request, silently defeating rotation-as-revocation (#70).
     logging.getLogger("uvicorn.access").disabled = True
