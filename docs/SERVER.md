@@ -135,6 +135,15 @@ sudo tailscale serve --bg 8787        # HTTPS inside your tailnet only
 sudo tailscale funnel --bg 8787       # public HTTPS, guarded by the token
 ```
 
+The server keeps DNS-rebinding protection on and must therefore accept
+the tunnel's Host header (#100). It auto-detects this machine's Tailscale
+name at startup, so the setup above needs nothing extra — but if the
+service can start before `tailscaled` is up (add `After=tailscale.service`
+to the unit to avoid that), or another proxy fronts the port, pin the
+hostname explicitly: `wingman-mcp --http --allowed-host my.front.example`
+(repeatable), or `WINGMAN_ALLOWED_HOSTS=a.example,b.example` in
+`wingman.env`. The startup banner lists the accepted names.
+
 Your endpoint is `https://<host>.<tailnet>.ts.net/mcp/<token>` (token from
 `cat "$(wingman status | sed -n 's/^Data dir: //p')/mcp-http-token"` or
 just read the file in your workspace).
