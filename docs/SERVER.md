@@ -142,7 +142,9 @@ service can start before `tailscaled` is up (add `After=tailscale.service`
 to the unit to avoid that), or another proxy fronts the port, pin the
 hostname explicitly: `wingman-mcp --http --allowed-host my.front.example`
 (repeatable), or `WINGMAN_ALLOWED_HOSTS=a.example,b.example` in
-`wingman.env`. The startup banner lists the accepted names.
+`wingman.env`. The startup banner prints a ready-to-paste https connector
+URL and web-UI URL (token included) for each tunnel hostname; `wingman-ctl
+start`/`status` echo them too.
 
 Your endpoint is `https://<host>.<tailnet>.ts.net/mcp/<token>` (token from
 `cat "$(wingman status | sed -n 's/^Data dir: //p')/mcp-http-token"` or
