@@ -166,8 +166,24 @@ signal to revisit the hosted-tier assessment instead.
 
 ## 8. The web UI
 
-The HTTP server also serves `https://…/ui/<token>` (RFC-033): today's
-digest, every report, and an upload form for LinkedIn exports and
-resumes — the no-terminal onboarding path for a second user (see
-`MULTI-INSTANCE-DESIGN.md`). Same token, same tunnel, nothing extra to
-run; the startup banner prints the exact URL.
+The HTTP server also serves `https://…/ui/<token>/` (RFC-033/034):
+today's digest, every report, an upload form for LinkedIn exports and
+resumes, and the validated API-key form — the no-terminal onboarding
+path for a second user (see `MULTI-INSTANCE-DESIGN.md`). Same token,
+same tunnel, nothing extra to run; the startup banner prints the URL.
+
+**Virtual folders for multiple instances.** One hostname can front every
+instance with Tailscale path mounts — the UI emits only relative URLs
+and canonicalizes with a relative redirect, so it works unchanged behind
+a stripped prefix:
+
+```bash
+sudo tailscale serve --bg --set-path /dhk   http://127.0.0.1:8787
+sudo tailscale serve --bg --set-path /trent http://127.0.0.1:8788
+```
+
+Each person's bookmark is `https://<host>.<tailnet>.ts.net/<name>/ui/<their-token>/`
+and their MCP connector URL is `…/<name>/mcp/<their-token>`. The path
+segment is a label, not a boundary — the token (and, under `serve`,
+tailnet membership) is still the credential; isolation remains the Unix
+user + workspace, per the multi-instance design.

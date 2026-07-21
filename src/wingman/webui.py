@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.logs import get_logger
@@ -120,11 +120,25 @@ def _listed_files(root: Path) -> list[tuple[str, Path]]:
     return sections
 
 
+async def ui_home_redirect(request: Request) -> Response:
+    """Canonicalize to the trailing-slash landing with a RELATIVE Location.
+
+    Every URL this UI emits is relative, so it works unchanged behind a
+    path-mounting reverse proxy (e.g. 'tailscale serve --set-path /trent'),
+    which strips the mount prefix before forwarding: the server never needs
+    to know its public prefix. That only holds if the landing URL ends in
+    '/', and only a relative redirect ('<token>/', resolved by the browser
+    against the public URL) preserves the prefix the server can't see.
+    """
+    if _authorized(request) is None:
+        return _not_found()
+    return RedirectResponse(url=f"{request.path_params['token']}/", status_code=307)
+
+
 async def ui_home(request: Request) -> Response:
     config = _authorized(request)
     if config is None:
         return _not_found()
-    token = request.path_params["token"]
     body: list[str] = ["<h1>Wingman</h1>"]
     body.append(f'<div class="meta">workspace: {_e(str(config.data_dir))}</div>')
 
@@ -160,7 +174,7 @@ async def ui_home(request: Request) -> Response:
         "<p>A LinkedIn data-export <b>.zip</b>, or a resume "
         "(<b>.md .txt .pdf .docx .tex</b>). It lands in the inbox and runs the "
         "ordinary ingest pipeline — nothing else is touched.</p>"
-        f'<form method="post" enctype="multipart/form-data" action="/ui/{_e(token)}/upload">'
+        '<form method="post" enctype="multipart/form-data" action="upload">'
         '<input type="file" name="file" required>'
         "<button>Upload &amp; ingest</button></form></div>"
     )
@@ -173,7 +187,7 @@ async def ui_home(request: Request) -> Response:
         f"(workspace file, owner-only). A key set in the service environment always "
         f"wins (RFC-019). Current: anthropic — <b>{_e(states.get('anthropic', '?'))}</b>, "
         f"voyage — <b>{_e(states.get('voyage', '?'))}</b>.</p>"
-        f'<form method="post" action="/ui/{_e(token)}/keys">'
+        '<form method="post" action="keys">'
         '<label>Anthropic key <input type="password" name="anthropic" '
         'autocomplete="off"></label><br>'
         '<label>Voyage key <input type="password" name="voyage" '
@@ -201,8 +215,7 @@ async def ui_upload(request: Request) -> Response:
     config = _authorized(request)
     if config is None:
         return _not_found()
-    token = str(request.path_params["token"])
-    back = f'<p><a href="/ui/{_e(token)}">&larr; back</a></p>'
+    back = '<p><a href="./">&larr; back</a></p>'
 
     form = await request.form()
     upload = form.get("file")
@@ -331,8 +344,7 @@ async def ui_keys(request: Request) -> Response:
     config = _authorized(request)
     if config is None:
         return _not_found()
-    token = str(request.path_params["token"])
-    back = f'<p><a href="/ui/{_e(token)}">&larr; back</a></p>'
+    back = '<p><a href="./">&larr; back</a></p>'
     from wingman.infrastructure.keys import KeyStoreError, store_workspace_key
 
     form = await request.form()
@@ -378,7 +390,8 @@ def register_ui(server: "FastMCP") -> None:
     if _registered:
         return
     _registered = True
-    server.custom_route("/ui/{token}", methods=["GET"])(ui_home)
+    server.custom_route("/ui/{token}", methods=["GET"])(ui_home_redirect)
+    server.custom_route("/ui/{token}/", methods=["GET"])(ui_home)
     server.custom_route("/ui/{token}/file/{path:path}", methods=["GET"])(ui_file)
     server.custom_route("/ui/{token}/upload", methods=["POST"])(ui_upload)
     server.custom_route("/ui/{token}/keys", methods=["POST"])(ui_keys)

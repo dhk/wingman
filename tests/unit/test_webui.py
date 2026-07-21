@@ -49,7 +49,7 @@ def test_wrong_or_missing_token_is_a_plain_404(client: tuple[TestClient, str]) -
     http, token = client
     assert http.get("/ui/wrong-token").status_code == 404
     assert http.get(f"/ui/{token}x/file/x.html").status_code == 404
-    ok = http.get(f"/ui/{token}")
+    ok = http.get(f"/ui/{token}/")
     assert ok.status_code == 200 and "Wingman" in ok.text
 
 
@@ -61,7 +61,7 @@ def test_home_lists_digest_and_reports(client: tuple[TestClient, str]) -> None:
     (digests / "latest.html").write_text("<h1>MARKER-DIGEST</h1>", encoding="utf-8")
     (config.reports_dir / "packs").mkdir()
     (config.reports_dir / "packs" / "pack-staff-mle.md").write_text("pack!", encoding="utf-8")
-    page = http.get(f"/ui/{token}").text
+    page = http.get(f"/ui/{token}/").text
     assert "Today" in page and "file/digests/latest.html" in page
     assert "pack-staff-mle.md" in page
     assert "Upload" in page  # the form is on the page
@@ -153,7 +153,7 @@ def test_key_form_validates_before_storing(
     monkeypatch.setitem(webui_module.VALIDATORS, "anthropic", good)
     monkeypatch.setitem(webui_module.VALIDATORS, "voyage", bad)
 
-    page = http.get(f"/ui/{token}").text
+    page = http.get(f"/ui/{token}/").text
     assert "API keys" in page and "not set" in page
 
     response = http.post(f"/ui/{token}/keys", data={"anthropic": "sk-ant-good", "voyage": "pa-bad"})
@@ -186,3 +186,20 @@ def test_env_always_shadows_workspace_key(
     import os
 
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-from-env"  # untouched
+
+
+def test_ui_is_path_mount_agnostic(client: tuple[TestClient, str]) -> None:
+    """Behind 'tailscale serve --set-path /trent' the prefix is stripped before
+    the backend: everything must work with zero prefix knowledge — a RELATIVE
+    redirect to the slash landing, and only relative URLs in the page."""
+    http, token = client
+    bare = http.get(f"/ui/{token}", follow_redirects=False)
+    assert bare.status_code == 307
+    assert bare.headers["location"] == f"{token}/"  # relative: the browser keeps the prefix
+    followed = http.get(f"/ui/{token}", follow_redirects=True)
+    assert followed.status_code == 200 and "Wingman" in followed.text
+    page = http.get(f"/ui/{token}/").text
+    assert 'href="/' not in page and 'action="/' not in page  # no absolute self-URLs
+    assert 'action="upload"' in page and 'action="keys"' in page
+    # wrong token gets no redirect breadcrumb either
+    assert http.get(f"/ui/{token}x", follow_redirects=False).status_code == 404
