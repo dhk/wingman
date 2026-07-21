@@ -20,6 +20,12 @@ say() { printf '%s\n' "$*"; }
 
 http_running() { wingman mcp status 2>/dev/null | grep -q 'is running'; }
 
+print_urls() {
+  # The startup banner writes every URL (token included) to the log —
+  # loopback plus a ready-to-paste https URL per tunnel hostname (#94).
+  [ -f "$LOG" ] && grep -E '^(MCP over HTTP|Web UI|Tunnel)' "$LOG" | sed 's/^/  /'
+}
+
 stdio_pids() {
   # wingman-mcp processes WITHOUT --http: the client-owned stdio servers.
   pgrep -f 'wingman-mcp' 2>/dev/null | while read -r pid; do
@@ -44,6 +50,7 @@ cmd_status() {
   say ""
   say "HTTP server (yours):"
   say "  $(wingman mcp status 2>/dev/null || say 'wingman not installed?')"
+  http_running && print_urls
   say ""
   say "Client-owned stdio servers:"
   found=0
@@ -61,13 +68,21 @@ cmd_status() {
 cmd_start() {
   if http_running; then
     wingman mcp status
+    print_urls
     return 0
   fi
   mkdir -p "$(dirname "$LOG")"
   nohup wingman-mcp --http >"$LOG" 2>&1 &
   disown 2>/dev/null || true
-  sleep 1
+  sleep 2
+  if ! http_running; then
+    say "START FAILED — last log lines:"
+    tail -8 "$LOG" | sed 's/^/  /'
+    say "(orphaned port-holder? 'wingman mcp status' names it; 'wingman mcp stop' clears it)"
+    return 1
+  fi
   wingman mcp status
+  print_urls
   say "log: $LOG"
 }
 

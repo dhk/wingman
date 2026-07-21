@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import secrets
+import socket
 import subprocess
 import sys
 import time
@@ -132,7 +133,12 @@ from wingman.domain.person import FeedAttribution, FeedKind, FeedSource, Person
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.keys import ensure_env
 from wingman.infrastructure.logs import configure_logging, get_logger
-from wingman.infrastructure.mcp_process import clear_pidfile, write_pidfile
+from wingman.infrastructure.mcp_process import (
+    clear_pidfile,
+    orphan_http_pids,
+    read_server_pid,
+    write_pidfile,
+)
 from wingman.version import wingman_version
 from wingman.infrastructure.telemetry import (
     count_events as telemetry_count,
@@ -1820,6 +1826,39 @@ def main(argv: list[str] | None = None) -> None:
         server.run()
         return
     config = load_config()
+    # Preflight before anything is printed or rotated: uvicorn's bind error
+    # arrives AFTER the full banner and reads like a crash — and when the
+    # port-holder has no pidfile, 'wingman mcp status' swears nothing is
+    # running. Refuse up front, naming the process and the remedy.
+    existing = read_server_pid(config)
+    if existing is not None:
+        print(
+            f"ERROR: the HTTP MCP server is already running (pid {existing}). "
+            "Stop it first: wingman mcp stop — or give a second instance its "
+            "own WINGMAN_DATA_DIR.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    orphans = orphan_http_pids(config, port=args.port)
+    if orphans:
+        pids = ", ".join(str(orphan) for orphan in orphans)
+        print(
+            f"ERROR: an orphaned wingman-mcp --http (no pidfile) is holding "
+            f"port {args.port}: pid {pids}. Clear it with: wingman mcp stop",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    family = socket.AF_INET6 if ":" in args.host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind((args.host, args.port))
+        except OSError as exc:
+            print(
+                f"ERROR: cannot bind {args.host}:{args.port} ({exc.strerror}). "
+                f"Something else holds the port — find it with: lsof -ti :{args.port}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     token = _http_token(config, rotate=args.rotate_token)
     from wingman.webui import normalize_prefix
 
@@ -1854,8 +1893,12 @@ def main(argv: list[str] | None = None) -> None:
     print("The URL is a capability — anyone holding it can use the workspace.")
     print("Revoke it any time: wingman-mcp --http --rotate-token")
     print(f"Reach it from elsewhere via your own tunnel, e.g.: tailscale serve {args.port}")
-    if extra_hosts:
-        print(f"Accepting tunnel Host headers: {', '.join(extra_hosts)}")
+    # Ready-to-paste URLs for each tunnel front (#94): the claude.ai
+    # connector needs the https form, and hunting the token file to build
+    # it by hand was the friction this replaces.
+    for tunnel_host in extra_hosts:
+        print(f"Tunnel MCP connector: https://{tunnel_host}{prefix}/mcp/{token}")
+        print(f"Tunnel web UI: https://{tunnel_host}{prefix}/ui/{token}/")
     # The capability token lives in the URL path; uvicorn's access log would
     # write it on every request, silently defeating rotation-as-revocation (#70).
     logging.getLogger("uvicorn.access").disabled = True

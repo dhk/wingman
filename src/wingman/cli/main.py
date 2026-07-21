@@ -2482,25 +2482,35 @@ def telemetry_harvest(
 
 
 @mcp_app.command("status")
-def mcp_status() -> None:
-    """Whether the HTTP MCP server ('wingman-mcp --http') is running."""
-    configure_logging()
-    config = load_config()
-    typer.echo(server_status(config))
+def mcp_status(
+    port: int = typer.Option(8787, help="Port to check for orphaned servers."),
+) -> None:
+    """Whether the HTTP MCP server ('wingman-mcp --http') is running.
 
-
-@mcp_app.command("stop")
-def mcp_stop() -> None:
-    """Stop the HTTP MCP server — and ONLY it (RFC-032).
-
-    Deterministic via the server's pidfile: never pattern-matches the
-    process table, never touches the stdio servers Claude Desktop and
-    Claude CLI sessions spawn for themselves (those belong to their
-    clients; restart the client to restart them).
+    Also flags an orphaned server holding the port without a pidfile
+    (killed before cleanup, or an older build) — the case where restarts
+    fail with 'address already in use' while this says not running.
     """
     configure_logging()
     config = load_config()
-    stopped, detail = stop_server(config)
+    typer.echo(server_status(config, port=port))
+
+
+@mcp_app.command("stop")
+def mcp_stop(
+    port: int = typer.Option(8787, help="Port whose orphaned servers to stop too."),
+) -> None:
+    """Stop the HTTP MCP server — and ONLY it (RFC-032).
+
+    Deterministic via the server's pidfile, with one narrow exception: an
+    orphaned 'wingman-mcp --http' holding this port without a pidfile is
+    stopped too (it blocks every restart and is invisible to status).
+    Stdio servers spawned by Claude Desktop / CLI sessions are never
+    touched — those belong to their clients.
+    """
+    configure_logging()
+    config = load_config()
+    stopped, detail = stop_server(config, port=port)
     typer.echo(detail)
     if not stopped:
         raise typer.Exit(code=1)
