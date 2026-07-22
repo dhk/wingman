@@ -25,8 +25,10 @@ def test_strips_markdown_fences() -> None:
 
 
 def test_rejects_invalid_json() -> None:
-    with pytest.raises(ProposalParseError, match="not valid JSON"):
+    with pytest.raises(ProposalParseError, match="no JSON"):
         parse_proposal("here are the items you asked for")
+    with pytest.raises(ProposalParseError, match="not valid JSON"):
+        parse_proposal('{"items": [unterminated')
 
 
 def test_rejects_schema_violations() -> None:

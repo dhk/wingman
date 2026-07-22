@@ -62,6 +62,9 @@ def test_rate_limit_gets_one_retry(monkeypatch: pytest.MonkeyPatch) -> None:
         def read(self, limit: int) -> bytes:
             return b"feed body"
 
+        def geturl(self) -> str:
+            return "https://rate.example.com/feed"
+
     class FakeOpener:
         def open(self, request: urllib.request.Request, timeout: int):  # noqa: ANN201
             calls.append(request.full_url)
