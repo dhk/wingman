@@ -295,6 +295,57 @@ def action_triage(action: str, key: str = "", days: int = 7) -> str:
 
 
 @server.tool()
+def job_criteria(action: str = "show", text: str = "") -> str:
+    """The job-criteria document that drives opening scoring (RFC-035).
+
+    action is 'show' (the current document) or 'save' (replace it with
+    `text`). Overnight runs judge every new job link on watched careers
+    pages against this document: hard filters remove postings outright,
+    weighted wants set the 0-100 score, and every score arrives in the
+    digest with verbatim quotes from the posting.
+
+    Protocol when the user wants to set up or revise job scoring: never
+    write criteria unilaterally. (1) 'show' first — existing text is the
+    baseline. (2) Interview the user, with AskUserQuestion where the
+    client supports it, across five areas: hard filters (location/remote,
+    seniority floor, comp floor, excluded industries), role families
+    (describe the work, not the title), strong attractors, anti-signals
+    (what makes them close the tab), and the tie-breaker between plausible
+    offers. (3) Draft the document, show it in full, and iterate until the
+    user confirms the wording. (4) Only after explicit confirmation call
+    'save'. The criteria are the user's own words — never save wording
+    they have not seen; the judge treats this document as the only
+    authority on what they care about.
+    """
+    from wingman.application.job_scoring import (
+        CRITERIA_FILENAME,
+        load_criteria,
+        save_criteria,
+    )
+
+    config = load_config()
+    if action == "show":
+        current = load_criteria(config)
+        if current is None:
+            return (
+                f"No {CRITERIA_FILENAME} yet — openings are listed unscored. "
+                "Interview the user (see this tool's protocol) and save the "
+                "confirmed document to turn on scoring."
+            )
+        return current
+    if action == "save":
+        try:
+            path = save_criteria(config, text)
+        except IngestError as exc:
+            return f"criteria save failed: {exc}"
+        return (
+            f"Saved {path.name} ({len(text.strip())} chars). Overnight runs now "
+            "score new openings against it; edits take effect next run."
+        )
+    return f"unknown action {action!r}; use show or save."
+
+
+@server.tool()
 def answer_bank(
     action: str,
     question: str = "",
