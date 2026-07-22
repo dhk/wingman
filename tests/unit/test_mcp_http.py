@@ -4,8 +4,13 @@ from pathlib import Path
 
 import pytest
 
+from typer.testing import CliRunner
+
+from wingman.cli.main import app
 from wingman.infrastructure.config import load_config
-from wingman.mcp_server import _http_token, main, server
+from wingman.mcp_server import _http_token, main, render_urls, server
+
+cli = CliRunner()
 
 
 @pytest.fixture
@@ -71,6 +76,51 @@ def test_non_loopback_bind_warns(
 def test_rotate_token_requires_http(workspace: Path) -> None:
     with pytest.raises(SystemExit):
         main(["--rotate-token"])
+
+
+def test_render_urls_is_pure_formatting_over_given_inputs() -> None:
+    bare = render_urls("TOK", [], host="127.0.0.1", port=8787, prefix="")
+    assert bare == [
+        "MCP over HTTP: http://127.0.0.1:8787/mcp/TOK",
+        "Web UI (read + upload): http://127.0.0.1:8787/ui/TOK",
+    ]
+    tunneled = render_urls("TOK", ["lobster.tail.ts.net"], port=9911, prefix="trent/")
+    assert tunneled == [
+        "MCP over HTTP: http://127.0.0.1:9911/trent/mcp/TOK",
+        "Web UI (read + upload): http://127.0.0.1:9911/trent/ui/TOK",
+        "Tunnel MCP connector: https://lobster.tail.ts.net/trent/mcp/TOK",
+        "Tunnel web UI: https://lobster.tail.ts.net/trent/ui/TOK/",
+    ]  # prefix normalization ("trent/" -> "/trent") applies here too
+
+
+def test_mcp_url_command_prints_the_capability_urls(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = cli.invoke(app, ["mcp", "url", "--port", "9914"])
+    assert result.exit_code == 0
+    token = _http_token(load_config())
+    assert f"http://127.0.0.1:9914/mcp/{token}" in result.output
+    assert f"http://127.0.0.1:9914/ui/{token}" in result.output
+
+
+def test_mcp_url_command_honors_explicit_allowed_host(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = cli.invoke(
+        app, ["mcp", "url", "--port", "9915", "--allowed-host", "lobster.example.ts.net"]
+    )
+    assert result.exit_code == 0
+    token = _http_token(load_config())
+    assert f"Tunnel MCP connector: https://lobster.example.ts.net/mcp/{token}" in result.output
+    assert f"Tunnel web UI: https://lobster.example.ts.net/ui/{token}/" in result.output
+
+
+def test_mcp_url_command_hints_when_no_tunnel_detected(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = cli.invoke(app, ["mcp", "url", "--port", "9916"])
+    assert result.exit_code == 0
+    assert "no tunnel hostname detected" in result.output
 
 
 def test_prefix_serves_natively_on_the_folder(

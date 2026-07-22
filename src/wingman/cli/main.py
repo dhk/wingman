@@ -2520,6 +2520,37 @@ def mcp_stop(
         raise typer.Exit(code=1)
 
 
+@mcp_app.command("url")
+def mcp_url(
+    host: str = typer.Option("127.0.0.1", help="Bind address the server was started with."),
+    port: int = typer.Option(8787, help="Port the server was started with."),
+    prefix: str = typer.Option("", help="Native --prefix the server was started with, if any."),
+    allowed_host: list[str] = typer.Option(  # noqa: B008 — typer's documented pattern
+        [], "--allowed-host", help="Extra --allowed-host flag(s) the server was started with."
+    ),
+) -> None:
+    """Print the ready-to-paste MCP connector and web UI URLs (#94, #122).
+
+    Computed straight from the token file and Tailscale auto-detection —
+    no need to grep the startup banner out of journalctl, and it works
+    whether or not the server is currently running. If the server was
+    started with non-default --host/--port/--prefix/--allowed-host, pass
+    the same flags here so the printed URLs match.
+    """
+    configure_logging()
+    from wingman.mcp_server import _extra_allowed_hosts, _http_token, render_urls
+
+    config = load_config()
+    token = _http_token(config)
+    extra_hosts = _extra_allowed_hosts(allowed_host or None)
+    for line in render_urls(token, extra_hosts, host=host, port=port, prefix=prefix):
+        typer.echo(line)
+    if not extra_hosts:
+        typer.echo(
+            "(no tunnel hostname detected — is Tailscale up? or pass --allowed-host explicitly)"
+        )
+
+
 @app.command("qa")
 def qa_note(
     question: str = typer.Argument(..., help="The clarifying question, as asked."),
