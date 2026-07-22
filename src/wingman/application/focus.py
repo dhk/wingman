@@ -250,6 +250,29 @@ def _scored_opening_actions(
     return bool(outcome.scored or outcome.filtered)
 
 
+def _criteria_review_action(config: Config) -> ActionItem | None:
+    """The periodic interview nudge (RFC-035): when job-criteria.md goes
+    stale, the digest says so — once per run, as an ordinary triageable
+    action. Snoozing 'criteria-review' sets the user's own cadence; muting
+    turns the loop off. Preferences drift; the doc should not."""
+    from wingman.application.job_scoring import criteria_review_due
+
+    age = criteria_review_due(config)
+    if age is None:
+        return None
+    return ActionItem(
+        what="Review your job criteria",
+        why=f"job-criteria.md was last updated {age} days ago — opening scores "
+        "are only as current as the document they judge against",
+        who="you",
+        evidence=[
+            "say: review my job criteria (the job_criteria tool walks the five areas)",
+            "or: wingman criteria review",
+        ],
+        key="criteria-review",
+    )
+
+
 def _company_deep(
     name: str, config: Config, storage: Storage, actions: list[ActionItem]
 ) -> OvernightTarget:
@@ -452,6 +475,9 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
             targets.append(_company_deep(member_name, config, storage, actions))
         else:
             targets.append(_person_deep(member_name, config, storage, actions))
+    review = _criteria_review_action(config)
+    if review is not None:
+        actions.append(review)
     # Standing triage verdicts (RFC-031): what the user muted or snoozed
     # never reaches the digest — applied before the cap so a suppressed
     # item can't crowd out a live one.

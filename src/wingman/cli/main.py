@@ -2539,6 +2539,20 @@ def criteria_show() -> None:
     typer.echo(current)
 
 
+@criteria_app.command("review")
+def criteria_review() -> None:
+    """Print the interview packet: current criteria plus the five question areas.
+
+    The same loop seeds a first document and reviews a stale one; the
+    digest nudges this when job-criteria.md is a month old (snooze the
+    'criteria-review' action key to set your own cadence).
+    """
+    configure_logging()
+    from wingman.application.job_scoring import render_interview
+
+    typer.echo(render_interview(load_config()))
+
+
 @criteria_app.command("save")
 def criteria_save(
     source: Path = typer.Argument(..., help="Markdown file to install as job-criteria.md."),

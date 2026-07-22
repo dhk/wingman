@@ -71,6 +71,96 @@ def save_criteria(config: Config, text: str) -> Path:
     return path
 
 
+# The interview loop: one question set, used for seeding AND for periodic
+# review, so the criteria doc never fossilizes. Each area is (name, prompt);
+# every surface — the MCP packet, the CLI, the digest nudge — reads this one
+# list, so revising the questions is one edit.
+INTERVIEW_AREAS: list[tuple[str, str]] = [
+    (
+        "Hard filters",
+        "The never-mind-how-good-it-sounds constraints: location/remote "
+        "requirements, minimum seniority or scope, comp floor, industries "
+        "you will not touch.",
+    ),
+    (
+        "Role families",
+        "The 2-3 shapes of job you would actually take. Describe the work, "
+        "not the title — titles lie.",
+    ),
+    (
+        "Strong attractors",
+        "What makes you lean in when you see it: technologies, problem "
+        "domains, company stage, team shape — whatever it really is.",
+    ),
+    (
+        "Anti-signals",
+        "Phrases or facts in a posting that make you close the tab even when "
+        "everything else fits. Be blunt; similarity can never learn this.",
+    ),
+    (
+        "Tie-breaker",
+        "When two plausible jobs compete for your attention, what wins: "
+        "comp, mission, people, growth, low chaos?",
+    ),
+]
+
+# When the doc is this old, the digest nudges a review. The nudge is an
+# ordinary RFC-031 action (key: criteria-review): snoozing it sets the
+# user's own cadence, muting it turns the loop off — their call, not ours.
+REVIEW_EVERY_DAYS = 30
+
+
+def criteria_age_days(config: Config) -> int | None:
+    """Whole days since the criteria doc was last saved, or None when absent."""
+    path = criteria_path(config)
+    if not path.exists():
+        return None
+    from datetime import UTC, datetime
+
+    modified = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    return max(0, (datetime.now(UTC) - modified).days)
+
+
+def criteria_review_due(config: Config, every_days: int = REVIEW_EVERY_DAYS) -> int | None:
+    """The doc's age when a review is due, else None (absent docs get the
+    seeding hint from the scoring path instead, not a review nudge)."""
+    age = criteria_age_days(config)
+    return age if age is not None and age >= every_days else None
+
+
+def render_interview(config: Config) -> str:
+    """The interview packet: current doc plus the five areas, for either
+    seeding (no doc yet) or periodic review (doc shown, area by area)."""
+    current = load_criteria(config)
+    age = criteria_age_days(config)
+    lines: list[str] = []
+    if current is None:
+        lines.append("Job criteria interview — SEEDING (no job-criteria.md yet).")
+        lines.append(
+            "Walk the five areas below with the user, one at a time; capture "
+            "answers in their words."
+        )
+    else:
+        stamp = f"last updated {age} day(s) ago" if age is not None else "age unknown"
+        lines.append(f"Job criteria interview — REVIEW ({stamp}).")
+        lines.append("Current document:")
+        lines.append("---")
+        lines.append(current)
+        lines.append("---")
+        lines.append(
+            "Walk the five areas below one at a time: read what the current "
+            "document says about the area, ask what changed, offer Keep / Update."
+        )
+    for number, (name, prompt) in enumerate(INTERVIEW_AREAS, start=1):
+        lines.append(f"{number}. {name} — {prompt}")
+    lines.append(
+        "When every area is done: draft the full revised document, show it, "
+        "iterate until the user confirms the wording, then call "
+        "job_criteria(action='save'). Save nothing without confirmation."
+    )
+    return "\n".join(lines)
+
+
 class ScoredOpening(BaseModel):
     """One judged posting: score, the criteria reasoning, verified quotes."""
 

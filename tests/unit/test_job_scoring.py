@@ -202,13 +202,69 @@ def test_missing_criteria_leaves_generic_action(workspace: Config) -> None:
     assert any(CRITERIA_FILENAME in line for line in target.lines)
 
 
+def test_interview_packet_seeding_and_review_modes(workspace: Config) -> None:
+    from wingman.application.job_scoring import INTERVIEW_AREAS, render_interview
+
+    packet = render_interview(workspace)
+    assert "SEEDING" in packet
+    for name, _prompt in INTERVIEW_AREAS:
+        assert name in packet  # all five areas, from the single source list
+    assert "Save nothing without confirmation" in packet
+
+    save_criteria(workspace, CRITERIA)
+    packet = render_interview(workspace)
+    assert "REVIEW" in packet and "No crypto" in packet  # current doc shown
+    assert "Keep / Update" in packet
+
+
+def test_review_due_only_when_stale(workspace: Config) -> None:
+    import os
+    import time
+
+    from wingman.application.job_scoring import (
+        REVIEW_EVERY_DAYS,
+        criteria_age_days,
+        criteria_review_due,
+    )
+
+    assert criteria_age_days(workspace) is None  # no doc: seeding hint, not a nudge
+    assert criteria_review_due(workspace) is None
+    save_criteria(workspace, CRITERIA)
+    assert criteria_age_days(workspace) == 0
+    assert criteria_review_due(workspace) is None  # fresh
+    stale = time.time() - (REVIEW_EVERY_DAYS + 10) * 86400
+    os.utime(criteria_path(workspace), (stale, stale))
+    assert criteria_review_due(workspace) == REVIEW_EVERY_DAYS + 10
+
+
+def test_stale_criteria_becomes_a_triageable_digest_action(workspace: Config) -> None:
+    import os
+    import time
+
+    from wingman.application.focus import _criteria_review_action
+    from wingman.application.job_scoring import REVIEW_EVERY_DAYS
+
+    assert _criteria_review_action(workspace) is None  # no doc
+    save_criteria(workspace, CRITERIA)
+    assert _criteria_review_action(workspace) is None  # fresh doc
+    stale = time.time() - (REVIEW_EVERY_DAYS + 1) * 86400
+    os.utime(criteria_path(workspace), (stale, stale))
+    action = _criteria_review_action(workspace)
+    assert action is not None
+    assert action.key == "criteria-review"  # snooze = cadence, mute = off (RFC-031)
+    assert "Review your job criteria" in action.what
+    assert any("wingman criteria review" in item for item in action.evidence)
+
+
 def test_mcp_job_criteria_roundtrip(workspace: Config) -> None:
     from wingman.mcp_server import job_criteria
 
     Storage(workspace.db_path).close()
     assert "No job-criteria.md yet" in job_criteria("show")
+    assert "SEEDING" in job_criteria("review")
     assert "Saved job-criteria.md" in job_criteria("save", text=CRITERIA)
     assert "No crypto" in job_criteria("show")
+    assert "REVIEW" in job_criteria("review")  # same loop, review mode now
     assert "failed" in job_criteria("save", text="  ")
     assert "unknown action" in job_criteria("nope")
     # the docstring carries the interview protocol (RFC-025/030/031 convention)
