@@ -146,9 +146,11 @@ hostname explicitly: `wingman-mcp --http --allowed-host my.front.example`
 URL and web-UI URL (token included) for each tunnel hostname; `wingman-ctl
 start`/`status` echo them too.
 
-Your endpoint is `https://<host>.<tailnet>.ts.net/mcp/<token>` (token from
-`cat "$(wingman status | sed -n 's/^Data dir: //p')/mcp-http-token"` or
-just read the file in your workspace).
+**Get the URLs any time** — whether or not you started the server
+yourself, and without hunting the token file: `wingman mcp url` (add
+`--port`/`--prefix`/`--allowed-host` if you ran the server with
+non-default flags). It computes the same lines the banner prints, straight
+from the token file and Tailscale auto-detection.
 
 In claude.ai: Settings → Connectors → Add custom connector → paste that
 URL. The same URL works in Claude Desktop and the Claude mobile apps once

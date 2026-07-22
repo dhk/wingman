@@ -1797,6 +1797,32 @@ def _extra_allowed_hosts(
     return list(ordered)
 
 
+def render_urls(
+    token: str,
+    extra_hosts: Sequence[str],
+    host: str = "127.0.0.1",
+    port: int = 8787,
+    prefix: str = "",
+) -> list[str]:
+    """The ready-to-paste URL lines: loopback MCP + web UI, plus a tunnel
+    pair per accepted hostname. Pure formatting over already-computed
+    token/extra_hosts — backs both the --http startup banner and
+    'wingman mcp url', which computes those fresh from the token file and
+    Tailscale auto-detection without starting a server.
+    """
+    from wingman.webui import normalize_prefix
+
+    prefix = normalize_prefix(prefix)
+    lines = [
+        f"MCP over HTTP: http://{host}:{port}{prefix}/mcp/{token}",
+        f"Web UI (read + upload): http://{host}:{port}{prefix}/ui/{token}",
+    ]
+    for tunnel_host in extra_hosts:
+        lines.append(f"Tunnel MCP connector: https://{tunnel_host}{prefix}/mcp/{token}")
+        lines.append(f"Tunnel web UI: https://{tunnel_host}{prefix}/ui/{token}/")
+    return lines
+
+
 def build_transport_security(extra_hosts: Sequence[str]) -> TransportSecuritySettings:
     """DNS-rebinding settings for a loopback bind: the SDK's loopback allow-list
     plus each extra hostname (#100). Protection stays ON — a tunnel widens the
@@ -2014,17 +2040,14 @@ def main(argv: list[str] | None = None) -> None:
     from wingman.webui import register_ui
 
     register_ui(server, prefix=prefix)
-    print(f"MCP over HTTP: http://{args.host}:{args.port}{prefix}/mcp/{token}")
-    print(f"Web UI (read + upload): http://{args.host}:{args.port}{prefix}/ui/{token}")
+    # Ready-to-paste URLs (#94): the claude.ai connector needs the https
+    # form, and hunting the token file to build it by hand was the
+    # friction this replaces. Same renderer 'wingman mcp url' uses.
+    for line in render_urls(token, extra_hosts, host=args.host, port=args.port, prefix=prefix):
+        print(line)
     print("The URL is a capability — anyone holding it can use the workspace.")
     print("Revoke it any time: wingman-mcp --http --rotate-token")
     print(f"Reach it from elsewhere via your own tunnel, e.g.: tailscale serve {args.port}")
-    # Ready-to-paste URLs for each tunnel front (#94): the claude.ai
-    # connector needs the https form, and hunting the token file to build
-    # it by hand was the friction this replaces.
-    for tunnel_host in extra_hosts:
-        print(f"Tunnel MCP connector: https://{tunnel_host}{prefix}/mcp/{token}")
-        print(f"Tunnel web UI: https://{tunnel_host}{prefix}/ui/{token}/")
     # Under 'wingman-ctl start' stdout is a redirected file, which Python
     # block-buffers: without this flush the banner sits in the buffer for
     # the life of the process and wg's URL echo greps an empty log.

@@ -21,9 +21,10 @@ say() { printf '%s\n' "$*"; }
 http_running() { wingman mcp status 2>/dev/null | grep -q 'is running'; }
 
 print_urls() {
-  # The startup banner writes every URL (token included) to the log —
-  # loopback plus a ready-to-paste https URL per tunnel hostname (#94).
-  [ -f "$LOG" ] && grep -E '^(MCP over HTTP|Web UI|Tunnel)' "$LOG" | sed 's/^/  /'
+  # Computed straight from the token file + Tailscale detection (#94,
+  # #122) — works regardless of how the server was launched (wg, systemd,
+  # by hand), unlike grepping a banner that only 'wg start' ever wrote.
+  wingman mcp url 2>/dev/null | sed 's/^/  /'
 }
 
 stdio_pids() {
