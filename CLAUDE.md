@@ -30,3 +30,15 @@ the destination in the preview (the routing map still wins if the request
 clearly belongs elsewhere). Never file without the explicit yes — the
 preview-then-confirm gate is the point (see RFC-025 in `docs/RFC.md` for
 the same protocol as wingman's own MCP tool).
+
+## Deployment facts (owner directives)
+
+- **lobster** — the owner's Ubuntu server hosting wingman. All CODE
+  checkouts live under `~/src` (repo at `~/src/wingman`; set
+  `WINGMAN_REPO=$HOME/src/wingman` for wingman-ctl). Data/workspace stays
+  at the XDG default (`~/.local/share/wingman`). GitHub access is via
+  SSH — use `git@github.com:` URLs in any command meant for lobster.
+- **Mac** — the owner's laptop; repo at `~/Documents/dev/wingman`
+  (wingman-ctl's default), `wg` is the alias for `scripts/wingman-ctl`.
+  After the lobster migration the Mac no longer serves; lobster's
+  workspace is the single writer.
