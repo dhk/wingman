@@ -124,18 +124,32 @@ cmd_upgrade() {
   say "Done. Restart Claude Desktop and any CLI sessions to reconnect on the new build."
 }
 
+cmd_cycle() {
+  # stop / upgrade / start in one act: unlike 'upgrade' (which only restores
+  # the prior state), cycle ALWAYS ends with the HTTP server running on the
+  # new build — the one-command morning refresh. Ordered pull→reinstall→
+  # stop→start so a failed pull touches nothing and downtime stays minimal.
+  cmd_upgrade || return 1
+  if ! http_running; then
+    say "→ starting the HTTP server (it was not running before the upgrade)…"
+    cmd_start
+  fi
+}
+
 case "${1:-}" in
   status)   cmd_status ;;
   start)    cmd_start ;;
   stop)     cmd_stop ;;
   stop-all) cmd_stop_all "${2:-}" ;;
   upgrade)  cmd_upgrade ;;
+  cycle)    cmd_cycle ;;
   *)
-    say "usage: $0 status|start|stop|stop-all [-y]|upgrade"
+    say "usage: $0 status|start|stop|stop-all [-y]|upgrade|cycle"
     say "  status    what's running, who owns each process, what's safe to stop"
     say "  start     the HTTP server (wingman-mcp --http), backgrounded + logged"
     say "  stop      the HTTP server only (pidfile-verified; never touches clients)"
     say "  stop-all  HTTP + client-owned stdio servers (asks first; -y skips)"
     say "  upgrade   pull → reinstall → stop-all → restart HTTP if it was running"
+    say "  cycle     stop / upgrade / start — always ends with the server running"
     exit 2 ;;
 esac
