@@ -70,7 +70,11 @@ def test_overnight_digest_honors_verdicts(
     workspace: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fake_deep(
-        name: str, config: Config, storage: Storage, actions: list[ActionItem]
+        name: str,
+        config: Config,
+        storage: Storage,
+        actions: list[ActionItem],
+        **_kwargs: object,
     ) -> OvernightTarget:
         actions.append(
             ActionItem(

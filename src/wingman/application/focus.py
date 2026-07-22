@@ -193,6 +193,35 @@ class OvernightReport(BaseModel):
 _JOBISH = ("job", "career", "opening", "position", "role")
 _MAX_ACTIONS = 10
 _MAX_ACTION_EVIDENCE = 3
+# Page-title resolution for evidence links (#109): one GET per titled link,
+# capped per run so a link-heavy morning can't turn the digest into a crawl.
+_TITLE_FETCH_BUDGET = 15
+_MAX_TITLE_CHARS = 80
+
+
+class _TitleBudget(BaseModel):
+    remaining: int = _TITLE_FETCH_BUDGET
+
+
+def _titled_link(url: str, budget: _TitleBudget) -> str:
+    """'[Page title](url)' evidence, degrading to '[link](url)' on any
+    failure or an exhausted budget — a title is a nicety, never worth
+    failing (or slowing) an action over (#109)."""
+    if budget.remaining <= 0:
+        return f"[link]({url})"
+    budget.remaining -= 1
+    # Fetched through research's binding: the same page-fetch pathway (and
+    # the same test seam) as the diff that surfaced the link.
+    from wingman.application import research
+
+    try:
+        title = research.page_title(research.fetch_url(url))  # type: ignore[attr-defined]
+    except FetchError:
+        return f"[link]({url})"
+    if not title:
+        return f"[link]({url})"
+    title = title.strip()[:_MAX_TITLE_CHARS].replace("[", "(").replace("]", ")")
+    return f"[{title}]({url})"
 
 
 def _scored_opening_actions(
@@ -274,12 +303,17 @@ def _criteria_review_action(config: Config) -> ActionItem | None:
 
 
 def _company_deep(
-    name: str, config: Config, storage: Storage, actions: list[ActionItem]
+    name: str,
+    config: Config,
+    storage: Storage,
+    actions: list[ActionItem],
+    titles: _TitleBudget | None = None,
 ) -> OvernightTarget:
     from wingman.application.pov import build_company_pov
     from wingman.providers.base import CapabilityClass
     from wingman.providers.router import get_provider
 
+    titles = titles if titles is not None else _TitleBudget()
     target = OvernightTarget(name=name, kind="company", status="ok")
     try:
         research = research_company(name, storage)
@@ -302,10 +336,11 @@ def _company_deep(
                     else f"Review what changed on {name}'s {result.label or 'watched'} page"
                 )
                 # Long URLs (job boards, trackers) read as noise: markdown
-                # links keep the line scannable; the runnable command below
-                # keeps the raw URL where it's needed verbatim.
+                # links with the page's own title keep the line scannable
+                # (#109); the runnable command below keeps the raw URL where
+                # it's needed verbatim.
                 evidence = [
-                    f"[link]({link})"
+                    _titled_link(link, titles)
                     for link in (jobish or result.new_links)[:_MAX_ACTION_EVIDENCE]
                 ]
                 if jobish:
@@ -469,10 +504,11 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     targets: list[OvernightTarget] = []
     companies: list[str] = []
     actions: list[ActionItem] = []
+    titles = _TitleBudget()  # one per run: the #109 fetch cap spans all companies
     for member_kind, member_name in members:
         if member_kind == "company":
             companies.append(member_name)
-            targets.append(_company_deep(member_name, config, storage, actions))
+            targets.append(_company_deep(member_name, config, storage, actions, titles=titles))
         else:
             targets.append(_person_deep(member_name, config, storage, actions))
     review = _criteria_review_action(config)

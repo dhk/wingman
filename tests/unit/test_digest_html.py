@@ -70,7 +70,11 @@ def test_overnight_writes_html_twin(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         directory.mkdir(parents=True)
 
     def fake_deep(
-        name: str, config: Config, storage: Storage, actions: list[ActionItem]
+        name: str,
+        config: Config,
+        storage: Storage,
+        actions: list[ActionItem],
+        **_kwargs: object,
     ) -> OvernightTarget:
         actions.append(ActionItem(what=f"Read {name}", why="w", who=name, key="company-posts:acme"))
         return OvernightTarget(name=name, kind="company", status="ok", lines=["fetched"])
