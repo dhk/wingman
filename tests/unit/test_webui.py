@@ -227,6 +227,58 @@ def test_native_prefix_serves_and_root_unaffected(client: tuple[TestClient, str]
     assert normalize_prefix("") == "" and normalize_prefix("/") == ""
 
 
+def test_connect_tab_shows_loopback_urls_with_no_tunnel_hint(
+    client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("wingman.mcp_server._extra_allowed_hosts", lambda cli_hosts: [])
+    http, token = client
+    host, port = server.settings.host, server.settings.port
+    page = http.get(f"/ui/{token}/").text
+    assert '<label for="tab-connect">Connect</label>' in page
+    assert f'value="http://{host}:{port}/mcp/{token}"' in page
+    assert f'value="http://{host}:{port}/ui/{token}"' in page
+    assert "No tunnel hostname detected" in page
+    assert "Settings → Connectors → Add custom connector" in page
+
+
+def test_connect_tab_shows_tunnel_urls_when_a_hostname_is_detected(
+    client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "wingman.mcp_server._extra_allowed_hosts",
+        lambda cli_hosts: ["lobster.tail08dfce.ts.net"],
+    )
+    http, token = client
+    page = http.get(f"/ui/{token}/").text
+    assert f"https://lobster.tail08dfce.ts.net/mcp/{token}" in page
+    assert f"https://lobster.tail08dfce.ts.net/ui/{token}/" in page
+    assert "No tunnel hostname detected" not in page
+
+
+def test_connect_tab_respects_native_prefix(client: tuple[TestClient, str]) -> None:
+    http, token = client
+    host, port = server.settings.host, server.settings.port
+    register_ui(server, prefix="/trent")
+    http2 = TestClient(server.streamable_http_app())
+    page = http2.get(f"/trent/ui/{token}/").text
+    assert f'value="http://{host}:{port}/trent/mcp/{token}"' in page
+    assert f'value="http://{host}:{port}/trent/ui/{token}"' in page
+
+
+def test_connect_panel_appears_in_fresh_setup_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "fresh-ws"))
+    config = load_config()
+    config.data_dir.mkdir(parents=True)
+    token = _http_token(config)
+    register_ui(server)
+    http = TestClient(server.streamable_http_app())
+    page = http.get(f"/ui/{token}/").text
+    assert "03 — Connect a Claude client" in page
+    assert f'value="http://{server.settings.host}:{server.settings.port}/mcp/{token}"' in page
+
+
 def test_spec_three_states_and_dark_tokens(client: tuple[TestClient, str]) -> None:
     """Issue #95 acceptance: state machine, humanization, details, dark mode."""
     http, token = client
