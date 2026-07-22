@@ -335,12 +335,17 @@ def _tabset(panels: list[tuple[str, str, str]]) -> str:
     return f'<div class="tabset">\n{inputs}\n<nav class="tabbar">{labels}</nav>\n{sections}\n</div>'
 
 
-def _tiers(groups: list[tuple[str, str]], manage: str) -> str:
-    """Tier 2 + Tier 3 as Digest · Files · Manage (tabs at >=768px, a stack below)."""
+def _tiers(groups: list[tuple[str, str]], manage: str, connect: str) -> str:
+    """Tier 2 + Tier 3 as Digest · Files · Connect · Manage (tabs at >=768px, a stack below)."""
     digest = "\n".join(html for section, html in groups if section.split("/")[0] == "digests")
     files = "\n".join(html for section, html in groups if section.split("/")[0] != "digests")
     return _tabset(
-        [("digest", "Digest", digest), ("files", "Files", files), ("manage", "Manage", manage)]
+        [
+            ("digest", "Digest", digest),
+            ("files", "Files", files),
+            ("connect", "Connect", connect),
+            ("manage", "Manage", manage),
+        ]
     )
 
 
@@ -354,6 +359,62 @@ def _upload_panel(step: str = "") -> str:
         '<form method="post" enctype="multipart/form-data" action="upload" class="field">'
         '<label>File</label><input type="file" name="file" required>'
         '<button class="btn">Upload &amp; ingest</button></form></div>'
+    )
+
+
+def _own_prefix(request: Request, token: str) -> str:
+    """The mount prefix this request actually arrived under ('' or '/trent').
+
+    Read back from the matched path rather than threaded through as state,
+    so it is always the prefix this instance is really mounted at — the
+    same value 'register_ui' was given, computed with zero extra plumbing.
+    """
+    suffix = f"/ui/{token}/"
+    path = request.url.path
+    return path[: -len(suffix)] if path.endswith(suffix) else ""
+
+
+def _url_field(label: str, value: str) -> str:
+    return (
+        f'<div class="field"><label>{_e(label)}</label>'
+        f'<input type="text" value="{_e(value)}" readonly></div>'
+    )
+
+
+def _connect_panel(request: Request, token: str, step: str = "") -> str:
+    """Same URLs 'wingman mcp url' prints, rendered here so reaching them
+    never requires shell access to the host — the point for a friend
+    running someone else's box (MULTI-INSTANCE-DESIGN.md shape B).
+    """
+    from wingman.mcp_server import _extra_allowed_hosts, connector_urls, server as mcp_server
+
+    lead = (
+        f'<span class="stepno">{_e(step)}</span>'
+        if step
+        else '<span class="stepno">Connect a client</span>'
+    )
+    host = getattr(mcp_server.settings, "host", "127.0.0.1")
+    port = getattr(mcp_server.settings, "port", 8787)
+    prefix = _own_prefix(request, token)
+    extra_hosts = _extra_allowed_hosts(None)
+    fields = "".join(
+        _url_field(label, url)
+        for label, url in connector_urls(token, extra_hosts, host=host, port=port, prefix=prefix)
+    )
+    hint = ""
+    if not extra_hosts:
+        hint = (
+            '<p class="dim">No tunnel hostname detected — only reachable from this '
+            "machine right now. Run <code>tailscale serve</code> (your own devices) or "
+            "<code>tailscale funnel</code> (claude.ai web/mobile) to reach it elsewhere.</p>"
+        )
+    return (
+        f'<div class="panel">{lead}'
+        "<p>Paste the MCP connector URL into claude.ai → Settings → Connectors "
+        "→ Add custom connector — the same URL works in Claude Desktop and the "
+        "mobile apps. Treat both URLs like a password: anyone holding one can read and "
+        "upload to this workspace.</p>"
+        f"{hint}{fields}</div>"
     )
 
 
@@ -406,6 +467,7 @@ async def ui_home(request: Request) -> Response:
     now = datetime.now(UTC)
     has_workspace = config.db_path.exists()
     latest = config.reports_dir / "digests" / "latest.html"
+    token = str(request.path_params["token"])
     body: list[str] = [_header(config)]
 
     if not has_workspace:
@@ -417,6 +479,7 @@ async def ui_home(request: Request) -> Response:
         )
         body.append(_keys_panel(config, step="01 \u2014 Add an API key"))
         body.append(_upload_panel(step="02 \u2014 Upload your data"))
+        body.append(_connect_panel(request, token, step="03 \u2014 Connect a Claude client"))
         # No tabs here (nothing to tab yet) \u2014 desktop just centers the setup.
         return _page("Wingman \u2014 setup", "\n".join(body), shell="ui ui-setup")
 
@@ -441,7 +504,7 @@ async def ui_home(request: Request) -> Response:
             + _keys_panel(config)
             + "</div></details>"
         )
-        body.append(_tiers(_artifact_sections(config, now), manage))
+        body.append(_tiers(_artifact_sections(config, now), manage, _connect_panel(request, token)))
         return _page("Wingman", "\n".join(body))
 
     # State 3 — degraded: workspace lives, no digest yet.
@@ -456,7 +519,7 @@ async def ui_home(request: Request) -> Response:
         + _keys_panel(config)
         + "</div></details>"
     )
-    body.append(_tiers(_artifact_sections(config, now), manage))
+    body.append(_tiers(_artifact_sections(config, now), manage, _connect_panel(request, token)))
     return _page("Wingman", "\n".join(body))
 
 

@@ -1797,6 +1797,31 @@ def _extra_allowed_hosts(
     return list(ordered)
 
 
+def connector_urls(
+    token: str,
+    extra_hosts: Sequence[str],
+    host: str = "127.0.0.1",
+    port: int = 8787,
+    prefix: str = "",
+) -> list[tuple[str, str]]:
+    """(label, url) pairs: loopback MCP + web UI, plus a tunnel pair per
+    accepted hostname. The single source of truth behind both 'render_urls'
+    (the --http banner and 'wingman mcp url' text output) and the web UI's
+    Connect tab — pure formatting over already-computed token/extra_hosts.
+    """
+    from wingman.webui import normalize_prefix
+
+    prefix = normalize_prefix(prefix)
+    pairs = [
+        ("MCP over HTTP", f"http://{host}:{port}{prefix}/mcp/{token}"),
+        ("Web UI (read + upload)", f"http://{host}:{port}{prefix}/ui/{token}"),
+    ]
+    for tunnel_host in extra_hosts:
+        pairs.append(("Tunnel MCP connector", f"https://{tunnel_host}{prefix}/mcp/{token}"))
+        pairs.append(("Tunnel web UI", f"https://{tunnel_host}{prefix}/ui/{token}/"))
+    return pairs
+
+
 def render_urls(
     token: str,
     extra_hosts: Sequence[str],
@@ -1804,23 +1829,14 @@ def render_urls(
     port: int = 8787,
     prefix: str = "",
 ) -> list[str]:
-    """The ready-to-paste URL lines: loopback MCP + web UI, plus a tunnel
-    pair per accepted hostname. Pure formatting over already-computed
-    token/extra_hosts — backs both the --http startup banner and
-    'wingman mcp url', which computes those fresh from the token file and
-    Tailscale auto-detection without starting a server.
+    """The ready-to-paste URL lines, formatted from 'connector_urls' — backs
+    both the --http startup banner and 'wingman mcp url', which computes
+    those fresh from the token file and Tailscale auto-detection without
+    starting a server.
     """
-    from wingman.webui import normalize_prefix
-
-    prefix = normalize_prefix(prefix)
-    lines = [
-        f"MCP over HTTP: http://{host}:{port}{prefix}/mcp/{token}",
-        f"Web UI (read + upload): http://{host}:{port}{prefix}/ui/{token}",
+    return [
+        f"{label}: {url}" for label, url in connector_urls(token, extra_hosts, host, port, prefix)
     ]
-    for tunnel_host in extra_hosts:
-        lines.append(f"Tunnel MCP connector: https://{tunnel_host}{prefix}/mcp/{token}")
-        lines.append(f"Tunnel web UI: https://{tunnel_host}{prefix}/ui/{token}/")
-    return lines
 
 
 def build_transport_security(extra_hosts: Sequence[str]) -> TransportSecuritySettings:
