@@ -42,6 +42,8 @@ def test_all_tools_are_registered() -> None:
         "answer_bank",
         "action_triage",
         "job_criteria",
+        "qa_capture",
+        "resolve_requirement",
         "assess_job",
         "ingest_resume_text",
         "people_add",

@@ -351,6 +351,76 @@ def job_criteria(action: str = "show", text: str = "") -> str:
 
 
 @server.tool()
+def qa_capture(question: str, answer: str, kind: str = "achievement") -> str:
+    """Save a clarifying Q&A as durable, citable profile evidence (#96, RFC-036).
+
+    The pair lands in the inbox as a source file and becomes one profile
+    item — name: the question, detail and evidence quote: the answer
+    VERBATIM — so future assessments cite it like any other evidence.
+    Re-answering the same question supersedes the earlier answer (RFC-028
+    lineage); it never piles up conflicts. kind is achievement, skill,
+    role, or testimonial.
+
+    Protocol: when the user answers a clarifying question during
+    assess/pack work, OFFER to save it — show the exact question and
+    answer text that will be stored, and save only after they agree.
+    Store their words verbatim; a paraphrase needs their confirmation
+    first. Never capture silently.
+    """
+    from wingman.application.qa_capture import capture_qa
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            report = capture_qa(question, answer, config, storage, kind=kind)
+    except IngestError as exc:
+        return f"qa capture failed: {exc}"
+    return (
+        f"{report.outcome}: [{report.kind}] {report.question}\n"
+        f"Evidence file: {report.source_path}\n"
+        "Future assessments cite this like any other profile item."
+    )
+
+
+@server.tool()
+def resolve_requirement(requirement: str, limit: int = 5) -> str:
+    """What the workspace already knows about one job requirement (#98, RFC-036).
+
+    Returns similar banked answers (RFC-030) plus unified workspace search
+    hits (RFC-022) for the requirement — the recall step before anyone is
+    asked anything.
+
+    Protocol when working an assessed opportunity's Unknown/Partial
+    requirements: go one requirement at a time, and for each one
+    (1) call this tool FIRST and offer any close match as the starting
+    point — never re-ask what the workspace can already answer;
+    (2) only when nothing fits, ask the user directly — AskUserQuestion
+    where the client supports it — and get a real answer instead of
+    leaving the verdict Unknown; (3) offer to persist the fresh answer
+    with qa_capture so the same gap never resurfaces; (4) capture
+    substance as terse raw bullets, one per requirement — refining the
+    wording into application prose is a later phase, never this one.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            parts: list[str] = []
+            similar = find_similar(requirement, storage, limit=limit)
+            if similar:
+                parts.append("Banked answers (closest first):")
+                parts.extend(render_answer(record) for record, _snippet in similar)
+            report = search_workspace(requirement, storage, config, limit=limit)
+            parts.append(render_search_report(report))
+    except IngestError as exc:
+        return f"resolve recall failed: {exc}"
+    return "\n\n".join(parts)
+
+
+@server.tool()
 def answer_bank(
     action: str,
     question: str = "",

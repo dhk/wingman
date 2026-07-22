@@ -2520,6 +2520,33 @@ def mcp_stop(
         raise typer.Exit(code=1)
 
 
+@app.command("qa")
+def qa_note(
+    question: str = typer.Argument(..., help="The clarifying question, as asked."),
+    answer: str = typer.Argument(..., help="Your answer — stored verbatim as evidence."),
+    kind: str = typer.Option(
+        "achievement", help="Profile item kind: achievement, skill, role, or testimonial."
+    ),
+) -> None:
+    """Save a clarifying Q&A as citable profile evidence (#96, RFC-036).
+
+    The answer becomes a profile item future 'wingman assess' runs can
+    cite; re-answering the same question supersedes the old answer.
+    """
+    configure_logging()
+    from wingman.application.qa_capture import capture_qa
+
+    config = load_config()
+    try:
+        with Storage(config.db_path) as storage:
+            report = capture_qa(question, answer, config, storage, kind=kind)
+    except IngestError as exc:
+        typer.echo(f"qa capture failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{report.outcome}: [{report.kind}] {report.question}")
+    typer.echo(f"evidence file: {report.source_path}")
+
+
 @criteria_app.command("show")
 def criteria_show() -> None:
     """Print job-criteria.md — the document overnight scoring judges against."""
