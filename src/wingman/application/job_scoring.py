@@ -16,7 +16,6 @@ never applied silently.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -217,15 +216,11 @@ class _Judgment(BaseModel):
 
 
 def _parse_judgment(model_text: str) -> _Judgment:
-    text = model_text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[len("json") :]
-        text = text.strip()
+    from wingman.agents._json import extract_json_block
+
     try:
-        return _Judgment.model_validate(json.loads(text))
-    except (json.JSONDecodeError, ValidationError) as exc:
+        return _Judgment.model_validate(extract_json_block(model_text))
+    except (ValueError, ValidationError) as exc:
         raise IngestError(f"the judge's output is not valid judgment JSON: {exc}") from exc
 
 

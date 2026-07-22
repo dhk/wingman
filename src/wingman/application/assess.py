@@ -234,19 +234,27 @@ def fetch_job_posting(url: str, config: Config, fetcher: object = None) -> Path:
     fetch stays the provenance record. A page with no extractable text
     (login wall, JS-only) fails visibly.
     """
-    from collections.abc import Callable
-
     from wingman.application.research import extract_page
-    from wingman.infrastructure.fetch import FetchError, fetch_url
+    from wingman.infrastructure.fetch import FetchError, fetch_url_final
 
     url = url.strip()
     if not url.startswith("https://"):
         raise IngestError(f"only https:// postings are fetched (RFC-009); got {url!r}")
-    fetch: Callable[[str], bytes] = fetcher if callable(fetcher) else fetch_url
     try:
-        data = fetch(url)
+        if callable(fetcher):
+            data, final_url = fetcher(url), url
+        else:
+            data, final_url = fetch_url_final(url)
     except FetchError as exc:
         raise IngestError(f"could not fetch the posting: {exc}. Nothing was assessed.") from exc
+    # Job boards (Greenhouse observed, #97) redirect expired postings to an
+    # error page with HTTP 200: the body is then the whole board index, and
+    # assessing it would be confidently wrong. The final URL is the tell.
+    if "error=true" in final_url:
+        raise IngestError(
+            f"{url} redirected to {final_url} — the job board reports this "
+            "posting as closed or missing. Nothing was assessed."
+        )
     text, _links = extract_page(data, url)
     text = text.strip()
     if len(text) < 200:

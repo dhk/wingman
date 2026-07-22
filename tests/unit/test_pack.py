@@ -170,3 +170,21 @@ def test_pack_errors_are_actionable(workspace: Path) -> None:
         # unknown company: pack still builds, says how to attach intelligence
         report = build_application_pack("staff mle", config, storage, company="Nowhere Co")
         assert "no synthesized themes yet" in report.markdown
+
+
+def test_fetch_job_posting_rejects_error_redirect(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#97: Greenhouse redirects expired postings to an error page with HTTP
+    200 — the final URL is the tell, and assessing the board index it serves
+    would be confidently wrong."""
+    import wingman.infrastructure.fetch as fetch_module
+
+    config = load_config()
+    monkeypatch.setattr(
+        fetch_module,
+        "fetch_url_final",
+        lambda url: (POSTING, "https://job-boards.greenhouse.io/anthropic?error=true"),
+    )
+    with pytest.raises(IngestError, match="closed or missing"):
+        fetch_job_posting("https://job-boards.greenhouse.io/anthropic/jobs/5015340008", config)

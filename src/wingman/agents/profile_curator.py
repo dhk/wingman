@@ -9,7 +9,6 @@ this agent enter the profile only after their evidence resolves.
 
 from __future__ import annotations
 
-import json
 from importlib.resources import files
 
 from pydantic import ValidationError
@@ -38,16 +37,12 @@ def build_prompt(resume_text: str) -> str:
 
 def parse_proposal(model_text: str) -> ExtractionProposal:
     """Deterministically validate model output against the extraction schema."""
-    text = model_text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[len("json") :]
-        text = text.strip()
+    from wingman.agents._json import extract_json_block
+
     try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ProposalParseError(f"model output is not valid JSON: {exc}") from exc
+        payload = extract_json_block(model_text)
+    except ValueError as exc:
+        raise ProposalParseError(str(exc)) from exc
     try:
         return ExtractionProposal.model_validate(payload)
     except ValidationError as exc:

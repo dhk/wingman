@@ -81,16 +81,12 @@ def build_assessment_prompt(requirements: list[Requirement], items: list[Profile
 
 
 def _parse_json(model_text: str) -> object:
-    text = model_text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[len("json") :]
-        text = text.strip()
+    from wingman.agents._json import extract_json_block
+
     try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ProposalParseError(f"model output is not valid JSON: {exc}") from exc
+        return extract_json_block(model_text)
+    except ValueError as exc:
+        raise ProposalParseError(str(exc)) from exc
 
 
 def parse_requirements(model_text: str) -> RequirementsProposal:

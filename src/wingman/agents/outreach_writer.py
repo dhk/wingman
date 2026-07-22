@@ -11,7 +11,6 @@ resolves verbatim against the user's stored corpus.
 
 from __future__ import annotations
 
-import json
 from importlib.resources import files
 
 from pydantic import ValidationError
@@ -52,16 +51,12 @@ def build_prompt(
 
 def parse_outreach_proposal(model_text: str) -> OutreachProposal:
     """Deterministically validate model output against the outreach schema."""
-    text = model_text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[len("json") :]
-        text = text.strip()
+    from wingman.agents._json import extract_json_block
+
     try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ProposalParseError(f"model output is not valid JSON: {exc}") from exc
+        payload = extract_json_block(model_text)
+    except ValueError as exc:
+        raise ProposalParseError(str(exc)) from exc
     try:
         return OutreachProposal.model_validate(payload)
     except ValidationError as exc:

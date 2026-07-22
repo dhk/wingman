@@ -115,6 +115,16 @@ def fetch_url(url: str) -> bytes:
     Retry-After-honoring pause — a single user-invoked fetch should survive
     a momentary throttle without turning into a polling loop.
     """
+    return fetch_url_final(url)[0]
+
+
+def fetch_url_final(url: str) -> tuple[bytes, str]:
+    """fetch_url, plus the FINAL URL after redirects.
+
+    Job boards redirect expired postings to an error page with HTTP 200
+    (#97) — the body looks fine and only the final URL betrays it, so
+    callers that must know what page they actually got use this form.
+    """
     if not url.startswith("https://"):
         raise FetchError(f"only https:// URLs are fetched (RFC-009); got {url!r}")
     _require_public_host(url)
@@ -123,6 +133,7 @@ def fetch_url(url: str) -> bytes:
         try:
             with _opener.open(request, timeout=_TIMEOUT_SECONDS) as response:
                 body: bytes = response.read(_MAX_BYTES + 1)
+                final_url: str = response.geturl()
         except FetchError:
             raise
         except urllib.error.HTTPError as exc:
@@ -134,5 +145,5 @@ def fetch_url(url: str) -> bytes:
             raise FetchError(f"could not fetch {url} ({exc})") from exc
         if len(body) > _MAX_BYTES:
             raise FetchError(f"{url} returned more than {_MAX_BYTES} bytes; refusing to ingest")
-        return body
+        return body, final_url
     raise FetchError(f"could not fetch {url} (retry exhausted)")  # pragma: no cover
