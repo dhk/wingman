@@ -1955,6 +1955,10 @@ def main(argv: list[str] | None = None) -> None:
     for tunnel_host in extra_hosts:
         print(f"Tunnel MCP connector: https://{tunnel_host}{prefix}/mcp/{token}")
         print(f"Tunnel web UI: https://{tunnel_host}{prefix}/ui/{token}/")
+    # Under 'wingman-ctl start' stdout is a redirected file, which Python
+    # block-buffers: without this flush the banner sits in the buffer for
+    # the life of the process and wg's URL echo greps an empty log.
+    sys.stdout.flush()
     # The capability token lives in the URL path; uvicorn's access log would
     # write it on every request, silently defeating rotation-as-revocation (#70).
     logging.getLogger("uvicorn.access").disabled = True
