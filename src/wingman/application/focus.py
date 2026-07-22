@@ -195,6 +195,61 @@ _MAX_ACTIONS = 10
 _MAX_ACTION_EVIDENCE = 3
 
 
+def _scored_opening_actions(
+    name: str,
+    jobish: list[str],
+    config: Config,
+    storage: Storage,
+    target: OvernightTarget,
+    actions: list[ActionItem],
+) -> bool:
+    """Judge new openings against job-criteria.md (RFC-035) into per-opening
+    scored actions. Returns False — leaving the generic 'assess' action to
+    the caller — when there is no criteria doc or scoring failed entirely."""
+    from wingman.application.job_scoring import (
+        CRITERIA_FILENAME,
+        load_criteria,
+        score_company_openings,
+    )
+    from wingman.providers.base import CapabilityClass
+    from wingman.providers.router import get_provider
+
+    if load_criteria(config) is None:
+        target.lines.append(
+            f"{len(jobish)} new job link(s) unscored — write {CRITERIA_FILENAME} "
+            "(the job_criteria tool interviews you) to get scored openings"
+        )
+        return False
+    try:
+        provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+        outcome = score_company_openings(name, jobish, config, storage, provider)
+    except Exception as exc:  # noqa: BLE001 — overnight reports failures, never dies on them
+        target.lines.append(f"opening scoring failed: {exc}")
+        return False
+    for opening in outcome.scored:
+        label = opening.title or "opening"
+        actions.append(
+            ActionItem(
+                what=f"{label} at {name} — scored {opening.score}/100",
+                why="; ".join(opening.reasons) or "judged against job-criteria.md",
+                who=name,
+                evidence=[f'"{quote}"' for quote in opening.quotes]
+                + [f"[link]({opening.url})", f'run: wingman assess --url "{opening.url}"'],
+                key=f"opening:{company_key(name)}:{opening.url}",
+            )
+        )
+    if outcome.filtered:
+        # Visible-suppression discipline (RFC-031): filtered is a count with
+        # names, never a silent disappearance.
+        for opening in outcome.filtered:
+            target.lines.append(
+                f"opening filtered by criteria ({opening.hard_filter_failed}): "
+                f"[link]({opening.url})"
+            )
+    target.lines.extend(f"scoring: {note}" for note in outcome.notes)
+    return bool(outcome.scored or outcome.filtered)
+
+
 def _company_deep(
     name: str, config: Config, storage: Storage, actions: list[ActionItem]
 ) -> OvernightTarget:
@@ -214,6 +269,10 @@ def _company_deep(
                     for link in result.new_links
                     if any(word in link.lower() for word in _JOBISH)
                 ]
+                if jobish and _scored_opening_actions(
+                    name, jobish, config, storage, target, actions
+                ):
+                    continue
                 what = (
                     f"Assess the new opening(s) at {name}"
                     if jobish

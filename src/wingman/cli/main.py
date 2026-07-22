@@ -182,6 +182,10 @@ mcp_app = typer.Typer(
     help="The HTTP MCP server process: status and stop, via its pidfile (RFC-032)."
 )
 app.add_typer(mcp_app, name="mcp")
+criteria_app = typer.Typer(
+    help="The job-criteria doc that scores new openings in the digest (RFC-035)."
+)
+app.add_typer(criteria_app, name="criteria")
 
 
 def _version_callback(value: bool) -> None:
@@ -2514,6 +2518,47 @@ def mcp_stop(
     typer.echo(detail)
     if not stopped:
         raise typer.Exit(code=1)
+
+
+@criteria_app.command("show")
+def criteria_show() -> None:
+    """Print job-criteria.md — the document overnight scoring judges against."""
+    configure_logging()
+    from wingman.application.job_scoring import CRITERIA_FILENAME, criteria_path, load_criteria
+
+    config = load_config()
+    current = load_criteria(config)
+    if current is None:
+        typer.echo(
+            f"No {CRITERIA_FILENAME} yet — new openings appear unscored. Seed it via the "
+            "job_criteria tool's interview in a connected client, or: "
+            "wingman criteria save <file>"
+        )
+        raise typer.Exit(code=1)
+    typer.echo(f"# {criteria_path(config)}")
+    typer.echo(current)
+
+
+@criteria_app.command("save")
+def criteria_save(
+    source: Path = typer.Argument(..., help="Markdown file to install as job-criteria.md."),
+) -> None:
+    """Replace job-criteria.md with a file's contents (takes effect next run)."""
+    configure_logging()
+    from wingman.application.job_scoring import save_criteria
+
+    config = load_config()
+    try:
+        text = source.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        typer.echo(f"could not read {source}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        path = save_criteria(config, text)
+    except IngestError as exc:
+        typer.echo(f"criteria save failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Saved {path} — overnight runs now score new openings against it.")
 
 
 @actions_app.command("mute")
