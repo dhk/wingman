@@ -78,6 +78,37 @@ def extract_page(data: bytes, base_url: str) -> tuple[str, list[str]]:
     return " ".join(parser.text_chunks), parser.links
 
 
+class _TitleParser(HTMLParser):
+    """The first <title> element's text, nothing more (#109)."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._in_title = False
+        self._done = False
+        self.title = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "title" and not self._done:
+            self._in_title = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "title" and self._in_title:
+            self._in_title = False
+            self._done = True
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self.title += data
+
+
+def page_title(data: bytes) -> str | None:
+    """The page's <title>, whitespace-collapsed, or None. Deterministic."""
+    parser = _TitleParser()
+    parser.feed(data.decode("utf-8", errors="replace"))
+    title = " ".join(parser.title.split())
+    return title or None
+
+
 def _resolve_company(name: str) -> str:
     key = company_key(name)
     if not key:

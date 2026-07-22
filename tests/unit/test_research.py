@@ -167,3 +167,16 @@ def test_delete_company_removes_sources_snapshots_and_watchlist(storage: Storage
 
 def test_delete_company_nothing_found_returns_false(storage: Storage) -> None:
     assert delete_company("Nobody Corp", storage) == (False, [])
+
+
+def test_page_title_extraction() -> None:
+    from wingman.application.research import page_title
+
+    assert (
+        page_title(b"<html><head><title>Ramp Blog \xe2\x80\x94 Posts</title></head></html>")
+        == "Ramp Blog — Posts"
+    )
+    # whitespace collapsed; only the FIRST title element counts
+    assert page_title(b"<html><title>A\n   B</title><title>second</title></html>") == "A B"
+    assert page_title(b"<html><body>no title here</body></html>") is None
+    assert page_title(b"\x00\xffnot html at all") is None

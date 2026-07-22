@@ -216,3 +216,29 @@ def test_latest_digest_and_out_dir(workspace: Path, monkeypatch: pytest.MonkeyPa
     assert (custom / "latest.md").exists()
     # default-location helper ignores custom out_dirs (they are the user's copy)
     assert latest_digest(config) is None
+
+
+def test_titled_link_resolves_sanitizes_and_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#109: evidence links carry the page's own title; every failure mode
+    (no title, fetch error, spent budget) degrades to the old bare link."""
+    import wingman.application.research as research_module
+    from wingman.application.focus import _TitleBudget, _titled_link
+
+    page = (
+        b"<html><head><title>  Staff [ML] Engineer\n at Acme  </title></head><body>x</body></html>"
+    )
+    monkeypatch.setattr(research_module, "fetch_url", lambda url: page)
+    budget = _TitleBudget(remaining=3)
+    assert (
+        _titled_link("https://a.example/j", budget)
+        == "[Staff (ML) Engineer at Acme](https://a.example/j)"  # brackets sanitized
+    )
+    monkeypatch.setattr(research_module, "fetch_url", lambda url: b"<html><body>no</body></html>")
+    assert _titled_link("https://a.example/k", budget) == "[link](https://a.example/k)"
+    monkeypatch.setattr(
+        research_module, "fetch_url", lambda url: (_ for _ in ()).throw(FetchError("451"))
+    )
+    assert _titled_link("https://a.example/l", budget) == "[link](https://a.example/l)"
+    assert budget.remaining == 0
+    monkeypatch.setattr(research_module, "fetch_url", lambda url: page)
+    assert _titled_link("https://a.example/m", budget) == "[link](https://a.example/m)"  # spent
