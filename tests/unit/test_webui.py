@@ -264,3 +264,88 @@ def test_spec_fresh_state_guides_setup(tmp_path: Path, monkeypatch: pytest.Monke
     assert "<details" not in page  # nothing collapsed away in setup
     assert 'action="keys"' in page and 'action="upload"' in page
     assert 'href="/' not in page  # still relative everywhere
+    # State 2 gets no tab chrome — desktop centers the setup column instead
+    assert 'type="radio"' not in page and 'class="tabbar"' not in page
+    assert '<div class="ui ui-setup">' in page
+    assert "<script" not in page  # the page carries zero JavaScript
+
+
+def test_desktop_tabs_are_css_only_and_single_sourced(client: tuple[TestClient, str]) -> None:
+    """Spec section 6 / acceptance 9: Digest · Files · Manage tabs from hidden
+    radios, hero pinned above the bar, panels present exactly once (narrow
+    viewports stack the same content — nothing is duplicated per tab)."""
+    http, token = client
+    config = load_config()
+    digests = config.reports_dir / "digests"
+    digests.mkdir(parents=True)
+    (digests / "latest.html").write_text("<h1>d</h1>", encoding="utf-8")
+    (digests / "overnight-20260101T051500Z.html").write_text("<h1>old</h1>", encoding="utf-8")
+    (config.reports_dir / "packs").mkdir()
+    (config.reports_dir / "packs" / "pack-staff-mle.md").write_text("pack!", encoding="utf-8")
+    page = http.get(f"/ui/{token}/").text
+    assert "<script" not in page  # CSS-only: no JS tab controller, no JS at all
+    assert '<input type="radio" name="view" id="tab-digest" checked>' in page
+    assert 'id="tab-files"' in page and 'id="tab-manage"' in page
+    assert '<label for="tab-digest">Digest</label>' in page
+    assert '<label for="tab-files">Files</label>' in page
+    assert '<label for="tab-manage">Manage</label>' in page
+    # header and hero stay above the tab bar (the glance is never behind a tab)
+    assert page.index('class="hdr"') < page.index('class="hero"') < page.index('class="tabbar"')
+    # each panel exists exactly once — CSS shows/hides, content is never cloned
+    assert page.count('class="tabpanel tabpanel-digest"') == 1
+    assert page.count('class="tabpanel tabpanel-files"') == 1
+    assert page.count('class="tabpanel tabpanel-manage"') == 1
+    assert page.count("Application packs") == 1
+    assert page.count("Overnight digests") == 1
+    assert page.count('action="upload"') == 1  # one Manage, not one per layout
+    # Manage keeps its no-JS <details> disclosure inside the tab panel
+    assert '<details class="manage"><summary>' in page
+
+
+def test_degraded_state_tabs_skip_empty_digest_panel(client: tuple[TestClient, str]) -> None:
+    """State 3 with only packs: no dead Digest tab; Files + Manage still tab."""
+    http, token = client
+    config = load_config()
+    (config.reports_dir / "packs").mkdir(parents=True)
+    (config.reports_dir / "packs" / "pack-staff-mle.md").write_text("pack!", encoding="utf-8")
+    page = http.get(f"/ui/{token}/").text
+    assert "No digest yet" in page
+    assert 'id="tab-digest"' not in page  # empty panel -> no tab for it
+    assert '<input type="radio" name="view" id="tab-files" checked>' in page
+    assert 'id="tab-manage"' in page
+    assert '<details class="manage" open>' in page  # still expanded in State 3
+
+
+def test_group_rows_cap_at_twelve_with_older_line(client: tuple[TestClient, str]) -> None:
+    """Spec section 5: 12 rows per group, newest first, then a muted 'older…'."""
+    import os
+
+    http, token = client
+    config = load_config()
+    packs = config.reports_dir / "packs"
+    packs.mkdir(parents=True)
+    base = 1_700_000_000
+    for index in range(14):
+        path = packs / f"pack-item-{index:02d}.md"
+        path.write_text("pack!", encoding="utf-8")
+        os.utime(path, (base + index, base + index))  # item-13 newest
+    page = http.get(f"/ui/{token}/").text
+    assert page.count('class="row"') == 12  # capped
+    assert "older…" in page  # the cap is named, mutedly
+    assert ">Item 13<" in page and ">Item 02<" in page  # newest 12 survive
+    assert ">Item 01<" not in page and ">Item 00<" not in page  # oldest two dropped
+    assert "pack-item-00" not in page and "pack-item-01" not in page  # no raw names
+
+
+def test_design_tokens_are_one_shared_constant(client: tuple[TestClient, str]) -> None:
+    """Issue #118 section 9: the same token block feeds the UI and the exports."""
+    from wingman.reporting.design_tokens import DESIGN_TOKENS_CSS
+    from wingman.reporting.export import WINGMAN_PDF_CSS
+
+    assert "--accent: #2b50e8" in DESIGN_TOKENS_CSS  # Electric Cobalt, light
+    assert "prefers-color-scheme: dark" in DESIGN_TOKENS_CSS  # dark rides along
+    assert DESIGN_TOKENS_CSS in WINGMAN_PDF_CSS  # exports/digest twin surface
+    assert DESIGN_TOKENS_CSS in webui_module._UI_CSS  # web UI surface
+    http, token = client
+    page = http.get(f"/ui/{token}/").text
+    assert page.count("--accent: #2b50e8") == 1  # emitted once, from one source

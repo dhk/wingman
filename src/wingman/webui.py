@@ -30,6 +30,7 @@ from starlette.responses import FileResponse, HTMLResponse, RedirectResponse, Re
 
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.logs import get_logger
+from wingman.reporting.design_tokens import DESIGN_TOKENS_CSS
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -48,7 +49,9 @@ _SERVE_TYPES = {
 }
 _MAX_LISTED_PER_SECTION = 12
 
-_UI_CSS = """
+# Component rules only — the token block is prepended below (issue #118 §9:
+# one shared constant feeds this stylesheet and WINGMAN_PDF_CSS alike).
+_UI_RULES_CSS = """
 body { margin: 0; }
 .ui { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px;
   display: flex; flex-direction: column; gap: 24px; }
@@ -109,8 +112,8 @@ body { margin: 0; }
 .btn { font-family: var(--font-mono); font-size: 12px; text-transform: uppercase;
   letter-spacing: .04em; min-height: 44px; width: 100%; border: 0;
   border-radius: var(--border-radius); background: var(--accent); color: #fff;
-  cursor: pointer; transition: opacity .15s; }
-.btn:hover { opacity: .85; }
+  cursor: pointer; transition: background .15s; }
+.btn:hover { background: var(--accent-hv); }
 .report-box { border-left: 3px solid var(--teal); background: var(--bg2);
   border-radius: 0 var(--border-radius) var(--border-radius) 0; padding: 12px 16px;
   white-space: pre-wrap; font-family: var(--font-mono); font-size: 13px; }
@@ -121,28 +124,60 @@ body { margin: 0; }
 .empty b { color: var(--text-head); }
 details.manage > summary { cursor: pointer; font-family: var(--font-mono); font-size: 11px;
   text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim);
-  padding: 10px 0; list-style: none; }
+  padding: 13px 0; list-style: none; }
 details.manage > summary::-webkit-details-marker { display: none; }
 details.manage > summary::before { content: "\\25B8  "; }
 details.manage[open] > summary::before { content: "\\25BE  "; }
 details.manage > div { display: flex; flex-direction: column; gap: 16px; padding-top: 8px; }
+.row-older { padding: 10px 12px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--text-dim); border-top: 1px solid var(--border-light); }
+/* Desktop tabs (spec section 6): CSS-only — hidden radios + :checked siblings, no
+   JavaScript. Narrow viewports never see the bar: every panel stacks in DOM
+   order, so the phone page is the same content top to bottom. With CSS
+   unavailable the radios and labels degrade to stacked labeled sections. */
+.tabset { display: flex; flex-direction: column; gap: 24px; }
+.tabset > input { position: absolute; width: 1px; height: 1px; opacity: 0;
+  pointer-events: none; }
+.tabbar { display: none; }
+.tabpanel { display: flex; flex-direction: column; gap: 24px; }
+@media (min-width: 768px) {
+  .ui-setup { max-width: 560px; }
+  .tabbar { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+  .tabbar label { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--text-dim); padding: 0 14px; min-height: 44px;
+    display: flex; align-items: center; cursor: pointer; margin-bottom: -1px;
+    border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
+  .tabbar label:hover { color: var(--text); }
+  .tabpanel { display: none; }
+  #tab-digest:checked ~ .tabpanel-digest,
+  #tab-files:checked ~ .tabpanel-files,
+  #tab-manage:checked ~ .tabpanel-manage { display: flex; }
+  #tab-digest:checked ~ .tabbar label[for="tab-digest"],
+  #tab-files:checked ~ .tabbar label[for="tab-files"],
+  #tab-manage:checked ~ .tabbar label[for="tab-manage"] {
+    color: var(--text); border-bottom-color: var(--accent); }
+}
 """
+
+_UI_CSS = DESIGN_TOKENS_CSS + _UI_RULES_CSS
 
 
 def _e(text: str) -> str:
     return html.escape(text, quote=True)
 
 
-def _page(title: str, body: str) -> HTMLResponse:
-    from wingman.reporting.export import WINGMAN_PDF_CSS
+def _page(title: str, body: str, shell: str = "ui") -> HTMLResponse:
+    # Tokens ride _UI_CSS (shared block, emitted once); the export stylesheet
+    # contributes only its component rules so nothing is defined twice.
+    from wingman.reporting.export import WINGMAN_PDF_RULES_CSS
 
     return HTMLResponse(
         "<!doctype html>\n"
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{_e(title)}</title>\n"
-        f"<style>\n{WINGMAN_PDF_CSS}\n{_UI_CSS}</style>\n"
-        f'<div class="ui">\n{body}\n</div>\n'
+        f"<style>\n{_UI_CSS}\n{WINGMAN_PDF_RULES_CSS}</style>\n"
+        f'<div class="{shell}">\n{body}\n</div>\n'
     )
 
 
@@ -247,27 +282,66 @@ def _header(config: Config) -> str:
     )
 
 
-def _artifact_sections(config: Config, now: datetime) -> list[str]:
+def _artifact_sections(config: Config, now: datetime) -> list[tuple[str, str]]:
+    """(section, rendered group) pairs \u2014 newest first, capped at 12 rows each."""
     grouped: dict[str, list[Path]] = {}
     for section, path in _listed_files(config.reports_dir):
-        grouped.setdefault(section, [])
-        if len(grouped[section]) < _MAX_LISTED_PER_SECTION:
-            grouped[section].append(path)
-    parts: list[str] = []
+        grouped.setdefault(section, []).append(path)
+    parts: list[tuple[str, str]] = []
     for section in sorted(grouped):
-        parts.append(
-            f'<div class="group"><div class="divider"><span>{_e(_group_name(section))}</span></div>'
-        )
         rows = []
-        for path in grouped[section]:
+        for path in grouped[section][:_MAX_LISTED_PER_SECTION]:
             rel = path.relative_to(config.reports_dir).as_posix()
             label, title = _humanize(path, now)
             rows.append(
                 f'<a class="row" href="file/{_e(rel)}"><span class="when">{_e(label)}</span>'
                 f"<span>{_e(title)}</span>" + '<span class="arrow">\u2192</span></a>'
             )
-        parts.append('<div class="rows">' + "".join(rows) + "</div></div>")
+        if len(grouped[section]) > _MAX_LISTED_PER_SECTION:
+            rows.append('<div class="row-older">older\u2026</div>')
+        parts.append(
+            (
+                section,
+                f'<div class="group"><div class="divider"><span>{_e(_group_name(section))}</span>'
+                '</div><div class="rows">' + "".join(rows) + "</div></div>",
+            )
+        )
     return parts
+
+
+def _tabset(panels: list[tuple[str, str, str]]) -> str:
+    """Desktop tabs (spec section 6): radios first, then labels, then panels.
+
+    CSS-only \u2014 hidden radio inputs drive :checked sibling selectors; the page
+    carries no JavaScript. Below 768px the bar is hidden and every panel
+    stacks in DOM order, so narrow viewports read the same single column as
+    before; with CSS unavailable the whole thing degrades to stacked labeled
+    sections. Empty panels are dropped (no dead tab), and a lone panel needs
+    no chrome at all.
+    """
+    filled = [(key, label, content) for key, label, content in panels if content]
+    if not filled:
+        return ""
+    if len(filled) == 1:
+        return filled[0][2]
+    inputs = "".join(
+        f'<input type="radio" name="view" id="tab-{key}"{" checked" if index == 0 else ""}>'
+        for index, (key, _, _) in enumerate(filled)
+    )
+    labels = "".join(f'<label for="tab-{key}">{_e(label)}</label>' for key, label, _ in filled)
+    sections = "\n".join(
+        f'<div class="tabpanel tabpanel-{key}">\n{content}\n</div>' for key, _, content in filled
+    )
+    return f'<div class="tabset">\n{inputs}\n<nav class="tabbar">{labels}</nav>\n{sections}\n</div>'
+
+
+def _tiers(groups: list[tuple[str, str]], manage: str) -> str:
+    """Tier 2 + Tier 3 as Digest · Files · Manage (tabs at >=768px, a stack below)."""
+    digest = "\n".join(html for section, html in groups if section.split("/")[0] == "digests")
+    files = "\n".join(html for section, html in groups if section.split("/")[0] != "digests")
+    return _tabset(
+        [("digest", "Digest", digest), ("files", "Files", files), ("manage", "Manage", manage)]
+    )
 
 
 def _upload_panel(step: str = "") -> str:
@@ -343,7 +417,8 @@ async def ui_home(request: Request) -> Response:
         )
         body.append(_keys_panel(config, step="01 \u2014 Add an API key"))
         body.append(_upload_panel(step="02 \u2014 Upload your data"))
-        return _page("Wingman \u2014 setup", "\n".join(body))
+        # No tabs here (nothing to tab yet) \u2014 desktop just centers the setup.
+        return _page("Wingman \u2014 setup", "\n".join(body), shell="ui ui-setup")
 
     if latest.exists():
         # State 1 — daily: the digest is the fold.
@@ -360,13 +435,13 @@ async def ui_home(request: Request) -> Response:
             '<p class="sub">Actions first, then everything that changed.</p>'
             "</div>" + '<span class="arrow">\u2192</span></a>'
         )
-        body.extend(_artifact_sections(config, now))
-        body.append(
+        manage = (
             '<details class="manage"><summary>Manage \u2014 keys &amp; uploads</summary><div>'
             + _upload_panel()
             + _keys_panel(config)
             + "</div></details>"
         )
+        body.append(_tiers(_artifact_sections(config, now), manage))
         return _page("Wingman", "\n".join(body))
 
     # State 3 — degraded: workspace lives, no digest yet.
@@ -375,13 +450,13 @@ async def ui_home(request: Request) -> Response:
         "No digest yet</span><b>The first overnight run writes one.</b>"
         '<span class="dim">Run <code>wingman overnight</code> \u2014 or follow a company first.</span></div>'
     )
-    body.extend(_artifact_sections(config, now))
-    body.append(
+    manage = (
         '<details class="manage" open><summary>Manage \u2014 keys &amp; uploads</summary><div>'
         + _upload_panel()
         + _keys_panel(config)
         + "</div></details>"
     )
+    body.append(_tiers(_artifact_sections(config, now), manage))
     return _page("Wingman", "\n".join(body))
 
 
