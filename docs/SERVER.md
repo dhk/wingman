@@ -257,7 +257,14 @@ name = "trent"
 port = 8788
 prefix = "/trent"
 token = "<trent's mcp-http-token>"
+tunnel_port = 8443   # only needed if this instance's funnel port isn't the implicit 443
 ```
+
+The "Open" link on each row prefers the same Tailscale-detected tunnel
+host the Connect tab uses, so it works when the page itself is viewed
+through the tunnel (the normal case) rather than only from lobster's own
+loopback; `tunnel_port` tells it which funnel port that particular
+instance is actually reachable on, same as `WINGMAN_TUNNEL_PORT` above.
 
 Deliberately explicit rather than auto-discovered — no scanning other
 users' home directories, no new cross-user read access. The page never
