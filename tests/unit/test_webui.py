@@ -227,6 +227,16 @@ def test_native_prefix_serves_and_root_unaffected(client: tuple[TestClient, str]
     assert normalize_prefix("") == "" and normalize_prefix("/") == ""
 
 
+def test_connect_tab_css_actually_reveals_its_panel(client: tuple[TestClient, str]) -> None:
+    """Regression: adding a tab to the Python tuple list isn't enough — the
+    hand-written :checked CSS selectors must name it too, or the panel stays
+    display:none forever (issue: Connect tab rendered but showed nothing)."""
+    http, token = client
+    page = http.get(f"/ui/{token}/").text
+    assert "#tab-connect:checked ~ .tabpanel-connect" in page
+    assert '#tab-connect:checked ~ .tabbar label[for="tab-connect"]' in page
+
+
 def test_connect_tab_shows_loopback_urls_with_no_tunnel_hint(
     client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
