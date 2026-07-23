@@ -93,6 +93,60 @@ def test_render_urls_is_pure_formatting_over_given_inputs() -> None:
     ]  # prefix normalization ("trent/" -> "/trent") applies here too
 
 
+def test_render_urls_honors_an_explicit_tunnel_port() -> None:
+    """A tunnel front on a non-443 port (e.g. two instances sharing one
+    Tailscale hostname on distinct funnel ports) only changes the tunnel
+    lines — the loopback lines still reflect the local --port, unrelated."""
+    lines = render_urls(
+        "TOK", ["lobster.tail.ts.net"], port=8788, prefix="/trent", tunnel_port=8443
+    )
+    assert lines == [
+        "MCP over HTTP: http://127.0.0.1:8788/trent/mcp/TOK",
+        "Web UI (read + upload): http://127.0.0.1:8788/trent/ui/TOK",
+        "Tunnel MCP connector: https://lobster.tail.ts.net:8443/trent/mcp/TOK",
+        "Tunnel web UI: https://lobster.tail.ts.net:8443/trent/ui/TOK/",
+    ]
+    assert render_urls("TOK", ["lobster.tail.ts.net"])[2] == (
+        "Tunnel MCP connector: https://lobster.tail.ts.net/mcp/TOK"
+    )  # tunnel_port=None (default): no port suffix, unchanged behavior
+
+
+def test_tunnel_port_cli_flag_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from wingman.mcp_server import _tunnel_port
+
+    monkeypatch.setenv("WINGMAN_TUNNEL_PORT", "9999")
+    assert _tunnel_port(8443) == 8443  # explicit value wins
+    assert _tunnel_port(None) == 9999  # falls back to the env var
+    monkeypatch.delenv("WINGMAN_TUNNEL_PORT")
+    assert _tunnel_port(None) is None  # unset means 'omit it, assume 443'
+
+
+def test_mcp_url_command_honors_explicit_tunnel_port(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = cli.invoke(
+        app,
+        [
+            "mcp",
+            "url",
+            "--port",
+            "8788",
+            "--prefix",
+            "/trent",
+            "--allowed-host",
+            "lobster.tail.ts.net",
+            "--tunnel-port",
+            "8443",
+        ],
+    )
+    assert result.exit_code == 0
+    token = _http_token(load_config())
+    assert (
+        f"Tunnel MCP connector: https://lobster.tail.ts.net:8443/trent/mcp/{token}" in result.output
+    )
+    assert f"Tunnel web UI: https://lobster.tail.ts.net:8443/trent/ui/{token}/" in result.output
+
+
 def test_mcp_url_command_prints_the_capability_urls(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

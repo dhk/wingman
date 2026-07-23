@@ -388,7 +388,12 @@ def _connect_panel(request: Request, token: str, step: str = "") -> str:
     never requires shell access to the host — the point for a friend
     running someone else's box (MULTI-INSTANCE-DESIGN.md shape B).
     """
-    from wingman.mcp_server import _extra_allowed_hosts, connector_urls, server as mcp_server
+    from wingman.mcp_server import (
+        _extra_allowed_hosts,
+        _tunnel_port,
+        connector_urls,
+        server as mcp_server,
+    )
 
     lead = (
         f'<span class="stepno">{_e(step)}</span>'
@@ -401,7 +406,9 @@ def _connect_panel(request: Request, token: str, step: str = "") -> str:
     extra_hosts = _extra_allowed_hosts(None)
     fields = "".join(
         _url_field(label, url)
-        for label, url in connector_urls(token, extra_hosts, host=host, port=port, prefix=prefix)
+        for label, url in connector_urls(
+            token, extra_hosts, host=host, port=port, prefix=prefix, tunnel_port=_tunnel_port()
+        )
     )
     hint = ""
     if not extra_hosts:

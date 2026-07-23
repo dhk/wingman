@@ -265,6 +265,24 @@ def test_connect_tab_shows_tunnel_urls_when_a_hostname_is_detected(
     assert "No tunnel hostname detected" not in page
 
 
+def test_connect_tab_honors_wingman_tunnel_port_env(
+    client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two instances sharing one Tailscale hostname on distinct funnel ports
+    (issue: dhk's and Trent's funnel commands collided on the default 443
+    root) — WINGMAN_TUNNEL_PORT lets each instance's Connect tab print its
+    own tunnel's actual external port."""
+    monkeypatch.setattr(
+        "wingman.mcp_server._extra_allowed_hosts",
+        lambda cli_hosts: ["lobster.tail08dfce.ts.net"],
+    )
+    monkeypatch.setenv("WINGMAN_TUNNEL_PORT", "8443")
+    http, token = client
+    page = http.get(f"/ui/{token}/").text
+    assert f"https://lobster.tail08dfce.ts.net:8443/mcp/{token}" in page
+    assert f"https://lobster.tail08dfce.ts.net:8443/ui/{token}/" in page
+
+
 def test_connect_tab_respects_native_prefix(client: tuple[TestClient, str]) -> None:
     http, token = client
     host, port = server.settings.host, server.settings.port
