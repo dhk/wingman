@@ -151,9 +151,11 @@ details.manage > div { display: flex; flex-direction: column; gap: 16px; padding
   .tabpanel { display: none; }
   #tab-digest:checked ~ .tabpanel-digest,
   #tab-files:checked ~ .tabpanel-files,
+  #tab-connect:checked ~ .tabpanel-connect,
   #tab-manage:checked ~ .tabpanel-manage { display: flex; }
   #tab-digest:checked ~ .tabbar label[for="tab-digest"],
   #tab-files:checked ~ .tabbar label[for="tab-files"],
+  #tab-connect:checked ~ .tabbar label[for="tab-connect"],
   #tab-manage:checked ~ .tabbar label[for="tab-manage"] {
     color: var(--text); border-bottom-color: var(--accent); }
 }
