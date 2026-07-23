@@ -11,6 +11,7 @@ UI but never renders anything from inside a workspace itself.
 
 from __future__ import annotations
 
+import asyncio
 import html
 import secrets
 import tomllib
@@ -82,6 +83,7 @@ class Instance:
     port: int
     prefix: str
     token: str
+    tunnel_port: int | None = None
 
 
 class InstallationsConfigError(Exception):
@@ -107,6 +109,7 @@ def load_instances(config: Config) -> list[Instance]:
                     port=int(entry["port"]),
                     prefix=str(entry.get("prefix", "")),
                     token=str(entry["token"]),
+                    tunnel_port=(int(entry["tunnel_port"]) if "tunnel_port" in entry else None),
                 )
             )
         except KeyError as exc:
@@ -116,10 +119,17 @@ def load_instances(config: Config) -> list[Instance]:
     return instances
 
 
-def _check_health(instance: Instance, client: httpx.Client) -> dict[str, object]:
+async def _check_health(instance: Instance, client: httpx.AsyncClient) -> dict[str, object]:
+    """Async on purpose: an instance's own admin page checking its own
+    /health is a self-request on the same event loop. A blocking client
+    here would stall waiting for a response that can't be produced until
+    the loop is free — deadlocking until the timeout, which then reads as
+    'stopped' even though the process is fine (only visible when an
+    instance checks itself; a separate process's instance never hit it).
+    """
     url = f"http://{instance.host}:{instance.port}{instance.prefix}/health"
     try:
-        response = client.get(url, timeout=_HEALTH_TIMEOUT_SECONDS)
+        response = await client.get(url, timeout=_HEALTH_TIMEOUT_SECONDS)
         response.raise_for_status()
         payload = response.json()
     except (httpx.HTTPError, ValueError):
@@ -131,8 +141,29 @@ def _check_health(instance: Instance, client: httpx.Client) -> dict[str, object]
     }
 
 
+def _open_url(instance: Instance) -> str:
+    """The launcher link. Loopback (instance.host/port) only makes sense
+    from a browser running ON the box itself — the admin page is normally
+    viewed through a tunnel from elsewhere, so prefer the same
+    Tailscale-detected tunnel URL the Connect tab uses (#128's
+    tunnel_port, per-instance since each may sit on a different funnel
+    port) and fall back to loopback only if no tunnel host is detected.
+    """
+    from wingman.mcp_server import _tailscale_dns_name
+
+    tailscale_host = _tailscale_dns_name()
+    if tailscale_host is None:
+        return f"http://{instance.host}:{instance.port}{instance.prefix}/ui/{instance.token}/"
+    authority = (
+        tailscale_host
+        if instance.tunnel_port is None
+        else f"{tailscale_host}:{instance.tunnel_port}"
+    )
+    return f"https://{authority}{instance.prefix}/ui/{instance.token}/"
+
+
 def _instance_row(instance: Instance, health: dict[str, object]) -> str:
-    open_url = f"http://{instance.host}:{instance.port}{instance.prefix}/ui/{instance.token}/"
+    open_url = _open_url(instance)
     if health["running"]:
         status_html = '<span class="status up">running</span>'
         meta = f"v{_e(str(health['version']))} · since {_e(str(health['started_at']))}"
@@ -186,10 +217,9 @@ async def installations_page(request: Request) -> Response:
             f'<div class="empty">No instances configured. Add <code>[[instance]]</code> '
             f"entries to <code>{_e(str(config.installations_config_path))}</code>.</div>"
         )
-    with httpx.Client() as client:
-        rows = "".join(
-            _instance_row(instance, _check_health(instance, client)) for instance in instances
-        )
+    async with httpx.AsyncClient() as client:
+        healths = await asyncio.gather(*(_check_health(instance, client) for instance in instances))
+    rows = "".join(_instance_row(instance, health) for instance, health in zip(instances, healths))
     body = "<h1>Installations</h1>" + f'<div class="instances">{rows}</div>'
     return _page(body)
 

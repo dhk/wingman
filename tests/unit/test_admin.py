@@ -1,5 +1,6 @@
 """Admin installations page (#130): explicit config, own credential, launcher only."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -139,18 +140,52 @@ token = "trenttoken"
     http = TestClient(server.streamable_http_app())
     token = admin_token(config)
 
-    def fake_check_health(instance: Instance, client: httpx.Client) -> dict[str, object]:
+    async def fake_check_health(instance: Instance, client: httpx.AsyncClient) -> dict[str, object]:
         if instance.name == "dhk":
             return {"running": True, "version": "0.5.0", "started_at": "2026-07-23T00:00:00"}
         return {"running": False}
 
     monkeypatch.setattr(admin_module, "_check_health", fake_check_health)
+    monkeypatch.setattr("wingman.mcp_server._tailscale_dns_name", lambda: None)  # deterministic
     page = http.get(f"/admin/{token}/installations").text
     assert ">dhk<" in page and ">trent<" in page
     assert "running" in page and "stopped" in page
     assert "v0.5.0" in page and "2026-07-23T00:00:00" in page
     assert 'href="http://127.0.0.1:8787/ui/dhktoken/"' in page
     assert 'href="http://127.0.0.1:8788/trent/ui/trenttoken/"' in page
+
+
+def test_check_health_is_async_not_blocking(workspace: Path) -> None:
+    """Regression: a synchronous httpx.Client here previously deadlocked an
+    instance checking its own /health, since the outgoing request and the
+    incoming one it's waiting to answer share a single event loop — it
+    only showed up when an instance checked itself, reading as 'stopped'
+    despite the process being fine."""
+    import wingman.admin as admin_module
+
+    assert asyncio.iscoroutinefunction(admin_module._check_health)
+
+
+def test_open_url_prefers_tunnel_host_over_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The launcher link is normally opened from a browser reached through
+    the tunnel, not from lobster itself — a loopback link there resolves
+    against the viewer's OWN machine, not lobster (issue: Trent's
+    drilldown link pointed at 127.0.0.1:8788, unreachable off-box)."""
+    from wingman.admin import Instance, _open_url
+
+    instance = Instance(
+        name="trent", host="127.0.0.1", port=8788, prefix="/trent", token="TOK", tunnel_port=8443
+    )
+    monkeypatch.setattr("wingman.mcp_server._tailscale_dns_name", lambda: None)
+    assert _open_url(instance) == "http://127.0.0.1:8788/trent/ui/TOK/"  # no tunnel: loopback
+
+    monkeypatch.setattr(
+        "wingman.mcp_server._tailscale_dns_name", lambda: "lobster.tail08dfce.ts.net"
+    )
+    assert _open_url(instance) == "https://lobster.tail08dfce.ts.net:8443/trent/ui/TOK/"
+
+    no_port = Instance(name="dhk", host="127.0.0.1", port=8787, prefix="", token="TOK2")
+    assert _open_url(no_port) == "https://lobster.tail08dfce.ts.net/ui/TOK2/"  # no tunnel_port set
 
 
 def test_health_endpoint_is_unauthenticated_and_minimal(workspace: Path) -> None:
