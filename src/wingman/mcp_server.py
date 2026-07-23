@@ -2087,9 +2087,11 @@ def main(argv: list[str] | None = None) -> None:
             "Prefer 127.0.0.1 plus a tunnel.",
             file=sys.stderr,
         )
+    from wingman.admin import register_admin
     from wingman.webui import register_ui
 
     register_ui(server, prefix=prefix)
+    register_admin(server)
     # Ready-to-paste URLs (#94): the claude.ai connector needs the https
     # form, and hunting the token file to build it by hand was the
     # friction this replaces. Same renderer 'wingman mcp url' uses.

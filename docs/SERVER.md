@@ -236,3 +236,30 @@ Set `WINGMAN_TUNNEL_PORT=8443` in that instance's `wingman.env` so
 `wingman mcp url` and the web UI's Connect tab print the URL with the
 right port baked in — otherwise both assume the implicit 443 and print a
 URL that 404s.
+
+**Seeing every instance on the box at once.** Checking on each instance
+individually (`wingman mcp status` per Unix user) doesn't scale past two
+people. `wingman admin url` prints a URL to a small cross-instance page —
+name, version, running/stopped, and a link into each instance's own web
+UI — gated by its own admin token, separate from any instance's own
+capability token. It reads a hand-maintained list, `<workspace>/
+installations.toml`, in whichever instance is serving the page (usually
+your own):
+
+```toml
+[[instance]]
+name = "dhk"
+port = 8787
+token = "<dhk's mcp-http-token>"
+
+[[instance]]
+name = "trent"
+port = 8788
+prefix = "/trent"
+token = "<trent's mcp-http-token>"
+```
+
+Deliberately explicit rather than auto-discovered — no scanning other
+users' home directories, no new cross-user read access. The page never
+shows anything from inside a workspace, only whether it's up and a link
+to it; each instance's own token remains the credential for its own data.
