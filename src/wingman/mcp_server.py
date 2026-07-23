@@ -1797,17 +1797,42 @@ def _extra_allowed_hosts(
     return list(ordered)
 
 
+def _tunnel_port(cli_value: int | None = None, env: Mapping[str, str] | None = None) -> int | None:
+    """The external port a tunnel front listens on, when it differs from
+    --port: two instances can share one Tailscale hostname on distinct
+    funnel ports (443/8443/10000) instead of colliding on the default root
+    mapping. CLI flag wins; WINGMAN_TUNNEL_PORT (systemd EnvironmentFile-
+    friendly) is the fallback; unset means 'omit the port, assume 443' —
+    unchanged behavior for the common single-instance case.
+    """
+    if cli_value is not None:
+        return cli_value
+    env = os.environ if env is None else env
+    raw = env.get("WINGMAN_TUNNEL_PORT", "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def connector_urls(
     token: str,
     extra_hosts: Sequence[str],
     host: str = "127.0.0.1",
     port: int = 8787,
     prefix: str = "",
+    tunnel_port: int | None = None,
 ) -> list[tuple[str, str]]:
     """(label, url) pairs: loopback MCP + web UI, plus a tunnel pair per
     accepted hostname. The single source of truth behind both 'render_urls'
     (the --http banner and 'wingman mcp url' text output) and the web UI's
     Connect tab — pure formatting over already-computed token/extra_hosts.
+    'tunnel_port' is the tunnel's own external port when it isn't the
+    implicit 443 (e.g. a second instance on the same Tailscale hostname via
+    a distinct funnel port) — orthogonal to 'port', which is always the
+    local bind.
     """
     from wingman.webui import normalize_prefix
 
@@ -1817,8 +1842,9 @@ def connector_urls(
         ("Web UI (read + upload)", f"http://{host}:{port}{prefix}/ui/{token}"),
     ]
     for tunnel_host in extra_hosts:
-        pairs.append(("Tunnel MCP connector", f"https://{tunnel_host}{prefix}/mcp/{token}"))
-        pairs.append(("Tunnel web UI", f"https://{tunnel_host}{prefix}/ui/{token}/"))
+        authority = tunnel_host if tunnel_port is None else f"{tunnel_host}:{tunnel_port}"
+        pairs.append(("Tunnel MCP connector", f"https://{authority}{prefix}/mcp/{token}"))
+        pairs.append(("Tunnel web UI", f"https://{authority}{prefix}/ui/{token}/"))
     return pairs
 
 
@@ -1828,15 +1854,15 @@ def render_urls(
     host: str = "127.0.0.1",
     port: int = 8787,
     prefix: str = "",
+    tunnel_port: int | None = None,
 ) -> list[str]:
     """The ready-to-paste URL lines, formatted from 'connector_urls' — backs
     both the --http startup banner and 'wingman mcp url', which computes
     those fresh from the token file and Tailscale auto-detection without
     starting a server.
     """
-    return [
-        f"{label}: {url}" for label, url in connector_urls(token, extra_hosts, host, port, prefix)
-    ]
+    pairs = connector_urls(token, extra_hosts, host, port, prefix, tunnel_port)
+    return [f"{label}: {url}" for label, url in pairs]
 
 
 def build_transport_security(extra_hosts: Sequence[str]) -> TransportSecuritySettings:
@@ -1982,6 +2008,14 @@ def main(argv: list[str] | None = None) -> None:
         "(comma-separated) and this machine's Tailscale name, which is auto-detected, "
         "so 'tailscale serve/funnel' needs no flag.",
     )
+    parser.add_argument(
+        "--tunnel-port",
+        type=int,
+        default=None,
+        help="External port the tunnel front uses, if not the implicit 443 — e.g. a second "
+        "instance sharing this Tailscale hostname on its own funnel port. Only changes the "
+        "printed/displayed URLs, not the local bind. Falls back to WINGMAN_TUNNEL_PORT.",
+    )
     args = parser.parse_args(argv)
     configure_logging()
     get_logger("mcp").info("wingman-mcp %s starting", wingman_version())
@@ -2053,13 +2087,18 @@ def main(argv: list[str] | None = None) -> None:
             "Prefer 127.0.0.1 plus a tunnel.",
             file=sys.stderr,
         )
+    from wingman.admin import register_admin
     from wingman.webui import register_ui
 
     register_ui(server, prefix=prefix)
+    register_admin(server)
     # Ready-to-paste URLs (#94): the claude.ai connector needs the https
     # form, and hunting the token file to build it by hand was the
     # friction this replaces. Same renderer 'wingman mcp url' uses.
-    for line in render_urls(token, extra_hosts, host=args.host, port=args.port, prefix=prefix):
+    tunnel_port = _tunnel_port(args.tunnel_port)
+    for line in render_urls(
+        token, extra_hosts, host=args.host, port=args.port, prefix=prefix, tunnel_port=tunnel_port
+    ):
         print(line)
     print("The URL is a capability — anyone holding it can use the workspace.")
     print("Revoke it any time: wingman-mcp --http --rotate-token")

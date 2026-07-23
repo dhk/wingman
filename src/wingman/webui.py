@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.logs import get_logger
@@ -388,7 +388,12 @@ def _connect_panel(request: Request, token: str, step: str = "") -> str:
     never requires shell access to the host — the point for a friend
     running someone else's box (MULTI-INSTANCE-DESIGN.md shape B).
     """
-    from wingman.mcp_server import _extra_allowed_hosts, connector_urls, server as mcp_server
+    from wingman.mcp_server import (
+        _extra_allowed_hosts,
+        _tunnel_port,
+        connector_urls,
+        server as mcp_server,
+    )
 
     lead = (
         f'<span class="stepno">{_e(step)}</span>'
@@ -401,7 +406,9 @@ def _connect_panel(request: Request, token: str, step: str = "") -> str:
     extra_hosts = _extra_allowed_hosts(None)
     fields = "".join(
         _url_field(label, url)
-        for label, url in connector_urls(token, extra_hosts, host=host, port=port, prefix=prefix)
+        for label, url in connector_urls(
+            token, extra_hosts, host=host, port=port, prefix=prefix, tunnel_port=_tunnel_port()
+        )
     )
     hint = ""
     if not extra_hosts:
@@ -709,6 +716,23 @@ async def ui_keys(request: Request) -> Response:
 
 _registered_prefixes: set[str] = set()
 
+# Captured once at import time (~= process start): the admin installations
+# page (#130) polls this to show "running since" without needing any
+# cross-workspace filesystem access into another instance's own state.
+_STARTED_AT = datetime.now(UTC).isoformat(timespec="seconds")
+
+
+async def ui_health(request: Request) -> Response:
+    """Deliberately unauthenticated: version + start time only, nothing
+    workspace-specific (no owner, no path, no data) — loopback-bound like
+    the rest of this server, so the exposure is the same as 'ps' already
+    gives anyone on the box. Lets the admin installations page (#130) tell
+    an instance is up without holding its capability token.
+    """
+    from wingman.version import wingman_version
+
+    return JSONResponse({"version": wingman_version(), "started_at": _STARTED_AT})
+
 
 def normalize_prefix(prefix: str) -> str:
     """'' stays root; 'trent', '/trent', '/trent/' all become '/trent'."""
@@ -735,3 +759,4 @@ def register_ui(server: "FastMCP", prefix: str = "") -> None:
     server.custom_route(f"{mount}/ui/{{token}}/file/{{path:path}}", methods=["GET"])(ui_file)
     server.custom_route(f"{mount}/ui/{{token}}/upload", methods=["POST"])(ui_upload)
     server.custom_route(f"{mount}/ui/{{token}}/keys", methods=["POST"])(ui_keys)
+    server.custom_route(f"{mount}/health", methods=["GET"])(ui_health)

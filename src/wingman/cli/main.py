@@ -186,6 +186,8 @@ criteria_app = typer.Typer(
     help="The job-criteria doc that scores new openings in the digest (RFC-035)."
 )
 app.add_typer(criteria_app, name="criteria")
+admin_app = typer.Typer(help="The cross-instance installations page for a shape-B box (#130).")
+app.add_typer(admin_app, name="admin")
 
 
 def _version_callback(value: bool) -> None:
@@ -2528,23 +2530,77 @@ def mcp_url(
     allowed_host: list[str] = typer.Option(  # noqa: B008 — typer's documented pattern
         [], "--allowed-host", help="Extra --allowed-host flag(s) the server was started with."
     ),
+    tunnel_port: int | None = typer.Option(
+        None,
+        "--tunnel-port",
+        help="External port the tunnel front uses, if not the implicit 443 (e.g. a second "
+        "instance sharing this Tailscale hostname on its own funnel port). Falls back to "
+        "WINGMAN_TUNNEL_PORT.",
+    ),
 ) -> None:
     """Print the ready-to-paste MCP connector and web UI URLs (#94, #122).
 
     Computed straight from the token file and Tailscale auto-detection —
     no need to grep the startup banner out of journalctl, and it works
     whether or not the server is currently running. If the server was
-    started with non-default --host/--port/--prefix/--allowed-host, pass
-    the same flags here so the printed URLs match.
+    started with non-default --host/--port/--prefix/--allowed-host/
+    --tunnel-port, pass the same flags here so the printed URLs match.
     """
     configure_logging()
-    from wingman.mcp_server import _extra_allowed_hosts, _http_token, render_urls
+    from wingman.mcp_server import _extra_allowed_hosts, _http_token, _tunnel_port, render_urls
 
     config = load_config()
     token = _http_token(config)
     extra_hosts = _extra_allowed_hosts(allowed_host or None)
-    for line in render_urls(token, extra_hosts, host=host, port=port, prefix=prefix):
+    for line in render_urls(
+        token,
+        extra_hosts,
+        host=host,
+        port=port,
+        prefix=prefix,
+        tunnel_port=_tunnel_port(tunnel_port),
+    ):
         typer.echo(line)
+    if not extra_hosts:
+        typer.echo(
+            "(no tunnel hostname detected — is Tailscale up? or pass --allowed-host explicitly)"
+        )
+
+
+@admin_app.command("url")
+def admin_url(
+    host: str = typer.Option("127.0.0.1", help="Bind address the server was started with."),
+    port: int = typer.Option(8787, help="Port the server was started with."),
+    allowed_host: list[str] = typer.Option(  # noqa: B008 — typer's documented pattern
+        [], "--allowed-host", help="Extra --allowed-host flag(s) the server was started with."
+    ),
+    tunnel_port: int | None = typer.Option(
+        None,
+        "--tunnel-port",
+        help="External port the tunnel front uses, if not the implicit 443. Falls back to "
+        "WINGMAN_TUNNEL_PORT.",
+    ),
+) -> None:
+    """Print the installations page URL (#130).
+
+    The admin token is generated on first use, separate from any instance's
+    own mcp-http-token (RFC-017) — add instances to
+    '<workspace>/installations.toml' for the page to list anything.
+    """
+    configure_logging()
+    from wingman.admin import admin_token
+    from wingman.mcp_server import _extra_allowed_hosts, _tunnel_port
+
+    config = load_config()
+    token = admin_token(config)
+    extra_hosts = _extra_allowed_hosts(allowed_host or None)
+    resolved_tunnel_port = _tunnel_port(tunnel_port)
+    typer.echo(f"Installations page: http://{host}:{port}/admin/{token}/installations")
+    for tunnel_host in extra_hosts:
+        authority = (
+            tunnel_host if resolved_tunnel_port is None else f"{tunnel_host}:{resolved_tunnel_port}"
+        )
+        typer.echo(f"Tunnel installations page: https://{authority}/admin/{token}/installations")
     if not extra_hosts:
         typer.echo(
             "(no tunnel hostname detected — is Tailscale up? or pass --allowed-host explicitly)"
