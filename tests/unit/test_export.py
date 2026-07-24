@@ -90,6 +90,27 @@ def test_career_export_is_letter_portrait_with_cited_cards(workspace: Path) -> N
     assert 'class="tag tag-skill"' in text and "Python" in text
 
 
+def test_career_export_honors_a_custom_title(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        storage.add_profile_item(
+            ProfileItem(
+                kind=ProfileItemKind.SKILL,
+                name="Python",
+                detail="",
+                classification=ClaimClassification.FACT,
+                confidence=0.9,
+                evidence=[EvidenceSpan(source_record_id="r1", quote="Skills: Python")],
+                prompt_version="v1",
+                extracted_by="test",
+            )
+        )
+        path = export_career(config, storage, title="2026 Refresh")
+    text = path.read_text(encoding="utf-8")
+    assert "title: 2026 Refresh" in text
+    assert "title: Career Profile" not in text
+
+
 def test_career_export_fails_visibly_on_empty_profile(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
@@ -214,6 +235,17 @@ def test_person_export_is_landscape_three_columns_with_links(workspace: Path) ->
     assert "Head of Data · ExplainCo" in text
 
 
+def test_person_export_honors_a_custom_title(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Jane Author", storage, substack_url="https://jane.substack.com")
+        fetch_person_feed(person, config, storage, fetcher=lambda url: FEED.encode())
+        path = export_person("Jane Author", config, storage, title="Referral prep")
+    text = path.read_text(encoding="utf-8")
+    assert "title: Referral prep" in text
+    assert "title: Jane Author" not in text
+
+
 def test_person_export_requires_some_data(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
@@ -254,6 +286,16 @@ def test_company_export_upgrades_labels_and_links(workspace: Path) -> None:
     assert '<span class="tag tag-inference">inference</span>' in text
     assert '<span class="tag tag-fact">fact</span>' in text
     assert "[inference]" not in text and "[fact]" not in text
+
+
+def test_company_export_honors_a_custom_title(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_person("Ana", storage, company="DataCo")
+        path = export_company("DataCo", config, storage, title="Q3 pipeline research")
+    text = path.read_text(encoding="utf-8")
+    assert "title: Q3 pipeline research" in text
+    assert "title: Company dossier" not in text
 
 
 def test_exports_honor_a_custom_output_folder(workspace: Path) -> None:

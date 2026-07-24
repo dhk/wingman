@@ -210,12 +210,21 @@ def _listed_files(root: Path) -> list[tuple[str, Path]]:
     """(section, file) pairs worth linking, newest first within each section."""
     if not root.exists():
         return []
+    from wingman.reporting.export import STYLESHEET_NAME
+
     sections: list[tuple[str, Path]] = []
-    candidates = [path for path in root.rglob("*") if path.suffix in _SERVE_TYPES]
-    # A digest's .md twin duplicates its .html: prefer the pretty one.
-    htmls = {path.with_suffix(".md") for path in candidates if path.suffix == ".html"}
+    candidates = [
+        path
+        for path in root.rglob("*")
+        if path.suffix in _SERVE_TYPES and path.name != STYLESHEET_NAME
+    ]
+    # A digest's .md twin duplicates its .html, and a report's .json sidecar
+    # duplicates its .md write-up (career.md/.json, fit-brief-*.md/.json):
+    # prefer the human-readable one in both cases.
+    skip = {path.with_suffix(".md") for path in candidates if path.suffix == ".html"}
+    skip |= {path.with_suffix(".json") for path in candidates if path.suffix == ".md"}
     for path in candidates:
-        if path in htmls or path.name in ("latest.md", "latest.html"):
+        if path in skip or path.name in ("latest.md", "latest.html"):
             continue
         section = path.parent.relative_to(root).as_posix()
         sections.append(("reports" if section == "." else section, path))
@@ -248,6 +257,32 @@ _GROUP_NAMES = {
 }
 _STAMP = re.compile(r"(20\d{6})T(\d{2})(\d{2})\d*Z?")
 _ISO_DATE = re.compile(r"(20\d{2}-\d{2}-\d{2})")
+_FRONTMATTER_TITLE = re.compile(r"^title:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _frontmatter_title(path: Path) -> str | None:
+    """A `title:` field from YAML frontmatter, when the file carries one.
+
+    reporting/export.py's `_frontmatter()` (and pack.py's own frontmatter
+    block) already write a real, human-chosen title for every export —
+    prefer it over guessing one back from the filename.
+    """
+    if path.suffix != ".md":
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text.startswith("---\n"):
+        return None
+    end = text.find("\n---", 4)
+    if end == -1:
+        return None
+    match = _FRONTMATTER_TITLE.search(text[:end])
+    if match is None:
+        return None
+    title = match.group(1).strip().strip("\"'")
+    return title or None
 
 
 def _humanize(path: Path, now: datetime) -> tuple[str, str]:
@@ -266,14 +301,16 @@ def _humanize(path: Path, now: datetime) -> tuple[str, str]:
             when = datetime.strptime(dated.group(1), "%Y-%m-%d").replace(tzinfo=UTC)
             label = "Today" if when.date() == now.date() else when.strftime("%d %b")
             stem = _ISO_DATE.sub("", stem)
-    words = [w for w in re.split(r"[-_.]+", stem) if w]
-    if words and words[0].lower() == "overnight":
-        title = "Overnight digest"
-    elif words and words[0].lower() == "pack":
-        rest = " ".join(w.capitalize() for w in words[1:])
-        title = rest or "Application pack"
-    else:
-        title = " ".join(w.capitalize() for w in words) or path.name
+    title = _frontmatter_title(path)
+    if title is None:
+        words = [w for w in re.split(r"[-_.]+", stem) if w]
+        if words and words[0].lower() == "overnight":
+            title = "Overnight digest"
+        elif words and words[0].lower() == "pack":
+            rest = " ".join(w.capitalize() for w in words[1:])
+            title = rest or "Application pack"
+        else:
+            title = " ".join(w.capitalize() for w in words) or path.name
     return label, title
 
 

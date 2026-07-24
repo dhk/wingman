@@ -246,7 +246,9 @@ def _write(directory: Path, filename: str, markdown: str) -> Path:
     return path
 
 
-def export_career(config: Config, storage: Storage, out_dir: Path | None = None) -> Path:
+def export_career(
+    config: Config, storage: Storage, out_dir: Path | None = None, title: str | None = None
+) -> Path:
     """Portrait one-pager: the canonical profile with every claim cited inline."""
     items = [item for item in storage.list_profile_items() if item.status is ItemStatus.ACTIVE]
     conflicted = [
@@ -260,7 +262,7 @@ def export_career(config: Config, storage: Storage, out_dir: Path | None = None)
     today = datetime.now(UTC).date().isoformat()
     sources = storage.count_source_records()
     parts = [
-        _frontmatter("Career Profile", directory),
+        _frontmatter(title or "Career Profile", directory),
         '<div class="portrait">',
         "",
         "# Career Profile",
@@ -303,12 +305,16 @@ def export_career(config: Config, storage: Storage, out_dir: Path | None = None)
 
 
 def export_company(
-    name: str, config: Config, storage: Storage, out_dir: Path | None = None
+    name: str,
+    config: Config,
+    storage: Storage,
+    out_dir: Path | None = None,
+    title: str | None = None,
 ) -> Path:
     """The company dossier, with fact/inference labels upgraded to styled tags."""
     directory = _resolve_out_dir(config, out_dir)
     report = build_company_dossier(name, config, storage)
-    lines = [_frontmatter(f"Company dossier: {report.company}", directory)]
+    lines = [_frontmatter(title or f"Company dossier: {report.company}", directory)]
     lines.append('<div class="portrait">')
     lines.append("")
     for raw in report.markdown.splitlines():
@@ -437,6 +443,7 @@ def export_person(
     storage: Storage,
     out_dir: Path | None = None,
     as_html: bool = False,
+    title: str | None = None,
 ) -> Path:
     """Landscape 2x2 briefing dock: brief | point of view | background | news.
 
@@ -611,8 +618,8 @@ def export_person(
         doc_rows = []
         for document in newest_first(documents)[:8]:
             when = document.published_at.date().isoformat() if document.published_at else "undated"
-            title = _link(document.url, document.title) if document.url else _e(document.title)
-            doc_rows.append(f"<li>{title} <span class='dim'>{when}</span></li>")
+            doc_title = _link(document.url, document.title) if document.url else _e(document.title)
+            doc_rows.append(f"<li>{doc_title} <span class='dim'>{when}</span></li>")
         if len(documents) > 8:
             doc_rows.append(f"<li><span class='dim'>+{len(documents) - 8} more</span></li>")
         right.append("<ul>" + "".join(doc_rows) + "</ul>")
@@ -653,7 +660,7 @@ def export_person(
 
     markdown = "\n".join(
         [
-            _frontmatter(person.name, directory, landscape=True),
+            _frontmatter(title or person.name, directory, landscape=True),
             '<div class="sheet-page">',
             "",
             f"# {_e(person.name)}",
