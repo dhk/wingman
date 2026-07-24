@@ -296,3 +296,66 @@ Deliberately explicit rather than auto-discovered — no scanning other
 users' home directories, no new cross-user read access. The page never
 shows anything from inside a workspace, only whether it's up and a link
 to it; each instance's own token remains the credential for its own data.
+
+**Keeping every instance current (#125).** Manual, per-user upgrades don't
+scale past two people either. `wingman-upgrade-all` is a separate,
+root-run tool (not part of the per-workspace `wingman` CLI, since it acts
+across accounts) that upgrades every configured shape-B user in one
+scheduled pass: `git pull --ff-only`, `uv tool install --reinstall`, then
+`systemctl --user restart wingman-mcp.service` for each — explicitly the
+systemd path, never `wingman-ctl`'s `nohup` path (running `wingman-ctl
+upgrade` under a systemd-managed account kills the process out from under
+systemd and relaunches it unmanaged; `Restart=on-failure` won't recover a
+graceful stop). One user's failed pull or reinstall is reported and
+skipped — it never blocks the others.
+
+This needs its own, separate root-owned install (it never touches any
+workspace, never reads a key, and root should not share dhk's or Trent's
+own `uv tool` install):
+
+```bash
+sudo -i                                            # or: sudo -u root -H bash
+uv tool install git+https://github.com/dhk/wingman.git
+command -v wingman-upgrade-all                     # note the path for the unit below
+```
+
+`/etc/systemd/system/wingman-upgrade-all.service` (a **system** unit,
+root-run — not a `--user` unit like the ones above):
+
+```ini
+[Unit]
+Description=Upgrade every wingman shape-B user (#125)
+
+[Service]
+Type=oneshot
+Environment=WINGMAN_UPGRADE_USERS=dhk,trent
+ExecStart=/root/.local/bin/wingman-upgrade-all
+```
+
+`/etc/systemd/system/wingman-upgrade-all.timer`:
+
+```ini
+[Unit]
+Description=Run wingman-upgrade-all daily
+
+[Timer]
+OnCalendar=*-*-* 04:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now wingman-upgrade-all.timer
+```
+
+Logs: `sudo journalctl -u wingman-upgrade-all.service`. Each user's
+account needs no configuration for this to work — `sudo -u <user> …` from
+root needs no password and grants no privilege that root didn't already
+have; this only automates what root could already do by hand for every
+file on the box. Assumes each listed user's checkout lives at
+`~/src/wingman` (this repo's own documented convention, §1) — a user who
+deviates isn't a candidate for automatic upgrade and should be upgraded
+by hand.
