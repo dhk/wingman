@@ -243,6 +243,57 @@ def test_env_always_shadows_workspace_key(
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-from-env"  # untouched
 
 
+def test_restart_route_rejects_a_wrong_token(client: tuple[TestClient, str]) -> None:
+    http, _token = client
+    assert http.post("/ui/nope/restart").status_code == 404
+
+
+def test_restart_route_reports_unavailable_when_not_systemd_managed(
+    client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    http, token = client
+    monkeypatch.setattr(
+        "wingman.infrastructure.self_restart.systemd_manages_this_instance", lambda: False
+    )
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "wingman.infrastructure.self_restart.trigger_restart", lambda: calls.append(1)
+    )
+    response = http.post(f"/ui/{token}/restart")
+    assert response.status_code == 200
+    assert "Not systemd-managed" in response.text
+    assert calls == []  # never fired when there's no supervisor to bring it back
+
+
+def test_restart_route_triggers_systemctl_when_systemd_managed(
+    client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    http, token = client
+    monkeypatch.setattr(
+        "wingman.infrastructure.self_restart.systemd_manages_this_instance", lambda: True
+    )
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "wingman.infrastructure.self_restart.trigger_restart", lambda: calls.append(1)
+    )
+    response = http.post(f"/ui/{token}/restart")
+    assert response.status_code == 200
+    assert "Restarting now" in response.text
+    assert calls == [1]
+
+
+def test_manage_panel_shows_restart_button_when_systemd_managed(
+    client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    http, token = client
+    monkeypatch.setattr(
+        "wingman.infrastructure.self_restart.systemd_manages_this_instance", lambda: True
+    )
+    page = http.get(f"/ui/{token}/").text
+    assert 'action="restart"' in page
+    assert "Restart server" in page
+
+
 def test_ui_is_path_mount_agnostic(client: tuple[TestClient, str]) -> None:
     """Behind 'tailscale serve --set-path /trent' the prefix is stripped before
     the backend: everything must work with zero prefix knowledge — a RELATIVE
