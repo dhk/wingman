@@ -87,9 +87,7 @@ def save_objective(
     thesis = thesis.strip()
     next_move = next_move.strip()
     if not goal or not thesis or not next_move:
-        raise IngestError(
-            "goal, thesis, and next_move are all required — nothing was saved."
-        )
+        raise IngestError("goal, thesis, and next_move are all required — nothing was saved.")
     existing = storage.get_objective(person.person_id)
     now = datetime.now(UTC)
     objective = RelationshipObjective(
@@ -123,14 +121,18 @@ def render_interview(name: str, storage: Storage) -> str:
     objective = storage.get_objective(person.person_id)
     lines: list[str] = []
     if objective is None:
-        lines.append(f"Relationship objective interview — SEEDING ({person.name}, no objective yet).")
+        lines.append(
+            f"Relationship objective interview — SEEDING ({person.name}, no objective yet)."
+        )
         lines.append(
             "Walk the three areas below with the user, one at a time; capture "
             "answers in their words."
         )
     else:
         age_days = (datetime.now(UTC) - objective.updated_at).days
-        lines.append(f"Relationship objective interview — REVISE ({person.name}, last set {age_days} day(s) ago).")
+        lines.append(
+            f"Relationship objective interview — REVISE ({person.name}, last set {age_days} day(s) ago)."
+        )
         lines.append("Current objective:")
         lines.append("---")
         lines.append(f"Goal: {objective.goal}")
