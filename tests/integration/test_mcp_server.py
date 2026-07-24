@@ -45,6 +45,7 @@ def test_all_tools_are_registered() -> None:
         "qa_capture",
         "relationship_objective",
         "relationship_log",
+        "heap",
         "resolve_requirement",
         "assess_job",
         "ingest_resume_text",

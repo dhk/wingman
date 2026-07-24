@@ -13,6 +13,7 @@ from wingman.domain import SourceRecord
 from wingman.domain.answer import AnswerRecord
 from wingman.domain.source_record import derive_document_key
 from wingman.domain.corpus import CorpusDocument
+from wingman.domain.heap import HeapItem
 from wingman.domain.opportunity import Opportunity
 from wingman.domain.outreach import OutreachBrief
 from wingman.domain.person import ExternalDocument, NewsItem, Person, PersonOrigin
@@ -145,6 +146,11 @@ CREATE TABLE IF NOT EXISTS embeddings (
     dim INTEGER NOT NULL,
     vector BLOB NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS heap_items (
+    item_id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    added_at TEXT NOT NULL
 );
 """
 
@@ -1094,6 +1100,22 @@ class Storage:
     def embedding_models_in_use(self) -> set[tuple[str, str]]:
         cursor = self._conn.execute("SELECT DISTINCT provider, model FROM embeddings")
         return {(row[0], row[1]) for row in cursor.fetchall()}
+
+    def add_heap_item(self, item: HeapItem) -> None:
+        self._conn.execute(
+            "INSERT INTO heap_items (item_id, payload, added_at) VALUES (?, ?, ?)",
+            (item.item_id, item.model_dump_json(), item.added_at.isoformat()),
+        )
+        self._conn.commit()
+
+    def list_heap_items(self) -> list[HeapItem]:
+        cursor = self._conn.execute("SELECT payload FROM heap_items ORDER BY added_at")
+        return [HeapItem.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def delete_heap_item(self, item_id: str) -> bool:
+        cursor = self._conn.execute("DELETE FROM heap_items WHERE item_id = ?", (item_id,))
+        self._conn.commit()
+        return cursor.rowcount > 0
 
     def search_external(self, query: str, limit: int = 10) -> list[tuple[ExternalDocument, str]]:
         """Full-text search over people's writing; returns (document, snippet) by rank."""
