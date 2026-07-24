@@ -237,6 +237,45 @@ def test_connect_tab_css_actually_reveals_its_panel(client: tuple[TestClient, st
     assert '#tab-connect:checked ~ .tabbar label[for="tab-connect"]' in page
 
 
+def test_changelog_tab_css_actually_reveals_its_panel(client: tuple[TestClient, str]) -> None:
+    """Same regression class as the Connect tab: the CSS selectors must name
+    'changelog' too, or the panel stays display:none forever."""
+    http, token = client
+    page = http.get(f"/ui/{token}/").text
+    assert "#tab-changelog:checked ~ .tabpanel-changelog" in page
+    assert '#tab-changelog:checked ~ .tabbar label[for="tab-changelog"]' in page
+
+
+def test_changelog_tab_shows_counts_and_curated_titles(
+    client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #145: the tab label carries today/7-day counts, titles render
+    verbatim with their PR number, and the internal-only filter excludes
+    what it targets without hiding anything outside that narrow list."""
+    from datetime import UTC, datetime, timedelta
+
+    import wingman.changelog_data as data_module
+
+    today = datetime.now(UTC).date()
+    monkeypatch.setattr(
+        data_module,
+        "CHANGELOG_DATA",
+        (
+            (today.isoformat(), 200, "Add a brand new feature"),
+            ((today - timedelta(days=3)).isoformat(), 199, "Fix a real bug"),
+            ((today - timedelta(days=3)).isoformat(), 198, "docs: session snapshot for resume"),
+            ((today - timedelta(days=30)).isoformat(), 100, "Old feature, outside the week"),
+        ),
+    )
+    http, token = client
+    page = http.get(f"/ui/{token}/").text
+    assert "Changelog (1 new today / 2 last 7 days)" in page
+    assert "Add a brand new feature" in page and "#200" in page
+    assert "Fix a real bug" in page and "#199" in page
+    assert "session snapshot" not in page  # internal-only filter excludes it
+    assert "Old feature, outside the week" in page  # listed, just outside the counted window
+
+
 def test_connect_tab_shows_loopback_urls_with_no_tunnel_hint(
     client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
