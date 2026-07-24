@@ -32,6 +32,8 @@ from wingman.application.people import match_people
 from wingman.application.pipeline import MisoReport, make_it_so
 from wingman.application.research import add_company_source, research_company
 from wingman.application.similarity import company_key, similar_companies
+from wingman.domain.person import Person
+from wingman.domain.relationship import RelationshipObjective
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.fetch import FetchError, fetch_url
 from wingman.infrastructure.logs import get_logger
@@ -193,6 +195,10 @@ class OvernightReport(BaseModel):
 _JOBISH = ("job", "career", "opening", "position", "role")
 _MAX_ACTIONS = 10
 _MAX_ACTION_EVIDENCE = 3
+# RFC-037's own motivating example set the cadence: "tickle him in a week
+# when X happens". Past this many days without the objective being touched,
+# the tickler fires on staleness alone, not just fresh material.
+TICKLER_STALE_DAYS = 7
 # Page-title resolution for evidence links (#109): one GET per titled link,
 # capped per run so a link-heavy morning can't turn the digest into a crawl.
 _TITLE_FETCH_BUDGET = 15
@@ -404,6 +410,29 @@ def _company_deep(
     return target
 
 
+def _relationship_tickler(
+    person: Person, objective: RelationshipObjective, fresh: list[str]
+) -> ActionItem:
+    """One tickler action citing the objective's own words as the why
+    (RFC-037): fresh material this run, or the next move having gone
+    stale. Keyed relationship:{person} — RFC-031 verdicts apply, so
+    snooze IS the tickler cadence and mute ends the thread's nudges."""
+    if fresh:
+        why = f'objective: "{objective.thesis}"'
+        evidence = fresh[:_MAX_ACTION_EVIDENCE] + [f'next move: "{objective.next_move}"']
+    else:
+        age = (datetime.now(UTC) - objective.updated_at).days
+        why = f'next move hasn\'t moved in {age} day(s) — objective: "{objective.thesis}"'
+        evidence = [f'next move: "{objective.next_move}"', f'goal: "{objective.goal}"']
+    return ActionItem(
+        what=f"{person.name}: {objective.next_move}",
+        why=why,
+        who=person.name,
+        evidence=evidence,
+        key=f"relationship:{person.name_key}",
+    )
+
+
 def _person_deep(
     name: str, config: Config, storage: Storage, actions: list[ActionItem]
 ) -> OvernightTarget:
@@ -446,10 +475,11 @@ def _person_deep(
                 )
             )
         news = steps.get("news")
+        news_items = []
         if news is not None and news.status == "ok":
-            items = storage.list_person_news(person.person_id) if person else []
-            if items:
-                top = items[-1]
+            news_items = storage.list_person_news(person.person_id) if person else []
+            if news_items:
+                top = news_items[-1]
                 actions.append(
                     ActionItem(
                         what=f"Skim the news snapshot for {name}",
@@ -458,6 +488,20 @@ def _person_deep(
                         evidence=[f"[{top.title}]({top.url})" if top.url else top.title],
                     )
                 )
+        # Objective-driven tickler (RFC-037): fresh material or a stale
+        # next-move earns a nudge, citing the objective's own words.
+        if person is not None:
+            objective = storage.get_objective(person.person_id)
+            if objective is not None:
+                fresh: list[str] = []
+                if added:
+                    fresh.extend(newest_titled)
+                if news_items:
+                    top = news_items[-1]
+                    fresh.append(f"news: {top.title}")
+                stale_days = (datetime.now(UTC) - objective.updated_at).days
+                if fresh or stale_days >= TICKLER_STALE_DAYS:
+                    actions.append(_relationship_tickler(person, objective, fresh))
     except IngestError as exc:
         target.status = "failed"
         target.lines.append(str(exc))

@@ -218,6 +218,107 @@ def test_latest_digest_and_out_dir(workspace: Path, monkeypatch: pytest.MonkeyPa
     assert latest_digest(config) is None
 
 
+def test_tickler_fires_on_fresh_material_citing_objective(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-037: a person with an objective and fresh writing this run earns
+    a relationship: tickler action citing the objective's own words."""
+    import wingman.application.news as news_module
+    import wingman.application.people as people_module
+    from wingman.application.relationship import save_objective
+
+    config = load_config()
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(news_module, "fetch_url", lambda url: FEED)
+    with Storage(config.db_path) as storage:
+        add_person("Jane Author", storage, substack_url="https://jane.substack.com")
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Jane Author")
+        save_objective(
+            "Jane Author",
+            "Build a peer relationship.",
+            "She responds well to direct technical exchange.",
+            "Reply to her next post with a real technical take.",
+            storage,
+        )
+        report = overnight_run(config, storage)
+    keys = {action.key for action in report.actions}
+    assert "relationship:jane author" in keys
+    tickler = next(a for a in report.actions if a.key == "relationship:jane author")
+    assert "Reply to her next post" in tickler.what
+    assert "direct technical exchange" in tickler.why
+    text = Path(report.digest_path).read_text(encoding="utf-8")
+    assert "relationship:jane author" in text
+
+
+def test_tickler_fires_on_stale_next_move_without_fresh_material(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No new writing this run, but the objective hasn't moved in a
+    while: the tickler still fires, citing staleness instead."""
+    from datetime import UTC, datetime, timedelta
+
+    from wingman.application.focus import TICKLER_STALE_DAYS
+    from wingman.application.relationship import save_objective
+
+    def empty_feed(url: str) -> bytes:
+        return b'<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>'
+
+    config = load_config()
+    import wingman.application.news as news_module
+    import wingman.application.people as people_module
+
+    monkeypatch.setattr(people_module, "fetch_url", empty_feed)
+    monkeypatch.setattr(news_module, "fetch_url", empty_feed)
+    with Storage(config.db_path) as storage:
+        add_person("Jane Author", storage, substack_url="https://jane.substack.com")
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Jane Author")
+        objective = save_objective("Jane Author", "Goal.", "Thesis.", "Next move.", storage)
+        backdated = objective.model_copy(
+            update={"updated_at": datetime.now(UTC) - timedelta(days=TICKLER_STALE_DAYS + 1)}
+        )
+        storage.save_objective(backdated)
+        report = overnight_run(config, storage)
+    tickler = next(a for a in report.actions if a.key == "relationship:jane author")
+    assert "hasn't moved in" in tickler.why
+
+
+def test_no_tickler_without_objective(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unchanged behavior: no objective, no relationship: action."""
+    import wingman.application.news as news_module
+    import wingman.application.people as people_module
+
+    config = load_config()
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(news_module, "fetch_url", lambda url: FEED)
+    with Storage(config.db_path) as storage:
+        add_person("Jane Author", storage, substack_url="https://jane.substack.com")
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Jane Author")
+        report = overnight_run(config, storage)
+    assert not any(action.key.startswith("relationship:") for action in report.actions)
+
+
+def test_tickler_mute_suppresses_future_digests(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-031: muting the relationship: key suppresses the tickler, same
+    as any other digest action — snooze is the tickler's cadence."""
+    import wingman.application.news as news_module
+    import wingman.application.people as people_module
+    from wingman.application.relationship import save_objective
+    from wingman.application.triage import mute_action
+
+    config = load_config()
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(news_module, "fetch_url", lambda url: FEED)
+    with Storage(config.db_path) as storage:
+        add_person("Jane Author", storage, substack_url="https://jane.substack.com")
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Jane Author")
+        save_objective("Jane Author", "Goal.", "Thesis.", "Next move.", storage)
+        mute_action("relationship:jane author", storage)
+        report = overnight_run(config, storage)
+    assert not any(action.key == "relationship:jane author" for action in report.actions)
+
+
 def test_titled_link_resolves_sanitizes_and_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
     """#109: evidence links carry the page's own title; every failure mode
     (no title, fetch error, spent budget) degrades to the old bare link."""
