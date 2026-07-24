@@ -433,11 +433,11 @@ def relationship_objective(
                 return render_interview(person, storage)
             if action == "save":
                 objective = save_objective(person, goal, thesis, next_move, storage)
-                who = storage.get_person(objective.person_id)
-                name = who.name if who else person
+                saved_for = storage.get_person(objective.person_id)
+                name = saved_for.name if saved_for else person
                 return (
                     f"Saved the relationship objective for {name}.\n"
-                    f"{render_objective(who, objective) if who else ''}\n"
+                    f"{render_objective(saved_for, objective) if saved_for else ''}\n"
                     "Overnight runs and future proposals about this person cite it."
                 )
     except IngestError as exc:
