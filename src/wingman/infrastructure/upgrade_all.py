@@ -1,10 +1,18 @@
 """Root-run: keep every shape-B user's wingman install current (#125).
 
-Lobster (docs/MULTI-INSTANCE-DESIGN.md shape B) is now multi-user: dhk and
-Trent each own a Unix account, a checkout under their own '~/src/wingman'
-(the code-location convention recorded in this repo's CLAUDE.md), and a
-per-account 'wingman-mcp.service' user unit. Updates were entirely manual
-and per-user — this module is the scheduled fix, run by root on a system
+Lobster (docs/MULTI-INSTANCE-DESIGN.md shape B) is multi-user, and not
+every user has the same install shape (#167):
+
+- **Checkout shape** (dhk): owns a git checkout under '~/src/wingman' (the
+  code-location convention recorded in this repo's CLAUDE.md). Updated by
+  'git pull --ff-only' against their own checkout, then
+  'uv tool install --reinstall' from it.
+- **Local-path shape** (Trent): deliberately has no GitHub access of his
+  own (docs/WALKTHROUGH-SECOND-USER.md's design) — he installs via
+  'uv tool install <another user's already-updated checkout path>', never
+  'git pull'. There is nothing of his own to pull.
+
+This module is the scheduled fix for both shapes, run by root on a system
 timer (see docs/SERVER.md), NOT a per-instance '--user' timer: it needs to
 act across accounts, which only root already can, without granting any
 NEW privilege — root already owns every file on the box regardless of
@@ -15,7 +23,13 @@ own token): this tool is a local, root-scheduled maintenance job, closer
 in spirit to unattended-upgrades than to a web-reachable admin surface,
 and it is never exposed over HTTP.
 
-Per user: 'git pull --ff-only', then 'uv tool install --reinstall', then
+Sequencing matters: a local-path user's install is only meaningful once
+their source user's checkout has actually been pulled — checkout-shape
+targets run first, local-path targets (which may depend on one of them)
+run after, never the reverse and never interleaved per-user in a way that
+could read a source checkout mid-pull.
+
+Per user, after any pull: 'uv tool install --reinstall', then
 'systemctl --user restart wingman-mcp.service' — explicitly NOT
 wingman-ctl's nohup path (issue #125's own finding: running wingman-ctl
 under a systemd-managed account kills the process out from under systemd
@@ -83,7 +97,10 @@ UidResolver = Callable[[str], int | None]
 @dataclass(frozen=True)
 class UpgradeTarget:
     user: str
-    repo_path: str
+    install_source: str  # passed to `uv tool install --reinstall <this>`
+    own_checkout: str | None  # `git pull --ff-only` here first when set; None = local-path
+    # shape (#167) — installs from another user's (already-updated) checkout, nothing of
+    # their own to pull.
 
 
 @dataclass(frozen=True)
@@ -93,14 +110,27 @@ class UpgradeResult:
     steps: list[str] = field(default_factory=list)
 
 
-def target_for(username: str, resolve_home: HomeResolver = _default_home) -> UpgradeTarget | None:
+def target_for(
+    username: str,
+    resolve_home: HomeResolver = _default_home,
+    install_source: str | None = None,
+) -> UpgradeTarget | None:
     """The upgrade target for a username, or None if the account doesn't
     exist — reported by the caller as an unresolvable user, not silently
-    skipped."""
+    skipped.
+
+    install_source, when given, makes this a local-path-shape target
+    (#167): installs are pulled from that path (someone else's checkout)
+    instead of pulling and installing this user's own — the checkout-shape
+    default when omitted.
+    """
     home = resolve_home(username)
     if home is None:
         return None
-    return UpgradeTarget(user=username, repo_path=f"{home.rstrip('/')}/{REPO_SUBPATH}")
+    own_checkout = f"{home.rstrip('/')}/{REPO_SUBPATH}"
+    if install_source is not None:
+        return UpgradeTarget(user=username, install_source=install_source, own_checkout=None)
+    return UpgradeTarget(user=username, install_source=own_checkout, own_checkout=own_checkout)
 
 
 def _sudo_as(user: str, argv: list[str], resolve_uid: UidResolver) -> list[str]:
@@ -115,22 +145,23 @@ def _sudo_as(user: str, argv: list[str], resolve_uid: UidResolver) -> list[str]:
 def upgrade_one(
     target: UpgradeTarget, run: Runner = _default_runner, resolve_uid: UidResolver = _default_uid
 ) -> UpgradeResult:
-    """One user's full upgrade: pull, reinstall, restart if managed by
-    systemd. Any step's failure stops THIS user's sequence and is
-    reported — it never raises, so a caller looping over many users can
-    never have one bad account abort the rest."""
+    """One user's full upgrade: pull (checkout-shape only), reinstall,
+    restart if managed by systemd. Any step's failure stops THIS user's
+    sequence and is reported — it never raises, so a caller looping over
+    many users can never have one bad account abort the rest."""
     steps: list[str] = []
 
     def sudo(argv: list[str]) -> list[str]:
         return _sudo_as(target.user, argv, resolve_uid)
 
-    code, out = run(sudo(["git", "-C", target.repo_path, "pull", "--ff-only"]))
-    if code != 0:
-        steps.append(f"pull failed, nothing was touched: {out}")
-        return UpgradeResult(target.user, ok=False, steps=steps)
-    steps.append("pulled latest")
+    if target.own_checkout is not None:
+        code, out = run(sudo(["git", "-C", target.own_checkout, "pull", "--ff-only"]))
+        if code != 0:
+            steps.append(f"pull failed, nothing was touched: {out}")
+            return UpgradeResult(target.user, ok=False, steps=steps)
+        steps.append("pulled latest")
 
-    code, out = run(sudo(["uv", "tool", "install", "--reinstall", target.repo_path]))
+    code, out = run(sudo(["uv", "tool", "install", "--reinstall", target.install_source]))
     if code != 0:
         steps.append(f"reinstall failed, nothing was restarted: {out}")
         return UpgradeResult(target.user, ok=False, steps=steps)
@@ -156,12 +187,17 @@ def upgrade_all(
     run: Runner = _default_runner,
     resolve_uid: UidResolver = _default_uid,
 ) -> list[UpgradeResult]:
-    """Every target, independently — one user's exception (a bug in a
-    custom runner, say) is caught and reported rather than aborting the
-    remaining users' runs, on top of 'upgrade_one' already reporting
-    ordinary command failures without raising."""
+    """Every target, checkout-shape first then local-path-shape (#167) —
+    a local-path target may install from a checkout-shape target's
+    directory, so that source must already be pulled by the time it
+    runs; original relative order is kept within each group. One user's
+    exception (a bug in a custom runner, say) is caught and reported
+    rather than aborting the remaining users' runs, on top of
+    'upgrade_one' already reporting ordinary command failures without
+    raising."""
+    ordered = sorted(targets, key=lambda target: target.own_checkout is None)
     results: list[UpgradeResult] = []
-    for target in targets:
+    for target in ordered:
         try:
             results.append(upgrade_one(target, run=run, resolve_uid=resolve_uid))
         except Exception as exc:  # noqa: BLE001 — must never abort the whole run
@@ -173,13 +209,20 @@ def _parse_usernames(raw: str) -> list[str]:
     return [name for name in re.split(r"[,\s]+", raw.strip()) if name]
 
 
+def _source_override_env_var(username: str) -> str:
+    return f"WINGMAN_UPGRADE_SOURCE_{username}"
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="wingman-upgrade-all",
         description=(
             "Root-run: git pull + uv reinstall + systemctl --user restart for every "
-            "configured shape-B user's wingman-mcp.service (#125). One user's failure "
-            "never blocks the others."
+            "configured shape-B user's wingman-mcp.service (#125). Checkout-shape users "
+            "(their own '~/src/wingman') pull their own history; local-path-shape users "
+            "(#167 — no GitHub access of their own, e.g. Trent) install from another "
+            "user's checkout instead, named via WINGMAN_UPGRADE_SOURCE_<username>. One "
+            "user's failure never blocks the others."
         ),
     )
     parser.add_argument(
@@ -200,7 +243,8 @@ def main(argv: list[str] | None = None) -> None:
     targets: list[UpgradeTarget] = []
     unresolved: list[str] = []
     for username in usernames:
-        target = target_for(username)
+        source = os.environ.get(_source_override_env_var(username), "").strip() or None
+        target = target_for(username, resolve_home=_default_home, install_source=source)
         if target is None:
             unresolved.append(username)
         else:
@@ -208,7 +252,7 @@ def main(argv: list[str] | None = None) -> None:
     for username in unresolved:
         print(f"[FAILED] {username}: no such Unix account — skipped", file=sys.stderr)
 
-    results = upgrade_all(targets)
+    results = upgrade_all(targets, run=_default_runner, resolve_uid=_default_uid)
     failures = len(unresolved)
     for result in results:
         status = "ok" if result.ok else "FAILED"
