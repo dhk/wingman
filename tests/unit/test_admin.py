@@ -78,6 +78,23 @@ token = "trenttoken"
     assert instances[0].host == "127.0.0.1"  # default
     assert instances[0].prefix == ""
     assert instances[1].prefix == "/trent"
+    assert instances[0].stripped is False and instances[1].stripped is False  # default
+
+
+def test_load_instances_parses_stripped_flag(workspace: Path) -> None:
+    (workspace / "installations.toml").write_text(
+        """
+[[instance]]
+name = "trent"
+port = 8788
+prefix = "/trent"
+token = "trenttoken"
+stripped = true
+""",
+        encoding="utf-8",
+    )
+    instances = load_instances(load_config())
+    assert instances[0].stripped is True
 
 
 def test_load_instances_rejects_malformed_toml(workspace: Path) -> None:
@@ -164,6 +181,43 @@ def test_check_health_is_async_not_blocking(workspace: Path) -> None:
     import wingman.admin as admin_module
 
     assert asyncio.iscoroutinefunction(admin_module._check_health)
+
+
+def test_check_health_omits_prefix_only_when_stripped() -> None:
+    """Regression: after moving an instance to Tailscale 'serve --set-path'
+    (the front strips the prefix before the backend ever sees it), the
+    admin page kept checking health at .../trent/health locally — a path
+    the backend no longer serves once it drops --prefix, so a genuinely
+    healthy instance read as 'stopped'. Native '--prefix' instances (the
+    backend really does listen under the prefix) must keep including it."""
+    from wingman.admin import Instance, _check_health
+
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        return httpx.Response(200, json={"version": "1.0", "started_at": "now"})
+
+    stripped = Instance(
+        name="trent", host="127.0.0.1", port=8788, prefix="/trent", token="TOK", stripped=True
+    )
+    native_bare = Instance(name="dhk", host="127.0.0.1", port=8787, prefix="", token="TOK2")
+    native_prefixed = Instance(name="x", host="127.0.0.1", port=9999, prefix="/x", token="TOK3")
+
+    async def run() -> None:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            for instance in (stripped, native_bare, native_prefixed):
+                result = await _check_health(instance, client)
+                assert result["running"] is True
+
+    asyncio.run(run())
+
+    assert requested_urls == [
+        "http://127.0.0.1:8788/health",  # stripped: prefix omitted from the local check
+        "http://127.0.0.1:8787/health",  # no prefix configured at all
+        "http://127.0.0.1:9999/x/health",  # native prefix: backend really listens there
+    ]
 
 
 def test_open_url_prefers_tunnel_host_over_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
