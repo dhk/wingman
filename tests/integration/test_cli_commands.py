@@ -59,6 +59,72 @@ def test_doctor_after_init_passes(workspace: Path) -> None:
     assert "[ok] database" in result.stdout
 
 
+def test_doctor_deep_walks_one_step_at_a_time(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#137: each invocation of 'doctor --deep' shows exactly one step and
+    advances the cursor once that step passes, rather than dumping the
+    whole ladder."""
+    from wingman.infrastructure import doctor_deep, portcheck
+
+    monkeypatch.setattr(doctor_deep.mcp_process, "read_server_pid", lambda config: 4242)
+    monkeypatch.setattr(
+        portcheck,
+        "find_port_owner",
+        lambda port, run=None: portcheck.PortOwner(
+            pid=4242, command="wingman-mcp --http", user="dave"
+        ),
+    )
+
+    result = runner.invoke(app, ["doctor", "--deep"])
+    assert result.exit_code == 0
+    assert "[1/5]" in result.stdout
+    assert "[2/5]" not in result.stdout  # only one step per invocation
+    state = (workspace / doctor_deep.STATE_FILENAME).read_text(encoding="utf-8")
+    assert '"step": 2' in state
+
+
+def test_doctor_deep_stops_and_does_not_advance_on_failure(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The #138 cross-account-squatting case: a failing step prints its
+    diagnosis and a concrete next action, and does not silently move on."""
+    from wingman.infrastructure import doctor_deep, portcheck
+
+    monkeypatch.setattr(doctor_deep.mcp_process, "read_server_pid", lambda config: None)
+    monkeypatch.setattr(
+        portcheck,
+        "find_port_owner",
+        lambda port, run=None: portcheck.PortOwner(pid=999, command=None, user=None),
+    )
+
+    result = runner.invoke(app, ["doctor", "--deep"])
+    assert result.exit_code == 1
+    assert "FAIL" in result.stdout
+    assert "next:" in result.stdout
+    from wingman.infrastructure.config import load_config
+
+    assert doctor_deep.read_cursor(load_config()) == 1
+
+
+def test_doctor_deep_reset_returns_to_step_one(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure import doctor_deep, portcheck
+
+    monkeypatch.setattr(doctor_deep.mcp_process, "read_server_pid", lambda config: 4242)
+    monkeypatch.setattr(
+        portcheck,
+        "find_port_owner",
+        lambda port, run=None: portcheck.PortOwner(
+            pid=4242, command="wingman-mcp --http", user="dave"
+        ),
+    )
+    runner.invoke(app, ["doctor", "--deep"])  # advances to step 2
+    result = runner.invoke(app, ["doctor", "--deep", "--reset"])
+    assert "[1/5]" in result.stdout
+
+
 def test_init_writes_models_config(workspace: Path) -> None:
     runner.invoke(app, ["init"])
     models = (workspace / "models.toml").read_text(encoding="utf-8")

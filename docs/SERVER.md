@@ -176,6 +176,13 @@ signal to revisit the hosted-tier assessment instead.
   journal; it is per-workspace and local-only (RFC-023).
 - **Sanity:** `wingman doctor` after any change; it reports version, keys
   seen (env), and workspace health.
+- **Faulting:** `wingman doctor --deep` walks a guided, one-step-at-a-time
+  ladder (RFC-039) for "the server seems down" — pidfile vs. actual port
+  binding (catches a stray process on the wrong `--port`, including one
+  squatting the port from a *different* Unix account), loopback health,
+  tunnel health, process state/logs, and a systemd restart-rate-limit
+  check. Each run shows one step and one next action; rerun (or
+  `--continue`) once you've acted on it.
 
 ## 8. The web UI
 

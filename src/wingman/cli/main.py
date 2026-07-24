@@ -79,6 +79,7 @@ from wingman.application.similarity import (
     similar_people,
 )
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
+from wingman.infrastructure import doctor_deep
 from wingman.version import wingman_version
 from wingman.infrastructure.keys import (
     KNOWN_KEYS,
@@ -258,11 +259,68 @@ def init() -> None:
     typer.echo(f"Workspace ready at {config.data_dir} (from {config.data_dir_source}).")
 
 
+def _doctor_deep(config: Config, continue_: bool, reset: bool, port: int) -> None:
+    """One step of the guided diagnostic ladder (#137, #138) — see
+    wingman.infrastructure.doctor_deep for the design rationale. Prints
+    exactly one step's result and one next action, then stops; a bare
+    rerun or '--continue' moves to the next step.
+    """
+    if reset:
+        doctor_deep.reset_cursor(config)
+        typer.echo("Ladder reset to step 1.\n")
+
+    total = doctor_deep.total_steps()
+    step = doctor_deep.read_cursor(config)
+    result = doctor_deep.run_step(config, step, port)
+
+    status = "ok" if result.ok else "FAIL"
+    typer.echo(f"[{step}/{total}] {result.name}: {status}")
+    typer.echo(result.summary)
+    if result.next_action:
+        typer.echo(f"\nnext: {result.next_action}")
+
+    advance = result.ok or continue_
+    if advance and step < total:
+        doctor_deep.write_cursor(config, step + 1)
+        typer.echo(f"\n(rerun 'wingman doctor --deep' to continue to step {step + 1}/{total})")
+    elif advance and step == total:
+        doctor_deep.write_cursor(config, step)
+        typer.echo("\nAll diagnostic steps complete. ('wingman doctor --deep --reset' to redo.)")
+    elif not result.ok:
+        typer.echo(
+            "\n(take the action above, then rerun 'wingman doctor --deep' to re-check this "
+            "step — or pass --continue to move on without re-checking)"
+        )
+        raise typer.Exit(code=1)
+
+
 @app.command()
-def doctor() -> None:
+def doctor(
+    deep: bool = typer.Option(
+        False,
+        "--deep",
+        help="Walk the guided incident-diagnostic ladder (#137) instead of the fast checklist.",
+    ),
+    continue_: bool = typer.Option(
+        False,
+        "--continue",
+        "-c",
+        help="With --deep: advance past the current step regardless of its result "
+        "(same as a bare rerun once you've acted on its instruction).",
+    ),
+    reset: bool = typer.Option(
+        False, "--reset", help="With --deep: start the ladder over from step 1."
+    ),
+    port: int = typer.Option(
+        8787, "--port", help="With --deep: port the HTTP MCP server should be bound to."
+    ),
+) -> None:
     """Check the local Wingman environment and report each result."""
     configure_logging()
     config = load_config()
+    if deep:
+        _doctor_deep(config, continue_=continue_, reset=reset, port=port)
+        return
     failures = 0
 
     def report(name: str, ok: bool, detail: str) -> None:
