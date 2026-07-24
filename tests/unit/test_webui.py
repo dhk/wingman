@@ -308,22 +308,23 @@ def test_connect_panel_appears_in_fresh_setup_state(
 
 
 def test_spec_three_states_and_dark_tokens(client: tuple[TestClient, str]) -> None:
-    """Issue #95 acceptance: state machine, humanization, details, dark mode."""
+    """Issue #95 acceptance: state machine, humanization, group labels, dark mode."""
     http, token = client
     config = load_config()
-    # fixture made the db but no digest -> State 3: degraded, Manage expanded
+    # fixture made the db but no digest -> State 3: degraded, Manage visible
     page = http.get(f"/ui/{token}/").text
     assert "No digest yet" in page and "wingman overnight" in page
-    assert '<details class="manage" open>' in page
+    assert '<div class="manage"><div class="manage-hd">Manage' in page
     assert "prefers-color-scheme: dark" in page  # dark tokens ride every page
-    # a digest arrives -> State 1: hero first, Manage collapsed
+    # a digest arrives -> State 1: hero first, Manage still plain (no caret)
     digests = config.reports_dir / "digests"
     digests.mkdir(parents=True, exist_ok=True)
     (digests / "latest.html").write_text("<h1>d</h1>", encoding="utf-8")
     (digests / "overnight-20260101T051500Z.html").write_text("<h1>old</h1>", encoding="utf-8")
     page = http.get(f"/ui/{token}/").text
     assert "Overnight digest" in page and 'class="hero"' in page
-    assert '<details class="manage"><summary>' in page  # closed by default
+    assert '<div class="manage"><div class="manage-hd">Manage' in page
+    assert "<details" not in page  # no collapse/caret for Manage
     assert "Overnight digests" in page  # group label
     assert "01 Jan" in page  # humanized date from the stamp
     assert ">overnight-20260101T051500Z<" not in page  # raw filename never link text
@@ -378,8 +379,9 @@ def test_desktop_tabs_are_css_only_and_single_sourced(client: tuple[TestClient, 
     assert page.count("Application packs") == 1
     assert page.count("Overnight digests") == 1
     assert page.count('action="upload"') == 1  # one Manage, not one per layout
-    # Manage keeps its no-JS <details> disclosure inside the tab panel
-    assert '<details class="manage"><summary>' in page
+    # Manage renders plain (no caret/disclosure) inside the tab panel
+    assert '<div class="manage"><div class="manage-hd">Manage' in page
+    assert "<details" not in page
 
 
 def test_degraded_state_tabs_skip_empty_digest_panel(client: tuple[TestClient, str]) -> None:
@@ -393,7 +395,7 @@ def test_degraded_state_tabs_skip_empty_digest_panel(client: tuple[TestClient, s
     assert 'id="tab-digest"' not in page  # empty panel -> no tab for it
     assert '<input type="radio" name="view" id="tab-files" checked>' in page
     assert 'id="tab-manage"' in page
-    assert '<details class="manage" open>' in page  # still expanded in State 3
+    assert '<div class="manage"><div class="manage-hd">Manage' in page  # still visible in State 3
 
 
 def test_group_rows_cap_at_twelve_with_older_line(client: tuple[TestClient, str]) -> None:
