@@ -385,6 +385,67 @@ def qa_capture(question: str, answer: str, kind: str = "achievement") -> str:
 
 
 @server.tool()
+def relationship_objective(
+    action: str, person: str, goal: str = "", thesis: str = "", next_move: str = ""
+) -> str:
+    """The relationship objective for one watched person (RFC-037): goal,
+    thesis, next move — the user's own confirmed words.
+
+    action is 'show' (the current triple), 'review' (the interview packet:
+    current triple, if any, plus the three question areas), or 'save'
+    (replace the triple with goal/thesis/next_move). This is the source of
+    truth for the relationship: any proposal you make about this person
+    must cite it plus evidence (their writing, logged interactions via
+    relationship_log) — never a free-floating judgment about what they
+    want from another human being.
+
+    Interview protocol — the SAME loop seeds a first objective and revises
+    an existing one; never write it unilaterally. (1) Call 'review' to get
+    the packet. (2) Walk its three areas one at a time, with
+    AskUserQuestion where the client supports it: when revising, read what
+    the current objective says about the area first and offer Keep /
+    Update; when seeding, ask fresh. (3) Draft the full goal/thesis/
+    next_move triple, show it, and iterate until the user confirms the
+    wording. (4) Only after explicit confirmation call 'save'. The triple
+    is the user's own words — never save wording they have not seen.
+    """
+    from wingman.application.relationship import (
+        load_objective,
+        render_interview,
+        render_objective,
+        save_objective,
+    )
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "show":
+                who, objective = load_objective(person, storage)
+                if objective is None:
+                    return (
+                        f"No relationship objective for {who.name} yet. Call this tool "
+                        "with action='review' for the seeding interview."
+                    )
+                return render_objective(who, objective)
+            if action == "review":
+                return render_interview(person, storage)
+            if action == "save":
+                objective = save_objective(person, goal, thesis, next_move, storage)
+                who = storage.get_person(objective.person_id)
+                name = who.name if who else person
+                return (
+                    f"Saved the relationship objective for {name}.\n"
+                    f"{render_objective(who, objective) if who else ''}\n"
+                    "Overnight runs and future proposals about this person cite it."
+                )
+    except IngestError as exc:
+        return f"relationship objective {action} failed: {exc}"
+    return f"unknown action {action!r}; use show, review, or save."
+
+
+@server.tool()
 def resolve_requirement(requirement: str, limit: int = 5) -> str:
     """What the workspace already knows about one job requirement (#98, RFC-036).
 
