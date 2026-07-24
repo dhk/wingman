@@ -319,6 +319,75 @@ def test_tickler_mute_suppresses_future_digests(
     assert not any(action.key == "relationship:jane author" for action in report.actions)
 
 
+def test_relationship_review_fires_for_stale_objective_off_watchlist(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-037 pt 4: an objective going stale earns a relationship-review:
+    action even for a person NOT enrolled on the overnight watchlist —
+    the review is about the objective's age, not fresh material."""
+    from datetime import UTC, datetime, timedelta
+
+    from wingman.application.relationship import REVIEW_EVERY_DAYS, save_objective
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        # Someone enrolled, so overnight_run has something to process.
+        add_person("Watched Person", storage)
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Watched Person")
+        # An objective for someone else, off the watchlist entirely.
+        add_person("Brandon Galang", storage)
+        objective = save_objective("Brandon Galang", "Goal.", "Thesis.", "Next move.", storage)
+        backdated = objective.model_copy(
+            update={"updated_at": datetime.now(UTC) - timedelta(days=REVIEW_EVERY_DAYS + 1)}
+        )
+        storage.save_objective(backdated)
+        report = overnight_run(config, storage)
+    keys = {action.key for action in report.actions}
+    assert "relationship-review:brandon galang" in keys
+    assert "relationship:brandon galang" not in keys  # never processed: no tickler
+    review = next(a for a in report.actions if a.key == "relationship-review:brandon galang")
+    assert "strengthened, stalled, or was the thesis wrong" in review.why
+
+
+def test_no_relationship_review_when_objective_fresh(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.application.relationship import save_objective
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_person("Watched Person", storage)
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Watched Person")
+        add_person("Brandon Galang", storage)
+        save_objective("Brandon Galang", "Goal.", "Thesis.", "Next move.", storage)
+        report = overnight_run(config, storage)
+    assert not any(action.key.startswith("relationship-review:") for action in report.actions)
+
+
+def test_relationship_review_mute_suppresses(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from wingman.application.relationship import REVIEW_EVERY_DAYS, save_objective
+    from wingman.application.triage import mute_action
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_person("Watched Person", storage)
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Watched Person")
+        add_person("Brandon Galang", storage)
+        objective = save_objective("Brandon Galang", "Goal.", "Thesis.", "Next move.", storage)
+        storage.save_objective(
+            objective.model_copy(
+                update={"updated_at": datetime.now(UTC) - timedelta(days=REVIEW_EVERY_DAYS + 1)}
+            )
+        )
+        mute_action("relationship-review:brandon galang", storage)
+        report = overnight_run(config, storage)
+    assert not any(action.key == "relationship-review:brandon galang" for action in report.actions)
+
+
 def test_titled_link_resolves_sanitizes_and_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
     """#109: evidence links carry the page's own title; every failure mode
     (no title, fetch error, spent budget) degrades to the old bare link."""

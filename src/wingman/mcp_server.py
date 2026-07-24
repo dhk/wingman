@@ -402,12 +402,15 @@ def relationship_objective(
     Interview protocol — the SAME loop seeds a first objective and revises
     an existing one; never write it unilaterally. (1) Call 'review' to get
     the packet. (2) Walk its three areas one at a time, with
-    AskUserQuestion where the client supports it: when revising, read what
-    the current objective says about the area first and offer Keep /
-    Update; when seeding, ask fresh. (3) Draft the full goal/thesis/
-    next_move triple, show it, and iterate until the user confirms the
-    wording. (4) Only after explicit confirmation call 'save'. The triple
-    is the user's own words — never save wording they have not seen.
+    AskUserQuestion where the client supports it: when revising — whether
+    the user asked directly or is here because the digest flagged a
+    'relationship-review:<person>' action — ask whether the relationship
+    strengthened, stalled, or the thesis was wrong, read what the current
+    objective says about the area first, and offer Keep / Update; when
+    seeding, ask fresh. (3) Draft the full goal/thesis/next_move triple,
+    show it, and iterate until the user confirms the wording. (4) Only
+    after explicit confirmation call 'save'. The triple is the user's own
+    words — never save wording they have not seen.
     """
     from wingman.application.relationship import (
         load_objective,
