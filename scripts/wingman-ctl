@@ -137,20 +137,44 @@ cmd_cycle() {
   fi
 }
 
+cmd_upgrade_all() {
+  # Cross-account, root-scheduled (#125/#167/#168) — NOT the same as
+  # 'upgrade'/'cycle' above, which only ever touch YOUR OWN instance. This
+  # triggers the shared 'wingman-upgrade-all.service' systemd unit, which
+  # updates every configured shape-B user (you, Trent, ...) via 'sudo -u',
+  # on whatever WINGMAN_UPGRADE_USERS list is set on this box (see
+  # docs/SERVER.md §7). Requires sudo rights on THIS box; on-demand only —
+  # the nightly timer keeps running on its own schedule regardless.
+  if ! systemctl list-unit-files wingman-upgrade-all.service >/dev/null 2>&1; then
+    say "wingman-upgrade-all.service isn't installed on this box — see docs/SERVER.md §7."
+    return 1
+  fi
+  say "→ triggering the cross-account upgrade (every user configured in the unit)…"
+  sudo systemctl start wingman-upgrade-all.service || {
+    say "trigger failed — check: sudo systemctl status wingman-upgrade-all.service"
+    return 1
+  }
+  sudo journalctl -u wingman-upgrade-all.service --no-pager -n 10
+}
+
 case "${1:-}" in
-  status)   cmd_status ;;
-  start)    cmd_start ;;
-  stop)     cmd_stop ;;
-  stop-all) cmd_stop_all "${2:-}" ;;
-  upgrade)  cmd_upgrade ;;
-  cycle)    cmd_cycle ;;
+  status)      cmd_status ;;
+  start)       cmd_start ;;
+  stop)        cmd_stop ;;
+  stop-all)    cmd_stop_all "${2:-}" ;;
+  upgrade)     cmd_upgrade ;;
+  cycle)       cmd_cycle ;;
+  upgrade-all) cmd_upgrade_all ;;
   *)
-    say "usage: $0 status|start|stop|stop-all [-y]|upgrade|cycle"
-    say "  status    what's running, who owns each process, what's safe to stop"
-    say "  start     the HTTP server (wingman-mcp --http), backgrounded + logged"
-    say "  stop      the HTTP server only (pidfile-verified; never touches clients)"
-    say "  stop-all  HTTP + client-owned stdio servers (asks first; -y skips)"
-    say "  upgrade   pull → reinstall → stop-all → restart HTTP if it was running"
-    say "  cycle     stop / upgrade / start — always ends with the server running"
+    say "usage: $0 status|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all"
+    say "  status       what's running, who owns each process, what's safe to stop"
+    say "  start        the HTTP server (wingman-mcp --http), backgrounded + logged"
+    say "  stop         the HTTP server only (pidfile-verified; never touches clients)"
+    say "  stop-all     HTTP + client-owned stdio servers (asks first; -y skips)"
+    say "  upgrade      pull → reinstall → stop-all → restart HTTP if it was running (YOU only)"
+    say "  cycle        stop / upgrade / start — always ends with the server running (YOU only)"
+    say "  upgrade-all  trigger the cross-account scheduled upgrade (you + every other"
+    say "               configured user, e.g. Trent) — needs sudo, needs the systemd"
+    say "               unit installed (docs/SERVER.md §7)"
     exit 2 ;;
 esac
