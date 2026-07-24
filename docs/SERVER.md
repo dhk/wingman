@@ -200,6 +200,15 @@ resumes, and the validated API-key form — the no-terminal onboarding
 path for a second user (see `MULTI-INSTANCE-DESIGN.md`). Same token,
 same tunnel, nothing extra to run; the startup banner prints the URL.
 
+**Restart, self-service (RFC-041).** The Manage panel's "Restart server"
+button (`POST …/ui/<token>/restart`) covers "the build didn't pick up"
+without an SSH round-trip — gated by that instance's own token, same as
+everything else here, and only ever able to restart *this* instance.
+Systemd-managed instances only (`systemctl --user restart
+wingman-mcp.service`, detected via `systemctl --user is-active`); an
+instance started any other way has no supervisor to bring it back up
+afterward, so the button explains that instead of guessing.
+
 **Virtual folders for multiple instances.** One hostname can front every
 instance as `/dhk/…`, `/trent/…` — two ways, and they must not be
 combined (the prefixes would stack):

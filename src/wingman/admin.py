@@ -7,6 +7,12 @@ preference for small build gaps over speculative generality), gated by its
 own credential separate from any single instance's capability token, and a
 launcher rather than a data merge — it links into each instance's own web
 UI but never renders anything from inside a workspace itself.
+
+Deliberately stays read-only + launcher: it never grows start/stop/backup
+for any instance (RFC-041, #133) — mutating another account's process
+requires real privilege escalation this page doesn't have and shouldn't
+gain. Any self-service action lives on the instance's OWN web UI, gated by
+that instance's own token (see 'wingman.infrastructure.self_restart').
 """
 
 from __future__ import annotations

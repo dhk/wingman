@@ -530,6 +530,30 @@ def _key_field(short: str, env_var: str, source: str) -> str:
     )
 
 
+def _restart_panel() -> str:
+    """Self-restart (#133): a single-click POST, same trust level as the
+    key form and upload button above it — no extra JS confirm dialog
+    (this page is deliberately JS-free), matched by the fact that a
+    restart is brief downtime, not data loss."""
+    from wingman.infrastructure.self_restart import systemd_manages_this_instance
+
+    if not systemd_manages_this_instance():
+        return (
+            '<div class="panel"><span class="stepno">Restart</span>'
+            "<p>This instance wasn't started via systemd, so it has no supervisor to "
+            "bring it back up after a self-restart. Restart it from the host instead: "
+            "<code>wingman mcp stop &amp;&amp; wingman-mcp --http</code> "
+            "(or <code>wingman-ctl start</code>).</p></div>"
+        )
+    return (
+        '<div class="panel"><span class="stepno">Restart</span>'
+        "<p>Picks up code or config changes that were already deployed but not yet "
+        "loaded. The page will be briefly unreachable.</p>"
+        '<form method="post" action="restart"><button class="btn">Restart server</button>'
+        "</form></div>"
+    )
+
+
 def _keys_panel(config: Config, step: str = "") -> str:
     lead = (
         f'<span class="stepno">{_e(step)}</span>'
@@ -590,7 +614,11 @@ async def ui_home(request: Request) -> Response:
         )
         manage = (
             '<div class="manage"><div class="manage-hd">Manage \u2014 keys &amp; uploads</div>'
-            '<div class="manage-body">' + _upload_panel() + _keys_panel(config) + "</div></div>"
+            '<div class="manage-body">'
+            + _upload_panel()
+            + _keys_panel(config)
+            + _restart_panel()
+            + "</div></div>"
         )
         body.append(
             _tiers(_artifact_sections(config, now), manage, _connect_panel(request, token), now)
@@ -605,7 +633,11 @@ async def ui_home(request: Request) -> Response:
     )
     manage = (
         '<div class="manage"><div class="manage-hd">Manage \u2014 keys &amp; uploads</div>'
-        '<div class="manage-body">' + _upload_panel() + _keys_panel(config) + "</div></div>"
+        '<div class="manage-body">'
+        + _upload_panel()
+        + _keys_panel(config)
+        + _restart_panel()
+        + "</div></div>"
     )
     body.append(
         _tiers(_artifact_sections(config, now), manage, _connect_panel(request, token), now)
@@ -795,6 +827,36 @@ async def ui_keys(request: Request) -> Response:
     return _page("Keys", back + blocks)
 
 
+async def ui_restart(request: Request) -> Response:
+    """Self-restart (#133): the token that authorizes this request is this
+    instance's own — never reachable with any other instance's token, and
+    never surfaced anywhere but this instance's own Manage panel."""
+    if _authorized(request) is None:
+        return _not_found()
+    from wingman.infrastructure.self_restart import systemd_manages_this_instance, trigger_restart
+
+    back = '<p><a href="./">&larr; back</a></p>'
+    if not systemd_manages_this_instance():
+        return _page(
+            "Restart",
+            f'{back}<div class="report-box err">Not systemd-managed — restart it from the '
+            "host: <code>wingman mcp stop &amp;&amp; wingman-mcp --http</code> "
+            "(or <code>wingman-ctl start</code>).</div>",
+        )
+    _logger.info("webui restart triggered")
+    # Fire-and-forget: 'trigger_restart' only launches 'systemctl restart'
+    # (a few ms to spawn) and returns immediately, well before systemd's
+    # own restart transaction gets far enough to signal this process — the
+    # response below still gets built and handed to the ASGI server first.
+    trigger_restart()
+    return _page(
+        "Restart",
+        '<div class="report-box">Restarting now — this page will be unreachable for a few '
+        'seconds.</div><meta http-equiv="refresh" content="5;url=./">'
+        '<p><a href="./">&larr; back now</a></p>',
+    )
+
+
 _registered_prefixes: set[str] = set()
 
 # Captured once at import time (~= process start): the admin installations
@@ -840,4 +902,5 @@ def register_ui(server: "FastMCP", prefix: str = "") -> None:
     server.custom_route(f"{mount}/ui/{{token}}/file/{{path:path}}", methods=["GET"])(ui_file)
     server.custom_route(f"{mount}/ui/{{token}}/upload", methods=["POST"])(ui_upload)
     server.custom_route(f"{mount}/ui/{{token}}/keys", methods=["POST"])(ui_keys)
+    server.custom_route(f"{mount}/ui/{{token}}/restart", methods=["POST"])(ui_restart)
     server.custom_route(f"{mount}/health", methods=["GET"])(ui_health)
