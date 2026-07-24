@@ -131,3 +131,8 @@ None of these block Trent starting today on shape A.
 - Upgrade coordination hurts (N instances of shape B want one
   `wingman-ctl upgrade --all-users` story; today each user upgrades
   their own).
+
+See `docs/OAUTH-MULTITENANCY-CONSIDERATION.md` for the fuller writeup of
+why per-account isolation (this document's shape B) stays the answer for
+now, even after a rough night of hands-on lobster operation that might
+otherwise have looked like pressure toward OAuth/multi-tenancy.
