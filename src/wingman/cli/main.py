@@ -18,7 +18,7 @@ from wingman.application.backup import create_backup, restore_backup
 from wingman.application.corpus import add_to_corpus, find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
-from wingman.application.news import fetch_person_news
+from wingman.application.news import STALE_AFTER_DAYS, fetch_person_news
 from wingman.application.focus import (
     follow_company,
     latest_digest,
@@ -86,6 +86,7 @@ from wingman.infrastructure.keys import (
     ensure_env,
     key_status,
     set_key,
+    test_keys,
     unset_key,
 )
 from wingman.infrastructure.logs import configure_logging
@@ -1571,12 +1572,16 @@ def people_news(
             typer.echo(f"people news failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
     if not report.titles:
-        if report.dropped:
-            typer.echo(
-                f"{report.dropped} results for {report.query} were all low-relevance "
-                "(name/company not in the headline, or a common-word company without "
-                "corporate context) — nothing stored."
-            )
+        if report.dropped or report.dropped_stale:
+            reasons = []
+            if report.dropped:
+                reasons.append(
+                    f"{report.dropped} low-relevance (name/company not in the headline, "
+                    "or a common-word company without corporate context)"
+                )
+            if report.dropped_stale:
+                reasons.append(f"{report.dropped_stale} too old (>{STALE_AFTER_DAYS} days)")
+            typer.echo(f"{' and '.join(reasons)} for {report.query} — nothing stored.")
         else:
             typer.echo(f"No recent news found for {report.query}.")
         return
@@ -1584,8 +1589,13 @@ def people_news(
     for number, title in enumerate(report.titles, start=1):
         typer.echo(f"{number}. {title}")
     summary = f"{report.stored} items stored"
+    dropped_bits = []
     if report.dropped:
-        summary += f", {report.dropped} low-relevance dropped"
+        dropped_bits.append(f"{report.dropped} low-relevance")
+    if report.dropped_stale:
+        dropped_bits.append(f"{report.dropped_stale} too old")
+    if dropped_bits:
+        summary += f", {' and '.join(dropped_bits)} dropped"
     typer.echo(f"{summary} — they'll appear in 'wingman export person'.")
 
 
@@ -1848,6 +1858,24 @@ def keys_list() -> None:
     for short_name, env_var, state in key_status():
         typer.echo(f"{short_name:10s} {env_var:20s} {state}")
     typer.echo("Precedence: an exported environment variable wins; the Keychain fills gaps.")
+
+
+@keys_app.command("test")
+def keys_test() -> None:
+    """Actually call each provider to confirm its key works — not just that
+    it's set. Costs one cheap, no-completion-tokens call per configured key
+    (Anthropic: list models; Voyage: one one-word embed). Keys that resolve
+    to nothing are reported as 'not set' with no network call at all.
+    """
+    configure_logging()
+    failed = False
+    for short_name, env_var, worked, message in test_keys():
+        status = "ok" if worked else "FAIL"
+        typer.echo(f"[{status}] {short_name:10s} {env_var:20s} {message}")
+        if not worked and message != "not set":
+            failed = True
+    if failed:
+        raise typer.Exit(code=1)
 
 
 @keys_app.command("unset")

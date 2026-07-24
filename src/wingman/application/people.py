@@ -352,14 +352,24 @@ def _parse_feed_items(feed_bytes: bytes, feed_url: str) -> list[dict[str, str]]:
 def _published_at(raw: str) -> datetime | None:
     if not raw:
         return None
+    parsed: datetime | None = None
     try:
-        return parsedate_to_datetime(raw)
+        parsed = parsedate_to_datetime(raw)
     except (TypeError, ValueError):
         pass
-    try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    if parsed is None:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    # A date string with no timezone token (RFC-822 or ISO) parses naive;
+    # every caller compares this against an aware datetime (e.g. the news
+    # staleness cutoff), which raises TypeError on a naive/aware mismatch.
+    # Assume UTC rather than guess a local zone — the feeds this reads are
+    # publicly syndicated, not tied to any particular reader's timezone.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _slug(title: str) -> str:

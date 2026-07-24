@@ -5,6 +5,7 @@ from pathlib import Path
 
 from wingman.infrastructure import keys as keys_module
 from wingman.infrastructure.keys import (
+    KNOWN_KEYS,
     KeyStoreError,
     ensure_env,
     get_key,
@@ -92,6 +93,54 @@ def test_key_status_names_sources_not_values(
     assert ("anthropic", "ANTHROPIC_API_KEY", "environment") in rows
     assert ("voyage", "VOYAGE_API_KEY", "keychain") in rows
     assert not any("secret-value" in " ".join(row) for row in rows)
+
+
+def test_test_key_reports_not_set_without_any_network_call(
+    chain: FakeKeychain, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(_key: str) -> tuple[bool, str]:
+        raise AssertionError("must not be called when the key is unset")
+
+    monkeypatch.setattr(keys_module, "_test_anthropic", boom)
+    monkeypatch.setattr(keys_module, "_test_voyage", boom)
+    assert keys_module.test_key("anthropic", runner=chain) == (False, "not set")
+
+
+def test_test_key_reports_provider_result(
+    chain: FakeKeychain, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-whatever")
+    seen: list[str] = []
+
+    def fake_anthropic(api_key: str) -> tuple[bool, str]:
+        seen.append(api_key)
+        return True, "working"
+
+    monkeypatch.setattr(keys_module, "_test_anthropic", fake_anthropic)
+    assert keys_module.test_key("anthropic", runner=chain) == (True, "working")
+    assert seen == ["sk-whatever"]  # the real value reached the tester, never logged
+
+
+def test_test_key_surfaces_rejection(chain: FakeKeychain, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VOYAGE_API_KEY", "pa-bad")
+    monkeypatch.setattr(
+        keys_module, "_test_voyage", lambda _key: (False, "Voyage API returned 401 for...")
+    )
+    worked, message = keys_module.test_key("voyage", runner=chain)
+    assert not worked
+    assert "401" in message
+
+
+def test_test_keys_covers_every_known_key(
+    chain: FakeKeychain, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(keys_module, "_test_anthropic", lambda _key: (True, "working"))
+    monkeypatch.setattr(keys_module, "_test_voyage", lambda _key: (True, "working"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
+    monkeypatch.setenv("VOYAGE_API_KEY", "pa-x")
+    rows = keys_module.test_keys(runner=chain)
+    assert {row[0] for row in rows} == set(KNOWN_KEYS)
+    assert all(row[2] for row in rows)  # all worked
 
 
 def test_workspace_key_file_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
