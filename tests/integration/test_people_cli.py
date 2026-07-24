@@ -50,6 +50,23 @@ def test_people_add_list_and_status(workspace: Path) -> None:
     assert "People: 1" in status.stdout
 
 
+def test_people_list_surfaces_linkedin_url(workspace: Path) -> None:
+    """#80: a stored LinkedIn URL is a one-click-open link in the listing,
+    on both the CLI and MCP surfaces."""
+    result = runner.invoke(
+        app,
+        ["people", "add", "Jane Author", "--linkedin", "https://www.linkedin.com/in/janeauthor"],
+    )
+    assert result.exit_code == 0
+
+    listed = runner.invoke(app, ["people", "list"])
+    assert "https://www.linkedin.com/in/janeauthor" in listed.stdout
+
+    from wingman.mcp_server import people_list as people_list_tool
+
+    assert "https://www.linkedin.com/in/janeauthor" in people_list_tool()
+
+
 def test_import_connections_and_watched_filter(workspace: Path, tmp_path: Path) -> None:
     export = tmp_path / "linkedin.zip"
     raw = (
