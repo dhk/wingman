@@ -1045,7 +1045,8 @@ def people_list(
         sources = person.sources
         feed = f"  [{', '.join(source.url for source in sources)}]" if sources else ""
         detail = f"  ({where})" if where else ""
-        typer.echo(f"{person.name}{detail}{feed}")
+        linkedin = f"  {person.linkedin_url}" if person.linkedin_url else ""
+        typer.echo(f"{person.name}{detail}{linkedin}{feed}")
     typer.echo(f"{len(people)} people.")
 
 

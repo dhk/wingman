@@ -841,8 +841,9 @@ def people_list(watched_only: bool = False) -> str:
         where = ", ".join(part for part in (person.position, person.company) if part)
         sources = ", ".join(source.url for source in person.sources)
         detail = f" ({where})" if where else ""
+        linkedin = f"  {person.linkedin_url}" if person.linkedin_url else ""
         feed = f"  [{sources}]" if sources else ""
-        lines.append(f"{person.name}{detail}{feed}")
+        lines.append(f"{person.name}{detail}{linkedin}{feed}")
     return "\n".join([*lines, f"{len(people)} people."])
 
 
