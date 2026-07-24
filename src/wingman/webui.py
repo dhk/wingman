@@ -148,14 +148,22 @@ body { margin: 0; }
   .tabpanel { display: none; }
   #tab-digest:checked ~ .tabpanel-digest,
   #tab-files:checked ~ .tabpanel-files,
+  #tab-changelog:checked ~ .tabpanel-changelog,
   #tab-connect:checked ~ .tabpanel-connect,
   #tab-manage:checked ~ .tabpanel-manage { display: flex; }
   #tab-digest:checked ~ .tabbar label[for="tab-digest"],
   #tab-files:checked ~ .tabbar label[for="tab-files"],
+  #tab-changelog:checked ~ .tabbar label[for="tab-changelog"],
   #tab-connect:checked ~ .tabbar label[for="tab-connect"],
   #tab-manage:checked ~ .tabbar label[for="tab-manage"] {
     color: var(--text); border-bottom-color: var(--accent); }
 }
+.changelog-rows { display: flex; flex-direction: column; }
+.changelog-row { display: grid; grid-template-columns: 72px 1fr auto; gap: 12px;
+  align-items: baseline; padding: 8px 0; border-top: 1px solid var(--border-light); }
+.changelog-row:first-child { border-top: 0; }
+.changelog-row .when { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+.changelog-row .pr { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
 """
 
 _UI_CSS = DESIGN_TOKENS_CSS + _UI_RULES_CSS
@@ -308,6 +316,43 @@ def _artifact_sections(config: Config, now: datetime) -> list[tuple[str, str]]:
     return parts
 
 
+def _changelog_date_label(iso_date: str, now: datetime) -> str:
+    when = datetime.strptime(iso_date, "%Y-%m-%d").replace(tzinfo=UTC)
+    return "Today" if when.date() == now.date() else when.strftime("%d %b")
+
+
+def _changelog_tab_label(today_count: int, week_count: int) -> str:
+    return f"Changelog ({today_count} new today / {week_count} last 7 days)"
+
+
+def _changelog_panel(now: datetime) -> tuple[str, str]:
+    """(tab label with counts, rendered panel) — issue #145.
+
+    Entries are wingman's own curated merged-PR history (RFC-038), not
+    workspace data, so this needs no Config and renders the same for every
+    instance running this build.
+    """
+    from wingman.domain.changelog import (
+        DEFAULT_DISPLAY_LIMIT,
+        counts_today_and_week,
+        user_facing_entries,
+    )
+
+    entries = user_facing_entries()
+    today_count, week_count = counts_today_and_week(entries, now.date())
+    rows = "".join(
+        '<div class="changelog-row">'
+        f'<span class="when">{_e(_changelog_date_label(entry.date, now))}</span>'
+        f"<span>{_e(entry.title)}</span>"
+        f'<span class="pr">#{entry.pr}</span></div>'
+        for entry in entries[:DEFAULT_DISPLAY_LIMIT]
+    )
+    if len(entries) > DEFAULT_DISPLAY_LIMIT:
+        rows += '<div class="row-older">older…</div>'
+    panel = f'<div class="changelog-rows">{rows}</div>' if rows else ""
+    return _changelog_tab_label(today_count, week_count), panel
+
+
 def _tabset(panels: list[tuple[str, str, str]]) -> str:
     """Desktop tabs (spec section 6): radios first, then labels, then panels.
 
@@ -334,14 +379,16 @@ def _tabset(panels: list[tuple[str, str, str]]) -> str:
     return f'<div class="tabset">\n{inputs}\n<nav class="tabbar">{labels}</nav>\n{sections}\n</div>'
 
 
-def _tiers(groups: list[tuple[str, str]], manage: str, connect: str) -> str:
-    """Tier 2 + Tier 3 as Digest · Files · Connect · Manage (tabs at >=768px, a stack below)."""
+def _tiers(groups: list[tuple[str, str]], manage: str, connect: str, now: datetime) -> str:
+    """Digest · Files · Changelog · Connect · Manage (tabs at >=768px, a stack below)."""
     digest = "\n".join(html for section, html in groups if section.split("/")[0] == "digests")
     files = "\n".join(html for section, html in groups if section.split("/")[0] != "digests")
+    changelog_label, changelog = _changelog_panel(now)
     return _tabset(
         [
             ("digest", "Digest", digest),
             ("files", "Files", files),
+            ("changelog", changelog_label, changelog),
             ("connect", "Connect", connect),
             ("manage", "Manage", manage),
         ]
@@ -508,7 +555,9 @@ async def ui_home(request: Request) -> Response:
             '<div class="manage"><div class="manage-hd">Manage \u2014 keys &amp; uploads</div>'
             '<div class="manage-body">' + _upload_panel() + _keys_panel(config) + "</div></div>"
         )
-        body.append(_tiers(_artifact_sections(config, now), manage, _connect_panel(request, token)))
+        body.append(
+            _tiers(_artifact_sections(config, now), manage, _connect_panel(request, token), now)
+        )
         return _page("Wingman", "\n".join(body))
 
     # State 3 — degraded: workspace lives, no digest yet.
@@ -521,7 +570,9 @@ async def ui_home(request: Request) -> Response:
         '<div class="manage"><div class="manage-hd">Manage \u2014 keys &amp; uploads</div>'
         '<div class="manage-body">' + _upload_panel() + _keys_panel(config) + "</div></div>"
     )
-    body.append(_tiers(_artifact_sections(config, now), manage, _connect_panel(request, token)))
+    body.append(
+        _tiers(_artifact_sections(config, now), manage, _connect_panel(request, token), now)
+    )
     return _page("Wingman", "\n".join(body))
 
 

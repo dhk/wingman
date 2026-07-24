@@ -84,6 +84,7 @@ def test_all_tools_are_registered() -> None:
         "assess_job_url",
         "pack",
         "feature_request",
+        "changelog",
     }
 
 
@@ -94,6 +95,32 @@ def test_tools_report_uninitialized_workspace(
     assert "not initialized" in status()
     assert "not initialized" in evidence("anything")
     assert "not initialized" in career_profile()
+
+
+def test_changelog_reports_curated_titles_without_a_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """changelog describes wingman itself, not the user's workspace (issue
+    #145) — it should answer even before 'wingman init' has run."""
+    from datetime import UTC, datetime
+
+    import wingman.changelog_data as data_module
+    from wingman.mcp_server import changelog
+
+    monkeypatch.setenv(ENV_DATA_DIR, str(tmp_path / "nowhere"))
+    today = datetime.now(UTC).date().isoformat()
+    monkeypatch.setattr(
+        data_module,
+        "CHANGELOG_DATA",
+        (
+            (today, 200, "Add a brand new feature"),
+            (today, 199, "docs: session snapshot for resume"),
+        ),
+    )
+    result = changelog()
+    assert "1 new today, 1 in the last 7 days" in result
+    assert "Add a brand new feature (#200)" in result
+    assert "session snapshot" not in result
 
 
 def test_status_and_evidence_roundtrip(workspace: Path, tmp_path: Path) -> None:
