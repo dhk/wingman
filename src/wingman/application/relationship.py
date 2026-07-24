@@ -38,6 +38,12 @@ _logger = get_logger("application.relationship")
 LOG_SOURCE_TYPE = "relationship_log"
 # How many recent log entries surface in a brief's deterministic footer.
 _BRIEF_LOG_LIMIT = 3
+# Past this many days without a revision, the overnight digest nudges a
+# review (RFC-037 pt 4) — the RFC-035 review loop, re-aimed at
+# relationships. Longer than the tickler's cadence (focus.TICKLER_STALE_DAYS,
+# 7 days): the tickler nudges acting on the next move, this asks whether
+# the objective itself is still the right one.
+REVIEW_EVERY_DAYS = 45
 
 # The interview loop: one question set, used for seeding AND for revision, so
 # the objective never fossilizes. Every surface — the MCP packet, the CLI —
@@ -150,7 +156,8 @@ def render_interview(name: str, storage: Storage) -> str:
         lines.append("---")
         lines.append(
             "Walk the three areas below one at a time: read what the current "
-            "objective says about the area, ask what changed, offer Keep / Update."
+            "objective says about the area, ask whether it strengthened, stalled, "
+            "or the thesis was wrong, and offer Keep / Update."
         )
     for number, (area, prompt) in enumerate(INTERVIEW_AREAS, start=1):
         lines.append(f"{number}. {area} — {prompt}")

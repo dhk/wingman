@@ -308,6 +308,41 @@ def _criteria_review_action(config: Config) -> ActionItem | None:
     )
 
 
+def _relationship_review_actions(storage: Storage) -> list[ActionItem]:
+    """The RFC-035 review loop, re-aimed at relationships (RFC-037 pt 4):
+    once an objective goes quiet for REVIEW_EVERY_DAYS, the digest nudges
+    a review — one triageable action per person, so mute/snooze applies
+    per relationship, not globally. The interview itself (already built:
+    relationship_objective(action='review')) walks strengthened / stalled
+    / thesis-wrong and saves only confirmed wording."""
+    from wingman.application.relationship import REVIEW_EVERY_DAYS
+
+    now = datetime.now(UTC)
+    actions: list[ActionItem] = []
+    for objective in storage.list_objectives():
+        age = (now - objective.updated_at).days
+        if age < REVIEW_EVERY_DAYS:
+            continue
+        person = storage.get_person(objective.person_id)
+        if person is None:
+            continue
+        actions.append(
+            ActionItem(
+                what=f"Review your objective with {person.name}",
+                why=f"objective last updated {age} day(s) ago — has it strengthened, "
+                f'stalled, or was the thesis wrong? current thesis: "{objective.thesis}"',
+                who=person.name,
+                evidence=[
+                    f"say: review my objective with {person.name} "
+                    "(the relationship_objective tool walks it)",
+                    f'or: wingman objective review "{person.name}"',
+                ],
+                key=f"relationship-review:{person.name_key}",
+            )
+        )
+    return actions
+
+
 def _company_deep(
     name: str,
     config: Config,
@@ -558,6 +593,7 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     review = _criteria_review_action(config)
     if review is not None:
         actions.append(review)
+    actions.extend(_relationship_review_actions(storage))
     # Standing triage verdicts (RFC-031): what the user muted or snoozed
     # never reaches the digest — applied before the cap so a suppressed
     # item can't crowd out a live one.

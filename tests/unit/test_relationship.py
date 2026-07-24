@@ -92,6 +92,7 @@ def test_render_interview_seeding_then_revision(workspace: Config) -> None:
         review = render_interview("Brandon Galang", storage)
         assert "REVISE" in review
         assert GOAL in review and THESIS in review and NEXT_MOVE in review
+        assert "strengthened, stalled, or the thesis was wrong" in review
 
 
 def test_delete_person_cascades_objective(workspace: Config) -> None:
