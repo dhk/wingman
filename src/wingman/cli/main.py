@@ -188,6 +188,10 @@ criteria_app = typer.Typer(
     help="The job-criteria doc that scores new openings in the digest (RFC-035)."
 )
 app.add_typer(criteria_app, name="criteria")
+objective_app = typer.Typer(
+    help="Per-person relationship objective: goal, thesis, next move (RFC-037)."
+)
+app.add_typer(objective_app, name="objective")
 admin_app = typer.Typer(help="The cross-instance installations page for a shape-B box (#130).")
 app.add_typer(admin_app, name="admin")
 
@@ -2773,6 +2777,78 @@ def criteria_save(
         typer.echo(f"criteria save failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Saved {path} — overnight runs now score new openings against it.")
+
+
+@objective_app.command("show")
+def objective_show(
+    person: str = typer.Argument(..., help="The person the objective is for."),
+) -> None:
+    """Print the relationship objective for one person: goal, thesis, next move."""
+    configure_logging()
+    from wingman.application.relationship import load_objective, render_objective
+
+    config = load_config()
+    _require_workspace(config, "shown")
+    try:
+        with Storage(config.db_path) as storage:
+            who, objective = load_objective(person, storage)
+    except IngestError as exc:
+        typer.echo(f"objective show failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if objective is None:
+        typer.echo(
+            f"No relationship objective for {who.name} yet. Seed it via the "
+            "relationship_objective tool's interview in a connected client, or: "
+            f'wingman objective save "{who.name}" --goal ... --thesis ... --next-move ...'
+        )
+        raise typer.Exit(code=1)
+    typer.echo(render_objective(who, objective))
+
+
+@objective_app.command("review")
+def objective_review(
+    person: str = typer.Argument(..., help="The person to seed or revise an objective for."),
+) -> None:
+    """Print the interview packet: current objective (if any) plus the three areas.
+
+    The same loop seeds a first objective and revises an existing one.
+    """
+    configure_logging()
+    from wingman.application.relationship import render_interview
+
+    config = load_config()
+    _require_workspace(config, "reviewed")
+    try:
+        with Storage(config.db_path) as storage:
+            typer.echo(render_interview(person, storage))
+    except IngestError as exc:
+        typer.echo(f"objective review failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@objective_app.command("save")
+def objective_save(
+    person: str = typer.Argument(..., help="The person the objective is for."),
+    goal: str = typer.Option(..., help="Why you're investing in this relationship."),
+    thesis: str = typer.Option(..., help="What you believe about the path from here."),
+    next_move: str = typer.Option(
+        ..., "--next-move", help="The next intended action, concrete enough to act on."
+    ),
+) -> None:
+    """Replace the relationship objective for one person — your confirmed words."""
+    configure_logging()
+    from wingman.application.relationship import render_objective, save_objective
+
+    config = load_config()
+    _require_workspace(config, "saved")
+    try:
+        with Storage(config.db_path) as storage:
+            objective = save_objective(person, goal, thesis, next_move, storage)
+            who = storage.get_person(objective.person_id)
+    except IngestError as exc:
+        typer.echo(f"objective save failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Saved.\n{render_objective(who, objective) if who else ''}")
 
 
 @actions_app.command("mute")

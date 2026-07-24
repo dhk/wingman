@@ -17,6 +17,7 @@ from wingman.domain.opportunity import Opportunity
 from wingman.domain.outreach import OutreachBrief
 from wingman.domain.person import ExternalDocument, NewsItem, Person, PersonOrigin
 from wingman.domain.pov import PovCard
+from wingman.domain.relationship import RelationshipLogEntry, RelationshipObjective
 from wingman.domain.research import CompanySource, ResearchSnapshot
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 
@@ -122,6 +123,20 @@ CREATE TABLE IF NOT EXISTS research_snapshots (
     fetched_at TEXT NOT NULL,
     PRIMARY KEY (company_key, url)
 );
+CREATE TABLE IF NOT EXISTS relationship_objectives (
+    objective_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS relationship_log (
+    entry_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL,
+    source_record_id TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    happened_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relationship_log_person ON relationship_log (person_id);
 CREATE TABLE IF NOT EXISTS embeddings (
     doc_id TEXT PRIMARY KEY,
     scope TEXT NOT NULL,
@@ -458,7 +473,8 @@ class Storage:
 
     def delete_person(self, person_id: str) -> bool:
         """Delete a person and everything keyed to them: documents (+FTS+embeddings),
-        POV card, news, outreach brief, and any watchlist membership."""
+        POV card, news, outreach brief, relationship objective/log, and any
+        watchlist membership."""
         person = self.get_person(person_id)
         if person is None:
             return False
@@ -469,6 +485,8 @@ class Storage:
         self._conn.execute("DELETE FROM pov_cards WHERE person_id = ?", (person_id,))
         self._conn.execute("DELETE FROM news_items WHERE person_id = ?", (person_id,))
         self._conn.execute("DELETE FROM outreach_briefs WHERE person_id = ?", (person_id,))
+        self._conn.execute("DELETE FROM relationship_objectives WHERE person_id = ?", (person_id,))
+        self._conn.execute("DELETE FROM relationship_log WHERE person_id = ?", (person_id,))
         self._conn.execute("DELETE FROM people WHERE person_id = ?", (person_id,))
         self._conn.commit()
         self.watchlist_delete_member("person", person.name)
@@ -603,6 +621,18 @@ class Storage:
             )
         else:
             self._conn.execute("DELETE FROM outreach_briefs WHERE person_id = ?", (absorb_id,))
+        if self.get_objective(keep_id) is None:
+            self._conn.execute(
+                "UPDATE relationship_objectives SET person_id = ? WHERE person_id = ?",
+                (keep_id, absorb_id),
+            )
+        else:
+            self._conn.execute(
+                "DELETE FROM relationship_objectives WHERE person_id = ?", (absorb_id,)
+            )
+        self._conn.execute(
+            "UPDATE relationship_log SET person_id = ? WHERE person_id = ?", (keep_id, absorb_id)
+        )
         self._conn.execute("DELETE FROM people WHERE person_id = ?", (absorb_id,))
         self._conn.commit()
         self.watchlist_delete_member("person", absorb.name)
@@ -679,6 +709,76 @@ class Storage:
     def list_pov_cards(self) -> list[PovCard]:
         cursor = self._conn.execute("SELECT payload FROM pov_cards ORDER BY created_at")
         return [PovCard.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def save_objective(self, objective: RelationshipObjective) -> None:
+        """Insert or replace the objective for its person (RFC-037: revised, not versioned)."""
+        self._conn.execute(
+            "INSERT INTO relationship_objectives"
+            " (objective_id, person_id, payload, updated_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(person_id) DO UPDATE SET objective_id = excluded.objective_id,"
+            " payload = excluded.payload, updated_at = excluded.updated_at",
+            (
+                objective.objective_id,
+                objective.person_id,
+                objective.model_dump_json(),
+                objective.updated_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def get_objective(self, person_id: str) -> RelationshipObjective | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM relationship_objectives WHERE person_id = ?", (person_id,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return RelationshipObjective.model_validate_json(row[0]) if row else None
+
+    def list_objectives(self) -> list[RelationshipObjective]:
+        cursor = self._conn.execute(
+            "SELECT payload FROM relationship_objectives ORDER BY updated_at"
+        )
+        return [RelationshipObjective.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def delete_objective(self, person_id: str) -> bool:
+        cursor = self._conn.execute(
+            "DELETE FROM relationship_objectives WHERE person_id = ?", (person_id,)
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def add_log_entry(self, entry: RelationshipLogEntry) -> None:
+        try:
+            self._conn.execute(
+                "INSERT INTO relationship_log"
+                " (entry_id, person_id, source_record_id, payload, happened_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    entry.entry_id,
+                    entry.person_id,
+                    entry.source_record_id,
+                    entry.model_dump_json(),
+                    entry.happened_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRecordError(
+                f"log entry for source {entry.source_record_id} already exists"
+            ) from exc
+        self._conn.commit()
+
+    def list_log_entries(self, person_id: str | None = None) -> list[RelationshipLogEntry]:
+        if person_id is None:
+            cursor = self._conn.execute(
+                "SELECT payload FROM relationship_log ORDER BY happened_at, entry_id"
+            )
+        else:
+            cursor = self._conn.execute(
+                "SELECT payload FROM relationship_log WHERE person_id = ?"
+                " ORDER BY happened_at, entry_id",
+                (person_id,),
+            )
+        return [RelationshipLogEntry.model_validate_json(row[0]) for row in cursor.fetchall()]
 
     def list_news_items(self) -> list[NewsItem]:
         cursor = self._conn.execute("SELECT payload FROM news_items ORDER BY fetched_at, item_id")
