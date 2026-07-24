@@ -131,10 +131,10 @@ def test_staleness_cutoff_boundary(workspace: Path) -> None:
 <rss version="2.0"><channel>
   <item><title>Marko Klopets: still inside the window</title>
     <link>https://news.google.com/rss/articles/inside</link>
-    <pubDate>{just_inside.strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate></item>
+    <pubDate>{just_inside.strftime("%a, %d %b %Y %H:%M:%S GMT")}</pubDate></item>
   <item><title>Marko Klopets: just outside the window</title>
     <link>https://news.google.com/rss/articles/outside</link>
-    <pubDate>{just_outside.strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate></item>
+    <pubDate>{just_outside.strftime("%a, %d %b %Y %H:%M:%S GMT")}</pubDate></item>
 </channel></rss>
 """.encode()
     config = load_config()
