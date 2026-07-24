@@ -1,12 +1,19 @@
-"""API keys in the macOS Keychain, hydrated into the environment (RFC-019).
+"""API keys: Keychain, host file, workspace file — one resolution ladder
+(RFC-019/034, #122).
 
 'wingman keys set anthropic' stores a key with the system 'security' CLI —
 no plaintext config files, no wrapper scripts. At startup (CLI and MCP
 server alike) every known key that is absent from the environment is
-hydrated from the Keychain; an environment variable that is already set
-always wins, so shell exports and launchd EnvironmentVariables behave
-exactly as before. On systems without the 'security' binary (Linux, CI)
-hydration is a silent no-op and 'wingman keys' says why.
+hydrated, in order: the Keychain, then the host's canonical key file
+(`~/.config/keys.env`, #122 — one file every consumer on a server host
+reads, instead of shell dotfile exports from one setup session and a
+service EnvironmentFile from another silently drifting apart), then the
+workspace key file (`keys.env` inside the workspace, RFC-034). An
+environment variable that is already set always wins over all three, so
+shell exports, launchd EnvironmentVariables, and a systemd
+`EnvironmentFile=` all behave exactly as before. On systems without the
+'security' binary (Linux, CI) Keychain hydration is a silent no-op and
+'wingman keys' says why.
 
 Secrets are never logged and never printed back by any command here.
 """
@@ -16,7 +23,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from wingman.infrastructure.logs import get_logger
@@ -119,15 +127,12 @@ def unset_key(name: str, runner: Runner | None = None) -> bool:
 
 
 KEYS_FILENAME = "keys.env"
+HOST_KEYS_FILENAME = "keys.env"
+HOST_KEYS_SUBDIR = ".config"
 
 
-def workspace_keys_path(data_dir: Path) -> Path:
-    return data_dir / KEYS_FILENAME
-
-
-def read_workspace_keys(data_dir: Path) -> dict[str, str]:
-    """NAME=value lines from the workspace key file; unknown names ignored."""
-    path = workspace_keys_path(data_dir)
+def _parse_known_keys_file(path: Path) -> dict[str, str]:
+    """NAME=value lines from a keys.env-shaped file; unknown names ignored."""
     if not path.exists():
         return {}
     known = set(KNOWN_KEYS.values())
@@ -137,6 +142,32 @@ def read_workspace_keys(data_dir: Path) -> dict[str, str]:
         if name.strip() in known and value.strip():
             values[name.strip()] = value.strip()
     return values
+
+
+def workspace_keys_path(data_dir: Path) -> Path:
+    return data_dir / KEYS_FILENAME
+
+
+def read_workspace_keys(data_dir: Path) -> dict[str, str]:
+    """NAME=value lines from the workspace key file; unknown names ignored."""
+    return _parse_known_keys_file(workspace_keys_path(data_dir))
+
+
+def host_keys_path(home: Path | None = None) -> Path:
+    """The one canonical host key file (#122): '~/.config/keys.env', 0600,
+
+    read by the CLI, the MCP server, and the overnight timer alike — so a
+    server host has a single place keys live, instead of shell dotfile
+    exports from one setup session and a systemd EnvironmentFile from
+    another silently drifting apart (the failure mode that stalled the
+    2026-07-22 lobster migration).
+    """
+    return (home if home is not None else Path.home()) / HOST_KEYS_SUBDIR / HOST_KEYS_FILENAME
+
+
+def read_host_keys(home: Path | None = None) -> dict[str, str]:
+    """NAME=value lines from the host key file; unknown names ignored."""
+    return _parse_known_keys_file(host_keys_path(home))
 
 
 def store_workspace_key(data_dir: Path, name: str, value: str) -> bool:
@@ -164,13 +195,21 @@ def store_workspace_key(data_dir: Path, name: str, value: str) -> bool:
     return True
 
 
-def ensure_env(runner: Runner | None = None, data_dir: Path | None = None) -> list[str]:
-    """Hydrate absent env vars from the Keychain, then the workspace key file.
+def ensure_env(
+    runner: Runner | None = None,
+    data_dir: Path | None = None,
+    home: Path | None = None,
+) -> list[str]:
+    """Hydrate absent env vars: Keychain, then the host file, then the
+    workspace file.
 
-    Resolution order (RFC-019/034): a set environment variable always wins;
-    the macOS Keychain fills gaps; the workspace 'keys.env' (written by the
-    web UI's validated key form) fills what remains. Returns the hydrated
-    variable names. Safe to call anywhere, any number of times.
+    Resolution order (RFC-019/034, #122): a set environment variable always
+    wins; the macOS Keychain fills gaps; the host's canonical key file
+    ('~/.config/keys.env') fills what remains, so the CLI and MCP server
+    work on a fresh shell with zero exports; the workspace 'keys.env'
+    (written by the web UI's validated key form) fills whatever is still
+    missing. Returns the hydrated variable names. Safe to call anywhere,
+    any number of times.
     """
     hydrated: list[str] = []
     if keychain_available():
@@ -181,6 +220,11 @@ def ensure_env(runner: Runner | None = None, data_dir: Path | None = None) -> li
             if value is not None:
                 os.environ[env_var] = value
                 hydrated.append(env_var)
+    for env_var, value in read_host_keys(home).items():
+        if os.environ.get(env_var, "").strip():
+            continue
+        os.environ[env_var] = value
+        hydrated.append(env_var)
     if data_dir is not None:
         for env_var, value in read_workspace_keys(data_dir).items():
             if os.environ.get(env_var, "").strip():
@@ -190,6 +234,66 @@ def ensure_env(runner: Runner | None = None, data_dir: Path | None = None) -> li
     if hydrated:
         _logger.info("keys hydrated %s", ",".join(hydrated))
     return hydrated
+
+
+_SOURCE_LABELS = ("environment", "keychain", "host file (~/.config/keys.env)", "workspace file")
+
+
+@dataclass(frozen=True)
+class KeySource:
+    """Where one known key was found, and whether other sources disagree.
+
+    'winning_source' names whichever source 'ensure_env' would actually
+    use, by the same ladder order. 'shadowed_by' lists every OTHER source
+    that also defines this key with a DIFFERENT value — a duplicate with
+    the same value is not a conflict worth a warning; a duplicate with a
+    different value is exactly the "which key file is canonical" confusion
+    #122 exists to surface instead of leaving to be found by hand.
+    """
+
+    short_name: str
+    env_var: str
+    winning_source: str
+    shadowed_by: list[str] = field(default_factory=list)
+
+
+def resolve_key_sources(
+    environ: Mapping[str, str],
+    data_dir: Path | None = None,
+    home: Path | None = None,
+    runner: Runner | None = None,
+) -> list[KeySource]:
+    """Per known key: which source wins, and which others disagree (#122).
+
+    'environ' is the caller's snapshot of the process environment — pass
+    one taken BEFORE 'ensure_env' hydrates it, or the reported "winning
+    source" degenerates to always "environment" once hydration has copied
+    a Keychain/file value into os.environ. Read-only: makes no writes,
+    unlike 'ensure_env'.
+    """
+    host_values = read_host_keys(home)
+    workspace_values = read_workspace_keys(data_dir) if data_dir is not None else {}
+    results: list[KeySource] = []
+    for short_name, env_var in KNOWN_KEYS.items():
+        candidates: list[tuple[str, str]] = []
+        env_value = environ.get(env_var, "").strip()
+        if env_value:
+            candidates.append((_SOURCE_LABELS[0], env_value))
+        if keychain_available():
+            keychain_value = get_key(short_name, runner=runner)
+            if keychain_value:
+                candidates.append((_SOURCE_LABELS[1], keychain_value))
+        if env_var in host_values:
+            candidates.append((_SOURCE_LABELS[2], host_values[env_var]))
+        if env_var in workspace_values:
+            candidates.append((_SOURCE_LABELS[3], workspace_values[env_var]))
+        if not candidates:
+            results.append(KeySource(short_name, env_var, "not set"))
+            continue
+        winning_source, winning_value = candidates[0]
+        shadowed_by = [source for source, value in candidates[1:] if value != winning_value]
+        results.append(KeySource(short_name, env_var, winning_source, shadowed_by))
+    return results
 
 
 def key_status(runner: Runner | None = None) -> list[tuple[str, str, str]]:

@@ -24,22 +24,30 @@ The workspace defaults to `~/.local/share/wingman` (XDG). Set
 `WINGMAN_DATA_DIR` before `wingman init` if you want it elsewhere —
 consistently, including inside the systemd units below.
 
-## 2. Keys (env vars — the Keychain is macOS-only)
+## 2. Keys (the canonical host file — the Keychain is macOS-only)
 
 `wingman keys` requires macOS's `security` binary and fails visibly on
-Linux; the RFC-019 resolution order ("environment wins") makes env vars
-the Linux path. Put them in an environment file the services will share:
+Linux. On a server host, one file is canonical (RFC-019/034/040, #122):
+`~/.config/keys.env`, mode 600. Wingman itself reads it directly — CLI and
+MCP server alike, on a fresh shell with zero exports — so this one file is
+the only thing to create or copy when migrating a box or debugging "which
+key file is actually in effect":
 
 ```bash
-install -m 600 /dev/null ~/.config/wingman.env
-cat >> ~/.config/wingman.env <<'EOF'
+install -m 600 /dev/null ~/.config/keys.env
+cat >> ~/.config/keys.env <<'EOF'
 ANTHROPIC_API_KEY=sk-ant-...
 VOYAGE_API_KEY=pa-...
 EOF
 ```
 
-For interactive shells, also `set -a; source ~/.config/wingman.env; set +a`
-from `~/.profile` (or export them your preferred way).
+The resolution order (`wingman doctor` names the winning source per key
+and flags a key defined in more than one place with a different value):
+**environment > Keychain (macOS) > `~/.config/keys.env` > the workspace's
+own `keys.env`**. A systemd `EnvironmentFile=` or a shell export still
+works exactly as before — either just becomes the "environment" source,
+which always wins — but neither is required anymore for the CLI or MCP
+server to see these keys.
 
 ## 3. Migrate the workspace from a Mac (optional)
 
@@ -66,7 +74,7 @@ Description=Wingman overnight run (RFC-018)
 
 [Service]
 Type=oneshot
-EnvironmentFile=%h/.config/wingman.env
+EnvironmentFile=-%h/.config/keys.env
 ExecStart=%h/.local/bin/wingman overnight
 ```
 
@@ -106,7 +114,7 @@ Description=Wingman MCP server (streamable HTTP, RFC-017)
 After=network.target
 
 [Service]
-EnvironmentFile=%h/.config/wingman.env
+EnvironmentFile=-%h/.config/keys.env
 ExecStart=%h/.local/bin/wingman-mcp --http
 Restart=on-failure
 
@@ -142,7 +150,7 @@ service can start before `tailscaled` is up (add `After=tailscale.service`
 to the unit to avoid that), or another proxy fronts the port, pin the
 hostname explicitly: `wingman-mcp --http --allowed-host my.front.example`
 (repeatable), or `WINGMAN_ALLOWED_HOSTS=a.example,b.example` in
-`wingman.env`. The startup banner prints a ready-to-paste https connector
+`keys.env`. The startup banner prints a ready-to-paste https connector
 URL and web-UI URL (token included) for each tunnel hostname; `wingman-ctl
 start`/`status` echo them too.
 
@@ -239,10 +247,12 @@ sudo tailscale funnel --bg 8787                # first instance keeps 443
 sudo tailscale funnel --https=8443 --bg 8788   # second instance gets its own port
 ```
 
-Set `WINGMAN_TUNNEL_PORT=8443` in that instance's `wingman.env` so
-`wingman mcp url` and the web UI's Connect tab print the URL with the
-right port baked in — otherwise both assume the implicit 443 and print a
-URL that 404s.
+Set `WINGMAN_TUNNEL_PORT=8443` in that instance's `wingman-mcp.service`
+`EnvironmentFile` (`~/.config/keys.env` works, but note it's a plain
+systemd env-var injection here, not one of the known keys wingman's own
+resolution ladder parses out of that file) so `wingman mcp url` and the
+web UI's Connect tab print the URL with the right port baked in —
+otherwise both assume the implicit 443 and print a URL that 404s.
 
 **Seeing every instance on the box at once.** Checking on each instance
 individually (`wingman mcp status` per Unix user) doesn't scale past two

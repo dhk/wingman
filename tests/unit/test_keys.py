@@ -1,5 +1,7 @@
 """Keychain-backed keys (RFC-019): env wins, keychain fills gaps, no secrets shown."""
 
+import os
+
 import pytest
 from pathlib import Path
 
@@ -13,6 +15,25 @@ from wingman.infrastructure.keys import (
     set_key,
     unset_key,
 )
+
+_KNOWN_ENV_VARS = ("ANTHROPIC_API_KEY", "VOYAGE_API_KEY")
+
+
+@pytest.fixture(autouse=True)
+def _restore_real_env() -> None:
+    """'ensure_env'/'store_workspace_key' hydrate the REAL process
+    environment by design (that's the point — a key becomes live with no
+    subprocess restart), bypassing monkeypatch's own tracking. Without this,
+    a test that hydrates a key here leaks it into every test that runs
+    afterward, in this file or any other, until the process exits.
+    """
+    originals = {name: os.environ.get(name) for name in _KNOWN_ENV_VARS}
+    yield
+    for name, value in originals.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 class FakeKeychain:
@@ -63,23 +84,25 @@ def test_unknown_and_empty_keys_are_rejected(chain: FakeKeychain) -> None:
 
 
 def test_ensure_env_fills_gaps_but_never_overwrites(
-    chain: FakeKeychain, monkeypatch: pytest.MonkeyPatch
+    chain: FakeKeychain, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import os
 
     set_key("anthropic", "sk-from-keychain", runner=chain)
     set_key("voyage", "pa-from-keychain", runner=chain)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-shell")
-    hydrated = ensure_env(runner=chain)
+    hydrated = ensure_env(runner=chain, home=tmp_path)  # no real ~/.config/keys.env in play
     assert hydrated == ["VOYAGE_API_KEY"]  # the gap
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-from-shell"  # env won
     assert os.environ["VOYAGE_API_KEY"] == "pa-from-keychain"
 
 
-def test_ensure_env_without_keychain_is_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_env_without_keychain_is_a_noop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
     monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
-    assert ensure_env() == []
+    assert ensure_env(home=tmp_path) == []
     with pytest.raises(KeyStoreError, match="macOS"):
         set_key("anthropic", "sk-ant-test")
 
@@ -152,6 +175,7 @@ def test_workspace_key_file_resolution(tmp_path: Path, monkeypatch: pytest.Monke
         workspace_keys_path,
     )
 
+    home = tmp_path / "home"  # no real ~/.config/keys.env in play
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("wingman.infrastructure.keys.keychain_available", lambda: False)
     assert store_workspace_key(tmp_path, "anthropic", "sk-ant-stored") is True
@@ -159,7 +183,7 @@ def test_workspace_key_file_resolution(tmp_path: Path, monkeypatch: pytest.Monke
     assert (workspace_keys_path(tmp_path).stat().st_mode & 0o777) == 0o600
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    hydrated = ensure_env(data_dir=tmp_path)
+    hydrated = ensure_env(data_dir=tmp_path, home=home)
     assert "ANTHROPIC_API_KEY" in hydrated
     import os
 
@@ -167,6 +191,92 @@ def test_workspace_key_file_resolution(tmp_path: Path, monkeypatch: pytest.Monke
 
     # env wins: hydration never overwrites, storing reports shadowed
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
-    assert ensure_env(data_dir=tmp_path) == []
+    assert ensure_env(data_dir=tmp_path, home=home) == []
     assert store_workspace_key(tmp_path, "anthropic", "sk-ant-newer") is False
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-env"
+
+
+def test_host_key_file_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#122: the host file sits between the Keychain and the workspace file."""
+    from wingman.infrastructure.keys import host_keys_path, read_host_keys
+
+    home = tmp_path / "home"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    assert read_host_keys(home) == {}
+
+    host_file = host_keys_path(home)
+    host_file.parent.mkdir(parents=True)
+    host_file.write_text("ANTHROPIC_API_KEY=sk-ant-from-host\n", encoding="utf-8")
+    assert read_host_keys(home) == {"ANTHROPIC_API_KEY": "sk-ant-from-host"}
+
+    hydrated = ensure_env(home=home)
+    assert hydrated == ["ANTHROPIC_API_KEY"]
+    import os
+
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-from-host"
+
+
+def test_host_file_outranks_workspace_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ladder order: environment > keychain > host file > workspace file."""
+    from wingman.infrastructure.keys import store_workspace_key
+
+    home = tmp_path / "home"
+    data_dir = tmp_path / "workspace"
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    store_workspace_key(data_dir, "anthropic", "sk-ant-workspace")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)  # store_workspace_key hydrated it
+
+    host_file = home / ".config" / "keys.env"
+    host_file.parent.mkdir(parents=True)
+    host_file.write_text("ANTHROPIC_API_KEY=sk-ant-host\n", encoding="utf-8")
+
+    import os
+
+    ensure_env(data_dir=data_dir, home=home)
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-host"  # host file beats workspace file
+
+
+def test_resolve_key_sources_names_the_winner(
+    chain: FakeKeychain, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from wingman.infrastructure.keys import resolve_key_sources
+
+    set_key("voyage", "pa-from-keychain", runner=chain)
+    sources = resolve_key_sources({}, data_dir=tmp_path, home=tmp_path / "home", runner=chain)
+    by_name = {source.short_name: source for source in sources}
+    assert by_name["voyage"].winning_source == "keychain"
+    assert by_name["voyage"].shadowed_by == []
+    assert by_name["anthropic"].winning_source == "not set"
+
+
+def test_resolve_key_sources_flags_a_conflicting_duplicate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact #122 scenario: the same key defined in two places with
+    different values — the resolution ladder still picks one deterministically,
+    but the operator needs to know the other copy is stale, not silently
+    ignored."""
+    from wingman.infrastructure.keys import resolve_key_sources, store_workspace_key
+
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    store_workspace_key(tmp_path, "anthropic", "sk-ant-workspace-copy")
+    environ = {"ANTHROPIC_API_KEY": "sk-ant-shell-export"}
+    sources = resolve_key_sources(environ, data_dir=tmp_path, home=tmp_path / "home")
+    by_name = {source.short_name: source for source in sources}
+    assert by_name["anthropic"].winning_source == "environment"
+    assert by_name["anthropic"].shadowed_by == ["workspace file"]
+
+
+def test_resolve_key_sources_no_warning_when_duplicate_values_agree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure.keys import resolve_key_sources, store_workspace_key
+
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    store_workspace_key(tmp_path, "anthropic", "sk-ant-same")
+    environ = {"ANTHROPIC_API_KEY": "sk-ant-same"}
+    sources = resolve_key_sources(environ, data_dir=tmp_path, home=tmp_path / "home")
+    by_name = {source.short_name: source for source in sources}
+    assert by_name["anthropic"].shadowed_by == []

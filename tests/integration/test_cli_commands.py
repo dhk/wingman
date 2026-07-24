@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,23 @@ from wingman.cli.main import app
 from wingman.infrastructure.config import ENV_DATA_DIR
 
 runner = CliRunner()
+
+_KNOWN_ENV_VARS = ("ANTHROPIC_API_KEY", "VOYAGE_API_KEY")
+
+
+@pytest.fixture(autouse=True)
+def _restore_real_env() -> None:
+    """'wingman doctor'/'ensure_env' can hydrate these into the REAL process
+    environment (by design), bypassing monkeypatch's own tracking — restore
+    them after every test so one test's hydration can't leak into another's.
+    """
+    originals = {name: os.environ.get(name) for name in _KNOWN_ENV_VARS}
+    yield
+    for name, value in originals.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 @pytest.fixture
@@ -57,6 +75,34 @@ def test_doctor_after_init_passes(workspace: Path) -> None:
     assert result.exit_code == 0
     assert "All checks passed." in result.stdout
     assert "[ok] database" in result.stdout
+
+
+def test_doctor_names_key_sources_and_flags_conflicting_duplicates(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#122: 'wingman doctor' names the winning source per key and flags a
+    key defined in more than one place with a different value — the exact
+    'which key file is canonical' confusion that stalled the lobster
+    migration."""
+    from wingman.infrastructure import keys as keys_module
+    from wingman.infrastructure.keys import store_workspace_key
+
+    fake_home = tmp_path / "fake-home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+
+    runner.invoke(app, ["init"])
+    store_workspace_key(workspace, "anthropic", "sk-ant-workspace-copy")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-shell-export")  # a different value
+
+    result = runner.invoke(app, ["doctor"])
+    assert "key anthropic: environment" in result.stdout
+    assert "workspace file" in result.stdout
+    assert "key voyage: not set" in result.stdout
+    assert result.exit_code == 1  # the conflicting duplicate is a FAIL, not silently ignored
 
 
 def test_doctor_deep_walks_one_step_at_a_time(
