@@ -80,7 +80,8 @@ claude mcp add wingman -- wingman-mcp        # Claude Code
 
 For Claude Desktop, point `claude_desktop_config.json` at the absolute
 path from `which wingman-mcp` and fully restart (Cmd-Q). Verify: the tools
-panel shows **wingman** with 35 tools.
+panel shows **wingman** with its full tool set (dozens of tools — the
+exact count grows as wingman does).
 
 ## Step 5 — First commands in the bash CLI
 

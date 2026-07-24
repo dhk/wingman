@@ -51,8 +51,9 @@ URL like a password** — the token is the entire credential.
 In Claude Desktop (or claude.ai, which syncs to Desktop and mobile):
 **Settings → Connectors → Add custom connector** → paste the URL.
 
-Expected: the tools panel shows **wingman** with 35 tools — identical to
-a local install, just reached over the tailnet instead of a local pipe.
+Expected: the tools panel shows **wingman** with its full tool set (dozens
+of tools — the exact count grows as wingman does) — identical to a local
+install, just reached over the tailnet instead of a local pipe.
 If the URL ever leaks (browser history, a pasted log), whoever runs
 Lobster reruns `wingman-mcp --http --rotate-token` and you re-paste the
 new URL.
