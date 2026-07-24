@@ -1028,6 +1028,37 @@ def company_similar(name: str = "", limit: int = 10) -> str:
 
 
 @server.tool()
+def woven_warm_path(person: str = "", company: str = "", from_person: str = "") -> str:
+    """Who in your network could make an introduction — a live, on-demand
+    call to Woven (#81, RFC-043), a separate warm-intro-path graph server.
+
+    Give exactly one of person (Woven's warmest path to that name) or
+    company (Woven's full picture of that company: reachable people,
+    coverage, best entry point). from_person narrows the search to paths
+    starting from a specific network owner, when Woven pools more than one.
+
+    Nothing is cached or stored — every call is a fresh read, and the
+    result is Woven's own text, not wingman's interpretation of it; cite it
+    as "from Woven" rather than restating it as wingman's own judgment.
+    Identity resolution is entirely Woven's fuzzy name/company matching —
+    if Woven's result shows ambiguity (e.g. two similarly-named people),
+    surface that to the user rather than guessing which one was meant.
+    Requires WINGMAN_WOVEN_URL to be configured; otherwise returns a clear
+    "not configured" message rather than failing.
+    """
+    from wingman.application.warm_intro import warm_overview_for_company, warm_paths_to_person
+
+    if bool(person.strip()) == bool(company.strip()):
+        return "give exactly one of person or company."
+    try:
+        if person.strip():
+            return warm_paths_to_person(person, from_person=from_person)
+        return warm_overview_for_company(company, from_person=from_person)
+    except IngestError as exc:
+        return f"woven warm path failed: {exc}"
+
+
+@server.tool()
 def company_like(names: list[str], limit: int = 10) -> str:
     """'If these companies interest you, look at…': rank companies near the centroid of two or more names."""
     config = _ready_config()

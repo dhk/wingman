@@ -1249,6 +1249,29 @@ def people_similar(
         )
 
 
+@people_app.command("warm-path")
+def people_warm_path(
+    name: str = typer.Argument(..., help="Person to find a warm introduction path to."),
+    from_person: str = typer.Option(
+        "", "--from", help="Narrow the search to paths starting from this network owner."
+    ),
+) -> None:
+    """Who in your network could introduce you — a live call to Woven (#81, RFC-043).
+
+    Woven is a separate warm-intro-path graph server; nothing is cached or
+    stored here, and identity resolution is entirely Woven's own fuzzy name
+    matching. Requires WINGMAN_WOVEN_URL to be configured.
+    """
+    configure_logging()
+    from wingman.application.warm_intro import warm_paths_to_person
+
+    try:
+        typer.echo(warm_paths_to_person(name, from_person=from_person))
+    except IngestError as exc:
+        typer.echo(f"warm-path failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
 @people_app.command("like")
 def people_like_cmd(
     names: list[str] = typer.Argument(
@@ -1803,6 +1826,29 @@ def company_similar(
             f"{number}. {entry.name}  score {entry.score:.3f}  "
             f"[{entry.people} people, {entry.documents} docs]"
         )
+
+
+@company_app.command("warm-path")
+def company_warm_path(
+    name: str = typer.Argument(..., help="Company to find warm-path coverage for."),
+    from_person: str = typer.Option(
+        "", "--from", help="Narrow the search to paths starting from this network owner."
+    ),
+) -> None:
+    """Who in your network reaches this company — a live call to Woven (#81, RFC-043).
+
+    Woven is a separate warm-intro-path graph server; nothing is cached or
+    stored here, and identity resolution is entirely Woven's own fuzzy
+    company matching. Requires WINGMAN_WOVEN_URL to be configured.
+    """
+    configure_logging()
+    from wingman.application.warm_intro import warm_overview_for_company
+
+    try:
+        typer.echo(warm_overview_for_company(name, from_person=from_person))
+    except IngestError as exc:
+        typer.echo(f"warm-path failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 def _render_hint(path: Path) -> str:
