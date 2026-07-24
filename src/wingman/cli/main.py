@@ -1353,8 +1353,11 @@ def people_brief(
         valid = ", ".join(entry.value for entry in OutreachPurpose)
         typer.echo(f"unknown purpose {purpose!r}; use one of: {valid}.", err=True)
         raise typer.Exit(code=1) from None
+    from wingman.application.relationship import render_relationship_context
+
     with Storage(config.db_path) as storage:
         person = _resolve_person(storage, name, "drafted")
+        context = render_relationship_context(person, storage)
         if not refresh:
             stored = storage.get_outreach_brief(person.person_id)
             if stored is not None:
@@ -1363,6 +1366,8 @@ def people_brief(
                 if stored.purpose is not outreach_purpose:
                     hint = f"stored purpose is {stored.purpose.value!r} — rebuild with --refresh"
                 typer.echo(f"\n(stored brief — {hint})")
+                if context:
+                    typer.echo(f"\n{context}")
                 return
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
@@ -1379,6 +1384,8 @@ def people_brief(
     typer.echo(render_outreach_brief(report.brief))
     for rejected in report.rejected:
         typer.echo(f"  rejected point {rejected.point!r}: {rejected.reason}")
+    if context:
+        typer.echo(f"\n{context}")
 
 
 @people_app.command("discover")
@@ -1706,6 +1713,28 @@ def people_docs(
         typer.echo(f"{number}. {document.title} [{when}]{via}")
         typer.echo(f"   {document.url or document.source_record_id}")
     typer.echo(f"{len(documents)} documents.")
+
+
+@people_app.command("log")
+def people_log(
+    name: str = typer.Argument(..., help="Person whose interaction log to show."),
+) -> None:
+    """List a person's logged interactions, oldest first (RFC-037).
+
+    Add entries with 'wingman log "<person>" "<what happened>"'.
+    """
+    configure_logging()
+    from wingman.application.relationship import list_log, render_log
+
+    config = load_config()
+    _require_workspace(config, "listed")
+    try:
+        with Storage(config.db_path) as storage:
+            person, entries = list_log(name, storage)
+    except IngestError as exc:
+        typer.echo(f"people log failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_log(person, entries))
 
 
 @people_app.command("evidence")
@@ -2741,6 +2770,31 @@ def qa_note(
         typer.echo(f"qa capture failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"{report.outcome}: [{report.kind}] {report.question}")
+    typer.echo(f"evidence file: {report.source_path}")
+
+
+@app.command("log")
+def log_interaction_cmd(
+    person: str = typer.Argument(..., help="Who this happened with."),
+    note: str = typer.Argument(..., help="What happened — stored verbatim as evidence."),
+) -> None:
+    """Record an interaction with a watched person (RFC-037): 'coffee with
+    R., discussed the eval harness role'. Deterministic, zero model calls
+    — the note becomes citable evidence for future briefs and objective
+    reviews. See 'wingman people log <person>' to list past entries.
+    """
+    configure_logging()
+    from wingman.application.relationship import log_interaction
+
+    config = load_config()
+    _require_workspace(config, "logged")
+    try:
+        with Storage(config.db_path) as storage:
+            report = log_interaction(person, note, config, storage)
+    except IngestError as exc:
+        typer.echo(f"log failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Logged for {report.person}: {report.entry.note}")
     typer.echo(f"evidence file: {report.source_path}")
 
 

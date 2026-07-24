@@ -446,6 +446,44 @@ def relationship_objective(
 
 
 @server.tool()
+def relationship_log(person: str, note: str = "", action: str = "add") -> str:
+    """Record what actually happened with a watched person (RFC-037):
+    'coffee with R., discussed the eval harness role' — the qa_capture
+    way (#96, RFC-036). action is 'add' (log `note` for `person`) or
+    'list' (show the person's interaction log, oldest first).
+
+    Deterministic and zero-model: the note becomes a source file and a
+    log entry whose evidence quote is the user's words verbatim. This is
+    raw material a future brief or objective revision can cite — never a
+    summary, never a model's characterization of the interaction.
+
+    Protocol: when the user describes something that happened with a
+    watched person in conversation, OFFER to log it — show the exact
+    note text that will be stored, and save only after they agree. Store
+    their words verbatim; never paraphrase without confirmation.
+    """
+    from wingman.application.relationship import list_log, log_interaction, render_log
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "add":
+                report = log_interaction(person, note, config, storage)
+                return (
+                    f"Logged for {report.person}: {report.entry.note}\n"
+                    f"Evidence file: {report.source_path}"
+                )
+            if action == "list":
+                who, entries = list_log(person, storage)
+                return render_log(who, entries)
+    except IngestError as exc:
+        return f"relationship log {action} failed: {exc}"
+    return f"unknown action {action!r}; use add or list."
+
+
+@server.tool()
 def resolve_requirement(requirement: str, limit: int = 5) -> str:
     """What the workspace already knows about one job requirement (#98, RFC-036).
 
@@ -1683,6 +1721,11 @@ def people_brief(name: str, purpose: str = "introduction", refresh: bool = False
     to the synthesize_balanced provider, and a talking point is kept only if
     it cites a card stance exactly and quotes the corpus verbatim). Drafts
     only — Wingman never sends anything (RFC-006).
+
+    When the person has a relationship objective and/or logged
+    interactions (RFC-037), a deterministic context footer is appended —
+    goal/thesis/next-move plus recent interactions, verbatim, never
+    model-generated. Cite it; don't restate it as your own judgment.
     """
     config = _ready_config()
     if config is None:
@@ -1692,18 +1735,24 @@ def people_brief(name: str, purpose: str = "introduction", refresh: bool = False
     except ValueError:
         valid = ", ".join(entry.value for entry in OutreachPurpose)
         return f"unknown purpose {purpose!r}; use one of: {valid}."
+    from wingman.application.relationship import render_relationship_context
+
     with Storage(config.db_path) as storage:
         found = _find_person(storage, name)
         if isinstance(found, str):
             return found
         person = found
+        context = render_relationship_context(person, storage)
+        context_suffix = f"\n\n{context}" if context else ""
         if not refresh:
             stored = storage.get_outreach_brief(person.person_id)
             if stored is not None:
                 hint = "rebuild with refresh=True"
                 if stored.purpose is not outreach_purpose:
                     hint = f"stored purpose is {stored.purpose.value!r} — rebuild with refresh=True"
-                return render_outreach_brief(stored) + f"\n\n(stored brief — {hint})"
+                return (
+                    render_outreach_brief(stored) + f"\n\n(stored brief — {hint})" + context_suffix
+                )
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
             report = build_outreach_brief(person.name, storage, provider, purpose=outreach_purpose)
@@ -1714,7 +1763,7 @@ def people_brief(name: str, purpose: str = "introduction", refresh: bool = False
     rejected = "".join(
         f"\n  rejected point {item.point!r}: {item.reason}" for item in report.rejected
     )
-    return render_outreach_brief(report.brief) + rejected
+    return render_outreach_brief(report.brief) + rejected + context_suffix
 
 
 @server.tool()
