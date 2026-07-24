@@ -193,6 +193,8 @@ objective_app = typer.Typer(
     help="Per-person relationship objective: goal, thesis, next move (RFC-037)."
 )
 app.add_typer(objective_app, name="objective")
+heap_app = typer.Typer(help="Capture-first inbox for leads, heat-rated, sorted on demand (#113).")
+app.add_typer(heap_app, name="heap")
 admin_app = typer.Typer(help="The cross-instance installations page for a shape-B box (#130).")
 app.add_typer(admin_app, name="admin")
 
@@ -2970,6 +2972,60 @@ def objective_save(
         typer.echo(f"objective save failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Saved.\n{render_objective(who, objective) if who else ''}")
+
+
+@heap_app.command("add")
+def heap_add(
+    items: list[str] = typer.Argument(..., help="One or more URLs or short references to capture."),
+    heat: str = typer.Option(
+        "warm", "--heat", help="How alive this lead is right now: hot, warm, or cold."
+    ),
+    note: str = typer.Option("", "--note", help="An optional note to attach to every item."),
+) -> None:
+    """Capture leads into the heap, unconditionally — no fetching, no sorting yet (#113)."""
+    configure_logging()
+    from wingman.application.heap import add_to_heap
+
+    config = load_config()
+    _require_workspace(config, "captured")
+    try:
+        with Storage(config.db_path) as storage:
+            saved = add_to_heap(items, storage, heat=heat, note=note)
+    except IngestError as exc:
+        typer.echo(f"heap add failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Captured {len(saved)} item(s) at heat={heat}.")
+
+
+@heap_app.command("show")
+def heap_show() -> None:
+    """List everything in the heap, hottest first — nothing sorted or clustered yet."""
+    configure_logging()
+    from wingman.application.heap import list_heap, render_heap
+
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        typer.echo(render_heap(list_heap(storage)))
+
+
+@heap_app.command("remove")
+def heap_remove(
+    item_id: str = typer.Argument(..., help="Item id (or a prefix), shown by 'wingman heap show'."),
+) -> None:
+    """Remove one item from the heap."""
+    configure_logging()
+    from wingman.application.heap import remove_from_heap
+
+    config = load_config()
+    _require_workspace(config, "removed")
+    try:
+        with Storage(config.db_path) as storage:
+            removed = remove_from_heap(item_id, storage)
+    except IngestError as exc:
+        typer.echo(f"heap remove failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Removed: {removed.item}")
 
 
 @actions_app.command("mute")

@@ -388,6 +388,34 @@ def test_relationship_review_mute_suppresses(
     assert not any(action.key == "relationship-review:brandon galang" for action in report.actions)
 
 
+def test_heap_hot_action_fires_and_mute_suppresses(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#113: hot heap items sitting unsorted earn one digest nudge; cold
+    ones never do, and the nudge rides ordinary RFC-031 triage."""
+    from wingman.application.heap import add_to_heap
+    from wingman.application.triage import mute_action
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_person("Watched Person", storage)
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Watched Person")
+        add_to_heap(["https://x.example/cold"], storage, heat="cold")
+        report = overnight_run(config, storage)
+    assert not any(action.key == "heap-hot" for action in report.actions)
+
+    with Storage(config.db_path) as storage:
+        add_to_heap(["https://x.example/hot"], storage, heat="hot")
+        report = overnight_run(config, storage)
+    heap_action = next(a for a in report.actions if a.key == "heap-hot")
+    assert "1 hot lead" in heap_action.why
+
+    with Storage(config.db_path) as storage:
+        mute_action("heap-hot", storage)
+        report = overnight_run(config, storage)
+    assert not any(action.key == "heap-hot" for action in report.actions)
+
+
 def test_titled_link_resolves_sanitizes_and_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
     """#109: evidence links carry the page's own title; every failure mode
     (no title, fetch error, spent budget) degrades to the old bare link."""

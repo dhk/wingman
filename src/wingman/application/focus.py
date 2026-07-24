@@ -343,6 +343,24 @@ def _relationship_review_actions(storage: Storage) -> list[ActionItem]:
     return actions
 
 
+def _heap_hot_action(storage: Storage) -> ActionItem | None:
+    """Hot heap items sitting unsorted earn one digest nudge (#113); cold
+    ones never do — heat is the only judgment captured at drop time, and
+    it's the only thing that decides what nags."""
+    from wingman.application.heap import hot_unsorted_count
+
+    count = hot_unsorted_count(storage)
+    if count == 0:
+        return None
+    return ActionItem(
+        what="Sort your hot heap items",
+        why=f"{count} hot lead(s) sitting unsorted in the heap",
+        who="you",
+        evidence=["wingman heap show"],
+        key="heap-hot",
+    )
+
+
 def _company_deep(
     name: str,
     config: Config,
@@ -594,6 +612,9 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     if review is not None:
         actions.append(review)
     actions.extend(_relationship_review_actions(storage))
+    heap_action = _heap_hot_action(storage)
+    if heap_action is not None:
+        actions.append(heap_action)
     # Standing triage verdicts (RFC-031): what the user muted or snoozed
     # never reaches the digest — applied before the cap so a suppressed
     # item can't crowd out a live one.

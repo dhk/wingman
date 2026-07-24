@@ -487,6 +487,54 @@ def relationship_log(person: str, note: str = "", action: str = "add") -> str:
 
 
 @server.tool()
+def heap(
+    action: str = "show",
+    items: list[str] | None = None,
+    heat: str = "warm",
+    item_id: str = "",
+    note: str = "",
+) -> str:
+    """The heap (#113): a capture-first inbox for leads that arrive faster
+    than they can be sorted — a job posting, a LinkedIn profile, a company
+    site, all dropped at once with zero processing.
+
+    action is 'add' (capture `items` — one or more URLs or short
+    references — at `heat`: hot/warm/cold, default warm), 'show' (list
+    everything, hottest first), or 'remove' (drop `item_id`, a prefix of
+    the id shown by 'show'). Capture is unconditional: never fetches,
+    never spends a token, never fails on a weird reference. Hot items
+    sitting unsorted earn a digest nudge; cold ones never do.
+
+    This ships the capture surface only — classification, screenshot
+    extraction, company clustering, and confirmation-gated routing
+    ('heap sort' in the fuller spec) are not implemented yet.
+
+    Protocol: when the user drops a burst of links (or describes several
+    leads at once), offer to capture them here rather than routing each
+    one by hand — ask how hot each is only if they haven't said, and
+    default to warm rather than blocking capture on the question.
+    """
+    from wingman.application.heap import add_to_heap, remove_from_heap, list_heap, render_heap
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "add":
+                saved = add_to_heap(items or [], storage, heat=heat, note=note)
+                return f"Captured {len(saved)} item(s) at heat={heat}."
+            if action == "show":
+                return render_heap(list_heap(storage))
+            if action == "remove":
+                removed = remove_from_heap(item_id, storage)
+                return f"Removed: {removed.item}"
+    except IngestError as exc:
+        return f"heap {action} failed: {exc}"
+    return f"unknown action {action!r}; use add, show, or remove."
+
+
+@server.tool()
 def resolve_requirement(requirement: str, limit: int = 5) -> str:
     """What the workspace already knows about one job requirement (#98, RFC-036).
 
