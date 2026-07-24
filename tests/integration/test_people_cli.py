@@ -67,6 +67,23 @@ def test_people_list_surfaces_linkedin_url(workspace: Path) -> None:
     assert "https://www.linkedin.com/in/janeauthor" in people_list_tool()
 
 
+def test_warm_path_commands_report_not_configured_without_woven_url(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#81: with WINGMAN_WOVEN_URL unset, both warm-path commands fail
+    clearly rather than raising — the feature is inert, not broken."""
+    from wingman.infrastructure.woven_client import ENV_WOVEN_URL
+
+    monkeypatch.delenv(ENV_WOVEN_URL, raising=False)
+    person = runner.invoke(app, ["people", "warm-path", "Target Person"])
+    assert person.exit_code == 1
+    assert "WINGMAN_WOVEN_URL" in person.output
+
+    company = runner.invoke(app, ["company", "warm-path", "Acme"])
+    assert company.exit_code == 1
+    assert "WINGMAN_WOVEN_URL" in company.output
+
+
 def test_import_connections_and_watched_filter(workspace: Path, tmp_path: Path) -> None:
     export = tmp_path / "linkedin.zip"
     raw = (
