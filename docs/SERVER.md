@@ -283,14 +283,31 @@ name = "trent"
 port = 8788
 prefix = "/trent"
 token = "<trent's mcp-http-token>"
-tunnel_port = 8443   # only needed if this instance's funnel port isn't the implicit 443
+stripped = true   # tailscale 'serve --set-path' strips /trent before the backend sees it
 ```
 
 The "Open" link on each row prefers the same Tailscale-detected tunnel
 host the Connect tab uses, so it works when the page itself is viewed
 through the tunnel (the normal case) rather than only from lobster's own
-loopback; `tunnel_port` tells it which funnel port that particular
-instance is actually reachable on, same as `WINGMAN_TUNNEL_PORT` above.
+loopback. `prefix` always describes the *public* URL; whether the backend
+process itself also listens under that prefix depends on which of the two
+multi-instance patterns above this instance uses:
+
+- **Native `--prefix`** (default, `stripped` omitted or `false`): the
+  backend really does register routes under `/trent`, so the admin page's
+  health check hits `/trent/health` locally too.
+- **Tailscale path mount** (`stripped = true`): the front strips `/trent`
+  before forwarding, so the backend listens bare — the health check must
+  hit plain `/health` locally, even though the public URL still has the
+  prefix. Getting this wrong makes a genuinely healthy instance read as
+  "stopped," since the health check 404s against a path the backend never
+  registered.
+
+If an instance sits on a non-default funnel port instead (two instances on
+distinct ports rather than one port split by path), add `tunnel_port` the
+same way `WINGMAN_TUNNEL_PORT` works for the Connect tab — but note the two
+approaches solve the same problem differently; an instance normally needs
+at most one of `stripped` or `tunnel_port`, not both.
 
 Deliberately explicit rather than auto-discovered — no scanning other
 users' home directories, no new cross-user read access. The page never

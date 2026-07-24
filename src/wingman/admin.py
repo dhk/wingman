@@ -84,12 +84,22 @@ def admin_token(config: Config, rotate: bool = False) -> str:
 
 @dataclass(frozen=True)
 class Instance:
+    """'stripped' distinguishes what 'prefix' means: False (default, native
+    '--prefix') means the backend itself registers routes under it, same as
+    the public URL. True means a fronting proxy strips it before the
+    backend ever sees it (Tailscale 'serve --set-path') — the public URL
+    still carries the prefix, but the local process listens bare. Health
+    checks and any other loopback request need the backend's real local
+    path, which only matches 'prefix' when stripped is False.
+    """
+
     name: str
     host: str
     port: int
     prefix: str
     token: str
     tunnel_port: int | None = None
+    stripped: bool = False
 
 
 class InstallationsConfigError(Exception):
@@ -116,6 +126,7 @@ def load_instances(config: Config) -> list[Instance]:
                     prefix=str(entry.get("prefix", "")),
                     token=str(entry["token"]),
                     tunnel_port=(int(entry["tunnel_port"]) if "tunnel_port" in entry else None),
+                    stripped=bool(entry.get("stripped", False)),
                 )
             )
         except KeyError as exc:
@@ -133,7 +144,8 @@ async def _check_health(instance: Instance, client: httpx.AsyncClient) -> dict[s
     'stopped' even though the process is fine (only visible when an
     instance checks itself; a separate process's instance never hit it).
     """
-    url = f"http://{instance.host}:{instance.port}{instance.prefix}/health"
+    local_prefix = "" if instance.stripped else instance.prefix
+    url = f"http://{instance.host}:{instance.port}{local_prefix}/health"
     try:
         response = await client.get(url, timeout=_HEALTH_TIMEOUT_SECONDS)
         response.raise_for_status()
@@ -175,7 +187,8 @@ def _instance_row(instance: Instance, health: dict[str, object]) -> str:
         meta = f"v{_e(str(health['version']))} · since {_e(str(health['started_at']))}"
     else:
         status_html = '<span class="status down">stopped</span>'
-        meta = _e(f"{instance.host}:{instance.port}{instance.prefix or '/'}")
+        local_prefix = "" if instance.stripped else instance.prefix
+        meta = _e(f"{instance.host}:{instance.port}{local_prefix or '/'}")
     return (
         '<div class="instance-row">'
         f'<span class="name">{_e(instance.name)}</span>'
