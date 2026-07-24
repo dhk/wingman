@@ -38,15 +38,18 @@ DEFAULT_PORT = 8787
 CommandOf = Callable[[int], str]
 # Injectable for tests: the whole process table as (pid, command) pairs.
 ListProcesses = Callable[[], list[tuple[int, str]]]
+# Injectable for tests: pid -> that process's owning uid, None if unknown.
+OwnerOf = Callable[[int], int | None]
 
 
 def _ps_command_of(pid: int) -> str:
     try:
-        result = subprocess.run(  # noqa: S603 — fixed binary, no shell
+        result = subprocess.run(
             ["ps", "-p", str(pid), "-o", "command="],
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -55,11 +58,12 @@ def _ps_command_of(pid: int) -> str:
 
 def _ps_all() -> list[tuple[int, str]]:
     try:
-        result = subprocess.run(  # noqa: S603 — fixed binary, no shell
+        result = subprocess.run(
             ["ps", "-axo", "pid=,command="],
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -71,6 +75,23 @@ def _ps_all() -> list[tuple[int, str]]:
         if len(parts) == 2 and parts[0].isdigit():
             table.append((int(parts[0]), parts[1]))
     return table
+
+
+def _ps_owner_of(pid: int) -> int | None:
+    """The pid's owning uid, or None when it can't be determined (gone,
+    ps failure) — treated as 'don't know', never as 'ours'."""
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "uid="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    text = result.stdout.strip()
+    return int(text) if result.returncode == 0 and text.isdigit() else None
 
 
 def _is_wingman_http(command: str) -> bool:
@@ -154,21 +175,31 @@ def orphan_http_pids(
     port: int = DEFAULT_PORT,
     command_of: CommandOf = _ps_command_of,
     processes: ListProcesses = _ps_all,
+    owner_of: OwnerOf = _ps_owner_of,
 ) -> list[int]:
-    """HTTP servers on our port that the pidfile doesn't know about.
+    """HTTP servers on OUR port, owned by US, that the pidfile doesn't know about.
 
     These hold the port (every restart dies with EADDRINUSE) while status
     says "not running". The match is deliberately narrow: the command must
     name wingman-mcp AND --http AND resolve to this port — stdio servers
-    and other instances' ports never qualify.
+    and other instances' ports never qualify. It is also deliberately
+    narrow on ownership (#138): 'ps -axo' lists every account's processes,
+    and on a shared multi-user host (RFC-032, the lobster shape) another
+    account's wingman-mcp can legitimately match the same command shape —
+    e.g. a caller who forgot --port and fell back to DEFAULT_PORT, which
+    is someone else's real port, not an orphan of theirs at all. A pid
+    whose owner can't be determined is treated the same as a mismatch:
+    excluded, never assumed to be ours.
     """
     managed = read_server_pid(config, command_of=command_of)
+    my_uid = os.getuid()
     return [
         pid
         for pid, command in processes()
         if pid not in (managed, os.getpid(), os.getppid())
         and _is_wingman_http(command)
         and _command_port(command) == port
+        and owner_of(pid) == my_uid
     ]
 
 
@@ -177,13 +208,16 @@ def server_status(
     port: int = DEFAULT_PORT,
     command_of: CommandOf = _ps_command_of,
     processes: ListProcesses = _ps_all,
+    owner_of: OwnerOf = _ps_owner_of,
 ) -> str:
     pid = read_server_pid(config, command_of=command_of)
     if pid is None:
         line = "The HTTP MCP server is not running. Start it with: wingman-mcp --http"
     else:
         line = f"The HTTP MCP server is running (pid {pid}). Stop it with: wingman mcp stop"
-    orphans = orphan_http_pids(config, port=port, command_of=command_of, processes=processes)
+    orphans = orphan_http_pids(
+        config, port=port, command_of=command_of, processes=processes, owner_of=owner_of
+    )
     if orphans:
         pids = ", ".join(str(orphan) for orphan in orphans)
         line += (
@@ -193,12 +227,22 @@ def server_status(
     return line
 
 
-def _terminate(pid: int, grace_seconds: float) -> bool:
-    """TERM, then KILL after the grace period. True when KILL was needed."""
+def _terminate(pid: int, grace_seconds: float) -> bool | None:
+    """TERM, then KILL after the grace period.
+
+    True when KILL was needed, False when TERM alone was enough (or the
+    process was already gone). None means the OS refused the signal — a
+    different account's process, discovered despite the ownership filter
+    in orphan_http_pids (e.g. ownership couldn't be determined up front).
+    Never raises: a permission failure is data for the caller to report,
+    not a crash — this runs on a shared multi-account host (RFC-032/#138).
+    """
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        return None
     deadline = time.monotonic() + grace_seconds
     while time.monotonic() < deadline:
         if not _alive(pid):
@@ -208,7 +252,17 @@ def _terminate(pid: int, grace_seconds: float) -> bool:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        return None
     return True
+
+
+def _describe_stop(pid: int, forced: bool | None, grace_seconds: float, label: str) -> str:
+    """label is a description ending in a space, e.g. 'the HTTP MCP server '."""
+    if forced is None:
+        return f"Found {label}(pid {pid}) owned by a different account — left it running, not ours to touch."
+    suffix = f", forced after {grace_seconds:g}s" if forced else ""
+    return f"Stopped {label}(pid {pid}{suffix})."
 
 
 def stop_server(
@@ -216,27 +270,41 @@ def stop_server(
     port: int = DEFAULT_PORT,
     command_of: CommandOf = _ps_command_of,
     processes: ListProcesses = _ps_all,
+    owner_of: OwnerOf = _ps_owner_of,
     grace_seconds: float = 5.0,
 ) -> tuple[bool, str]:
     """TERM the recorded server (and any port-holding orphan), KILL after grace.
 
     Returns (stopped_something, detail). Signals only pids that verify as
-    wingman-mcp: the pidfile's entry, plus orphan_http_pids' narrow match.
+    wingman-mcp AND ours to signal: the pidfile's entry, plus
+    orphan_http_pids' narrow, ownership-filtered match (#138) — a
+    same-port process on a shared host that belongs to a different
+    account is reported, never touched, even if it slips past the
+    ownership filter (e.g. an undeterminable owner at scan time).
     """
     pid = read_server_pid(config, command_of=command_of)
-    orphans = orphan_http_pids(config, port=port, command_of=command_of, processes=processes)
+    orphans = orphan_http_pids(
+        config, port=port, command_of=command_of, processes=processes, owner_of=owner_of
+    )
     if pid is None and not orphans:
         return False, "The HTTP MCP server is not running (nothing to stop)."
     details: list[str] = []
+    touched_something = False
     if pid is not None:
         forced = _terminate(pid, grace_seconds)
-        clear_pidfile(config)
-        _logger.info("http server stopped pid=%d forced=%s", pid, forced)
-        suffix = f", forced after {grace_seconds:g}s" if forced else ""
-        details.append(f"Stopped the HTTP MCP server (pid {pid}{suffix}).")
+        if forced is not None:
+            touched_something = True
+            clear_pidfile(config)
+        _logger.info("http server stop attempt pid=%d forced=%s", pid, forced)
+        details.append(_describe_stop(pid, forced, grace_seconds, "the HTTP MCP server "))
     for orphan in orphans:
         forced = _terminate(orphan, grace_seconds)
-        _logger.info("orphan http server stopped pid=%d forced=%s", orphan, forced)
-        suffix = f", forced after {grace_seconds:g}s" if forced else ""
-        details.append(f"Stopped an orphaned HTTP server on port {port} (pid {orphan}{suffix}).")
-    return True, "\n".join(details)
+        if forced is not None:
+            touched_something = True
+        _logger.info("orphan http server stop attempt pid=%d forced=%s", orphan, forced)
+        details.append(
+            _describe_stop(
+                orphan, forced, grace_seconds, f"an orphaned HTTP server on port {port} "
+            )
+        )
+    return touched_something, "\n".join(details)

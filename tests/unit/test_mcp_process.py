@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from wingman.infrastructure import mcp_process as mcp_process_module
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.mcp_process import (
     clear_pidfile,
@@ -120,9 +121,14 @@ def test_stop_escalates_to_kill(workspace: Config) -> None:
             stubborn.wait()
 
 
+def _owned_by_us(_pid: int) -> int:
+    return os.getuid()
+
+
 def test_orphan_detection_is_port_and_transport_scoped(workspace: Config) -> None:
-    """Only 'wingman-mcp … --http' on OUR port counts: stdio servers and
-    other instances' ports (multi-instance design) must never match."""
+    """Only 'wingman-mcp … --http' on OUR port, owned by US, counts: stdio
+    servers, other instances' ports, and other accounts' processes
+    (multi-instance design, #138) must never match."""
 
     def table() -> list[tuple[int, str]]:
         return [
@@ -136,9 +142,13 @@ def test_orphan_detection_is_port_and_transport_scoped(workspace: Config) -> Non
             (106, "uv run wingman-mcp --http"),  # wrapper of a real server -> orphan
         ]
 
-    orphans = orphan_http_pids(workspace, port=8787, command_of=_as_wingman, processes=table)
+    orphans = orphan_http_pids(
+        workspace, port=8787, command_of=_as_wingman, processes=table, owner_of=_owned_by_us
+    )
     assert orphans == [101, 105, 106]
-    assert orphan_http_pids(workspace, port=8788, command_of=_as_wingman, processes=table) == [102]
+    assert orphan_http_pids(
+        workspace, port=8788, command_of=_as_wingman, processes=table, owner_of=_owned_by_us
+    ) == [102]
     # the pidfile-managed server is not an orphan of itself
     managed = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     try:
@@ -153,6 +163,7 @@ def test_orphan_detection_is_port_and_transport_scoped(workspace: Config) -> Non
                 port=8787,
                 command_of=lambda pid: "python /x/bin/wingman-mcp --http",
                 processes=managed_table,
+                owner_of=_owned_by_us,
             )
             == []
         )
@@ -161,13 +172,44 @@ def test_orphan_detection_is_port_and_transport_scoped(workspace: Config) -> Non
         managed.wait()
 
 
+def test_orphan_detection_excludes_other_accounts_processes(workspace: Config) -> None:
+    """Regression: a caller who forgets --port falls back to DEFAULT_PORT, which
+    may be a DIFFERENT account's real port on a shared host (lobster, shape B).
+    That process must never be treated as our orphan, even though the command
+    line matches — ownership is unknown or foreign, so it's excluded entirely."""
+
+    def table() -> list[tuple[int, str]]:
+        return [
+            (201, "python /x/bin/wingman-mcp --http"),  # command matches, but...
+            (202, "python /x/bin/wingman-mcp --http"),
+        ]
+
+    def owner_of(pid: int) -> int | None:
+        return {201: os.getuid() + 1, 202: None}[pid]  # a different uid; an unknown uid
+
+    orphans = orphan_http_pids(
+        workspace, port=8787, command_of=_as_wingman, processes=table, owner_of=owner_of
+    )
+    assert orphans == []
+
+
 def test_status_names_the_orphan(workspace: Config) -> None:
     def table() -> list[tuple[int, str]]:
         return [(4242, "python /x/bin/wingman-mcp --http")]
 
-    text = server_status(workspace, command_of=_as_wingman, processes=table)
+    text = server_status(workspace, command_of=_as_wingman, processes=table, owner_of=_owned_by_us)
     assert "not running" in text  # the pidfile view, unchanged
     assert "Orphaned" in text and "4242" in text and "wingman mcp stop" in text
+
+
+def test_status_never_names_another_accounts_process(workspace: Config) -> None:
+    def table() -> list[tuple[int, str]]:
+        return [(4243, "python /x/bin/wingman-mcp --http")]
+
+    text = server_status(
+        workspace, command_of=_as_wingman, processes=table, owner_of=lambda _pid: os.getuid() + 1
+    )
+    assert "Orphaned" not in text and "4243" not in text
 
 
 def test_stop_clears_the_orphan_too(workspace: Config) -> None:
@@ -184,3 +226,31 @@ def test_stop_clears_the_orphan_too(workspace: Config) -> None:
         if orphan.poll() is None:
             orphan.kill()
             orphan.wait()
+
+
+def test_stop_reports_permission_denied_without_crashing(
+    workspace: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a same-port process that reaches _terminate (e.g. ownership
+    was undeterminable at scan time, so it wasn't pre-filtered) must be
+    reported, never crash 'wingman mcp stop' with an unhandled PermissionError
+    — this is exactly what happened live on a shared multi-account host."""
+
+    def fake_kill(_pid: int, _sig: int) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(mcp_process_module.os, "kill", fake_kill)
+
+    def table() -> list[tuple[int, str]]:
+        return [(9001, "python /x/bin/wingman-mcp --http")]
+
+    # owner_of says "ours" so it survives the pre-filter, simulating a race
+    # or an owner_of implementation that can't always tell in advance —
+    # _terminate's own PermissionError handling is the last line of defense.
+    stopped, detail = stop_server(
+        workspace, command_of=_as_wingman, processes=table, owner_of=_owned_by_us
+    )
+    assert not stopped
+    assert "9001" in detail
+    assert "different account" in detail
+    assert "left it running" in detail
