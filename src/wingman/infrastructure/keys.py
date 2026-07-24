@@ -205,3 +205,63 @@ def key_status(runner: Runner | None = None) -> list[tuple[str, str, str]]:
             state = "not set"
         rows.append((short_name, env_var, state))
     return rows
+
+
+def _test_anthropic(api_key: str) -> tuple[bool, str]:
+    """One cheap authenticated call (list models) — no completion tokens spent."""
+    import anthropic
+
+    try:
+        anthropic.Anthropic(api_key=api_key).models.list(limit=1)
+    except anthropic.AuthenticationError:
+        return False, "Anthropic rejected the key (invalid or revoked)"
+    except anthropic.APIConnectionError as exc:
+        return False, f"could not reach the Anthropic API ({exc})"
+    except anthropic.APIStatusError as exc:
+        return False, f"Anthropic API error ({exc.status_code})"
+    except anthropic.APIError as exc:
+        # Catches the rest of the SDK's error hierarchy (e.g. a malformed
+        # response) so an unusual failure reports cleanly instead of an
+        # unhandled traceback — this is a health check, not a hard call.
+        return False, f"Anthropic API error ({exc})"
+    return True, "working"
+
+
+def _test_voyage(api_key: str) -> tuple[bool, str]:
+    """One minimal embed call — a single short word, cheapest possible request."""
+    from wingman.providers.embeddings import EmbeddingError, VoyageEmbeddingProvider
+
+    try:
+        VoyageEmbeddingProvider(model="voyage-4", api_key=api_key).embed(["ping"], "query")
+    except EmbeddingError as exc:
+        return False, str(exc)
+    return True, "working"
+
+
+def test_key(short_name: str, runner: Runner | None = None) -> tuple[bool, str]:
+    """Actually call the provider to confirm a key works, not just that it's
+
+    set (RFC-034-adjacent: presence isn't validity). Resolution order matches
+    every other entrypoint — an exported environment variable wins, the
+    Keychain fills gaps. Returns (worked, message); the message never
+    contains the key value. A key that resolves to nothing is reported as
+    'not set' without making any network call.
+    """
+    key = _require_name(short_name)
+    env_var = KNOWN_KEYS[key]
+    value = os.environ.get(env_var, "").strip() or get_key(key, runner=runner)
+    if not value:
+        return False, "not set"
+    if key == "anthropic":
+        return _test_anthropic(value)
+    if key == "voyage":
+        return _test_voyage(value)
+    raise AssertionError(f"no live test defined for {key!r}")  # unreachable — _require_name guards
+
+
+def test_keys(runner: Runner | None = None) -> list[tuple[str, str, bool, str]]:
+    """(short name, env var, worked, message) per known key — live-tested."""
+    return [
+        (short_name, KNOWN_KEYS[short_name], *test_key(short_name, runner=runner))
+        for short_name in KNOWN_KEYS
+    ]

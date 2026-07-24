@@ -1,11 +1,12 @@
 """Recent-news snapshots: one public RSS GET, replace-on-refresh, visible failures."""
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from wingman.application.ingest import IngestError
-from wingman.application.news import build_news_query, fetch_person_news
+from wingman.application.news import STALE_AFTER_DAYS, build_news_query, fetch_person_news
 from wingman.application.people import add_person
 from wingman.infrastructure.config import load_config
 from wingman.infrastructure.fetch import FetchError
@@ -109,15 +110,74 @@ def test_relevance_filter_on_field_data(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
         person, _ = add_person("Marko Klopets", storage, company="Supersimple")
-        report = fetch_person_news(person, storage, fetcher=lambda url: FIELD_RSS)
-        # kept: the funding story (company + corporate context) and the
-        # person-name headline; every adjective/'Super Simple Songs' item dropped
-        assert report.stored == 2 and report.dropped == 5
-        titles = report.titles
-        assert titles[0].startswith("Marko Klopets on the future")  # newest first
-        assert titles[1].startswith("Supersimple Raises $2.2 Million")
+        report = fetch_person_news(
+            person, storage, fetcher=lambda url: FIELD_RSS, now=datetime(2026, 7, 20, tzinfo=UTC)
+        )
+        # relevance keeps the funding story and the person-name headline;
+        # every adjective/'Super Simple Songs' item dropped (issue #97 era).
+        # The funding story is itself from 2024 (issue #142) so it's then
+        # dropped for staleness — only the genuinely recent item survives.
+        assert report.stored == 1 and report.dropped == 5 and report.dropped_stale == 1
+        assert report.titles == ["Marko Klopets on the future of BI - Podcast"]
         stored = storage.list_person_news(person.person_id)
-        assert len(stored) == 2
+        assert len(stored) == 1
+
+
+def test_staleness_cutoff_boundary(workspace: Path) -> None:
+    now = datetime(2026, 7, 20, tzinfo=UTC)
+    just_inside = now - timedelta(days=STALE_AFTER_DAYS - 1)
+    just_outside = now - timedelta(days=STALE_AFTER_DAYS + 1)
+    rss = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <item><title>Marko Klopets: still inside the window</title>
+    <link>https://news.google.com/rss/articles/inside</link>
+    <pubDate>{just_inside.strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate></item>
+  <item><title>Marko Klopets: just outside the window</title>
+    <link>https://news.google.com/rss/articles/outside</link>
+    <pubDate>{just_outside.strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate></item>
+</channel></rss>
+""".encode()
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Marko Klopets", storage)
+        report = fetch_person_news(person, storage, fetcher=lambda url: rss, now=now)
+        assert report.stored == 1 and report.dropped_stale == 1
+        assert report.titles == ["Marko Klopets: still inside the window"]
+
+
+def test_undated_item_is_kept_not_treated_as_stale(workspace: Path) -> None:
+    """We can't verify an undated item's age — guessing 'old' is no more honest than 'new'."""
+    rss = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <item><title>Marko Klopets, no date on this one</title>
+    <link>https://news.google.com/rss/articles/undated</link></item>
+</channel></rss>
+"""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Marko Klopets", storage)
+        report = fetch_person_news(person, storage, fetcher=lambda url: rss)
+        assert report.stored == 1 and report.dropped_stale == 0
+        assert storage.list_person_news(person.person_id)[0].published_at is None
+
+
+def test_naive_pubdate_does_not_crash_the_staleness_comparison(workspace: Path) -> None:
+    """Regression: a pubDate with no timezone token parses naive; comparing it against
+    the (aware) staleness cutoff used to raise TypeError instead of filtering cleanly."""
+    rss = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <item><title>Marko Klopets, naive timestamp</title>
+    <link>https://news.google.com/rss/articles/naive</link>
+    <pubDate>Mon, 01 Jan 2024 00:00:00</pubDate></item>
+</channel></rss>
+"""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Marko Klopets", storage)
+        report = fetch_person_news(
+            person, storage, fetcher=lambda url: rss, now=datetime(2026, 7, 20, tzinfo=UTC)
+        )
+        assert report.stored == 0 and report.dropped_stale == 1
 
 
 def test_all_junk_stores_nothing_but_reports_it(workspace: Path) -> None:

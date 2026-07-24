@@ -71,6 +71,7 @@ no secret ever sits in a config file, plist, or wrapper script:
 wingman keys set anthropic   # takes the exported env var, or prompts hidden
 wingman keys set voyage
 wingman keys list            # shows each key's source, never its value
+wingman keys test            # actually calls each provider — presence isn't validity
 ```
 
 An exported environment variable always wins over the Keychain. On Linux,

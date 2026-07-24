@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field
@@ -27,6 +28,13 @@ _logger = get_logger("application.news")
 
 NEWS_LIMIT = 8
 _GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
+# Google News' RSS search keeps returning the same evergreen/popular result
+# for a sparse query indefinitely — a real 2024 funding story showed up in
+# a 2026 digest looking exactly like fresh news (issue #142). A dated item
+# older than this is dropped rather than presented as current; an UNDATED
+# item is kept — we can't tell if it's stale, and guessing "old" is no more
+# honest than guessing "new".
+STALE_AFTER_DAYS = 180
 
 # Company names are often ordinary words ("Supersimple" the startup vs
 # "supersimple trick" the adjective). A company-matched headline only counts
@@ -90,6 +98,7 @@ class NewsReport(BaseModel):
     query: str
     stored: int
     dropped: int = 0
+    dropped_stale: int = 0
     titles: list[str] = Field(default_factory=list)
 
 
@@ -105,6 +114,7 @@ def fetch_person_news(
     person: Person,
     storage: Storage,
     fetcher: Callable[[str], bytes] | None = None,
+    now: datetime | None = None,
 ) -> NewsReport:
     """Fetch and store the current news snapshot for a person (replaces the old one).
 
@@ -114,6 +124,8 @@ def fetch_person_news(
     from wingman.application.people import _parse_feed_items, _published_at
 
     fetch = fetcher if fetcher is not None else fetch_url
+    moment = now if now is not None else datetime.now(UTC)
+    stale_cutoff = moment - timedelta(days=STALE_AFTER_DAYS)
     query = build_news_query(person)
     url = f"{_GOOGLE_NEWS_RSS}?q={quote(query)}&hl=en-US&gl=US&ceid=US:en"
     try:
@@ -123,6 +135,7 @@ def fetch_person_news(
     entries = _parse_feed_items(data, url)
     kept: list[NewsItem] = []
     dropped = 0
+    dropped_stale = 0
     for entry in entries:
         title = entry["title"].strip()
         link = entry["link"].strip()
@@ -131,12 +144,16 @@ def fetch_person_news(
         if not _title_is_relevant(title, person):
             dropped += 1
             continue
+        published_at = _published_at(entry["published"])
+        if published_at is not None and published_at < stale_cutoff:
+            dropped_stale += 1
+            continue
         kept.append(
             NewsItem(
                 person_id=person.person_id,
                 title=title,
                 url=link,
-                published_at=_published_at(entry["published"]),
+                published_at=published_at,
             )
         )
     # newest first, undated last, then cap — a briefing wants recency
@@ -150,12 +167,18 @@ def fetch_person_news(
     items = kept[:NEWS_LIMIT]
     storage.replace_person_news(person.person_id, items)
     _logger.info(
-        "news person=%s query=%s stored=%d dropped=%d", person.name, query, len(items), dropped
+        "news person=%s query=%s stored=%d dropped=%d dropped_stale=%d",
+        person.name,
+        query,
+        len(items),
+        dropped,
+        dropped_stale,
     )
     return NewsReport(
         person_name=person.name,
         query=query,
         stored=len(items),
         dropped=dropped,
+        dropped_stale=dropped_stale,
         titles=[item.title for item in items],
     )

@@ -1504,7 +1504,7 @@ def people_news(name: str) -> str:
     is the entire egress. Replaces the stored snapshot shown in the person
     export's News quadrant.
     """
-    from wingman.application.news import fetch_person_news
+    from wingman.application.news import STALE_AFTER_DAYS, fetch_person_news
 
     config = _ready_config()
     if config is None:
@@ -1518,17 +1518,24 @@ def people_news(name: str) -> str:
         except IngestError as exc:
             return f"people news failed: {exc}"
     if not report.titles:
-        if report.dropped:
-            return (
-                f"{report.dropped} results for {report.query} were all low-relevance; "
-                "nothing stored."
-            )
+        if report.dropped or report.dropped_stale:
+            reasons = []
+            if report.dropped:
+                reasons.append(f"{report.dropped} low-relevance")
+            if report.dropped_stale:
+                reasons.append(f"{report.dropped_stale} too old (>{STALE_AFTER_DAYS}d)")
+            return f"{' and '.join(reasons)} for {report.query}; nothing stored."
         return f"No recent news found for {report.query}."
     lines = [f"News for {report.query}:"]
     lines.extend(f"{number}. {title}" for number, title in enumerate(report.titles, start=1))
     summary = f"{report.stored} items stored"
+    dropped_bits = []
     if report.dropped:
-        summary += f", {report.dropped} low-relevance dropped"
+        dropped_bits.append(f"{report.dropped} low-relevance")
+    if report.dropped_stale:
+        dropped_bits.append(f"{report.dropped_stale} too old")
+    if dropped_bits:
+        summary += f", {' and '.join(dropped_bits)} dropped"
     lines.append(summary + ".")
     return "\n".join(lines)
 
