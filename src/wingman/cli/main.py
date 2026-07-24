@@ -86,6 +86,7 @@ from wingman.infrastructure.keys import (
     KeyStoreError,
     ensure_env,
     key_status,
+    resolve_key_sources,
     set_key,
     test_keys,
     unset_key,
@@ -198,6 +199,14 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+# The environment as the process actually received it, snapshotted before
+# '_bootstrap' hydrates os.environ from the Keychain/host file/workspace
+# file — 'doctor' needs this to report which source a key really came
+# from (#122); os.environ itself no longer carries that distinction once
+# hydration has copied a non-environment value into it.
+_pre_hydration_env: dict[str, str] = {}
+
+
 @app.callback()
 def _bootstrap(
     version: bool = typer.Option(
@@ -208,7 +217,9 @@ def _bootstrap(
         help="Print the installed build (git-derived) and exit.",
     ),
 ) -> None:
-    """Hydrate missing API keys (Keychain, then workspace key file) before any command."""
+    """Hydrate missing API keys (Keychain, host file, workspace file) before any command."""
+    global _pre_hydration_env
+    _pre_hydration_env = dict(os.environ)
     ensure_env(data_dir=load_config().data_dir)
 
 
@@ -374,6 +385,15 @@ def doctor(
                 True,
                 f"{embedder.provider_name}/{embedder.model}{key_note}",
             )
+
+    for source in resolve_key_sources(_pre_hydration_env, data_dir=config.data_dir):
+        detail = source.winning_source
+        if source.shadowed_by:
+            detail += (
+                f" — also defined, with a DIFFERENT value, in: {', '.join(source.shadowed_by)}"
+                f" (ignored per the resolution order; remove the stale copy or make them match)"
+            )
+        report(f"key {source.short_name}", not source.shadowed_by, detail)
 
     if failures:
         typer.echo(f"{failures} check(s) failed.", err=True)
