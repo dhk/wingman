@@ -87,6 +87,17 @@ deterministic validation as the CLI (RFC-008).
 claude mcp add wingman -- wingman-mcp
 ```
 
+This registers a single, global `wingman` connection that every Claude
+Code session picks up, in every project directory. That's deliberate:
+this repo's own `.mcp.json` intentionally defines **no** project-scoped
+`wingman` server. A project-scoped entry alongside the global one creates
+two (or three, counting a `claude.ai` connector) simultaneous `wingman`
+connections with no clear precedence — real confusion hit during
+development, not a hypothetical. If you want project-scoped access
+instead of global (e.g. pointing this checkout at a specific remote
+instance via `WINGMAN_MCP_URL`), first remove the global entry
+(`claude mcp remove wingman`) so only one connection exists at a time.
+
 **Claude Desktop:** edit `~/Library/Application Support/Claude/claude_desktop_config.json`
 (use the absolute path from `which wingman-mcp` — the app does not inherit
 your shell PATH):
