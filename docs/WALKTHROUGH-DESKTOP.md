@@ -58,7 +58,9 @@ shell PATH):
 ```
 
 Fully restart the app (Cmd-Q, not just close-window). Expected: the tools
-panel shows **wingman** with 35 tools.
+panel shows **wingman** with its full tool set (dozens of tools — the
+exact count grows as wingman does, so don't worry about matching a
+specific number).
 
 No keys at all? Everything deterministic still works — ask Claude for a
 workspace status check (Step 2) and it will tell you which two

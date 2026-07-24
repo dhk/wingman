@@ -242,6 +242,29 @@ def test_open_url_prefers_tunnel_host_over_loopback(monkeypatch: pytest.MonkeyPa
     assert _open_url(no_port) == "https://lobster.tail08dfce.ts.net/ui/TOK2/"  # no tunnel_port set
 
 
+def test_open_url_loopback_fallback_omits_prefix_for_stripped_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the loopback fallback (#128, no tunnel host detected —
+    e.g. a transient tailscaled hiccup, or the admin page viewed directly
+    on-box) is a local request, same as #170's health-check fix. For a
+    'stripped' instance the backend listens bare, so this link must omit
+    the prefix locally even though the tunnel URL (tested above) always
+    keeps it."""
+    from wingman.admin import Instance, _open_url
+
+    monkeypatch.setattr("wingman.mcp_server._tailscale_dns_name", lambda: None)
+    stripped = Instance(
+        name="trent", host="127.0.0.1", port=8788, prefix="/trent", token="TOK", stripped=True
+    )
+    assert _open_url(stripped) == "http://127.0.0.1:8788/ui/TOK/"
+
+    native = Instance(
+        name="x", host="127.0.0.1", port=8789, prefix="/x", token="TOK2", stripped=False
+    )
+    assert _open_url(native) == "http://127.0.0.1:8789/x/ui/TOK2/"  # unchanged: native still local
+
+
 def test_health_endpoint_is_unauthenticated_and_minimal(workspace: Path) -> None:
     register_ui(server)
     http = TestClient(server.streamable_http_app())
