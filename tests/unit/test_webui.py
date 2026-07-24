@@ -72,6 +72,59 @@ def test_home_lists_digest_and_reports(client: tuple[TestClient, str]) -> None:
     assert served.headers["content-type"].startswith("text/html")
 
 
+def test_stylesheet_is_not_listed_as_a_report(client: tuple[TestClient, str]) -> None:
+    """Issue #141: wingman-pdf.css rides along every export dir but isn't a report."""
+    from wingman.reporting.export import STYLESHEET_NAME
+
+    http, token = client
+    config = load_config()
+    pdf_dir = config.reports_dir / "pdf"
+    pdf_dir.mkdir(parents=True)
+    (pdf_dir / STYLESHEET_NAME).write_text("body{}", encoding="utf-8")
+    (pdf_dir / "career.md").write_text("# Career Profile\n", encoding="utf-8")
+    page = http.get(f"/ui/{token}/").text
+    assert "Wingman Pdf" not in page  # the mis-titled row is gone
+    assert STYLESHEET_NAME not in page  # not linked as a row at all
+    assert ">Career<" in page  # the real report still lists
+    # still servable if directly linked (e.g. from an export's own frontmatter)
+    served = http.get(f"/ui/{token}/file/pdf/{STYLESHEET_NAME}")
+    assert served.status_code == 200
+
+
+def test_json_sidecar_is_deduped_against_its_md_twin(client: tuple[TestClient, str]) -> None:
+    """Issue #141: career.md + career.json (and fit-brief-*.md/.json) list once."""
+    http, token = client
+    config = load_config()
+    (config.reports_dir / "career.md").write_text("# Career Profile\n", encoding="utf-8")
+    (config.reports_dir / "career.json").write_text("{}", encoding="utf-8")
+    page = http.get(f"/ui/{token}/").text
+    assert page.count(">Career<") == 1
+    assert 'href="file/career.md"' in page
+    assert 'href="file/career.json"' not in page
+    # still directly servable
+    served = http.get(f"/ui/{token}/file/career.json")
+    assert served.status_code == 200
+
+
+def test_report_listing_prefers_frontmatter_title(client: tuple[TestClient, str]) -> None:
+    """Issue #141: a `title:` field in frontmatter wins over the filename guess.
+
+    This is the same mechanism that already fixes pack.py's titles, which
+    were being overridden by the generic filename-derived heuristic even
+    though a real custom title sits right there in frontmatter.
+    """
+    http, token = client
+    config = load_config()
+    packs = config.reports_dir / "packs"
+    packs.mkdir(parents=True)
+    (packs / "pack-staff-mle.md").write_text(
+        "---\ntitle: Application pack — Staff MLE @ Acme\n---\n\nbody\n", encoding="utf-8"
+    )
+    page = http.get(f"/ui/{token}/").text
+    assert ">Application pack — Staff MLE @ Acme<" in page
+    assert ">Staff Mle<" not in page  # filename heuristic no longer wins
+
+
 def test_file_serving_is_confined_to_reports(client: tuple[TestClient, str]) -> None:
     http, token = client
     config = load_config()

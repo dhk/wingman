@@ -961,7 +961,9 @@ def company_dossier(name: str) -> str:
 
 
 @server.tool()
-def export_pdf(target: str, name: str = "", out_dir: str = "", as_html: bool = False) -> str:
+def export_pdf(
+    target: str, name: str = "", out_dir: str = "", as_html: bool = False, title: str = ""
+) -> str:
     """Write a print-ready, design-system-styled Letter export under reports/pdf/.
 
     target is 'career' (portrait profile one-pager), 'company' (dossier,
@@ -969,19 +971,30 @@ def export_pdf(target: str, name: str = "", out_dir: str = "", as_html: bool = F
     brief | point of view | related links — requires name). Returns the
     written path; the user renders it with md-to-pdf or any Markdown
     previewer. No model call, no network.
+
+    title, if given, becomes the export's displayed name (its frontmatter
+    title, and what the web UI's report list shows) instead of the default
+    ('Career Profile', 'Company dossier: <name>', or the person's name).
+
+    Protocol: before calling, ask the user what they'd like this report
+    called — do not invent a title yourself or generate silently with a
+    placeholder.
     """
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
     destination = Path(out_dir).expanduser() if out_dir.strip() else None
+    report_title = title.strip() or None
     try:
         with Storage(config.db_path) as storage:
             if target == "career":
-                path = export_career(config, storage, out_dir=destination)
+                path = export_career(config, storage, out_dir=destination, title=report_title)
             elif target == "company":
                 if not name.strip():
                     return "export company needs a company name."
-                path = export_company(name, config, storage, out_dir=destination)
+                path = export_company(
+                    name, config, storage, out_dir=destination, title=report_title
+                )
             elif target == "person":
                 if not name.strip():
                     return "export person needs a person's name."
@@ -989,7 +1002,12 @@ def export_pdf(target: str, name: str = "", out_dir: str = "", as_html: bool = F
                 if isinstance(found, str):
                     return found
                 path = export_person(
-                    found.name, config, storage, out_dir=destination, as_html=as_html
+                    found.name,
+                    config,
+                    storage,
+                    out_dir=destination,
+                    as_html=as_html,
+                    title=report_title,
                 )
             else:
                 return f"unknown export target {target!r}; use career, company, or person."
