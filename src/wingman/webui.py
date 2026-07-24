@@ -122,13 +122,10 @@ body { margin: 0; }
   border-radius: var(--border-radius); padding: 24px 16px; text-align: center;
   display: flex; flex-direction: column; gap: 4px; }
 .empty b { color: var(--text-head); }
-details.manage > summary { cursor: pointer; font-family: var(--font-mono); font-size: 11px;
+.manage-hd { font-family: var(--font-mono); font-size: 11px;
   text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim);
-  padding: 13px 0; list-style: none; }
-details.manage > summary::-webkit-details-marker { display: none; }
-details.manage > summary::before { content: "\\25B8  "; }
-details.manage[open] > summary::before { content: "\\25BE  "; }
-details.manage > div { display: flex; flex-direction: column; gap: 16px; padding-top: 8px; }
+  padding: 13px 0; }
+.manage-body { display: flex; flex-direction: column; gap: 16px; }
 .row-older { padding: 10px 12px; font-family: var(--font-mono); font-size: 11px;
   color: var(--text-dim); border-top: 1px solid var(--border-light); }
 /* Desktop tabs (spec section 6): CSS-only — hidden radios + :checked siblings, no
@@ -508,10 +505,8 @@ async def ui_home(request: Request) -> Response:
             "</div>" + '<span class="arrow">\u2192</span></a>'
         )
         manage = (
-            '<details class="manage"><summary>Manage \u2014 keys &amp; uploads</summary><div>'
-            + _upload_panel()
-            + _keys_panel(config)
-            + "</div></details>"
+            '<div class="manage"><div class="manage-hd">Manage \u2014 keys &amp; uploads</div>'
+            '<div class="manage-body">' + _upload_panel() + _keys_panel(config) + "</div></div>"
         )
         body.append(_tiers(_artifact_sections(config, now), manage, _connect_panel(request, token)))
         return _page("Wingman", "\n".join(body))
@@ -523,10 +518,8 @@ async def ui_home(request: Request) -> Response:
         '<span class="dim">Run <code>wingman overnight</code> \u2014 or follow a company first.</span></div>'
     )
     manage = (
-        '<details class="manage" open><summary>Manage \u2014 keys &amp; uploads</summary><div>'
-        + _upload_panel()
-        + _keys_panel(config)
-        + "</div></details>"
+        '<div class="manage"><div class="manage-hd">Manage \u2014 keys &amp; uploads</div>'
+        '<div class="manage-body">' + _upload_panel() + _keys_panel(config) + "</div></div>"
     )
     body.append(_tiers(_artifact_sections(config, now), manage, _connect_panel(request, token)))
     return _page("Wingman", "\n".join(body))
