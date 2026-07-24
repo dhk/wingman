@@ -152,6 +152,22 @@ def test_log_interaction_creates_source_file_and_entry(workspace: Config) -> Non
         assert len(entries) == 1 and entries[0].note == LOG_NOTE
 
 
+def test_log_interaction_allows_identical_note_twice(workspace: Config) -> None:
+    """Regression: logging the exact same short note twice for the same
+    person (e.g. "Coffee." on two different days) must produce two
+    separate timeline entries, not crash. The content-hash-based source
+    dedup borrowed from qa_capture is wrong here — this log is a timeline
+    of distinct events, not a corpus of facts that collapse when repeated."""
+    with Storage(workspace.db_path) as storage:
+        person, _ = add_person("Brandon Galang", storage)
+        first = log_interaction("Brandon Galang", "Coffee.", workspace, storage)
+        second = log_interaction("Brandon Galang", "Coffee.", workspace, storage)
+        assert first.entry.entry_id != second.entry.entry_id
+        assert first.entry.source_record_id != second.entry.source_record_id
+        entries = storage.list_log_entries(person.person_id)
+        assert len(entries) == 2
+
+
 def test_log_interaction_requires_note_and_known_person(workspace: Config) -> None:
     with Storage(workspace.db_path) as storage:
         add_person("Brandon Galang", storage)

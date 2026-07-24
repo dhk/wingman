@@ -1,5 +1,7 @@
 """Warm-path lookups via Woven (#81, RFC-043): on-demand bridge, nothing stored."""
 
+import asyncio
+
 import pytest
 
 from wingman.application.ingest import IngestError
@@ -84,6 +86,29 @@ def test_woven_url_reads_env_var_and_degrades_to_none() -> None:
 def test_call_woven_tool_raises_not_configured_when_env_unset() -> None:
     with pytest.raises(WovenNotConfigured, match="WINGMAN_WOVEN_URL"):
         call_woven_tool("find_warmest_paths", {"to": "X"}, env={})
+
+
+def test_call_woven_tool_works_when_invoked_from_a_running_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: FastMCP dispatches a sync tool by calling it inline —
+    `fn(**arguments)` — from within its own already-running event loop, not
+    from a worker thread. call_woven_tool is exactly that sync tool's
+    underlying call: a bare `asyncio.run()` inside it would raise "cannot
+    be called from a running event loop" on every real MCP invocation, a
+    failure mode plain synchronous pytest tests can't otherwise catch. This
+    reproduces that calling shape directly."""
+    import wingman.infrastructure.woven_client as woven_client_module
+
+    async def fake_call(url: str, tool: str, arguments: dict[str, object]) -> str:
+        return f"ok:{tool}"
+
+    monkeypatch.setattr(woven_client_module, "_call", fake_call)
+
+    async def invoke_from_within_a_running_loop() -> str:
+        return call_woven_tool("find_warmest_paths", {"to": "X"}, env={ENV_WOVEN_URL: "https://x"})
+
+    assert asyncio.run(invoke_from_within_a_running_loop()) == "ok:find_warmest_paths"
 
 
 def test_mcp_woven_warm_path_tool_requires_exactly_one_of_person_or_company() -> None:

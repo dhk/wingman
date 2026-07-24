@@ -282,6 +282,50 @@ def test_tickler_fires_on_stale_next_move_without_fresh_material(
     assert "hasn't moved in" in tickler.why
 
 
+def test_tickler_staleness_boundary_day_before_and_of(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exact-boundary regression: TICKLER_STALE_DAYS - 1 days old must not
+    fire on staleness alone, and exactly TICKLER_STALE_DAYS days old must —
+    the same boundary-precision convention this codebase's other staleness
+    checks are held to (e.g. test_news.py's staleness-boundary test)."""
+    from datetime import UTC, datetime, timedelta
+
+    from wingman.application.focus import TICKLER_STALE_DAYS
+    from wingman.application.relationship import save_objective
+
+    def empty_feed(url: str) -> bytes:
+        return b'<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>'
+
+    config = load_config()
+    import wingman.application.news as news_module
+    import wingman.application.people as people_module
+
+    monkeypatch.setattr(people_module, "fetch_url", empty_feed)
+    monkeypatch.setattr(news_module, "fetch_url", empty_feed)
+    with Storage(config.db_path) as storage:
+        add_person("Jane Author", storage, substack_url="https://jane.substack.com")
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Jane Author")
+        objective = save_objective("Jane Author", "Goal.", "Thesis.", "Next move.", storage)
+        storage.save_objective(
+            objective.model_copy(
+                update={"updated_at": datetime.now(UTC) - timedelta(days=TICKLER_STALE_DAYS - 1)}
+            )
+        )
+        report = overnight_run(config, storage)
+    assert not any(action.key == "relationship:jane author" for action in report.actions)
+
+    with Storage(config.db_path) as storage:
+        objective = storage.list_objectives()[0]
+        storage.save_objective(
+            objective.model_copy(
+                update={"updated_at": datetime.now(UTC) - timedelta(days=TICKLER_STALE_DAYS)}
+            )
+        )
+        report = overnight_run(config, storage)
+    assert "relationship:jane author" in {action.key for action in report.actions}
+
+
 def test_no_tickler_without_objective(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Unchanged behavior: no objective, no relationship: action."""
     import wingman.application.news as news_module
@@ -362,6 +406,42 @@ def test_no_relationship_review_when_objective_fresh(
         save_objective("Brandon Galang", "Goal.", "Thesis.", "Next move.", storage)
         report = overnight_run(config, storage)
     assert not any(action.key.startswith("relationship-review:") for action in report.actions)
+
+
+def test_relationship_review_boundary_day_before_and_of(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exact-boundary regression: REVIEW_EVERY_DAYS - 1 days old must not
+    fire yet, and exactly REVIEW_EVERY_DAYS days old must fire — the same
+    boundary-precision convention this codebase's other staleness checks
+    are held to (e.g. test_news.py's staleness-boundary test)."""
+    from datetime import UTC, datetime, timedelta
+
+    from wingman.application.relationship import REVIEW_EVERY_DAYS, save_objective
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_person("Watched Person", storage)
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Watched Person")
+        add_person("Brandon Galang", storage)
+        objective = save_objective("Brandon Galang", "Goal.", "Thesis.", "Next move.", storage)
+        storage.save_objective(
+            objective.model_copy(
+                update={"updated_at": datetime.now(UTC) - timedelta(days=REVIEW_EVERY_DAYS - 1)}
+            )
+        )
+        report = overnight_run(config, storage)
+    assert not any(action.key.startswith("relationship-review:") for action in report.actions)
+
+    with Storage(config.db_path) as storage:
+        objective = storage.list_objectives()[0]
+        storage.save_objective(
+            objective.model_copy(
+                update={"updated_at": datetime.now(UTC) - timedelta(days=REVIEW_EVERY_DAYS)}
+            )
+        )
+        report = overnight_run(config, storage)
+    assert "relationship-review:brandon galang" in {action.key for action in report.actions}
 
 
 def test_relationship_review_mute_suppresses(

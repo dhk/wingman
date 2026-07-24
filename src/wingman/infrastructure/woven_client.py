@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
@@ -76,6 +77,16 @@ def call_woven_tool(
     Raises WovenNotConfigured when WINGMAN_WOVEN_URL is unset, WovenCallError
     on any connection or tool-level failure. Never caches, never persists —
     every call is a fresh, on-demand read (RFC-043).
+
+    Runs the async call in its own thread with its own event loop rather
+    than a bare `asyncio.run()` on the calling thread: the MCP tool that
+    fronts this (`woven_warm_path`) is a plain sync function, and FastMCP
+    invokes sync tools inline on its own already-running event loop
+    (`fn(**arguments)`, not offloaded to a worker thread) — a bare
+    `asyncio.run()` there raises "cannot be called from a running event
+    loop" on every real invocation. Spinning up a dedicated thread sidesteps
+    that regardless of whether the caller (CLI or MCP dispatch) already has
+    a loop running.
     """
     url = woven_url(env)
     if url is None:
@@ -85,7 +96,8 @@ def call_woven_tool(
         )
     _logger.info("woven call tool=%s", tool)
     try:
-        return asyncio.run(_call(url, tool, arguments))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(lambda: asyncio.run(_call(url, tool, arguments))).result()
     except WovenCallError:
         raise
     except Exception as exc:  # noqa: BLE001 — one clear failure, never a raw traceback

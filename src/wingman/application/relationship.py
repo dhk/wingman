@@ -179,30 +179,38 @@ def log_interaction(name: str, note: str, config: Config, storage: Storage) -> L
     """Record what actually happened with a person — the qa_capture way
     (RFC-036): deterministic, person-attributed, the user's own words as
     the evidence quote, zero model calls. The raw material a future brief
-    or objective revision can cite."""
+    or objective revision can cite.
+
+    Always writes its own new source file and record, even when an
+    identical note was logged before: unlike qa_capture's evidence corpus
+    (where a repeated Q&A genuinely is the same fact, so reusing a
+    matching record is correct), this log is a timeline — "Coffee." on
+    Monday and "Coffee." again on Friday are two distinct events, not a
+    duplicate. Reusing a prior record here would collide with
+    `relationship_log.source_record_id`'s uniqueness constraint (one entry
+    per source record) the moment the same short note was logged twice.
+    """
     person = _resolve_person(name, storage)
     note = " ".join(note.split())
     if not note:
         raise IngestError("the note is empty — nothing was logged.")
     content = f"# Relationship log\n\nPerson: {person.name}\n\n{note}\n"
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    record = storage.get_source_record_by_hash(content_hash)
-    if record is None:
-        config.inbox_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
-        path = config.inbox_dir / f"{stamp}-relationship-log.md"
-        path.write_text(content, encoding="utf-8")
-        data_root = config.data_dir.resolve()
-        resolved = path.resolve()
-        record = SourceRecord(
-            source_type=LOG_SOURCE_TYPE,
-            source_locator=str(resolved.relative_to(data_root))
-            if resolved.is_relative_to(data_root)
-            else str(resolved),
-            content_hash=content_hash,
-            document_key=f"relationship-log:{person.person_id}:{stamp}",
-        )
-        storage.add_source_record(record)
+    config.inbox_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    path = config.inbox_dir / f"{stamp}-relationship-log.md"
+    path.write_text(content, encoding="utf-8")
+    data_root = config.data_dir.resolve()
+    resolved = path.resolve()
+    record = SourceRecord(
+        source_type=LOG_SOURCE_TYPE,
+        source_locator=str(resolved.relative_to(data_root))
+        if resolved.is_relative_to(data_root)
+        else str(resolved),
+        content_hash=content_hash,
+        document_key=f"relationship-log:{person.person_id}:{stamp}",
+    )
+    storage.add_source_record(record)
     entry = RelationshipLogEntry(
         person_id=person.person_id,
         source_record_id=record.record_id,
