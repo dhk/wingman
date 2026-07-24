@@ -166,12 +166,18 @@ def _open_url(instance: Instance) -> str:
     Tailscale-detected tunnel URL the Connect tab uses (#128's
     tunnel_port, per-instance since each may sit on a different funnel
     port) and fall back to loopback only if no tunnel host is detected.
+
+    The loopback fallback is a local request, same as the health check
+    (#170's own fix) — for a 'stripped' instance the backend listens bare,
+    so the prefix belongs only on the public/tunnel URL below, never on
+    this loopback one.
     """
     from wingman.mcp_server import _tailscale_dns_name
 
     tailscale_host = _tailscale_dns_name()
     if tailscale_host is None:
-        return f"http://{instance.host}:{instance.port}{instance.prefix}/ui/{instance.token}/"
+        local_prefix = "" if instance.stripped else instance.prefix
+        return f"http://{instance.host}:{instance.port}{local_prefix}/ui/{instance.token}/"
     authority = (
         tailscale_host
         if instance.tunnel_port is None
