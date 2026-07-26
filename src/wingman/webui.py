@@ -68,7 +68,8 @@ body { margin: 0; }
   transition: background .15s, border-color .15s; }
 .hero:hover { background: var(--bg3); }
 .hero .hbody { flex: 1; display: flex; flex-direction: column; gap: 4px; }
-.hero .title { font-size: 20px; font-weight: 600; color: var(--text-head); }
+.hero .title { font-size: clamp(22px, 3.4vw, 26px); font-weight: 700;
+  letter-spacing: -.01em; line-height: 1.2; color: var(--text-head); }
 .hero .sub { color: var(--text-muted); font-size: 14px; margin: 0; }
 .hero .arrow { color: var(--accent); font-size: 20px; }
 .group { display: flex; flex-direction: column; gap: 8px; }
@@ -84,6 +85,7 @@ body { margin: 0; }
 .row:hover { background: var(--bg3); }
 .row .when { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
 .row .arrow { color: var(--text-dim); }
+.row > span:nth-child(2) { font-weight: 500; color: var(--text-head); }
 .chip { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
   letter-spacing: .04em; padding: 2px 8px; border-radius: 999px; }
 .chip-digest { background: rgba(43, 80, 232, .12); color: var(--accent); }
@@ -122,9 +124,10 @@ body { margin: 0; }
   border-radius: var(--border-radius); padding: 24px 16px; text-align: center;
   display: flex; flex-direction: column; gap: 4px; }
 .empty b { color: var(--text-head); }
-.manage-hd { font-family: var(--font-mono); font-size: 11px;
-  text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim);
-  padding: 13px 0; }
+.manage-hd { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; padding: 13px 0; }
+.manage-title { font-size: 15px; font-weight: 700; color: var(--text-head); }
+.manage-sub { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--text-dim); }
 .manage-body { display: flex; flex-direction: column; gap: 16px; }
 .row-older { padding: 10px 12px; font-family: var(--font-mono); font-size: 11px;
   color: var(--text-dim); border-top: 1px solid var(--border-light); }
@@ -613,7 +616,7 @@ async def ui_home(request: Request) -> Response:
             "</div>" + '<span class="arrow">\u2192</span></a>'
         )
         manage = (
-            '<div class="manage"><div class="manage-hd">Manage \u2014 keys &amp; uploads</div>'
+            '<div class="manage"><div class="manage-hd"><span class="manage-title">Manage</span><span class="manage-sub">\u2014 keys &amp; uploads</span></div>'
             '<div class="manage-body">'
             + _upload_panel()
             + _keys_panel(config)
@@ -632,7 +635,7 @@ async def ui_home(request: Request) -> Response:
         '<span class="dim">Run <code>wingman overnight</code> \u2014 or follow a company first.</span></div>'
     )
     manage = (
-        '<div class="manage"><div class="manage-hd">Manage \u2014 keys &amp; uploads</div>'
+        '<div class="manage"><div class="manage-hd"><span class="manage-title">Manage</span><span class="manage-sub">\u2014 keys &amp; uploads</span></div>'
         '<div class="manage-body">'
         + _upload_panel()
         + _keys_panel(config)
