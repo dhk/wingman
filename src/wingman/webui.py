@@ -405,7 +405,7 @@ def _changelog_panel(now: datetime) -> tuple[str, str]:
     return _changelog_tab_label(today_count, week_count), panel
 
 
-def _tabset(panels: list[tuple[str, str, str]]) -> str:
+def _tabset(panels: list[tuple[str, str, str]], selected: str | None = None) -> str:
     """Desktop tabs (spec section 6): radios first, then labels, then panels.
 
     CSS-only \u2014 hidden radio inputs drive :checked sibling selectors; the page
@@ -414,15 +414,21 @@ def _tabset(panels: list[tuple[str, str, str]]) -> str:
     before; with CSS unavailable the whole thing degrades to stacked labeled
     sections. Empty panels are dropped (no dead tab), and a lone panel needs
     no chrome at all.
+
+    `selected` (a ?tab= query param, typically) picks which radio starts
+    checked -- how a report page's nav bar jumps back to a specific tab
+    instead of always landing on the first one. An unknown or absent value
+    falls back to the first panel, same as before that param existed.
     """
     filled = [(key, label, content) for key, label, content in panels if content]
     if not filled:
         return ""
     if len(filled) == 1:
         return filled[0][2]
+    default_key = selected if selected in {key for key, _, _ in filled} else filled[0][0]
     inputs = "".join(
-        f'<input type="radio" name="view" id="tab-{key}"{" checked" if index == 0 else ""}>'
-        for index, (key, _, _) in enumerate(filled)
+        f'<input type="radio" name="view" id="tab-{key}"{" checked" if key == default_key else ""}>'
+        for key, _, _ in filled
     )
     labels = "".join(f'<label for="tab-{key}">{_e(label)}</label>' for key, label, _ in filled)
     sections = "\n".join(
@@ -431,7 +437,13 @@ def _tabset(panels: list[tuple[str, str, str]]) -> str:
     return f'<div class="tabset">\n{inputs}\n<nav class="tabbar">{labels}</nav>\n{sections}\n</div>'
 
 
-def _tiers(groups: list[tuple[str, str]], manage: str, connect: str, now: datetime) -> str:
+def _tiers(
+    groups: list[tuple[str, str]],
+    manage: str,
+    connect: str,
+    now: datetime,
+    selected: str | None = None,
+) -> str:
     """Digest · Files · Changelog · Connect · Manage (tabs at >=768px, a stack below)."""
     digest = "\n".join(html for section, html in groups if section.split("/")[0] == "digests")
     files = "\n".join(html for section, html in groups if section.split("/")[0] != "digests")
@@ -443,7 +455,8 @@ def _tiers(groups: list[tuple[str, str]], manage: str, connect: str, now: dateti
             ("changelog", changelog_label, changelog),
             ("connect", "Connect", connect),
             ("manage", "Manage", manage),
-        ]
+        ],
+        selected=selected,
     )
 
 
@@ -597,6 +610,7 @@ async def ui_home(request: Request) -> Response:
     has_workspace = config.db_path.exists()
     latest = config.reports_dir / "digests" / "latest.html"
     token = str(request.path_params["token"])
+    selected_tab = request.query_params.get("tab")
     body: list[str] = [_header(config)]
 
     if not has_workspace:
@@ -636,7 +650,13 @@ async def ui_home(request: Request) -> Response:
             + "</div></div>"
         )
         body.append(
-            _tiers(_artifact_sections(config, now), manage, _connect_panel(request, token), now)
+            _tiers(
+                _artifact_sections(config, now),
+                manage,
+                _connect_panel(request, token),
+                now,
+                selected=selected_tab,
+            )
         )
         return _page("Wingman", "\n".join(body))
 
@@ -655,9 +675,51 @@ async def ui_home(request: Request) -> Response:
         + "</div></div>"
     )
     body.append(
-        _tiers(_artifact_sections(config, now), manage, _connect_panel(request, token), now)
+        _tiers(
+            _artifact_sections(config, now),
+            manage,
+            _connect_panel(request, token),
+            now,
+            selected=selected_tab,
+        )
     )
     return _page("Wingman", "\n".join(body))
+
+
+_REPORT_NAV_TABS = (
+    ("digest", "Digest"),
+    ("files", "Files"),
+    ("changelog", "Changelog"),
+    ("connect", "Connect"),
+    ("manage", "Manage"),
+)
+_REPORT_NAV_CSS = """
+.wg-nav { display: flex; gap: 4px; padding: 8px 16px; margin-bottom: 8px;
+  border-bottom: 1px solid var(--border); font-family: var(--font-mono); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .04em; }
+.wg-nav a { color: var(--text-dim); text-decoration: none; padding: 6px 10px;
+  border-radius: var(--border-radius); }
+.wg-nav a:hover { color: var(--text); background: var(--bg2); }
+@media print { .wg-nav { display: none; } }
+"""
+
+
+def _inject_report_nav(html_text: str, rel_path: str) -> str:
+    """A live 'back to Wingman' bar, added only at serve time — never baked into
+    the generated file itself, so the artifact stays the same portable,
+    self-contained document whether opened through the web UI, downloaded, or
+    read straight off disk. `rel_path` is the file's path under reports/ (the
+    'path' route param), used to compute how many levels back to the tabbed
+    home page. A page missing the expected '</style>' shell is left untouched
+    rather than guessing where to inject.
+    """
+    marker = "</style>\n"
+    if marker not in html_text:
+        return html_text
+    up = "../" * (rel_path.count("/") + 1)
+    links = "".join(f'<a href="{up}?tab={key}">{_e(label)}</a>' for key, label in _REPORT_NAV_TABS)
+    nav = f'<nav class="wg-nav">{links}</nav>\n'
+    return html_text.replace(marker, f"{_REPORT_NAV_CSS}{marker}{nav}", 1)
 
 
 async def ui_file(request: Request) -> Response:
@@ -665,12 +727,16 @@ async def ui_file(request: Request) -> Response:
     if config is None:
         return _not_found()
     root = config.reports_dir.resolve()
-    target = (root / str(request.path_params["path"])).resolve()
+    rel_path = str(request.path_params["path"])
+    target = (root / rel_path).resolve()
     if not target.is_relative_to(root) or not target.is_file():
         return _not_found()
     media = _SERVE_TYPES.get(target.suffix)
     if media is None:
         return _not_found()
+    if target.suffix == ".html":
+        content = _inject_report_nav(target.read_text(encoding="utf-8"), rel_path)
+        return HTMLResponse(content)
     return FileResponse(target, media_type=media)
 
 
