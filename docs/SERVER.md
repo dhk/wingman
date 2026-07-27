@@ -175,9 +175,44 @@ signal to revisit the hosted-tier assessment instead.
 
 ## 7. Care and feeding
 
-- **Backups:** `wingman backup` is one command; add a second user timer
-  (weekly) if the box is the workspace's only home. Tarballs land in
-  `<workspace>/backups/`, pruned to keep-N.
+- **Backups:** `wingman backup` is one command. If the box is the
+  workspace's only home, put it on its own weekly timer — same pattern as
+  §4's overnight run, same per-account boundary as everything else here
+  (#133): each Unix account backs up only its own workspace.
+
+  `~/.config/systemd/user/wingman-backup.service`:
+
+  ```ini
+  [Unit]
+  Description=Wingman weekly backup
+
+  [Service]
+  Type=oneshot
+  ExecStart=%h/.local/bin/wingman backup
+  ```
+
+  `~/.config/systemd/user/wingman-backup.timer`:
+
+  ```ini
+  [Unit]
+  Description=Run wingman backup weekly
+
+  [Timer]
+  OnCalendar=weekly
+  Persistent=true
+
+  [Install]
+  WantedBy=timers.target
+  ```
+
+  ```bash
+  systemctl --user daemon-reload
+  systemctl --user enable --now wingman-backup.timer
+  ```
+
+  Tarballs land in `<workspace>/backups/`, pruned to keep-N (default 10,
+  `wingman backup --keep`). `Persistent=true` catches a missed run the
+  same way §4's does. Logs: `journalctl --user -u wingman-backup.service`.
 - **Updates:** `cd ~/wingman && git pull && uv tool install --reinstall .`
   then `systemctl --user restart wingman-mcp.service`.
 - **Telemetry:** `wingman telemetry on` once, if you want the usage
