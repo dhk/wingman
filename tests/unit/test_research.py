@@ -1,5 +1,6 @@
 """Approved-source research (RFC-015): user-named pages, deterministic diffs."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -136,6 +137,75 @@ def test_dossier_renders_research_section(tmp_path: Path, monkeypatch: pytest.Mo
         assert "no approved research sources" not in after  # gap line gone
 
 
+def test_dossier_accumulates_new_links_across_research_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.application.dossier import build_company_dossier
+    from wingman.application.people import add_person
+
+    monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
+    config = load_config()
+    for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
+        directory.mkdir(parents=True)
+    with Storage(config.db_path) as storage:
+        add_person("Ana", storage, company="Acme")
+        add_company_source("Acme", "https://acme.example.com/careers", storage, label="careers")
+
+        # first fetch is a baseline, not "new" — nothing to accumulate yet
+        research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+        first = build_company_dossier("Acme", config, storage).markdown
+        assert "## New since last dossier (0)" in first
+        assert "none recorded yet" in first
+
+        # a run between dossiers surfaces a new link…
+        research_company("Acme", storage, fetcher=lambda url: PAGE_V2)
+        second = build_company_dossier("Acme", config, storage).markdown
+        assert "## New since last dossier (1)" in second
+        assert (
+            "https://acme.example.com/jobs/staff-mle (via https://acme.example.com/careers)"
+            in second
+        )
+
+        # …and once summarized, a dossier without any further research shows none
+        third = build_company_dossier("Acme", config, storage).markdown
+        assert "## New since last dossier (0)" in third
+        assert "none since" in third
+
+
+def test_dossier_new_links_section_caps_and_orders_by_recency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.application.dossier import MAX_NEW_LINKS_SHOWN, build_company_dossier
+    from wingman.application.people import add_person
+
+    monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
+    config = load_config()
+    for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
+        directory.mkdir(parents=True)
+    with Storage(config.db_path) as storage:
+        add_person("Ana", storage, company="Acme")
+        add_company_source("Acme", "https://acme.example.com/careers", storage)
+        key = "acme"
+        base_page = b"<html><body></body></html>"
+        research_company("Acme", storage, fetcher=lambda url: base_page)
+
+        total = MAX_NEW_LINKS_SHOWN + 3
+        for index in range(total):
+            storage.record_new_links(
+                key,
+                "https://acme.example.com/careers",
+                [f"https://acme.example.com/jobs/{index}"],
+                datetime.now(UTC),
+            )
+
+        text = build_company_dossier("Acme", config, storage).markdown
+        assert f"## New since last dossier ({total})" in text
+        assert "(+3 earlier links not shown)" in text
+        # the most recently discovered links are the ones shown
+        assert f"https://acme.example.com/jobs/{total - 1}" in text
+        assert "https://acme.example.com/jobs/0" not in text
+
+
 def test_rename_company_moves_sources_and_watchlist(storage: Storage) -> None:
     add_company_source("Synctera", "https://synctera.com/careers", storage, label="careers")
     storage.watchlist_add("overnight", "company", "Synctera")
@@ -146,6 +216,37 @@ def test_rename_company_moves_sources_and_watchlist(storage: Storage) -> None:
     assert len(renamed_sources) == 1
     assert renamed_sources[0].company_name == "Synctera Inc."
     assert storage.watchlist_members("overnight") == [("company", "Synctera Inc.")]
+
+
+def test_rename_company_moves_new_link_history_and_dossier_cursor(storage: Storage) -> None:
+    add_company_source("Synctera", "https://synctera.com/careers", storage)
+    research_company("Synctera", storage, fetcher=lambda url: PAGE_V1)
+    research_company("Synctera", storage, fetcher=lambda url: PAGE_V2)  # 1 new link
+    storage.mark_dossier_generated("synctera", datetime(2020, 1, 1, tzinfo=UTC))
+
+    rename_company("Synctera", "Synctera Inc.", storage)
+
+    assert storage.list_new_links_since("synctera", None) == []
+    moved_events = storage.list_new_links_since("synctera inc.", None)
+    assert len(moved_events) == 1
+    # PAGE_V2's new link is relative, resolved against the source URL
+    assert moved_events[0].url == "https://synctera.com/jobs/staff-mle"
+    assert moved_events[0].source_url == "https://synctera.com/careers"
+
+    assert storage.get_dossier_generated_at("synctera") is None
+    assert storage.get_dossier_generated_at("synctera inc.") == datetime(2020, 1, 1, tzinfo=UTC)
+
+
+def test_delete_company_purges_new_link_history_and_dossier_cursor(storage: Storage) -> None:
+    add_company_source("Acme", "https://acme.example.com/careers", storage)
+    research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+    research_company("Acme", storage, fetcher=lambda url: PAGE_V2)  # 1 new link
+    storage.mark_dossier_generated("acme", datetime.now(UTC))
+
+    delete_company("Acme", storage)
+
+    assert storage.list_new_links_since("acme", None) == []
+    assert storage.get_dossier_generated_at("acme") is None
 
 
 def test_rename_company_same_key_is_rejected(storage: Storage) -> None:

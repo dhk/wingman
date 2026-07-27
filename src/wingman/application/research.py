@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from datetime import UTC, datetime
 from html.parser import HTMLParser
 from urllib.parse import urljoin
 
@@ -248,6 +249,7 @@ def research_company(
         text, links = extract_page(data, source.url)
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         previous = storage.get_research_snapshot(key, source.url)
+        fetched_at = datetime.now(UTC)
         if previous is None:
             detail = f"first snapshot: {len(links)} links recorded as the baseline"
             new_links: list[str] = []
@@ -263,8 +265,15 @@ def research_company(
             else:
                 detail = f"unchanged since {since}"
         storage.save_research_snapshot(
-            ResearchSnapshot(company_key=key, url=source.url, text_hash=text_hash, links=links)
+            ResearchSnapshot(
+                company_key=key,
+                url=source.url,
+                text_hash=text_hash,
+                links=links,
+                fetched_at=fetched_at,
+            )
         )
+        storage.record_new_links(key, source.url, new_links, fetched_at)
         results.append(
             SourceResult(
                 url=source.url,
