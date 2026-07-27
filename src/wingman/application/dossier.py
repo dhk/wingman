@@ -34,6 +34,9 @@ _logger = get_logger("application.dossier")
 
 # A signal older than this is flagged, not silently presented as current.
 STALE_AFTER_DAYS = 90
+# Most-recent accumulated new links rendered in the dossier; older ones past
+# this are summarized as a count rather than listed (RFC-045).
+MAX_NEW_LINKS_SHOWN = 20
 
 
 class DossierReport(BaseModel):
@@ -155,6 +158,22 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
                 entry += f" — ⚠ stale ({age_days} days old); re-run 'wingman company research'"
             lines.append(entry)
 
+        last_dossier_at = storage.get_dossier_generated_at(key)
+        new_events = storage.list_new_links_since(key, last_dossier_at)
+        lines.extend(["", f"## New since last dossier ({len(new_events)})", ""])
+        if new_events:
+            shown = new_events[-MAX_NEW_LINKS_SHOWN:]
+            for event in shown:
+                lines.append(f"- {event.url} (via {event.source_url})")
+            omitted = len(new_events) - len(shown)
+            if omitted:
+                noun = "link" if omitted == 1 else "links"
+                lines.append(f"- (+{omitted} earlier {noun} not shown)")
+        elif last_dossier_at is None:
+            lines.append("- none recorded yet — run 'wingman company research'")
+        else:
+            lines.append(f"- none since {last_dossier_at.date().isoformat()}")
+
     company_card = storage.get_pov_card(company_card_id(key))
     if company_card is not None:
         lines.extend(
@@ -232,6 +251,8 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{_slug(display)}-{now.date().isoformat()}.md"
     path.write_text(markdown, encoding="utf-8")
+    if research_sources:
+        storage.mark_dossier_generated(key, now)
     _logger.info(
         "company_dossier company=%s people=%d documents=%d cards=%d path=%s",
         display,

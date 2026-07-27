@@ -72,6 +72,55 @@ def test_home_lists_digest_and_reports(client: tuple[TestClient, str]) -> None:
     assert served.headers["content-type"].startswith("text/html")
 
 
+def test_report_pages_get_a_live_nav_back_to_the_tabbed_home(
+    client: tuple[TestClient, str],
+) -> None:
+    """A generated .html report served through /file/ gets a nav bar injected
+    at serve time so there's a way back to the other tabs without hitting
+    the browser's back button — but the bar is relative, not baked into the
+    file on disk (the artifact stays portable if downloaded or opened raw)."""
+    http, token = client
+    config = load_config()
+    digests = config.reports_dir / "digests"
+    digests.mkdir(parents=True)
+    (digests / "latest.html").write_text(
+        "<!doctype html>\n<style>body{}</style>\n<div>MARKER</div>\n", encoding="utf-8"
+    )
+    served = http.get(f"/ui/{token}/file/digests/latest.html")
+    assert served.status_code == 200
+    assert 'class="wg-nav"' in served.text
+    assert '<a href="../../?tab=digest">Digest</a>' in served.text
+    assert '<a href="../../?tab=manage">Manage</a>' in served.text
+    assert "MARKER" in served.text  # original content is untouched, just prefixed
+    # the file on disk was never modified
+    assert "wg-nav" not in (digests / "latest.html").read_text(encoding="utf-8")
+
+
+def test_report_nav_skipped_for_pages_without_the_expected_style_shell(
+    client: tuple[TestClient, str],
+) -> None:
+    """A .html file with no '</style>' marker (e.g. a bare fixture) is served
+    as-is rather than guessing where injection should go."""
+    http, token = client
+    config = load_config()
+    digests = config.reports_dir / "digests"
+    digests.mkdir(parents=True)
+    (digests / "latest.html").write_text("<h1>MARKER-DIGEST</h1>", encoding="utf-8")
+    served = http.get(f"/ui/{token}/file/digests/latest.html")
+    assert served.status_code == 200
+    assert served.text == "<h1>MARKER-DIGEST</h1>"
+    assert "wg-nav" not in served.text
+
+
+def test_report_nav_is_not_added_to_non_html_files(client: tuple[TestClient, str]) -> None:
+    http, token = client
+    config = load_config()
+    (config.reports_dir / "career.md").write_text("# Career\n<style>x</style>\n", encoding="utf-8")
+    served = http.get(f"/ui/{token}/file/career.md")
+    assert served.status_code == 200
+    assert "wg-nav" not in served.text
+
+
 def test_stylesheet_is_not_listed_as_a_report(client: tuple[TestClient, str]) -> None:
     """Issue #141: wingman-pdf.css rides along every export dir but isn't a report."""
     from wingman.reporting.export import STYLESHEET_NAME
@@ -536,6 +585,27 @@ def test_desktop_tabs_are_css_only_and_single_sourced(client: tuple[TestClient, 
     assert "<details" not in page
 
 
+def test_tab_query_param_preselects_a_tab(client: tuple[TestClient, str]) -> None:
+    """A report page's nav bar links to '?tab=<key>' — the home page must
+    honor it, so clicking Manage from inside a digest actually lands on
+    Manage instead of always resetting to Digest."""
+    http, token = client
+    config = load_config()
+    digests = config.reports_dir / "digests"
+    digests.mkdir(parents=True)
+    (digests / "latest.html").write_text("<h1>d</h1>", encoding="utf-8")
+    # latest.html alone doesn't populate the Digest tab's row list (only dated
+    # files do — 'latest' is reached via the hero link instead).
+    (digests / "overnight-20260101T051500Z.html").write_text("<h1>old</h1>", encoding="utf-8")
+    page = http.get(f"/ui/{token}/?tab=manage").text
+    assert '<input type="radio" name="view" id="tab-manage" checked>' in page
+    assert '<input type="radio" name="view" id="tab-digest" checked>' not in page
+
+    # an unknown tab key falls back to the first panel, same as no param at all
+    fallback = http.get(f"/ui/{token}/?tab=nonsense").text
+    assert '<input type="radio" name="view" id="tab-digest" checked>' in fallback
+
+
 def test_degraded_state_tabs_skip_empty_digest_panel(client: tuple[TestClient, str]) -> None:
     """State 3 with only packs: no dead Digest tab; Files + Manage still tab."""
     http, token = client
@@ -572,6 +642,25 @@ def test_group_rows_cap_at_twelve_with_older_line(client: tuple[TestClient, str]
     assert ">Item 13<" in page and ">Item 02<" in page  # newest 12 survive
     assert ">Item 01<" not in page and ">Item 00<" not in page  # oldest two dropped
     assert "pack-item-00" not in page and "pack-item-01" not in page  # no raw names
+
+
+def test_digest_rows_cap_at_seven_not_the_generic_twelve(client: tuple[TestClient, str]) -> None:
+    """#173: digests use their own cap ("last N overnight runs") — smaller
+    than the generic per-section cap, since one digest file = one run."""
+    import os
+
+    http, token = client
+    config = load_config()
+    digests = config.reports_dir / "digests"
+    digests.mkdir(parents=True)
+    base = 1_700_000_000
+    for index in range(9):
+        path = digests / f"overnight-202607{10 + index:02d}T050000Z.md"
+        path.write_text("digest!", encoding="utf-8")
+        os.utime(path, (base + index, base + index))  # index 8 newest
+    page = http.get(f"/ui/{token}/").text
+    assert page.count('class="row"') == 7  # capped at 7, not the generic 12
+    assert "older…" in page
 
 
 def test_design_tokens_are_one_shared_constant(client: tuple[TestClient, str]) -> None:

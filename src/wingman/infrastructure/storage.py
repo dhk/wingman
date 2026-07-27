@@ -19,7 +19,7 @@ from wingman.domain.outreach import OutreachBrief
 from wingman.domain.person import ExternalDocument, NewsItem, Person, PersonOrigin
 from wingman.domain.pov import PovCard
 from wingman.domain.relationship import RelationshipLogEntry, RelationshipObjective
-from wingman.domain.research import CompanySource, ResearchSnapshot
+from wingman.domain.research import CompanySource, NewLinkEvent, ResearchSnapshot
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 
 _SCHEMA = """
@@ -123,6 +123,17 @@ CREATE TABLE IF NOT EXISTS research_snapshots (
     payload TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
     PRIMARY KEY (company_key, url)
+);
+CREATE TABLE IF NOT EXISTS new_link_events (
+    company_key TEXT NOT NULL,
+    url TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    discovered_at TEXT NOT NULL,
+    PRIMARY KEY (company_key, url)
+);
+CREATE TABLE IF NOT EXISTS dossier_state (
+    company_key TEXT PRIMARY KEY,
+    last_generated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS relationship_objectives (
     objective_id TEXT PRIMARY KEY,
@@ -937,6 +948,10 @@ class Storage:
             "DELETE FROM research_snapshots WHERE company_key = ? AND url = ?",
             (company_key, url),
         )
+        self._conn.execute(
+            "DELETE FROM new_link_events WHERE company_key = ? AND source_url = ?",
+            (company_key, url),
+        )
         self._conn.commit()
         return cursor.rowcount > 0
 
@@ -971,6 +986,64 @@ class Storage:
         row: tuple[str] | None = cursor.fetchone()
         return ResearchSnapshot.model_validate_json(row[0]) if row else None
 
+    def record_new_links(
+        self, company_key: str, source_url: str, links: list[str], discovered_at: datetime
+    ) -> None:
+        """Append newly-diffed links to the accumulating history a dossier reads
+        from. Idempotent per (company_key, url): first sighting wins, so a link
+        that later drops out of a snapshot and re-diffs as 'new' again does not
+        reset its discovered_at."""
+        if not links:
+            return
+        for link in links:
+            self._conn.execute(
+                "INSERT INTO new_link_events (company_key, url, source_url, discovered_at)"
+                " VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(company_key, url) DO NOTHING",
+                (company_key, link, source_url, discovered_at.isoformat()),
+            )
+        self._conn.commit()
+
+    def list_new_links_since(self, company_key: str, since: datetime | None) -> list[NewLinkEvent]:
+        """Every accumulated new-link event for a company, oldest first. `since`
+        of None returns the full history (there has never been a dossier)."""
+        if since is None:
+            cursor = self._conn.execute(
+                "SELECT url, source_url, discovered_at FROM new_link_events"
+                " WHERE company_key = ? ORDER BY discovered_at",
+                (company_key,),
+            )
+        else:
+            cursor = self._conn.execute(
+                "SELECT url, source_url, discovered_at FROM new_link_events"
+                " WHERE company_key = ? AND discovered_at > ? ORDER BY discovered_at",
+                (company_key, since.isoformat()),
+            )
+        return [
+            NewLinkEvent(
+                company_key=company_key,
+                url=url,
+                source_url=source_url,
+                discovered_at=datetime.fromisoformat(discovered_at),
+            )
+            for url, source_url, discovered_at in cursor.fetchall()
+        ]
+
+    def get_dossier_generated_at(self, company_key: str) -> datetime | None:
+        cursor = self._conn.execute(
+            "SELECT last_generated_at FROM dossier_state WHERE company_key = ?", (company_key,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return datetime.fromisoformat(row[0]) if row else None
+
+    def mark_dossier_generated(self, company_key: str, generated_at: datetime) -> None:
+        self._conn.execute(
+            "INSERT INTO dossier_state (company_key, last_generated_at) VALUES (?, ?)"
+            " ON CONFLICT(company_key) DO UPDATE SET last_generated_at = excluded.last_generated_at",
+            (company_key, generated_at.isoformat()),
+        )
+        self._conn.commit()
+
     def move_company_sources(self, old_key: str, new_key: str, new_name: str) -> int:
         """Re-key every company_sources/research_snapshots row from old_key to new_key,
         renaming the denormalized display name. A row already present at new_key for the
@@ -1001,15 +1074,40 @@ class Storage:
                 (new_key, url, payload, datetime.now(UTC).isoformat()),
             )
         self._conn.execute("DELETE FROM research_snapshots WHERE company_key = ?", (old_key,))
+        for url, source_url, discovered_at in self._conn.execute(
+            "SELECT url, source_url, discovered_at FROM new_link_events WHERE company_key = ?",
+            (old_key,),
+        ).fetchall():
+            self._conn.execute(
+                "INSERT INTO new_link_events (company_key, url, source_url, discovered_at)"
+                " VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(company_key, url) DO NOTHING",
+                (new_key, url, source_url, discovered_at),
+            )
+        self._conn.execute("DELETE FROM new_link_events WHERE company_key = ?", (old_key,))
+        dossier_row: tuple[str] | None = self._conn.execute(
+            "SELECT last_generated_at FROM dossier_state WHERE company_key = ?", (old_key,)
+        ).fetchone()
+        if dossier_row is not None:
+            self._conn.execute(
+                "INSERT INTO dossier_state (company_key, last_generated_at) VALUES (?, ?)"
+                " ON CONFLICT(company_key) DO UPDATE SET"
+                " last_generated_at = excluded.last_generated_at",
+                (new_key, dossier_row[0]),
+            )
+            self._conn.execute("DELETE FROM dossier_state WHERE company_key = ?", (old_key,))
         self._conn.commit()
         return moved
 
     def delete_company_sources(self, company_key: str) -> int:
-        """Delete every approved source and research snapshot for a company."""
+        """Delete every approved source, research snapshot, new-link history, and
+        dossier cursor for a company."""
         cursor = self._conn.execute(
             "DELETE FROM company_sources WHERE company_key = ?", (company_key,)
         )
         self._conn.execute("DELETE FROM research_snapshots WHERE company_key = ?", (company_key,))
+        self._conn.execute("DELETE FROM new_link_events WHERE company_key = ?", (company_key,))
+        self._conn.execute("DELETE FROM dossier_state WHERE company_key = ?", (company_key,))
         self._conn.commit()
         return cursor.rowcount
 

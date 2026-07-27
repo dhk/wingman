@@ -33,3 +33,15 @@ class ResearchSnapshot(BaseModel):
     text_hash: str
     links: list[str] = Field(default_factory=list)
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class NewLinkEvent(BaseModel):
+    """One link first seen as 'new' during a research fetch. Snapshots are
+    replace-on-refresh and only ever hold the latest link set, so this is the
+    accumulating record a dossier draws its 'new since last dossier' section
+    from — first sighting wins, it is never overwritten."""
+
+    company_key: str
+    url: str
+    source_url: str
+    discovered_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
