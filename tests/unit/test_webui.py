@@ -574,6 +574,25 @@ def test_group_rows_cap_at_twelve_with_older_line(client: tuple[TestClient, str]
     assert "pack-item-00" not in page and "pack-item-01" not in page  # no raw names
 
 
+def test_digest_rows_cap_at_seven_not_the_generic_twelve(client: tuple[TestClient, str]) -> None:
+    """#173: digests use their own cap ("last N overnight runs") — smaller
+    than the generic per-section cap, since one digest file = one run."""
+    import os
+
+    http, token = client
+    config = load_config()
+    digests = config.reports_dir / "digests"
+    digests.mkdir(parents=True)
+    base = 1_700_000_000
+    for index in range(9):
+        path = digests / f"overnight-202607{10 + index:02d}T050000Z.md"
+        path.write_text("digest!", encoding="utf-8")
+        os.utime(path, (base + index, base + index))  # index 8 newest
+    page = http.get(f"/ui/{token}/").text
+    assert page.count('class="row"') == 7  # capped at 7, not the generic 12
+    assert "older…" in page
+
+
 def test_design_tokens_are_one_shared_constant(client: tuple[TestClient, str]) -> None:
     """Issue #118 section 9: the same token block feeds the UI and the exports."""
     from wingman.reporting.design_tokens import DESIGN_TOKENS_CSS

@@ -48,6 +48,13 @@ _SERVE_TYPES = {
     ".css": "text/css",
 }
 _MAX_LISTED_PER_SECTION = 12
+# #173: digests get their own, smaller cap — "last N overnight runs" rather
+# than the generic per-section row cap, since 'wingman overnight' writes
+# exactly one dated digest file per run. Files are never deleted (backup.py's
+# --keep prunes disk; this only prunes what's *listed*), so older digests
+# stay reachable by direct URL/search (search.py's own digest glob) even
+# once they roll off this list.
+_DIGEST_RUNS_LISTED = 7
 
 # Component rules only — the token block is prepended below (issue #118 §9:
 # one shared constant feeds this stylesheet and WINGMAN_PDF_CSS alike).
@@ -329,22 +336,27 @@ def _header(config: Config) -> str:
     )
 
 
+def _section_cap(section: str) -> int:
+    return _DIGEST_RUNS_LISTED if section == "digests" else _MAX_LISTED_PER_SECTION
+
+
 def _artifact_sections(config: Config, now: datetime) -> list[tuple[str, str]]:
-    """(section, rendered group) pairs \u2014 newest first, capped at 12 rows each."""
+    """(section, rendered group) pairs \u2014 newest first, capped per '_section_cap'."""
     grouped: dict[str, list[Path]] = {}
     for section, path in _listed_files(config.reports_dir):
         grouped.setdefault(section, []).append(path)
     parts: list[tuple[str, str]] = []
     for section in sorted(grouped):
+        cap = _section_cap(section)
         rows = []
-        for path in grouped[section][:_MAX_LISTED_PER_SECTION]:
+        for path in grouped[section][:cap]:
             rel = path.relative_to(config.reports_dir).as_posix()
             label, title = _humanize(path, now)
             rows.append(
                 f'<a class="row" href="file/{_e(rel)}"><span class="when">{_e(label)}</span>'
                 f"<span>{_e(title)}</span>" + '<span class="arrow">\u2192</span></a>'
             )
-        if len(grouped[section]) > _MAX_LISTED_PER_SECTION:
+        if len(grouped[section]) > cap:
             rows.append('<div class="row-older">older\u2026</div>')
         parts.append(
             (
