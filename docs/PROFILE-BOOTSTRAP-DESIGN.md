@@ -2,11 +2,13 @@
 
 **Status.** Design recorded 2026-07-27, from an ideation session; interview
 modules revised 2026-07-28 (pro/con structure, Mission alignment split out
-as its own category rather than a Values fallback). Not built — no code in
-this repository implements any part of this document. Graduates to a
-numbered `RFC.md` entry (and a `ROADMAP.md` phase slice) once a v0 slice
-ships; until then this document is the working design and the thing to
-revise.
+as its own category rather than a Values fallback), then revised again the
+same day to reinstate a company-reaction question as Values' own fallback
+(distinct from Mission alignment — see "Interview modules"). Not built —
+no code in this repository implements any part of this document. Graduates
+to a numbered `RFC.md` entry (and a `ROADMAP.md` phase slice) once a v0
+slice ships; until then this document is the working design and the thing
+to revise.
 
 ## Motivation
 
@@ -91,13 +93,32 @@ variant) into named categories with a settled internal structure.
   purely on evidence quality. Within each block (con, then pro), the
   original ask-#2-first order still applies: #2, then #1, then #3 —
   skips the rehearsed, front-loaded first answer.
+- **Fallback, when someone struggles to name people.** Swap the stimulus
+  to companies: three whose products/services they're proud to buy, three
+  they'd never buy — same pro/con, con-then-pro, ask-#2-first structure as
+  the people version (an assumption, not independently confirmed — the
+  rescue path could reasonably be lighter, e.g. one of each, but full
+  structure was chosen for consistency rather than inventing a second,
+  thinner shape). Illustrative example: "Walmart — they destroy
+  communities" as a con nomination. The "why" is captured verbatim,
+  unsteered — a price- or quality-based reason is still a real answer,
+  even if thinner evidence than an ethics-based one; the mechanic doesn't
+  coach or filter it, consistent with how every other module works.
+  **This is a different question from Mission alignment below**, even
+  though both involve naming companies: this fallback asks "whose
+  products would you buy or refuse to buy" (a consumer-ethics judgment,
+  standing in for a personal-values signal), where Mission alignment asks
+  "who would you want to work for or be associated with" (an aspirational,
+  professional-fit judgment). Different psychological register, both
+  worth keeping.
 
 ### Mission alignment (groups)
 
 Not "company" specifically — any nominated set of people aligned for a
 purpose: a company, a club, a professional organization.
 
-- **Pro.** Three organizations you'd be proud to be associated with.
+- **Pro.** Three companies you'd like to work at, or organizations/purposes
+  you believe in — you'd be proud to be associated with them.
 - **Con.** Three organizations you'd be horrified to be associated with —
   symmetric with Values' con side. Needs its own exclusion rule analogous
   to "no Hitler" (not yet settled — a content-moderation detail, not core
@@ -111,15 +132,19 @@ purpose: a company, a club, a professional organization.
   "Pepsi sells cola," "the fire department puts out fires." Captured as
   context alongside the alignment reasoning, never as evidence itself.
 
-This replaces this design's earlier framing of "products/companies you'd
-buy" as a *fallback substitute* when someone can't name people for
-Values — it isn't a rescue mechanism, it's this category's own primary
-mechanic, aimed at organizations instead of individuals. (The research
-pass under `docs/research/profile-interview-design/` predates this
-correction; its Q3 answers a framing this design no longer uses, though
-the adjacent findings — laddering/means-end-chain interviewing,
-conspicuous-consumption caveats — still bear on Mission alignment's own
-validity.)
+**This is not the same question as the Values fallback above**, even
+though both name companies. Mission alignment asks "who would you want to
+work for or be associated with" — an aspirational, professional-fit
+judgment, always asked as its own category regardless of whether someone
+struggled with the Values people-question. The Values fallback asks "whose
+products would you buy or refuse to buy" — a consumer-ethics judgment,
+invoked only as a rescue path. (The research pass under
+`docs/research/profile-interview-design/` predates this whole
+distinction — it was written back when "products/companies" was a single,
+undifferentiated fallback idea; its Q3 findings — laddering/means-end-chain
+interviewing, conspicuous-consumption caveats — still bear on both
+company-facing questions' validity, just not on a framing this design
+still uses as originally written.)
 
 ### Alignment of perspective
 
@@ -142,7 +167,7 @@ path (`company_alignment()`).
 | Tier | Ask | Commitment |
 |---|---|---|
 | 1 — zero-commitment | React to 2-3 pieces of content the user already has in mind (agree/disagree + one line why) | Minutes; no account of themselves beyond reactions |
-| 2 — light values | Values (pro/con dinner-guest question) and Mission alignment (pro/con org question), each con-then-pro with ask-#2-first nested inside | Still short, first real values + mission-fit signal |
+| 2 — light values | Values (pro/con dinner-guest question, or the proud-to-buy/never-buy company fallback if people-naming struggles) and Mission alignment (pro/con org question), each con-then-pro with ask-#2-first nested inside | Still short, first real values + mission-fit signal |
 | 3 — deeper, opt-in | Company-alignment variant reactions once a job-search target exists; resume/LinkedIn mined for anything usable; option to attach a blog/writing if they have one (the existing writer's path) | Ongoing, as engagement builds |
 
 Whether tier progression is product-enforced (a guided flow) or just the
@@ -219,12 +244,13 @@ actively enforced here, not just true in principle:
 - **Flow enforcement.** Is the trust-ladder progression guided by the
   product, or just documented intended order with each module
   independently invokable?
-- **The no-examples fallback.** Rarer than "no writing," but possible:
-  what happens if someone genuinely can't name any people for Values, or
-  any organizations for Mission alignment? Each category is now its own
-  primary mechanic rather than a rescue for the other (see "Interview
-  modules" above), so this is an open question per category, not one
-  question with the other category as its answer.
+- **The no-examples fallback.** Values now has a defined fallback (the
+  proud-to-buy/never-buy company question — see "Interview modules"). Two
+  things this doesn't resolve: (1) that fallback's own depth (full 3+3
+  structure vs. something lighter) is an unconfirmed assumption, not a
+  decision; (2) Mission alignment still has no fallback at all — what
+  happens if someone genuinely can't name any organization they'd want to
+  work at or be horrified by?
 - **Con-side exclusion rules.** Values excludes Hitler as a con nomination
   (too easy, discriminates nothing). Mission alignment's con side needs an
   analogous exclusion — not yet named.
