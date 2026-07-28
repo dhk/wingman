@@ -38,7 +38,10 @@ the same protocol as wingman's own MCP tool).
   `WINGMAN_REPO=$HOME/src/wingman` for wingman-ctl). Data/workspace stays
   at the XDG default (`~/.local/share/wingman`). GitHub access is via
   SSH — use `git@github.com:` URLs in any command meant for lobster.
-- **Mac** — the owner's laptop; repo at `~/Documents/dev/wingman`
+- **Mac** — the owner's laptop. **Global convention: every repo checkout
+  lives under `~/Documents/dev`** (e.g. `~/Documents/dev/wingman`,
+  `~/Documents/dev/alexandria`) — not specific to this repo, applies
+  everywhere. wingman's own repo is `~/Documents/dev/wingman`
   (wingman-ctl's default), `wg` is the alias for `scripts/wingman-ctl`.
   After the lobster migration the Mac no longer serves; lobster's
   workspace is the single writer.
