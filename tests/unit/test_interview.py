@@ -1,0 +1,193 @@
+"""Profile Bootstrap v0 (docs/PROFILE-BOOTSTRAP-DESIGN.md): interview
+reactions as evidence — stimulus fetched for provenance only, 'why' is the
+only evidence stored."""
+
+from pathlib import Path
+
+import pytest
+
+from wingman.application.ingest import IngestError
+from wingman.application.interview import (
+    INTERVIEW_SOURCE_TYPE,
+    capture_interview_reaction,
+    interview_document_key,
+    render_interview_reaction,
+)
+from wingman.domain.profile import ItemStatus, ProfileItemKind
+from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
+from wingman.infrastructure.storage import Storage
+
+PAGE = b"<html><head><title>An Essay</title></head><body><p>Some argument.</p></body></html>"
+WHY_AGREE = "This matches how I think about it — I've seen the same pattern firsthand."
+WHY_DISAGREE = "I don't buy the premise; the incentives cut the other way in practice."
+
+
+@pytest.fixture
+def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
+    monkeypatch.setenv(ENV_DATA_DIR, str(tmp_path / "ws"))
+    config = load_config()
+    config.data_dir.mkdir(parents=True)
+    Storage(config.db_path).close()
+    return config
+
+
+def test_capture_url_stimulus_creates_source_record_and_item(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        report = capture_interview_reaction(
+            "alignment_of_perspective_agree",
+            "https://example.com/essay",
+            WHY_AGREE,
+            storage,
+            fetcher=lambda url: PAGE,
+        )
+        assert report.outcome == "saved"
+        assert report.title == "An Essay"
+        items = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
+        assert len(items) == 1
+        item = items[0]
+        assert item.kind is ProfileItemKind.INTERVIEW
+        assert item.subtype == "alignment_of_perspective_agree"
+        assert item.detail == WHY_AGREE
+        assert item.extracted_by == "user" and item.confidence == 1.0
+        # the stimulus's own words never become the evidence quote — only 'why' does
+        assert item.evidence[0].quote == WHY_AGREE
+        record = storage.get_source_record(item.evidence[0].source_record_id)
+        assert record is not None
+        assert record.source_type == INTERVIEW_SOURCE_TYPE
+        assert record.source_locator == "https://example.com/essay"
+        assert record.document_key == interview_document_key(
+            "alignment_of_perspective_agree", "https://example.com/essay"
+        )
+
+
+def test_capture_local_file_stimulus(workspace: Config, tmp_path: Path) -> None:
+    stimulus = tmp_path / "post.md"
+    stimulus.write_text("# A post\n\nSome argument worth reacting to.\n", encoding="utf-8")
+    with Storage(workspace.db_path) as storage:
+        report = capture_interview_reaction(
+            "alignment_of_perspective_disagree", str(stimulus), WHY_DISAGREE, storage
+        )
+        assert report.outcome == "saved"
+        assert report.title == "post.md"
+        items = storage.list_profile_items()
+        assert items[0].subtype == "alignment_of_perspective_disagree"
+        assert items[0].detail == WHY_DISAGREE
+
+
+def test_reacting_to_same_stimulus_and_subtype_supersedes(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction(
+            "alignment_of_perspective_agree",
+            "https://example.com/essay",
+            WHY_AGREE,
+            storage,
+            fetcher=lambda url: PAGE,
+        )
+        report = capture_interview_reaction(
+            "alignment_of_perspective_agree",
+            "https://example.com/essay",
+            "A revised, better reason.",
+            storage,
+            fetcher=lambda url: PAGE,
+        )
+        assert "superseded" in report.outcome
+        active = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
+        superseded = [i for i in storage.list_profile_items() if i.status is ItemStatus.SUPERSEDED]
+        assert [i.detail for i in active] == ["A revised, better reason."]
+        assert [i.detail for i in superseded] == [WHY_AGREE]
+        # identical re-capture changes nothing
+        again = capture_interview_reaction(
+            "alignment_of_perspective_agree",
+            "https://example.com/essay",
+            "A revised, better reason.",
+            storage,
+            fetcher=lambda url: PAGE,
+        )
+        assert "already captured" in again.outcome
+
+
+def test_different_subtype_same_stimulus_is_a_separate_item(workspace: Config) -> None:
+    """Agreeing and disagreeing with the SAME piece under different subtypes
+    (e.g. across two different interview passes) must not collide — only a
+    same-subtype re-reaction supersedes."""
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction(
+            "alignment_of_perspective_agree",
+            "https://example.com/essay",
+            WHY_AGREE,
+            storage,
+            fetcher=lambda url: PAGE,
+        )
+        capture_interview_reaction(
+            "alignment_of_perspective_disagree",
+            "https://example.com/essay",
+            WHY_DISAGREE,
+            storage,
+            fetcher=lambda url: PAGE,
+        )
+        active = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
+        assert {i.subtype for i in active} == {
+            "alignment_of_perspective_agree",
+            "alignment_of_perspective_disagree",
+        }
+
+
+def test_capture_validates_inputs(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        with pytest.raises(IngestError, match="unknown subtype"):
+            capture_interview_reaction("vibe", "https://example.com/x", WHY_AGREE, storage)
+        with pytest.raises(IngestError, match="required"):
+            capture_interview_reaction(
+                "alignment_of_perspective_agree", "https://example.com/x", "  ", storage
+            )
+        with pytest.raises(IngestError, match="neither an https"):
+            capture_interview_reaction(
+                "alignment_of_perspective_agree", "/no/such/file.md", WHY_AGREE, storage
+            )
+
+
+def test_render_interview_reaction() -> None:
+    from wingman.application.interview import InterviewReactionReport
+    from wingman.application.profile_store import ItemCounts
+
+    report = InterviewReactionReport(
+        subtype="alignment_of_perspective_agree",
+        stimulus="https://example.com/essay",
+        title="An Essay",
+        outcome="saved",
+        counts=ItemCounts(accepted=1),
+    )
+    rendered = render_interview_reaction(report)
+    assert "alignment_of_perspective_agree" in rendered
+    assert "An Essay" in rendered and "saved" in rendered
+
+
+def test_captured_reactions_are_reviewable_via_profile_list(workspace: Config) -> None:
+    """v0's own requirement: 'reactions are stored and reviewable' — no
+    bespoke listing command needed, 'wingman profile list' already groups
+    by kind dynamically."""
+    from wingman.application.profile_manage import render_profile_listing
+
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction(
+            "alignment_of_perspective_agree",
+            "https://example.com/essay",
+            WHY_AGREE,
+            storage,
+            fetcher=lambda url: PAGE,
+        )
+        listing = render_profile_listing(storage.list_profile_items())
+    assert "Interviews:" in listing
+    assert WHY_AGREE in listing
+
+
+def test_mcp_interview_react(workspace: Config) -> None:
+    from wingman.mcp_server import interview_react as interview_react_tool
+
+    result = interview_react_tool(
+        "alignment_of_perspective_agree", "https://example.com/essay", WHY_AGREE
+    )
+    # the MCP tool uses the real fetch_url, unreachable in tests — assert the
+    # failure path is honest rather than silently swallowed
+    assert "interview capture failed" in result
+    assert "Never capture silently" in (interview_react_tool.__doc__ or "")
