@@ -2833,14 +2833,23 @@ def interview_react(
         "to see your name in print alongside — excluding Hitler), "
         "values_fallback_pro, values_fallback_con (companies whose products/"
         "services you're proud to buy / would never buy — use these if "
-        "people-naming struggles).",
+        "people-naming struggles), mission_alignment_pro, mission_alignment_con "
+        "(companies, clubs, or any group aligned for a purpose that you'd be "
+        "proud/horrified to be associated with — requires --primary-purpose).",
     ),
     target: str = typer.Argument(
         ...,
         help="For a reaction subtype: an https:// URL, or a local PDF/DOCX/MD/TXT file. "
-        "For a nomination subtype: the person's or company's name.",
+        "For a nomination subtype: the person's or organization's name.",
     ),
     why: str = typer.Argument(..., help="Your reasoning — stored verbatim as evidence."),
+    primary_purpose: str = typer.Option(
+        "",
+        "--primary-purpose",
+        help="Required for mission_alignment subtypes only: what you understand this "
+        "organization's primary purpose to be, e.g. 'Pepsi sells cola'. Stored as "
+        "context alongside the capture, never as evidence.",
+    ),
 ) -> None:
     """Capture one interview reaction or nomination as citable profile evidence (docs/PROFILE-BOOTSTRAP-DESIGN.md).
 
@@ -2850,9 +2859,9 @@ def interview_react(
     subtype supersedes the earlier answer. See 'wingman profile list' to
     review what's been captured so far.
 
-    Values' con-then-pro ordering, with ask-#2-first nested inside each
-    block, is this interview module's own protocol — conduct it in that
-    order; it isn't enforced by this command itself.
+    Values' and Mission alignment's con-then-pro ordering, with ask-#2-first
+    nested inside each block, is this interview module's own protocol —
+    conduct it in that order; it isn't enforced by this command itself.
     """
     configure_logging()
     from wingman.application.interview import capture_interview_reaction, render_interview_reaction
@@ -2860,7 +2869,9 @@ def interview_react(
     config = load_config()
     try:
         with Storage(config.db_path) as storage:
-            report = capture_interview_reaction(subtype, target, why, storage)
+            report = capture_interview_reaction(
+                subtype, target, why, config, storage, primary_purpose=primary_purpose
+            )
     except IngestError as exc:
         typer.echo(f"interview capture failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc

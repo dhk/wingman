@@ -37,6 +37,7 @@ def test_capture_url_stimulus_creates_source_record_and_item(workspace: Config) 
             "alignment_of_perspective_agree",
             "https://example.com/essay",
             WHY_AGREE,
+            workspace,
             storage,
             fetcher=lambda url: PAGE,
         )
@@ -54,6 +55,7 @@ def test_capture_url_stimulus_creates_source_record_and_item(workspace: Config) 
         record = storage.get_source_record(item.evidence[0].source_record_id)
         assert record is not None
         assert record.source_type == INTERVIEW_SOURCE_TYPE
+        # a reaction's target IS a real, dereferenceable location — used as-is
         assert record.source_locator == "https://example.com/essay"
         assert record.document_key == interview_document_key(
             "alignment_of_perspective_agree", "https://example.com/essay"
@@ -65,7 +67,7 @@ def test_capture_local_file_stimulus(workspace: Config, tmp_path: Path) -> None:
     stimulus.write_text("# A post\n\nSome argument worth reacting to.\n", encoding="utf-8")
     with Storage(workspace.db_path) as storage:
         report = capture_interview_reaction(
-            "alignment_of_perspective_disagree", str(stimulus), WHY_DISAGREE, storage
+            "alignment_of_perspective_disagree", str(stimulus), WHY_DISAGREE, workspace, storage
         )
         assert report.outcome == "saved"
         assert report.title == "post.md"
@@ -80,6 +82,7 @@ def test_reacting_to_same_stimulus_and_subtype_supersedes(workspace: Config) -> 
             "alignment_of_perspective_agree",
             "https://example.com/essay",
             WHY_AGREE,
+            workspace,
             storage,
             fetcher=lambda url: PAGE,
         )
@@ -87,6 +90,7 @@ def test_reacting_to_same_stimulus_and_subtype_supersedes(workspace: Config) -> 
             "alignment_of_perspective_agree",
             "https://example.com/essay",
             "A revised, better reason.",
+            workspace,
             storage,
             fetcher=lambda url: PAGE,
         )
@@ -100,6 +104,7 @@ def test_reacting_to_same_stimulus_and_subtype_supersedes(workspace: Config) -> 
             "alignment_of_perspective_agree",
             "https://example.com/essay",
             "A revised, better reason.",
+            workspace,
             storage,
             fetcher=lambda url: PAGE,
         )
@@ -115,6 +120,7 @@ def test_different_subtype_same_stimulus_is_a_separate_item(workspace: Config) -
             "alignment_of_perspective_agree",
             "https://example.com/essay",
             WHY_AGREE,
+            workspace,
             storage,
             fetcher=lambda url: PAGE,
         )
@@ -122,6 +128,7 @@ def test_different_subtype_same_stimulus_is_a_separate_item(workspace: Config) -
             "alignment_of_perspective_disagree",
             "https://example.com/essay",
             WHY_DISAGREE,
+            workspace,
             storage,
             fetcher=lambda url: PAGE,
         )
@@ -135,14 +142,16 @@ def test_different_subtype_same_stimulus_is_a_separate_item(workspace: Config) -
 def test_capture_validates_inputs(workspace: Config) -> None:
     with Storage(workspace.db_path) as storage:
         with pytest.raises(IngestError, match="unknown subtype"):
-            capture_interview_reaction("vibe", "https://example.com/x", WHY_AGREE, storage)
+            capture_interview_reaction(
+                "vibe", "https://example.com/x", WHY_AGREE, workspace, storage
+            )
         with pytest.raises(IngestError, match="required"):
             capture_interview_reaction(
-                "alignment_of_perspective_agree", "https://example.com/x", "  ", storage
+                "alignment_of_perspective_agree", "https://example.com/x", "  ", workspace, storage
             )
         with pytest.raises(IngestError, match="neither an https"):
             capture_interview_reaction(
-                "alignment_of_perspective_agree", "/no/such/file.md", WHY_AGREE, storage
+                "alignment_of_perspective_agree", "/no/such/file.md", WHY_AGREE, workspace, storage
             )
 
 
@@ -156,8 +165,10 @@ def test_values_pro_and_con_nominations_are_captured_with_no_fetch(workspace: Co
     """Nominations never fetch anything — 'target' is just a name, unlike
     the reaction subtypes above."""
     with Storage(workspace.db_path) as storage:
-        pro = capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, storage)
-        con = capture_interview_reaction("values_con", "A. Public Figure", WHY_CON, storage)
+        pro = capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, workspace, storage)
+        con = capture_interview_reaction(
+            "values_con", "A. Public Figure", WHY_CON, workspace, storage
+        )
         assert pro.outcome == "saved" and pro.title is None
         assert con.outcome == "saved" and con.title is None
         items = {
@@ -166,6 +177,12 @@ def test_values_pro_and_con_nominations_are_captured_with_no_fetch(workspace: Co
         assert items["values_pro"].name == "values_pro: Jane Goodall"
         assert items["values_pro"].detail == WHY_PRO
         assert items["values_con"].detail == WHY_CON
+        # a nomination's target is a bare name, not a real location — the
+        # note is archived to the inbox instead, unlike a reaction
+        record = storage.get_source_record(items["values_pro"].evidence[0].source_record_id)
+        assert record is not None
+        note = workspace.data_dir / record.source_locator
+        assert note.exists() and WHY_PRO in note.read_text(encoding="utf-8")
 
 
 def test_values_con_excludes_hitler(workspace: Config) -> None:
@@ -174,16 +191,17 @@ def test_values_con_excludes_hitler(workspace: Config) -> None:
     with Storage(workspace.db_path) as storage:
         for name in ("Hitler", "hitler", "  HITLER  ", "Adolf Hitler", "adolf   hitler"):
             with pytest.raises(IngestError, match="excluded from values_con"):
-                capture_interview_reaction("values_con", name, WHY_CON, storage)
+                capture_interview_reaction("values_con", name, WHY_CON, workspace, storage)
         # the exclusion is specific to values_con — the identical literal
         # string is accepted under values_pro or the company fallback (no
         # exclusion list there at all, per the design's resolution)
         assert (
-            capture_interview_reaction("values_pro", "Hitler", WHY_PRO, storage).outcome == "saved"
+            capture_interview_reaction("values_pro", "Hitler", WHY_PRO, workspace, storage).outcome
+            == "saved"
         )
         assert (
             capture_interview_reaction(
-                "values_fallback_con", "Hitler", WHY_WALMART_CON, storage
+                "values_fallback_con", "Hitler", WHY_WALMART_CON, workspace, storage
             ).outcome
             == "saved"
         )
@@ -191,9 +209,11 @@ def test_values_con_excludes_hitler(workspace: Config) -> None:
 
 def test_values_fallback_nominates_a_company_instead_of_a_person(workspace: Config) -> None:
     with Storage(workspace.db_path) as storage:
-        con = capture_interview_reaction("values_fallback_con", "Walmart", WHY_WALMART_CON, storage)
+        con = capture_interview_reaction(
+            "values_fallback_con", "Walmart", WHY_WALMART_CON, workspace, storage
+        )
         pro = capture_interview_reaction(
-            "values_fallback_pro", "A Local Co-op", WHY_WALMART_PRO, storage
+            "values_fallback_pro", "A Local Co-op", WHY_WALMART_PRO, workspace, storage
         )
         assert con.outcome == "saved" and pro.outcome == "saved"
         items = {
@@ -204,13 +224,88 @@ def test_values_fallback_nominates_a_company_instead_of_a_person(workspace: Conf
 
 def test_renominating_the_same_person_supersedes(workspace: Config) -> None:
     with Storage(workspace.db_path) as storage:
-        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, storage)
+        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, workspace, storage)
         report = capture_interview_reaction(
-            "values_pro", "Jane Goodall", "A different, better reason.", storage
+            "values_pro", "Jane Goodall", "A different, better reason.", workspace, storage
         )
         assert "superseded" in report.outcome
         active = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
         assert [i.detail for i in active] == ["A different, better reason."]
+
+
+WHY_MISSION_PRO = "Their approach to firefighting logistics matches how I think teams should run."
+WHY_MISSION_CON = "I think their core business model is extractive by design."
+
+
+def test_mission_alignment_requires_primary_purpose(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        with pytest.raises(IngestError, match="primary_purpose is required"):
+            capture_interview_reaction(
+                "mission_alignment_pro", "The Fire Department", WHY_MISSION_PRO, workspace, storage
+            )
+        with pytest.raises(IngestError, match="primary_purpose is required"):
+            capture_interview_reaction(
+                "mission_alignment_pro",
+                "The Fire Department",
+                WHY_MISSION_PRO,
+                workspace,
+                storage,
+                primary_purpose="   ",
+            )
+        # not required for any other subtype, reaction or nomination
+        assert (
+            capture_interview_reaction(
+                "values_pro", "Jane Goodall", WHY_PRO, workspace, storage
+            ).outcome
+            == "saved"
+        )
+
+
+def test_mission_alignment_captures_purpose_as_context_not_evidence(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        report = capture_interview_reaction(
+            "mission_alignment_pro",
+            "The Fire Department",
+            WHY_MISSION_PRO,
+            workspace,
+            storage,
+            primary_purpose="Puts out fires",
+        )
+        assert report.outcome == "saved" and report.title is None
+        items = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
+        item = items[0]
+        # the evidence quote is ONLY the reasoning — the purpose answer
+        # never becomes the (or part of the) evidence itself
+        assert item.evidence[0].quote == WHY_MISSION_PRO
+        assert item.detail == WHY_MISSION_PRO
+        assert "Puts out fires" not in item.detail
+        assert "Puts out fires" not in item.evidence[0].quote
+        # it IS retained as retrievable context in the inbox note (unlike
+        # v1 slice 1, which had no primary-purpose concept to lose)
+        record = storage.get_source_record(item.evidence[0].source_record_id)
+        assert record is not None
+        note = workspace.data_dir / record.source_locator
+        note_text = note.read_text(encoding="utf-8")
+        assert "Puts out fires" in note_text
+        assert WHY_MISSION_PRO in note_text
+        assert record.document_key == interview_document_key(
+            "mission_alignment_pro", "The Fire Department"
+        )
+
+
+def test_mission_alignment_con_has_no_exclusion_list(workspace: Config) -> None:
+    """Unlike values_con, there's no equivalent to 'no Hitler' here — see
+    docs/PROFILE-BOOTSTRAP-DESIGN.md's resolution of why."""
+    with Storage(workspace.db_path) as storage:
+        report = capture_interview_reaction(
+            "mission_alignment_con",
+            "Hitler Youth Reenactment Society",
+            WHY_MISSION_CON,
+            workspace,
+            storage,
+            primary_purpose="Historical reenactment",
+        )
+        assert report.outcome == "saved"
 
 
 def test_render_interview_reaction() -> None:
@@ -240,6 +335,7 @@ def test_captured_reactions_are_reviewable_via_profile_list(workspace: Config) -
             "alignment_of_perspective_agree",
             "https://example.com/essay",
             WHY_AGREE,
+            workspace,
             storage,
             fetcher=lambda url: PAGE,
         )
