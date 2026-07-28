@@ -290,13 +290,25 @@ Resolved 2026-07-28 (see "Revisit if" for what would reopen each):
 - ~~**Storage shape for `InterviewDocument`.**~~ **Resolved: reuse and
   extend `qa_capture`'s shape**, with a new `subtype` field carrying the
   interview category — see "Architecture" above.
+- ~~**Mission alignment's own no-examples fallback.**~~ **Resolved:
+  anchor first, then skip gracefully.** If someone can't name a company or
+  organization they'd want to work at or be horrified by, first re-ask
+  anchored to something they've actually lived — "an organization you've
+  actually been part of: school, an employer, a club, a volunteer group —
+  proud or not, and why" (Critical Incident Technique — a memory-anchored
+  prompt beats open hypothetical recall for someone already stalling, per
+  the research pass's Q2 finding). If that still comes up empty, the
+  module just doesn't fire — same honest-degrade pattern the dossier's
+  Gaps section already uses elsewhere in wingman ("no stance yet — run
+  X"), rather than forcing an answer. Naturally fills in later once real
+  job-search targets exist (tier 3's Company-alignment variant). Rejected:
+  deriving a company indirectly from whoever they already named in
+  Values ("you said you'd have dinner with X — what org is X associated
+  with?") — reintroduces exactly the cross-module indirection this design
+  just spent effort removing by keeping Values and Mission alignment as
+  separate, direct questions.
 
-Still open:
-
-- **Mission alignment's own no-examples fallback.** Values has one now
-  (the proud-to-buy/never-buy company question). Mission alignment still
-  has none — what happens if someone genuinely can't name any
-  organization they'd want to work at or be horrified by?
+All seven v1 open questions are now resolved.
 
 ## Phasing
 
@@ -333,3 +345,9 @@ Still open:
   for organizations, where it reads as a deliberate technique for people)
   — that's the trigger to give organizations their own ordering, not
   assume the carried-over one is permanent.
+- The anchor-first fallback for Mission alignment (Critical Incident
+  Technique — "an org you've actually been part of") turns out to *also*
+  come up empty often enough that skip-gracefully is doing most of the
+  work — that's the trigger to reconsider whether Mission alignment needs
+  a company-free fallback of its own (parallel to Values'), not just a
+  two-step version of the same question shape.
