@@ -385,17 +385,17 @@ def qa_capture(question: str, answer: str, kind: str = "achievement") -> str:
 
 
 @server.tool()
-def interview_react(subtype: str, target: str, why: str) -> str:
+def interview_react(subtype: str, target: str, why: str, primary_purpose: str = "") -> str:
     """Capture one interview reaction OR nomination as citable profile
     evidence (docs/PROFILE-BOOTSTRAP-DESIGN.md) — a way to bootstrap
     profile evidence without pre-existing published writing.
 
-    Two mechanics, chosen by subtype:
+    Three mechanics, chosen by subtype:
     - Reaction (Alignment of perspective): target is an https:// URL or a
       local PDF/DOCX/MD/TXT file the user chose to react to. subtype is
       'alignment_of_perspective_agree' or
       'alignment_of_perspective_disagree'.
-    - Nomination (Values): target is a person's name (or, for the fallback
+    - Nomination — Values: target is a person's name (or, for the fallback
       subtypes, a company's). subtype is 'values_pro' / 'values_con'
       (three people, living or dead, they'd have dinner with / be
       horrified to see their name in print alongside — 'values_con'
@@ -404,22 +404,36 @@ def interview_react(subtype: str, target: str, why: str) -> str:
       (companies whose products/services they're proud to buy / would
       never buy — offer these ONLY if the person struggles to name
       people).
+    - Nomination — Mission alignment: target is an organization's name —
+      a company, club, or any nominated group aligned for a purpose, not
+      "company" specifically. subtype is 'mission_alignment_pro' (they'd
+      like to work there, or be proud to be associated with it) /
+      'mission_alignment_con' (horrified to be associated with it — no
+      exclusion list here, unlike values_con). primary_purpose is
+      REQUIRED for this pair only: what the user understands the
+      nominated org's primary purpose to be, e.g. "Pepsi sells cola" or
+      "the fire department puts out fires" — ask it every time an org is
+      nominated, pro or con. Stored as context alongside the reasoning,
+      never as evidence itself.
 
     Either way, why is the user's own reasoning, stored verbatim as the
     ONLY evidence — the target itself (fetched page or nominee name) is
     never quoted as if it were the user's own words. Capturing the same
     target again under the same subtype supersedes the earlier answer.
 
-    Protocol for Values specifically — conduct it in this order, this tool
-    does not enforce it: con nominees before pro nominees (ends the
-    interview on a high note); within EACH block, ask why about the
-    SECOND nominee first, then the first, then the third (dodges the
-    rehearsed, front-loaded answer).
+    Protocol for Values and Mission alignment — conduct each module in
+    this order, this tool does not enforce it: con nominees before pro
+    nominees (ends the interview on a high note); within EACH block, ask
+    why about the SECOND nominee first, then the first, then the third
+    (dodges the rehearsed, front-loaded answer). For Mission alignment,
+    ask the primary-purpose question immediately after each nomination,
+    before asking why.
 
     Same show-before-save discipline as qa_capture otherwise — show the
-    exact target, subtype, and why text that will be stored, and save
-    only after the user agrees. Never capture silently, and never
-    paraphrase 'why' on the user's behalf.
+    exact target, subtype, and why text (and primary_purpose, where it
+    applies) that will be stored, and save only after the user agrees.
+    Never capture silently, and never paraphrase 'why' on the user's
+    behalf.
     """
     from wingman.application.interview import capture_interview_reaction
 
@@ -428,7 +442,9 @@ def interview_react(subtype: str, target: str, why: str) -> str:
         return _NOT_INITIALIZED
     try:
         with Storage(config.db_path) as storage:
-            report = capture_interview_reaction(subtype, target, why, storage)
+            report = capture_interview_reaction(
+                subtype, target, why, config, storage, primary_purpose=primary_purpose
+            )
     except IngestError as exc:
         return f"interview capture failed: {exc}"
     title = f" ({report.title})" if report.title else ""

@@ -8,29 +8,35 @@ dispatched by `subtype`:
   content (an https:// URL, or a local PDF/DOCX/Markdown/text file), states
   agree/disagree, and explains why. The content is fetched only far enough
   to extract a title and a content hash for provenance.
-- **Nomination** (v1, Values): the user names a person (or, for the
-  fallback subtypes, a company) and explains why — no fetch at all, there
-  is nothing to reduce.
+- **Nomination** (v1, Values and Mission alignment): the user names a
+  person or organization and explains why — no fetch at all, there is
+  nothing to reduce. A nomination's target is a bare name, not a
+  dereferenceable location, so (unlike a reaction) the capture note is
+  written to the inbox — qa_capture.py's exact pattern — so 'why' and, for
+  Mission alignment, the primary-purpose answer both stay retrievable
+  there. Mission alignment captures what the person understands the
+  nominated org's primary purpose to be ("Pepsi sells cola") as context
+  alongside the reasoning, never as evidence.
 
 Either way, the "why" is the ONLY thing that ever becomes evidence,
-mirroring qa_capture.py's pattern exactly — the stimulus/nominee is
-context, never quoted as if it were the user's own words (the design's
-"one hard rule"). No model call is made anywhere in this module, so the
-model-exposure risk the design names doesn't arise yet; that's v1's
+mirroring qa_capture.py's pattern exactly — the stimulus/nominee/purpose
+answer is context, never quoted as if it were the user's own words (the
+design's "one hard rule"). No model call is made anywhere in this module,
+so the model-exposure risk the design names doesn't arise yet; that's v1's
 synthesis step (InterviewDocument, not built here).
 
 Ordering (con-then-pro, ask-#2-first) is enforced the same way this
 codebase already enforces other tool-usage protocols (qa_capture,
 resolve_requirement) — as instructions in the MCP tool's docstring for the
-calling agent to follow, not a stateful wizard here. Mission alignment
-subtypes and InterviewDocument/synthesis are the next slices; neither
-exists yet.
+calling agent to follow, not a stateful wizard here. InterviewDocument and
+synthesis into build_own_pov are the next slice; neither exists yet.
 """
 
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -42,6 +48,7 @@ from wingman.application.resume_formats import extract_resume_text
 from wingman.domain.profile import EvidenceSpan, ProfileItem, ProfileItemKind
 from wingman.domain.provenance import ClaimClassification
 from wingman.domain.source_record import SourceRecord
+from wingman.infrastructure.config import Config
 from wingman.infrastructure.fetch import FetchError, fetch_url
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -58,20 +65,26 @@ REACTION_SUBTYPES = {
     "alignment_of_perspective_disagree",
 }
 # Values (v1): nominate a person by name, no fetch — values_fallback_* name
-# a company instead, when someone struggles to name people. Mission
-# alignment subtypes join this set in the next slice.
-NOMINATION_SUBTYPES = {
+# a company instead, when someone struggles to name people.
+VALUES_SUBTYPES = {
     "values_pro",
     "values_con",
     "values_fallback_pro",
     "values_fallback_con",
 }
+# Mission alignment (v1): nominate an organization — a company, club, or any
+# nominated set of people aligned for a purpose, not "company" specifically.
+MISSION_ALIGNMENT_SUBTYPES = {
+    "mission_alignment_pro",
+    "mission_alignment_con",
+}
+NOMINATION_SUBTYPES = VALUES_SUBTYPES | MISSION_ALIGNMENT_SUBTYPES
 VALID_SUBTYPES = REACTION_SUBTYPES | NOMINATION_SUBTYPES
 
 # values_con excludes Hitler — too easy a nomination to discriminate
 # anything about the person's actual values. No analogous exclusion for
-# values_fallback_con (companies) or (in a later slice) mission alignment's
-# con side — see docs/PROFILE-BOOTSTRAP-DESIGN.md's resolution of why.
+# values_fallback_con (companies) or mission_alignment_con — see
+# docs/PROFILE-BOOTSTRAP-DESIGN.md's resolution of why.
 _EXCLUDED_VALUES_CON_NOMINEES = {"hitler", "adolf hitler"}
 
 
@@ -120,15 +133,23 @@ def capture_interview_reaction(
     subtype: str,
     target: str,
     why: str,
+    config: Config,
     storage: Storage,
     fetcher: Callable[[str], bytes] | None = None,
+    primary_purpose: str | None = None,
 ) -> InterviewReactionReport:
     """Persist one interview capture — a reaction to fetched content
-    (Alignment of perspective) or a nomination by name (Values).
+    (Alignment of perspective), or a nomination by name (Values, Mission
+    alignment).
 
     'target' is the https:// URL/local file to react to for a reaction
-    subtype, or the person/company name for a nomination subtype. Either
-    way 'why' is the only evidence stored, never the target's own content.
+    subtype, or the person/organization name for a nomination subtype.
+    Either way 'why' is the only evidence stored, never the target's own
+    content. 'primary_purpose' is required for mission_alignment_* only —
+    what the person understands the nominated org's primary purpose to be
+    ("Pepsi sells cola"); it is written to the inbox note alongside the
+    capture (like qa_capture's own note file) so it stays retrievable, but
+    it never becomes the evidence quote itself.
     """
     subtype = subtype.strip().lower()
     if subtype not in VALID_SUBTYPES:
@@ -138,6 +159,26 @@ def capture_interview_reaction(
     why = why.strip()
     if not target or not why:
         raise IngestError("both a target and a why are required — nothing was captured.")
+    primary_purpose = (primary_purpose or "").strip() or None
+    if subtype in MISSION_ALIGNMENT_SUBTYPES and primary_purpose is None:
+        raise IngestError(
+            "primary_purpose is required for mission_alignment subtypes — what do you "
+            "understand this organization's primary purpose to be? Nothing was captured."
+        )
+
+    # Hashed on the full capture (subtype + target + why [+ primary_purpose
+    # for mission alignment]), not just the fetched/nominated target —
+    # mirroring qa_capture's Q+A hash exactly. A changed 'why' (or purpose
+    # answer) must produce a new record, or RFC-028 supersession has
+    # nothing earlier to point at: reusing one record per target (keyed on
+    # the target's own content) would tie every revised capture to the SAME
+    # record, excluding it from its own lineage check and forcing a
+    # spurious conflict instead of a clean update.
+    content = f"# Interview capture\n\nSubtype: {subtype}\n\nTarget: {target}\n\nWhy: {why}\n"
+    if primary_purpose is not None:
+        content += f"\nUnderstood primary purpose: {primary_purpose}\n"
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    record = storage.get_source_record_by_hash(content_hash)
 
     if subtype in NOMINATION_SUBTYPES:
         if subtype == "values_con" and " ".join(target.lower().split()) in (
@@ -148,27 +189,41 @@ def capture_interview_reaction(
                 "discriminate anything about your actual values. Nothing was captured."
             )
         title = None
+        if record is None:
+            # A nomination's target is a bare name, not a real location —
+            # unlike a reaction's URL/file, there is nowhere to point
+            # source_locator that a reader could later dereference. Write
+            # the capture note to the inbox (qa_capture's exact pattern) so
+            # 'why' AND primary_purpose both stay retrievable there, not
+            # just baked into an opaque hash.
+            config.inbox_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+            path = config.inbox_dir / f"{stamp}-interview-note.md"
+            path.write_text(content, encoding="utf-8")
+            data_root = config.data_dir.resolve()
+            resolved = path.resolve()
+            locator = (
+                str(resolved.relative_to(data_root))
+                if resolved.is_relative_to(data_root)
+                else str(resolved)
+            )
+            record = SourceRecord(
+                source_type=INTERVIEW_SOURCE_TYPE,
+                source_locator=locator,
+                content_hash=content_hash,
+                document_key=interview_document_key(subtype, target),
+            )
+            storage.add_source_record(record)
     else:
         _text, title = _fetch_stimulus(target, fetcher)
-
-    # Hashed on the full capture (subtype + target + why), not just the
-    # fetched/nominated target — mirroring qa_capture's Q+A hash exactly. A
-    # changed 'why' must produce a new record, or RFC-028 supersession has
-    # nothing earlier to point at: reusing one record per target (keyed on
-    # the target's own content) would tie every revised capture to the SAME
-    # record, excluding it from its own lineage check and forcing a
-    # spurious conflict instead of a clean update.
-    content = f"# Interview capture\n\nSubtype: {subtype}\n\nTarget: {target}\n\nWhy: {why}\n"
-    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    record = storage.get_source_record_by_hash(content_hash)
-    if record is None:
-        record = SourceRecord(
-            source_type=INTERVIEW_SOURCE_TYPE,
-            source_locator=target,
-            content_hash=content_hash,
-            document_key=interview_document_key(subtype, target),
-        )
-        storage.add_source_record(record)
+        if record is None:
+            record = SourceRecord(
+                source_type=INTERVIEW_SOURCE_TYPE,
+                source_locator=target,
+                content_hash=content_hash,
+                document_key=interview_document_key(subtype, target),
+            )
+            storage.add_source_record(record)
 
     item = ProfileItem(
         kind=ProfileItemKind.INTERVIEW,
