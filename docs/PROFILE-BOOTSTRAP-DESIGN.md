@@ -1,14 +1,16 @@
 # Profile Bootstrap via Reaction — Design (proposal, not yet an RFC)
 
 **Status.** Design recorded 2026-07-27, from an ideation session; interview
-modules revised 2026-07-28 (pro/con structure, Mission alignment split out
-as its own category rather than a Values fallback), then revised again the
-same day to reinstate a company-reaction question as Values' own fallback
-(distinct from Mission alignment — see "Interview modules"). Not built —
-no code in this repository implements any part of this document. Graduates
-to a numbered `RFC.md` entry (and a `ROADMAP.md` phase slice) once a v0
-slice ships; until then this document is the working design and the thing
-to revise.
+modules revised twice on 2026-07-28 (pro/con structure and Mission
+alignment split out as its own category, then a company-reaction fallback
+reinstated for Values specifically — see "Interview modules"); five of
+the v1 open questions resolved the same day (`InterviewDocument` as the
+synthesis-feeding type, flow enforcement, fallback depth, con-side
+exclusions, ordering validation — see "Open questions" and "Revisit if").
+Not built — no code in this repository implements any part of this
+document. Graduates to a numbered `RFC.md` entry (and a `ROADMAP.md` phase
+slice) once a v0 slice ships; until then this document is the working
+design and the thing to revise.
 
 ## Motivation
 
@@ -120,9 +122,11 @@ purpose: a company, a club, a professional organization.
 - **Pro.** Three companies you'd like to work at, or organizations/purposes
   you believe in — you'd be proud to be associated with them.
 - **Con.** Three organizations you'd be horrified to be associated with —
-  symmetric with Values' con side. Needs its own exclusion rule analogous
-  to "no Hitler" (not yet settled — a content-moderation detail, not core
-  to the mechanic).
+  symmetric with Values' con side. No exclusion rule (unlike Values' "no
+  Hitler") — see "Open questions" for why: there's no single obvious
+  "worst company" the way there's an obvious lazy answer for a person, so
+  this relies on verbatim capture and the pro/con pairing itself to
+  surface real signal instead of a hardcoded banned-org list.
 - **Ordering.** Same con-then-pro block ordering and nested ask-#2-first
   logic as Values, carried over for consistency (not independently
   confirmed for this category — an assumption to revisit if it doesn't
@@ -170,9 +174,9 @@ path (`company_alignment()`).
 | 2 — light values | Values (pro/con dinner-guest question, or the proud-to-buy/never-buy company fallback if people-naming struggles) and Mission alignment (pro/con org question), each con-then-pro with ask-#2-first nested inside | Still short, first real values + mission-fit signal |
 | 3 — deeper, opt-in | Company-alignment variant reactions once a job-search target exists; resume/LinkedIn mined for anything usable; option to attach a blog/writing if they have one (the existing writer's path) | Ongoing, as engagement builds |
 
-Whether tier progression is product-enforced (a guided flow) or just the
-intended order with each module independently invokable is an open
-question below.
+Tier progression is not product-enforced (see "Open questions" for the
+resolution) — this table is a suggested default order, and each module
+stays independently invokable.
 
 ## Architecture — what already exists to reuse
 
@@ -195,9 +199,23 @@ it's mostly integration, not new machinery:
   `ProfileItem`, zero model calls at capture time. This flow generalizes
   that pattern (today scoped to resolving Unknown verdicts mid-assess)
   into a deliberate onboarding interview.
-- **Downstream synthesis** — how this new evidence eventually feeds
-  `build_own_pov` (which today reads `ExternalDocument`/`CorpusDocument`
-  only) is an open design question below, not decided here.
+- **Downstream synthesis — resolved 2026-07-28: `InterviewDocument`.** A
+  new, thin candidate-document type alongside `ExternalDocument`/
+  `CorpusDocument`, which `build_own_pov` reads in the same synthesis call
+  as the other two. Rejected: coercing the "why" text into an existing
+  `CorpusDocument` — cheaper (zero pipeline changes) but collapses
+  provenance, since a stance built entirely from three terse interview
+  answers would then render identically to one built from a 2,000-word
+  essay, against `AGENTS.md`'s "inspectable outputs and provenance"
+  invariant. `InterviewDocument` keeps both evidence sources composable in
+  one call (so writing and interview answers genuinely *augment* each
+  other for someone who has both) while staying labeled by source in the
+  rendered card. Not yet settled: whether its backing store reuses
+  `qa_capture`'s existing `SourceRecord`/`ProfileItem` shape as-is, or
+  needs its own table — `qa_capture`'s shape was built for career-evidence
+  items (achievement/skill), and this needs richer fields (which category,
+  the stimulus, pro/con) that may not fit cleanly. Left for whoever builds
+  this to decide against the code, not guessed here.
 
 ## Limits and configuration
 
@@ -234,29 +252,48 @@ actively enforced here, not just true in principle:
 
 ## Open questions
 
-- **Storage shape.** Does the submitted content + the "why" answer get a
-  new table modeled on `qa_capture`'s `SourceRecord`/`ProfileItem` shape,
-  or extend `ExternalDocument`? Not decided.
-- **Feeding synthesis.** How does this reach `build_own_pov`/
-  `build_company_pov` — a new candidate-document type alongside
-  `ExternalDocument | CorpusDocument`, or does the "why" text get treated
-  as a `CorpusDocument` directly? Not decided.
-- **Flow enforcement.** Is the trust-ladder progression guided by the
-  product, or just documented intended order with each module
-  independently invokable?
-- **The no-examples fallback.** Values now has a defined fallback (the
-  proud-to-buy/never-buy company question — see "Interview modules"). Two
-  things this doesn't resolve: (1) that fallback's own depth (full 3+3
-  structure vs. something lighter) is an unconfirmed assumption, not a
-  decision; (2) Mission alignment still has no fallback at all — what
-  happens if someone genuinely can't name any organization they'd want to
-  work at or be horrified by?
-- **Con-side exclusion rules.** Values excludes Hitler as a con nomination
-  (too easy, discriminates nothing). Mission alignment's con side needs an
-  analogous exclusion — not yet named.
-- **Does Mission alignment's con-then-pro/ask-#2-first ordering actually
-  hold up?** Carried over from Values by assumption, not independently
-  validated for organizations.
+Resolved 2026-07-28 (all in one pass — see "Revisit if" for what would
+reopen each):
+
+- ~~**Feeding synthesis.**~~ **Resolved: `InterviewDocument`**, a new
+  candidate-document type — see "Architecture" above for the decision and
+  what it rejected.
+- ~~**Flow enforcement.**~~ **Resolved: not product-enforced across
+  modules.** Nothing else in wingman gates command sequencing (`wingman
+  company pov` doesn't require `wingman people fetch` first; dossiers
+  degrade gracefully via their Gaps section instead) — Values, Mission
+  alignment, and Alignment of perspective stay independently invokable,
+  and the trust ladder is a *suggested default order* for an onboarding
+  prompt, not an enforced gate. Ordering **within** one module's own flow
+  (con-then-pro, ask-#2-first) stays code-enforced regardless — that's a
+  single interactive command's own logic, not cross-module sequencing.
+- ~~**Values fallback depth.**~~ **Resolved: ship the full 3+3
+  structure**, same as the primary people-based question — one code path
+  handles both stimulus types, rather than building a second, thinner
+  interview shape ahead of any evidence it's needed.
+- ~~**Mission alignment's con-side exclusion rule.**~~ **Resolved: no
+  exclusion list.** "No Hitler" works for Values because there's one
+  obvious, universally-agreed lazy answer for a *person*; there's no
+  equivalent single obvious "worst company," and a hardcoded banned-org
+  list would be brittle and culturally specific to maintain. Rely on
+  verbatim capture + the pro/con pairing itself to surface real signal;
+  add a rule only if real usage actually produces a problem.
+- ~~**Does Mission alignment's ordering hold up for organizations?**~~
+  **Resolved: ship the carried-over assumption, observe.** One shared
+  ordering implementation for both Values and Mission alignment rather
+  than two; this is empirical and can't be resolved by design discussion
+  — see "Revisit if."
+
+Still open:
+
+- **Storage shape for `InterviewDocument`.** Reuse `qa_capture`'s
+  `SourceRecord`/`ProfileItem` shape as-is, or a new dedicated table? See
+  the "Architecture" section's `InterviewDocument` entry — left for
+  whoever builds this to decide against the actual code.
+- **Mission alignment's own no-examples fallback.** Values has one now
+  (the proud-to-buy/never-buy company question). Mission alignment still
+  has none — what happens if someone genuinely can't name any
+  organization they'd want to work at or be horrified by?
 
 ## Phasing
 
@@ -273,9 +310,9 @@ actively enforced here, not just true in principle:
 
 ## Revisit if
 
-- The storage-shape question above turns out to matter for something else
-  already planned (e.g. RFC-036's Q&A lineage machinery) — resolve them
-  together rather than diverging.
+- The `InterviewDocument` storage-shape question turns out to matter for
+  something else already planned (e.g. RFC-036's Q&A lineage machinery) —
+  resolve them together rather than diverging.
 - Real usage shows the trust ladder's tiers don't match how people actually
   move through onboarding (e.g. everyone stops after tier 1) — that's a
   product-flow finding, not a reason to redesign the underlying mechanic.
@@ -284,3 +321,12 @@ actively enforced here, not just true in principle:
   synthesized stance despite the delimiting) — that is the trigger to
   reconsider whether synthesis should read the submitted content at all,
   versus only ever reading the user's own "why" text.
+- Someone actually nominates a genuinely problematic org for Mission
+  alignment's con side and the no-exclusion-list decision turns out to be
+  wrong in practice — that's the trigger to name a specific rule, not
+  building one on spec now.
+- Real usage shows Mission alignment's con-then-pro/ask-#2-first ordering
+  doesn't land the same way it does for Values (e.g. it reads as arbitrary
+  for organizations, where it reads as a deliberate technique for people)
+  — that's the trigger to give organizations their own ordering, not
+  assume the carried-over one is permanent.
