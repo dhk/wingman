@@ -1,10 +1,12 @@
 # Profile Bootstrap via Reaction — Design (proposal, not yet an RFC)
 
-**Status.** Design recorded 2026-07-27, from an ideation session. Not built —
-no code in this repository implements any part of this document. Graduates
-to a numbered `RFC.md` entry (and a `ROADMAP.md` phase slice) once a v0
-slice ships; until then this document is the working design and the thing
-to revise.
+**Status.** Design recorded 2026-07-27, from an ideation session; interview
+modules revised 2026-07-28 (pro/con structure, Mission alignment split out
+as its own category rather than a Values fallback). Not built — no code in
+this repository implements any part of this document. Graduates to a
+numbered `RFC.md` entry (and a `ROADMAP.md` phase slice) once a v0 slice
+ships; until then this document is the working design and the thing to
+revise.
 
 ## Motivation
 
@@ -73,26 +75,75 @@ mode RFC-005 and `AGENTS.md`'s product invariants exist to prevent.
 
 ## Interview modules
 
-- **Agree/disagree pairs.** The core loop: 3 pieces the user agrees with, 3
-  they don't, each with a one-line why.
-- **Three-people question**, asked in **ask-#2-first order**: "name three
-  people you'd want to be professionally associated with," then ask why
-  about the *second* one first, deliberately skipping the rehearsed,
-  front-loaded answer to get to something more honestly reasoned before
-  circling back to the first.
-- **Company-alignment variant.** The same stimulus/reaction/reasoning loop,
-  pointed at a target company's own public content instead of a person's —
-  answers "does this org's thinking actually match mine" directly, as an
-  alternative or supplement to the existing indirect embedding-similarity
-  path (`company_alignment()`).
+Three categories, refined 2026-07-28 from the original looser three-module
+sketch (agree/disagree pairs, a three-people question, a company-alignment
+variant) into named categories with a settled internal structure.
+
+### Values (people)
+
+- **Pro.** Three people, living or dead, you'd have dinner with.
+- **Con.** Three people, living or dead, you'd be horrified to see your
+  name in print alongside — excluding Hitler (too easy a nomination to
+  discriminate anything about the person's actual values).
+- **Ordering.** Ask why about every con nominee before any pro nominee —
+  ends the block on a high note, a bet on continued-engagement UX
+  (dwelling on the negative first, resolving positive last) rather than
+  purely on evidence quality. Within each block (con, then pro), the
+  original ask-#2-first order still applies: #2, then #1, then #3 —
+  skips the rehearsed, front-loaded first answer.
+
+### Mission alignment (groups)
+
+Not "company" specifically — any nominated set of people aligned for a
+purpose: a company, a club, a professional organization.
+
+- **Pro.** Three organizations you'd be proud to be associated with.
+- **Con.** Three organizations you'd be horrified to be associated with —
+  symmetric with Values' con side. Needs its own exclusion rule analogous
+  to "no Hitler" (not yet settled — a content-moderation detail, not core
+  to the mechanic).
+- **Ordering.** Same con-then-pro block ordering and nested ask-#2-first
+  logic as Values, carried over for consistency (not independently
+  confirmed for this category — an assumption to revisit if it doesn't
+  hold up in practice).
+- **Primary-purpose check.** Whenever an org is nominated (pro or con),
+  ask what the person understands that org's primary purpose to be —
+  "Pepsi sells cola," "the fire department puts out fires." Captured as
+  context alongside the alignment reasoning, never as evidence itself.
+
+This replaces this design's earlier framing of "products/companies you'd
+buy" as a *fallback substitute* when someone can't name people for
+Values — it isn't a rescue mechanism, it's this category's own primary
+mechanic, aimed at organizations instead of individuals. (The research
+pass under `docs/research/profile-interview-design/` predates this
+correction; its Q3 answers a framing this design no longer uses, though
+the adjacent findings — laddering/means-end-chain interviewing,
+conspicuous-consumption caveats — still bear on Mission alignment's own
+validity.)
+
+### Alignment of perspective
+
+- **Agree/disagree pairs.** The core loop, unchanged: 3 pieces of content
+  the user agrees with, 3 they don't, each with a one-line why — reacting
+  to specific people's intellectual, ethical, or professional
+  perspectives.
+
+### Company-alignment variant (v2, job-search-specific)
+
+The same stimulus/reaction/reasoning loop as Mission alignment, but
+pointed at one *target* company's own public content during an active job
+search, instead of freely-nominated organizations during onboarding —
+answers "does this org's thinking actually match mine" directly, as an
+alternative or supplement to the existing indirect embedding-similarity
+path (`company_alignment()`).
 
 ## Trust ladder
 
 | Tier | Ask | Commitment |
 |---|---|---|
 | 1 — zero-commitment | React to 2-3 pieces of content the user already has in mind (agree/disagree + one line why) | Minutes; no account of themselves beyond reactions |
-| 2 — light values | The three-people question (ask-#2-first); one or two "what would you defend" prompts | Still short, first real values signal |
-| 3 — deeper, opt-in | Company-alignment reactions once targets exist; resume/LinkedIn mined for anything usable; option to attach a blog/writing if they have one (the existing writer's path) | Ongoing, as engagement builds |
+| 2 — light values | Values (pro/con dinner-guest question) and Mission alignment (pro/con org question), each con-then-pro with ask-#2-first nested inside | Still short, first real values + mission-fit signal |
+| 3 — deeper, opt-in | Company-alignment variant reactions once a job-search target exists; resume/LinkedIn mined for anything usable; option to attach a blog/writing if they have one (the existing writer's path) | Ongoing, as engagement builds |
 
 Whether tier progression is product-enforced (a guided flow) or just the
 intended order with each module independently invokable is an open
@@ -169,8 +220,17 @@ actively enforced here, not just true in principle:
   product, or just documented intended order with each module
   independently invokable?
 - **The no-examples fallback.** Rarer than "no writing," but possible:
-  what happens if someone genuinely can't name any people or content they
-  have a reaction to?
+  what happens if someone genuinely can't name any people for Values, or
+  any organizations for Mission alignment? Each category is now its own
+  primary mechanic rather than a rescue for the other (see "Interview
+  modules" above), so this is an open question per category, not one
+  question with the other category as its answer.
+- **Con-side exclusion rules.** Values excludes Hitler as a con nomination
+  (too easy, discriminates nothing). Mission alignment's con side needs an
+  analogous exclusion — not yet named.
+- **Does Mission alignment's con-then-pro/ask-#2-first ordering actually
+  hold up?** Carried over from Values by assumption, not independently
+  validated for organizations.
 
 ## Phasing
 
@@ -179,7 +239,8 @@ actively enforced here, not just true in principle:
   yet synthesized into a stance.
 - **v1.** Model-synthesized stance from the captured reactions, using the
   same evidence-validated machinery `build_own_pov`/`build_company_pov`
-  already use; adds the three-people module.
+  already use; adds the Values and Mission alignment modules (pro/con,
+  con-then-pro ordering, nested ask-#2-first).
 - **v2.** Company-alignment variant — react to a target company's own
   content — as an alternative to the embedding-based `company_alignment()`
   path.
