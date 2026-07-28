@@ -239,3 +239,146 @@ def test_own_pov_builds_from_the_corpus(workspace: Path) -> None:
         assert stored is not None and stored.person_name == "Your corpus"
         rendered = render_pov_card(stored)
         assert "Your corpus" in rendered and "[values]" in rendered
+
+
+def test_own_pov_builds_from_interview_captures_with_no_corpus(workspace: Path) -> None:
+    """Profile Bootstrap's whole point (docs/PROFILE-BOOTSTRAP-DESIGN.md):
+    someone with zero published writing still gets a real stance, built
+    from captured interview reactions alone."""
+    from wingman.application.interview import capture_interview_reaction
+    from wingman.application.pov import CORPUS_PERSON_ID, build_own_pov
+    from wingman.infrastructure.config import load_config
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            "She spent decades on one cause and never wavered.",
+            config,
+            storage,
+        )
+        items = storage.list_profile_items()
+        doc_id = items[0].item_id  # InterviewDocument.doc_id == ProfileItem.item_id
+        provider = ScriptedProvider(
+            {
+                "stances": [
+                    {
+                        "statement": "The author values sustained, unwavering commitment.",
+                        "quote": "never wavered",
+                        "doc_id": doc_id,
+                        "dimension": "values",
+                    }
+                ],
+                "topics": ["persistence"],
+            }
+        )
+        report = build_own_pov(storage, provider)
+        assert len(report.card.stances) == 1
+        stored = storage.get_pov_card(CORPUS_PERSON_ID)
+        assert stored is not None
+        assert stored.stances[0].quote == "never wavered"
+
+
+def test_own_pov_merges_corpus_and_interview_documents(workspace: Path) -> None:
+    from wingman.application.corpus import add_to_corpus
+    from wingman.application.interview import capture_interview_reaction
+    from wingman.application.pov import build_own_pov
+    from wingman.infrastructure.config import load_config
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        essay = workspace / "essay.md"
+        essay.write_text("Answers must show their work.", encoding="utf-8")
+        add_to_corpus(essay, "writing", config, storage)
+        corpus_doc_id = storage.list_corpus_documents()[0].doc_id
+        capture_interview_reaction(
+            "values_pro", "Jane Goodall", "She never wavered on one cause.", config, storage
+        )
+        interview_doc_id = storage.list_profile_items()[0].item_id
+
+        provider = ScriptedProvider(
+            {
+                "stances": [
+                    {
+                        "statement": "The author believes answers must show their work.",
+                        "quote": "show their work",
+                        "doc_id": corpus_doc_id,
+                    },
+                    {
+                        "statement": "The author values sustained commitment.",
+                        "quote": "never wavered",
+                        "doc_id": interview_doc_id,
+                    },
+                ],
+                "topics": [],
+            }
+        )
+        report = build_own_pov(storage, provider)
+        assert len(report.card.stances) == 2
+        quotes = {stance.quote for stance in report.card.stances}
+        assert quotes == {"show their work", "never wavered"}
+
+
+def test_own_pov_never_sees_the_stimulus_only_the_users_own_why(workspace: Path) -> None:
+    """The security property discussed for this slice: the stimulus's own
+    fetched content never reaches the prompt at all (interview.py discards
+    it at capture time) — only the user's verbatim 'why' does, and a
+    fabricated quote lifted from anywhere else is rejected exactly like any
+    other document type's fabrication guard."""
+    from wingman.application.interview import capture_interview_reaction
+    from wingman.application.pov import build_own_pov
+    from wingman.infrastructure.config import load_config
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        page = (
+            b"<html><head><title>An Essay</title></head>"
+            b"<body><p>SECRET_STIMULUS_SENTENCE never typed by the user.</p></body></html>"
+        )
+        capture_interview_reaction(
+            "alignment_of_perspective_agree",
+            "https://example.com/essay",
+            "This matches how I already think about it.",
+            config,
+            storage,
+            fetcher=lambda url: page,
+        )
+        doc_id = storage.list_profile_items()[0].item_id
+
+        # honest attempt: quoting the user's own 'why' validates fine
+        honest = ScriptedProvider(
+            {
+                "stances": [
+                    {
+                        "statement": "The author agreed with the piece.",
+                        "quote": "already think about it",
+                        "doc_id": doc_id,
+                    }
+                ],
+                "topics": [],
+            }
+        )
+        report = build_own_pov(storage, honest)
+        assert len(report.card.stances) == 1
+        assert honest.last_prompt is not None
+        assert "SECRET_STIMULUS_SENTENCE" not in honest.last_prompt  # never reached the prompt
+
+        # a fabricated quote lifted from the stimulus (which the model
+        # cannot actually have seen, since it was never in the prompt) is
+        # rejected the same way any fabricated quote is -- zero surviving
+        # stances raises rather than silently storing an empty card
+        dishonest = ScriptedProvider(
+            {
+                "stances": [
+                    {
+                        "statement": "Fabricated from content never given to the model.",
+                        "quote": "SECRET_STIMULUS_SENTENCE",
+                        "doc_id": doc_id,
+                    }
+                ],
+                "topics": [],
+            }
+        )
+        with pytest.raises(IngestError, match="no stance survived validation"):
+            build_own_pov(storage, dishonest)

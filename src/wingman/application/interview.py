@@ -28,8 +28,12 @@ synthesis step (InterviewDocument, not built here).
 Ordering (con-then-pro, ask-#2-first) is enforced the same way this
 codebase already enforces other tool-usage protocols (qa_capture,
 resolve_requirement) — as instructions in the MCP tool's docstring for the
-calling agent to follow, not a stateful wizard here. InterviewDocument and
-synthesis into build_own_pov are the next slice; neither exists yet.
+calling agent to follow, not a stateful wizard here.
+
+`list_interview_documents` is the read side: every active capture, back as
+a `domain.interview.InterviewDocument` for `application.pov.build_own_pov`
+to read alongside `ExternalDocument`/`CorpusDocument` — the final v1 slice,
+actually synthesizing these captures into a stance.
 """
 
 from __future__ import annotations
@@ -45,7 +49,8 @@ from wingman.application.ingest import IngestError
 from wingman.application.profile_store import ItemCounts, persist_items
 from wingman.application.research import extract_page, page_title
 from wingman.application.resume_formats import extract_resume_text
-from wingman.domain.profile import EvidenceSpan, ProfileItem, ProfileItemKind
+from wingman.domain.interview import InterviewDocument
+from wingman.domain.profile import EvidenceSpan, ItemStatus, ProfileItem, ProfileItemKind
 from wingman.domain.provenance import ClaimClassification
 from wingman.domain.source_record import SourceRecord
 from wingman.infrastructure.config import Config
@@ -257,3 +262,27 @@ def capture_interview_reaction(
 def render_interview_reaction(report: InterviewReactionReport) -> str:
     title = f" ({report.title})" if report.title else ""
     return f"{report.subtype}: {report.target}{title} — {report.outcome}"
+
+
+def list_interview_documents(storage: Storage) -> list[InterviewDocument]:
+    """Every active interview capture, read back as a build_own_pov
+    candidate document — the read side of every subtype captured above.
+
+    body is ALWAYS item.detail (the 'why'), never anything derived from the
+    target/stimulus — see InterviewDocument's own docstring for why that is
+    what keeps this synthesis-safe. primary_purpose is deliberately NOT
+    included here even for mission_alignment items: it lives only in the
+    inbox note as durable provenance, not fed to the model in this slice —
+    keeps 'why is the only evidence' unambiguous rather than reopening it.
+    """
+    return [
+        InterviewDocument(
+            doc_id=item.item_id,
+            title=item.name,
+            body=item.detail,
+            published_at=item.extracted_at,
+            source_record_id=item.evidence[0].source_record_id,
+        )
+        for item in storage.list_profile_items()
+        if item.kind is ProfileItemKind.INTERVIEW and item.status is ItemStatus.ACTIVE
+    ]

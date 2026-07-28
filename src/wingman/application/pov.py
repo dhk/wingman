@@ -24,6 +24,7 @@ from wingman.application.evidence import fold_whitespace
 from wingman.application.ingest import IngestError
 from wingman.application.similarity import company_key
 from wingman.domain.corpus import CorpusDocument
+from wingman.domain.interview import InterviewDocument
 from wingman.domain.person import ExternalDocument
 from wingman.domain.pov import PovCard, PovProposal, Stance, StanceDimension
 from wingman.infrastructure.logs import get_logger
@@ -63,9 +64,10 @@ def company_card_id(key: str) -> str:
     return f"{COMPANY_POV_PREFIX}{key}"
 
 
-def _documents_block(
-    documents: Sequence[ExternalDocument | CorpusDocument], bodies: dict[str, str]
-) -> str:
+PovDocument = ExternalDocument | CorpusDocument | InterviewDocument
+
+
+def _documents_block(documents: Sequence[PovDocument], bodies: dict[str, str]) -> str:
     parts = []
     for document in documents:
         body = bodies[document.doc_id][:MAX_CHARS_PER_DOCUMENT]
@@ -80,6 +82,22 @@ def _newest[DocT: (ExternalDocument, CorpusDocument)](
     """Newest-first cap; naive timestamps treated as UTC so mixed dates sort."""
 
     def key(document: DocT) -> tuple[bool, datetime]:
+        when = document.published_at
+        if when is None:
+            return (False, datetime.min.replace(tzinfo=UTC))
+        return (True, when if when.tzinfo else when.replace(tzinfo=UTC))
+
+    return sorted(documents, key=key, reverse=True)[:limit]
+
+
+def _newest_mixed(documents: Sequence[PovDocument], limit: int) -> list[PovDocument]:
+    """Same newest-first cap as _newest, for build_own_pov's one genuinely
+    heterogeneous call: a per-call-constrained generic binds to exactly one
+    concrete type, so it can't express a list mixing CorpusDocument and
+    InterviewDocument together — this is the plain-union equivalent, used
+    only where the mix is real."""
+
+    def key(document: PovDocument) -> tuple[bool, datetime]:
         when = document.published_at
         if when is None:
             return (False, datetime.min.replace(tzinfo=UTC))
@@ -216,24 +234,47 @@ def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovR
 def build_own_pov(storage: Storage, provider: ModelProvider) -> PovReport:
     """Build (or rebuild) the POV card for the user's own corpus.
 
-    The same machinery as a person's card, pointed at the user's writing:
-    an assembly of the subject areas where the corpus takes a position,
-    each stance backed by a verbatim quote from the user's own documents.
-    Stored under the reserved CORPUS_PERSON_ID.
+    The same machinery as a person's card, pointed at the user's writing
+    AND their captured interview reactions/nominations (docs/PROFILE-
+    BOOTSTRAP-DESIGN.md) — an assembly of the subject areas where either
+    takes a position, each stance backed by a verbatim quote from the
+    user's own words. Interview captures make this work even with an
+    empty corpus (the bootstrap path for someone without published
+    writing); a corpus, when present, simply adds more candidate
+    documents to the same pool. Stored under the reserved CORPUS_PERSON_ID.
     """
-    documents = storage.list_corpus_documents()
-    if not documents:
+    # Local import: application.interview -> application.research ->
+    # application.pov (for COMPANY_POV_PREFIX/company_card_id) is already a
+    # cycle at module scope; importing here instead of at module level
+    # avoids it, same convention this codebase already uses for
+    # qa_capture/capture_interview_reaction at CLI/MCP call sites.
+    from wingman.application.interview import list_interview_documents
+
+    corpus_documents = storage.list_corpus_documents()
+    interview_documents = list_interview_documents(storage)
+    if not corpus_documents and not interview_documents:
         raise IngestError(
-            "your corpus is empty — nothing to take a position from. "
-            "Add your writing with 'wingman corpus add' first."
+            "your corpus is empty and you haven't captured any interview reactions yet — "
+            "add writing with 'wingman corpus add', or capture one with 'wingman interview'."
         )
-    documents = _newest(documents, MAX_DOCUMENTS)
-    bodies = {
-        document.doc_id: storage.get_corpus_body(document.doc_id) or "" for document in documents
+    documents: list[PovDocument] = _newest_mixed(
+        [*corpus_documents, *interview_documents], MAX_DOCUMENTS
+    )
+    bodies: dict[str, str] = {
+        document.doc_id: storage.get_corpus_body(document.doc_id) or ""
+        for document in documents
+        if isinstance(document, CorpusDocument)
     }
+    bodies.update(
+        {
+            document.doc_id: document.body
+            for document in documents
+            if isinstance(document, InterviewDocument)
+        }
+    )
     documents = [document for document in documents if bodies[document.doc_id].strip()]
     if not documents:
-        raise IngestError("your corpus documents have no extractable text.")
+        raise IngestError("your corpus documents and interview captures have no extractable text.")
 
     prompt = build_prompt(
         "the author of these documents (write statements as 'The author ...')",
