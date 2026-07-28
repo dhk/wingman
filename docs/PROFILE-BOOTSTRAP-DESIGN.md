@@ -210,12 +210,17 @@ it's mostly integration, not new machinery:
   invariant. `InterviewDocument` keeps both evidence sources composable in
   one call (so writing and interview answers genuinely *augment* each
   other for someone who has both) while staying labeled by source in the
-  rendered card. Not yet settled: whether its backing store reuses
-  `qa_capture`'s existing `SourceRecord`/`ProfileItem` shape as-is, or
-  needs its own table — `qa_capture`'s shape was built for career-evidence
-  items (achievement/skill), and this needs richer fields (which category,
-  the stimulus, pro/con) that may not fit cleanly. Left for whoever builds
-  this to decide against the code, not guessed here.
+  rendered card. **Storage — resolved 2026-07-28: reuse and extend
+  `qa_capture`'s `SourceRecord`/`ProfileItem` shape**, not a new table.
+  `ProfileItemKind` (`achievement`/`skill`/`role`/`testimonial`) stays
+  scoped to career evidence as-is — none of those fit an interview
+  reaction — so this adds one new discriminator field, a `subtype`
+  carrying the interview category (e.g. `values_pro`, `values_con`,
+  `values_fallback_con`, `mission_alignment_pro`,
+  `alignment_of_perspective_agree` — exact values TBD at implementation
+  time), rather than overloading `ProfileItemKind` itself or forking a
+  parallel table. `InterviewDocument` is then the read-side view
+  `build_own_pov` consumes, assembled from these rows.
 
 ## Limits and configuration
 
@@ -252,8 +257,7 @@ actively enforced here, not just true in principle:
 
 ## Open questions
 
-Resolved 2026-07-28 (all in one pass — see "Revisit if" for what would
-reopen each):
+Resolved 2026-07-28 (see "Revisit if" for what would reopen each):
 
 - ~~**Feeding synthesis.**~~ **Resolved: `InterviewDocument`**, a new
   candidate-document type — see "Architecture" above for the decision and
@@ -283,13 +287,12 @@ reopen each):
   ordering implementation for both Values and Mission alignment rather
   than two; this is empirical and can't be resolved by design discussion
   — see "Revisit if."
+- ~~**Storage shape for `InterviewDocument`.**~~ **Resolved: reuse and
+  extend `qa_capture`'s shape**, with a new `subtype` field carrying the
+  interview category — see "Architecture" above.
 
 Still open:
 
-- **Storage shape for `InterviewDocument`.** Reuse `qa_capture`'s
-  `SourceRecord`/`ProfileItem` shape as-is, or a new dedicated table? See
-  the "Architecture" section's `InterviewDocument` entry — left for
-  whoever builds this to decide against the actual code.
 - **Mission alignment's own no-examples fallback.** Values has one now
   (the proud-to-buy/never-buy company question). Mission alignment still
   has none — what happens if someone genuinely can't name any
