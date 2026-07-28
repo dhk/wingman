@@ -2822,6 +2822,37 @@ def qa_note(
     typer.echo(f"evidence file: {report.source_path}")
 
 
+@app.command("interview")
+def interview_react(
+    subtype: str = typer.Argument(
+        ...,
+        help="Interview category+reaction, e.g. alignment_of_perspective_agree "
+        "or alignment_of_perspective_disagree.",
+    ),
+    stimulus: str = typer.Argument(..., help="An https:// URL, or a local PDF/DOCX/MD/TXT file."),
+    why: str = typer.Argument(..., help="Your reasoning — stored verbatim as evidence."),
+) -> None:
+    """Capture one interview reaction as citable profile evidence (docs/PROFILE-BOOTSTRAP-DESIGN.md, v0).
+
+    The stimulus is fetched only for provenance (a title, a content hash) —
+    'why' is the only thing that becomes evidence, never the stimulus's own
+    words. Reacting to the same stimulus again under the same subtype
+    supersedes the earlier answer. See 'wingman profile list' to review
+    what's been captured so far.
+    """
+    configure_logging()
+    from wingman.application.interview import capture_interview_reaction, render_interview_reaction
+
+    config = load_config()
+    try:
+        with Storage(config.db_path) as storage:
+            report = capture_interview_reaction(subtype, stimulus, why, storage)
+    except IngestError as exc:
+        typer.echo(f"interview capture failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_interview_reaction(report))
+
+
 @app.command("log")
 def log_interaction_cmd(
     person: str = typer.Argument(..., help="Who this happened with."),

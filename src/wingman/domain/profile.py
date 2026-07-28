@@ -16,6 +16,10 @@ class ProfileItemKind(StrEnum):
     SKILL = "skill"
     ROLE = "role"
     TESTIMONIAL = "testimonial"
+    # A reaction captured via the interview mechanic (docs/PROFILE-BOOTSTRAP-
+    # DESIGN.md): one kind for every interview category, differentiated by
+    # ProfileItem.subtype rather than adding a kind per category/reaction.
+    INTERVIEW = "interview"
 
 
 class ItemStatus(StrEnum):
@@ -42,6 +46,7 @@ class ProfileItem(BaseModel):
 
     item_id: str = Field(default_factory=lambda: str(uuid4()))
     kind: ProfileItemKind
+    subtype: str | None = None
     name: str
     detail: str = ""
     classification: ClaimClassification
