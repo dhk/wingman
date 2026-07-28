@@ -1,6 +1,6 @@
-"""Profile Bootstrap v0 (docs/PROFILE-BOOTSTRAP-DESIGN.md): interview
-reactions as evidence — stimulus fetched for provenance only, 'why' is the
-only evidence stored."""
+"""Profile Bootstrap (docs/PROFILE-BOOTSTRAP-DESIGN.md): interview
+reactions (fetch a target for provenance) and nominations (name a target,
+no fetch) as evidence — either way, 'why' is the only evidence stored."""
 
 from pathlib import Path
 
@@ -146,13 +146,80 @@ def test_capture_validates_inputs(workspace: Config) -> None:
             )
 
 
+WHY_PRO = "She's spent decades arguing for something and never flinched on it."
+WHY_CON = "He built his career on a premise I think is actively harmful."
+WHY_WALMART_CON = "They destroy local communities on their way to scale."
+WHY_WALMART_PRO = "Their supply-chain logistics are genuinely a marvel of operations."
+
+
+def test_values_pro_and_con_nominations_are_captured_with_no_fetch(workspace: Config) -> None:
+    """Nominations never fetch anything — 'target' is just a name, unlike
+    the reaction subtypes above."""
+    with Storage(workspace.db_path) as storage:
+        pro = capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, storage)
+        con = capture_interview_reaction("values_con", "A. Public Figure", WHY_CON, storage)
+        assert pro.outcome == "saved" and pro.title is None
+        assert con.outcome == "saved" and con.title is None
+        items = {
+            i.subtype: i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE
+        }
+        assert items["values_pro"].name == "values_pro: Jane Goodall"
+        assert items["values_pro"].detail == WHY_PRO
+        assert items["values_con"].detail == WHY_CON
+
+
+def test_values_con_excludes_hitler(workspace: Config) -> None:
+    """Too easy a nomination to discriminate anything about actual values —
+    docs/PROFILE-BOOTSTRAP-DESIGN.md's explicit exclusion."""
+    with Storage(workspace.db_path) as storage:
+        for name in ("Hitler", "hitler", "  HITLER  ", "Adolf Hitler", "adolf   hitler"):
+            with pytest.raises(IngestError, match="excluded from values_con"):
+                capture_interview_reaction("values_con", name, WHY_CON, storage)
+        # the exclusion is specific to values_con — the identical literal
+        # string is accepted under values_pro or the company fallback (no
+        # exclusion list there at all, per the design's resolution)
+        assert (
+            capture_interview_reaction("values_pro", "Hitler", WHY_PRO, storage).outcome == "saved"
+        )
+        assert (
+            capture_interview_reaction(
+                "values_fallback_con", "Hitler", WHY_WALMART_CON, storage
+            ).outcome
+            == "saved"
+        )
+
+
+def test_values_fallback_nominates_a_company_instead_of_a_person(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        con = capture_interview_reaction("values_fallback_con", "Walmart", WHY_WALMART_CON, storage)
+        pro = capture_interview_reaction(
+            "values_fallback_pro", "A Local Co-op", WHY_WALMART_PRO, storage
+        )
+        assert con.outcome == "saved" and pro.outcome == "saved"
+        items = {
+            i.subtype: i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE
+        }
+        assert items["values_fallback_con"].detail == WHY_WALMART_CON
+
+
+def test_renominating_the_same_person_supersedes(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, storage)
+        report = capture_interview_reaction(
+            "values_pro", "Jane Goodall", "A different, better reason.", storage
+        )
+        assert "superseded" in report.outcome
+        active = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
+        assert [i.detail for i in active] == ["A different, better reason."]
+
+
 def test_render_interview_reaction() -> None:
     from wingman.application.interview import InterviewReactionReport
     from wingman.application.profile_store import ItemCounts
 
     report = InterviewReactionReport(
         subtype="alignment_of_perspective_agree",
-        stimulus="https://example.com/essay",
+        target="https://example.com/essay",
         title="An Essay",
         outcome="saved",
         counts=ItemCounts(accepted=1),

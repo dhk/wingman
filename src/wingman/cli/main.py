@@ -2826,19 +2826,33 @@ def qa_note(
 def interview_react(
     subtype: str = typer.Argument(
         ...,
-        help="Interview category+reaction, e.g. alignment_of_perspective_agree "
-        "or alignment_of_perspective_disagree.",
+        help="Interview category. Reactions (fetch a target, agree/disagree): "
+        "alignment_of_perspective_agree, alignment_of_perspective_disagree. "
+        "Nominations (name a target, no fetch): values_pro, values_con "
+        "(three people, living or dead, you'd have dinner with / be horrified "
+        "to see your name in print alongside — excluding Hitler), "
+        "values_fallback_pro, values_fallback_con (companies whose products/"
+        "services you're proud to buy / would never buy — use these if "
+        "people-naming struggles).",
     ),
-    stimulus: str = typer.Argument(..., help="An https:// URL, or a local PDF/DOCX/MD/TXT file."),
+    target: str = typer.Argument(
+        ...,
+        help="For a reaction subtype: an https:// URL, or a local PDF/DOCX/MD/TXT file. "
+        "For a nomination subtype: the person's or company's name.",
+    ),
     why: str = typer.Argument(..., help="Your reasoning — stored verbatim as evidence."),
 ) -> None:
-    """Capture one interview reaction as citable profile evidence (docs/PROFILE-BOOTSTRAP-DESIGN.md, v0).
+    """Capture one interview reaction or nomination as citable profile evidence (docs/PROFILE-BOOTSTRAP-DESIGN.md).
 
-    The stimulus is fetched only for provenance (a title, a content hash) —
-    'why' is the only thing that becomes evidence, never the stimulus's own
-    words. Reacting to the same stimulus again under the same subtype
-    supersedes the earlier answer. See 'wingman profile list' to review
-    what's been captured so far.
+    The target is fetched (reactions) or just named (nominations) only for
+    provenance — 'why' is the only thing that becomes evidence, never the
+    target's own words. Capturing the same target again under the same
+    subtype supersedes the earlier answer. See 'wingman profile list' to
+    review what's been captured so far.
+
+    Values' con-then-pro ordering, with ask-#2-first nested inside each
+    block, is this interview module's own protocol — conduct it in that
+    order; it isn't enforced by this command itself.
     """
     configure_logging()
     from wingman.application.interview import capture_interview_reaction, render_interview_reaction
@@ -2846,7 +2860,7 @@ def interview_react(
     config = load_config()
     try:
         with Storage(config.db_path) as storage:
-            report = capture_interview_reaction(subtype, stimulus, why, storage)
+            report = capture_interview_reaction(subtype, target, why, storage)
     except IngestError as exc:
         typer.echo(f"interview capture failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc

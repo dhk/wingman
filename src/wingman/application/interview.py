@@ -1,20 +1,30 @@
-"""Interview-reaction evidence: stimulus -> reaction -> reasoning.
+"""Interview evidence: stimulus -> reaction -> reasoning, and nomination ->
+reasoning (docs/PROFILE-BOOTSTRAP-DESIGN.md).
 
-v0 of docs/PROFILE-BOOTSTRAP-DESIGN.md — a way to bootstrap quote-backed
-profile evidence without requiring pre-existing published writing. One
-reaction is captured at a time: the user submits a piece of content (an
-https:// URL, or a local PDF/DOCX/Markdown/text file), states whether they
-agree or disagree with it, and explains why in their own words. The
-submitted content is fetched only far enough to extract a title and a
-content hash for provenance — the "why" is the only thing that ever
-becomes evidence, mirroring qa_capture.py's pattern exactly. A model must
-never be able to quote the stimulus as if it were the user's own words
-(the design's "one hard rule"); v0 makes no model call at all, so that
-risk doesn't arise yet.
+Two capture mechanics share one entry point, `capture_interview_reaction`,
+dispatched by `subtype`:
 
-v0 ships Alignment of perspective only (agree/disagree). Values and
-Mission alignment are v1, along with synthesizing these reactions into a
-stance via a new InterviewDocument candidate type — neither exists yet.
+- **Reaction** (v0, Alignment of perspective): the user submits a piece of
+  content (an https:// URL, or a local PDF/DOCX/Markdown/text file), states
+  agree/disagree, and explains why. The content is fetched only far enough
+  to extract a title and a content hash for provenance.
+- **Nomination** (v1, Values): the user names a person (or, for the
+  fallback subtypes, a company) and explains why — no fetch at all, there
+  is nothing to reduce.
+
+Either way, the "why" is the ONLY thing that ever becomes evidence,
+mirroring qa_capture.py's pattern exactly — the stimulus/nominee is
+context, never quoted as if it were the user's own words (the design's
+"one hard rule"). No model call is made anywhere in this module, so the
+model-exposure risk the design names doesn't arise yet; that's v1's
+synthesis step (InterviewDocument, not built here).
+
+Ordering (con-then-pro, ask-#2-first) is enforced the same way this
+codebase already enforces other tool-usage protocols (qa_capture,
+resolve_requirement) — as instructions in the MCP tool's docstring for the
+calling agent to follow, not a stateful wizard here. Mission alignment
+subtypes and InterviewDocument/synthesis are the next slices; neither
+exists yet.
 """
 
 from __future__ import annotations
@@ -42,32 +52,44 @@ INTERVIEW_SOURCE_TYPE = "interview_stimulus"
 INTERVIEW_PROMPT_VERSION = "interview_capture_v0"
 INTERVIEW_EXTRACTOR = "user"  # the user's own words — no model proposed anything
 
-# v0 ships Alignment of perspective only; Values/Mission alignment subtypes
-# (values_pro, values_con, values_fallback_pro, values_fallback_con,
-# mission_alignment_pro, mission_alignment_con, ...) are added in v1.
-VALID_SUBTYPES = {
+# Alignment of perspective (v0): react to fetched content.
+REACTION_SUBTYPES = {
     "alignment_of_perspective_agree",
     "alignment_of_perspective_disagree",
 }
+# Values (v1): nominate a person by name, no fetch — values_fallback_* name
+# a company instead, when someone struggles to name people. Mission
+# alignment subtypes join this set in the next slice.
+NOMINATION_SUBTYPES = {
+    "values_pro",
+    "values_con",
+    "values_fallback_pro",
+    "values_fallback_con",
+}
+VALID_SUBTYPES = REACTION_SUBTYPES | NOMINATION_SUBTYPES
+
+# values_con excludes Hitler — too easy a nomination to discriminate
+# anything about the person's actual values. No analogous exclusion for
+# values_fallback_con (companies) or (in a later slice) mission alignment's
+# con side — see docs/PROFILE-BOOTSTRAP-DESIGN.md's resolution of why.
+_EXCLUDED_VALUES_CON_NOMINEES = {"hitler", "adolf hitler"}
 
 
-def interview_document_key(subtype: str, stimulus: str) -> str:
-    """One evolving 'document' per (subtype, stimulus) pair: reacting to the
-    same content again under the same subtype supersedes it (RFC-028)."""
-    return f"interview: {subtype}: " + " ".join(stimulus.strip().lower().split())
+def interview_document_key(subtype: str, target: str) -> str:
+    """One evolving 'document' per (subtype, target) pair — capturing the
+    same target again under the same subtype supersedes it (RFC-028)."""
+    return f"interview: {subtype}: " + " ".join(target.strip().lower().split())
 
 
 class InterviewReactionReport(BaseModel):
     subtype: str
-    stimulus: str
+    target: str
     title: str | None
     outcome: str
     counts: ItemCounts
 
 
-def _fetch_stimulus(
-    stimulus: str, fetcher: Callable[[str], bytes] | None
-) -> tuple[str, str | None]:
+def _fetch_stimulus(target: str, fetcher: Callable[[str], bytes] | None) -> tuple[str, str | None]:
     """(extracted text, title) for a submitted URL or local file path.
 
     Deterministic extraction only, reusing existing infra as-is — an
@@ -76,69 +98,82 @@ def _fetch_stimulus(
     dispatches on suffix through resume_formats.extract_resume_text, the
     same PDF/DOCX/Markdown/text pipeline resume ingestion already uses.
     """
-    if stimulus.startswith("https://"):
+    if target.startswith("https://"):
         fetch = fetcher if fetcher is not None else fetch_url
         try:
-            data = fetch(stimulus)
+            data = fetch(target)
         except FetchError as exc:
-            raise IngestError(f"could not fetch {stimulus} ({exc}). Nothing was captured.") from exc
-        text, _links = extract_page(data, stimulus)
+            raise IngestError(f"could not fetch {target} ({exc}). Nothing was captured.") from exc
+        text, _links = extract_page(data, target)
         if not text.strip():
-            raise IngestError(f"{stimulus} had no extractable text. Nothing was captured.")
+            raise IngestError(f"{target} had no extractable text. Nothing was captured.")
         return text, page_title(data)
-    path = Path(stimulus).expanduser()
+    path = Path(target).expanduser()
     if not path.is_file():
         raise IngestError(
-            f"{stimulus!r} is neither an https:// URL nor an existing file. Nothing was captured."
+            f"{target!r} is neither an https:// URL nor an existing file. Nothing was captured."
         )
     return extract_resume_text(path), path.name
 
 
 def capture_interview_reaction(
     subtype: str,
-    stimulus: str,
+    target: str,
     why: str,
     storage: Storage,
     fetcher: Callable[[str], bytes] | None = None,
 ) -> InterviewReactionReport:
-    """Persist one stimulus -> reaction -> reasoning capture.
+    """Persist one interview capture — a reaction to fetched content
+    (Alignment of perspective) or a nomination by name (Values).
 
-    The stimulus is fetched only for provenance (title, content hash);
-    'why' is the only evidence stored, never the stimulus's own content.
+    'target' is the https:// URL/local file to react to for a reaction
+    subtype, or the person/company name for a nomination subtype. Either
+    way 'why' is the only evidence stored, never the target's own content.
     """
     subtype = subtype.strip().lower()
     if subtype not in VALID_SUBTYPES:
         valid = ", ".join(sorted(VALID_SUBTYPES))
         raise IngestError(f"unknown subtype {subtype!r}; use one of: {valid}.")
-    stimulus = stimulus.strip()
+    target = target.strip()
     why = why.strip()
-    if not stimulus or not why:
-        raise IngestError("both a stimulus and a why are required — nothing was captured.")
+    if not target or not why:
+        raise IngestError("both a target and a why are required — nothing was captured.")
 
-    _text, title = _fetch_stimulus(stimulus, fetcher)
-    # Hashed on the full reaction (subtype + stimulus + why), not just the
-    # fetched stimulus text — mirroring qa_capture's Q+A hash exactly. A
+    if subtype in NOMINATION_SUBTYPES:
+        if subtype == "values_con" and " ".join(target.lower().split()) in (
+            _EXCLUDED_VALUES_CON_NOMINEES
+        ):
+            raise IngestError(
+                f"{target!r} is excluded from values_con — too easy a nomination to "
+                "discriminate anything about your actual values. Nothing was captured."
+            )
+        title = None
+    else:
+        _text, title = _fetch_stimulus(target, fetcher)
+
+    # Hashed on the full capture (subtype + target + why), not just the
+    # fetched/nominated target — mirroring qa_capture's Q+A hash exactly. A
     # changed 'why' must produce a new record, or RFC-028 supersession has
-    # nothing earlier to point at: reusing one record per stimulus (keyed
-    # on the stimulus's own content) would tie every revised reaction to
-    # the SAME record, excluding it from its own lineage check and forcing
-    # a spurious conflict instead of a clean update.
-    content = f"# Interview reaction\n\nSubtype: {subtype}\n\nStimulus: {stimulus}\n\nWhy: {why}\n"
+    # nothing earlier to point at: reusing one record per target (keyed on
+    # the target's own content) would tie every revised capture to the SAME
+    # record, excluding it from its own lineage check and forcing a
+    # spurious conflict instead of a clean update.
+    content = f"# Interview capture\n\nSubtype: {subtype}\n\nTarget: {target}\n\nWhy: {why}\n"
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     record = storage.get_source_record_by_hash(content_hash)
     if record is None:
         record = SourceRecord(
             source_type=INTERVIEW_SOURCE_TYPE,
-            source_locator=stimulus,
+            source_locator=target,
             content_hash=content_hash,
-            document_key=interview_document_key(subtype, stimulus),
+            document_key=interview_document_key(subtype, target),
         )
         storage.add_source_record(record)
 
     item = ProfileItem(
         kind=ProfileItemKind.INTERVIEW,
         subtype=subtype,
-        name=f"{subtype}: {stimulus}",
+        name=f"{subtype}: {target}",
         detail=why,
         classification=ClaimClassification.FACT,  # the user's own stated reaction
         confidence=1.0,  # first-person statement; there is no better source
@@ -147,23 +182,23 @@ def capture_interview_reaction(
         extracted_by=INTERVIEW_EXTRACTOR,
     )
     earlier = storage.record_ids_for_document(
-        interview_document_key(subtype, stimulus), exclude_record_id=record.record_id
+        interview_document_key(subtype, target), exclude_record_id=record.record_id
     )
     counts = persist_items([item], storage, superseded_records=earlier)
     if counts.updated or counts.retired:
-        outcome = "updated — the earlier reaction to this stimulus was superseded"
+        outcome = "updated — the earlier capture for this target was superseded"
     elif counts.skipped_duplicates or counts.evidence_merged:
         outcome = "already captured — nothing changed"
     elif counts.conflicts:
         outcome = "saved as a conflict with an existing item (resolve via wingman profile)"
     else:
         outcome = "saved"
-    _logger.info("interview_reaction subtype=%s outcome=%s stimulus=%r", subtype, outcome, stimulus)
+    _logger.info("interview_capture subtype=%s outcome=%s target=%r", subtype, outcome, target)
     return InterviewReactionReport(
-        subtype=subtype, stimulus=stimulus, title=title, outcome=outcome, counts=counts
+        subtype=subtype, target=target, title=title, outcome=outcome, counts=counts
     )
 
 
 def render_interview_reaction(report: InterviewReactionReport) -> str:
     title = f" ({report.title})" if report.title else ""
-    return f"{report.subtype}: {report.stimulus}{title} — {report.outcome}"
+    return f"{report.subtype}: {report.target}{title} — {report.outcome}"

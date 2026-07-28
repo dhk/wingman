@@ -385,24 +385,41 @@ def qa_capture(question: str, answer: str, kind: str = "achievement") -> str:
 
 
 @server.tool()
-def interview_react(subtype: str, stimulus: str, why: str) -> str:
-    """Capture one interview reaction as citable profile evidence
-    (docs/PROFILE-BOOTSTRAP-DESIGN.md, v0) — a way to bootstrap profile
-    evidence without pre-existing published writing.
+def interview_react(subtype: str, target: str, why: str) -> str:
+    """Capture one interview reaction OR nomination as citable profile
+    evidence (docs/PROFILE-BOOTSTRAP-DESIGN.md) — a way to bootstrap
+    profile evidence without pre-existing published writing.
 
-    stimulus is an https:// URL or a local PDF/DOCX/MD/TXT file the user
-    chose to react to. subtype is the interview category+reaction — v0
-    ships 'alignment_of_perspective_agree' and
-    'alignment_of_perspective_disagree' only. why is the user's own
-    reasoning, stored verbatim as the ONLY evidence — the stimulus itself
-    is fetched only for provenance (a title, a content hash) and is never
-    quoted as if it were the user's own words. Reacting to the same
-    stimulus again under the same subtype supersedes the earlier answer.
+    Two mechanics, chosen by subtype:
+    - Reaction (Alignment of perspective): target is an https:// URL or a
+      local PDF/DOCX/MD/TXT file the user chose to react to. subtype is
+      'alignment_of_perspective_agree' or
+      'alignment_of_perspective_disagree'.
+    - Nomination (Values): target is a person's name (or, for the fallback
+      subtypes, a company's). subtype is 'values_pro' / 'values_con'
+      (three people, living or dead, they'd have dinner with / be
+      horrified to see their name in print alongside — 'values_con'
+      rejects Hitler specifically, too easy a nomination to discriminate
+      anything), or 'values_fallback_pro' / 'values_fallback_con'
+      (companies whose products/services they're proud to buy / would
+      never buy — offer these ONLY if the person struggles to name
+      people).
 
-    Protocol: same as qa_capture — show the exact stimulus, reaction, and
-    why text that will be stored, and save only after the user agrees.
-    Never capture silently, and never paraphrase 'why' on the user's
-    behalf.
+    Either way, why is the user's own reasoning, stored verbatim as the
+    ONLY evidence — the target itself (fetched page or nominee name) is
+    never quoted as if it were the user's own words. Capturing the same
+    target again under the same subtype supersedes the earlier answer.
+
+    Protocol for Values specifically — conduct it in this order, this tool
+    does not enforce it: con nominees before pro nominees (ends the
+    interview on a high note); within EACH block, ask why about the
+    SECOND nominee first, then the first, then the third (dodges the
+    rehearsed, front-loaded answer).
+
+    Same show-before-save discipline as qa_capture otherwise — show the
+    exact target, subtype, and why text that will be stored, and save
+    only after the user agrees. Never capture silently, and never
+    paraphrase 'why' on the user's behalf.
     """
     from wingman.application.interview import capture_interview_reaction
 
@@ -411,12 +428,12 @@ def interview_react(subtype: str, stimulus: str, why: str) -> str:
         return _NOT_INITIALIZED
     try:
         with Storage(config.db_path) as storage:
-            report = capture_interview_reaction(subtype, stimulus, why, storage)
+            report = capture_interview_reaction(subtype, target, why, storage)
     except IngestError as exc:
         return f"interview capture failed: {exc}"
     title = f" ({report.title})" if report.title else ""
     return (
-        f"{report.outcome}: [{report.subtype}] {report.stimulus}{title}\n"
+        f"{report.outcome}: [{report.subtype}] {report.target}{title}\n"
         "Not yet synthesized into a stance (v1) — review with 'wingman profile list'."
     )
 
