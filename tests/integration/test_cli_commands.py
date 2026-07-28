@@ -235,3 +235,32 @@ def test_evidence_no_results(workspace: Path) -> None:
     result = runner.invoke(app, ["evidence", "flamingo"])
     assert result.exit_code == 0
     assert "No corpus evidence found" in result.output
+
+
+def test_perspectives_content_branch_adds_to_corpus(workspace: Path, tmp_path: Path) -> None:
+    runner.invoke(app, ["init"])
+    essay = tmp_path / "essay.md"
+    essay.write_text("# A post\n\nSome argument worth keeping.\n", encoding="utf-8")
+    result = runner.invoke(app, ["perspectives"], input=f"content\n{essay}\n\n")
+    assert result.exit_code == 0, result.output
+    assert "Added: 1" in result.output
+
+    listing = runner.invoke(app, ["corpus", "list"])
+    assert "A post" in listing.output
+
+
+def test_perspectives_interview_branch_captures_a_reaction(workspace: Path, tmp_path: Path) -> None:
+    runner.invoke(app, ["init"])
+    stimulus = tmp_path / "stimulus.md"
+    stimulus.write_text("# Someone else's essay\n\nAn argument to react to.\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["perspectives"],
+        input=f"interview\ny\n{stimulus}\nThis matches how I already think about it.\nn\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "saved" in result.output
+    assert "Values and Mission alignment" in result.output
+
+    listing = runner.invoke(app, ["profile", "list"])
+    assert "This matches how I already think about it." in listing.output

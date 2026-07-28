@@ -2878,6 +2878,72 @@ def interview_react(
     typer.echo(render_interview_reaction(report))
 
 
+@app.command()
+def perspectives() -> None:
+    """Perspectives: the onboarding entry point for a new profile (docs/PROFILE-BOOTSTRAP-DESIGN.md).
+
+    Branches once, up front: existing writing goes to the corpus (same as
+    'wingman corpus add'); no writing yet starts a short interview instead
+    (same mechanic as 'wingman interview', tier 1 — Alignment of
+    perspective). Neither path is required before the other — do one, the
+    other, or both, in any order.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "used")
+    from wingman.application.interview import capture_interview_reaction, render_interview_reaction
+
+    typer.echo(
+        "Perspectives builds your profile two ways: share writing you've already "
+        "published, or answer a few quick interview questions instead — either, or "
+        "both, in any order."
+    )
+    choice = typer.prompt(
+        "Do you have existing writing to share, or would you rather do a quick interview?",
+        type=click.Choice(["content", "interview"], case_sensitive=False),
+    )
+    with Storage(config.db_path) as storage:
+        if choice == "content":
+            path_str = typer.prompt("Path to a file, directory, or zip export")
+            source_type = typer.prompt("Source type", default="writing")
+            try:
+                corpus_report = add_to_corpus(Path(path_str), source_type, config, storage)
+            except IngestError as exc:
+                typer.echo(f"corpus add failed: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
+            typer.echo(
+                f"Added: {corpus_report.added}  Duplicates skipped: {corpus_report.skipped_duplicates}  "
+                f"Unsupported: {len(corpus_report.skipped_unsupported)}  "
+                f"Failures: {len(corpus_report.failures)}"
+            )
+            for title in corpus_report.titles:
+                typer.echo(f"  + {title}")
+            return
+        typer.echo(
+            "Let's start light: something you already agree or disagree with — a link "
+            "or a file, not your own writing — and why."
+        )
+        while True:
+            agree = typer.confirm("Do you agree with it? (no = disagree)")
+            subtype = (
+                "alignment_of_perspective_agree" if agree else "alignment_of_perspective_disagree"
+            )
+            target = typer.prompt("A URL or a local file")
+            why = typer.prompt("Why, in your own words")
+            try:
+                interview_report = capture_interview_reaction(subtype, target, why, config, storage)
+            except IngestError as exc:
+                typer.echo(f"capture failed: {exc}", err=True)
+            else:
+                typer.echo(render_interview_reaction(interview_report))
+            if not typer.confirm("Capture another reaction?", default=True):
+                break
+        typer.echo(
+            "That's tier 1. When you're ready for Values and Mission alignment (naming "
+            "people or organizations you align with or against), see 'wingman interview --help'."
+        )
+
+
 @app.command("log")
 def log_interaction_cmd(
     person: str = typer.Argument(..., help="Who this happened with."),

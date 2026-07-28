@@ -3,14 +3,19 @@
 **Status.** Design recorded 2026-07-27, from an ideation session; interview
 modules revised twice on 2026-07-28 (pro/con structure and Mission
 alignment split out as its own category, then a company-reaction fallback
-reinstated for Values specifically — see "Interview modules"); five of
-the v1 open questions resolved the same day (`InterviewDocument` as the
+reinstated for Values specifically — see "Interview modules"); all seven
+v1 open questions resolved the same day (`InterviewDocument` as the
 synthesis-feeding type, flow enforcement, fallback depth, con-side
-exclusions, ordering validation — see "Open questions" and "Revisit if").
-Not built — no code in this repository implements any part of this
-document. Graduates to a numbered `RFC.md` entry (and a `ROADMAP.md` phase
-slice) once a v0 slice ships; until then this document is the working
-design and the thing to revise.
+exclusions, ordering validation, storage shape, Mission alignment's own
+fallback — see "Open questions" and "Revisit if"). **v0 and v1 are both
+shipped**: reaction capture, Values/Mission alignment nomination capture,
+per-submission size and per-subtype count limits, and synthesis into a
+stance via `build_own_pov` are all in this repository (`wingman
+interview`/`interview_react`, `wingman perspectives`/`perspectives_start`
+as the branching onboarding entry point). v2 (the company-alignment
+variant) is not started. Graduates to a numbered `RFC.md` entry (and a
+`ROADMAP.md` phase slice) once it's referenced elsewhere; until then this
+document is the working design and the thing to revise.
 
 ## Motivation
 
@@ -178,6 +183,15 @@ Tier progression is not product-enforced (see "Open questions" for the
 resolution) — this table is a suggested default order, and each module
 stays independently invokable.
 
+**Perspectives — implemented as the onboarding entry point.** `wingman
+perspectives` (an interactive CLI wizard) and `perspectives_start` (an MCP
+tool returning branching instructions for the calling agent) both ask the
+one question this design never automated: content to share, or an
+interview instead? Content routes to the corpus (`wingman corpus add`);
+"interview" starts tier 1 (Alignment of perspective) and hands off to
+`wingman interview`/`interview_react` for tiers 2+. Neither branch gates
+the other — this is the front door, not a wizard that walks every tier.
+
 ## Architecture — what already exists to reuse
 
 Nothing here is designed from scratch; the point of this design is that
@@ -224,14 +238,20 @@ it's mostly integration, not new machinery:
 
 ## Limits and configuration
 
-- **Per-submission size** — smaller than the existing 20MB upload cap
-  (`webui.py`'s `MAX_UPLOAD_BYTES`), which is sized for resumes. An article
-  is KB-scale; the cap here should reflect that.
-- **Submission count per onboarding pass** — configurable per instance via
-  a `WINGMAN_*` environment variable in `keys.env`, same shape as
-  `WINGMAN_TUNNEL_PORT`/`WINGMAN_ALLOWED_HOSTS` (an operator-tunable knob,
-  not a per-session parameter). Default ~6, enough to cover "3 agree + 3
-  disagree" with no slack for scope creep.
+- **Per-submission size — implemented.** `INTERVIEW_MAX_SUBMISSION_BYTES`
+  (2MB) in `application/interview.py`, well under `webui.py`'s
+  `MAX_UPLOAD_BYTES` (20MB, sized for resumes) — an article is KB-scale,
+  and a 2MB cap covers even an image-heavy PDF write-up. Applies to both a
+  fetched URL's body and a local file's size, checked before extraction.
+- **Submission count per onboarding pass — implemented, scoped per
+  subtype.** `WINGMAN_INTERVIEW_MAX_PER_SUBTYPE` (default 6, same
+  operator-tunable-env-var shape as `WINGMAN_TUNNEL_PORT`/
+  `WINGMAN_ALLOWED_HOSTS`). Written when only Alignment of perspective
+  existed, the original "~6 covers 3 agree + 3 disagree" framing meant a
+  single global cap; that would starve Values/Mission alignment once they
+  shipped, so the cap became per-subtype instead — a new target for a
+  subtype already at its cap is refused, but re-capturing an existing
+  target (a supersession, not growth) is exempt.
 
 ## Security: untrusted content handling
 

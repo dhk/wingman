@@ -354,3 +354,70 @@ def test_mcp_interview_react(workspace: Config) -> None:
     # failure path is honest rather than silently swallowed
     assert "interview capture failed" in result
     assert "Never capture silently" in (interview_react_tool.__doc__ or "")
+
+
+def test_mcp_perspectives_start_returns_branching_guidance() -> None:
+    from wingman.mcp_server import perspectives_start
+
+    result = perspectives_start()
+    assert "existing writing" in result
+    assert "interview" in result.lower()
+
+
+def test_url_submission_over_size_limit_is_rejected(workspace: Config) -> None:
+    from wingman.application.interview import INTERVIEW_MAX_SUBMISSION_BYTES
+
+    oversized = b"x" * (INTERVIEW_MAX_SUBMISSION_BYTES + 1)
+    with Storage(workspace.db_path) as storage:
+        with pytest.raises(IngestError, match="interview submission limit"):
+            capture_interview_reaction(
+                "alignment_of_perspective_agree",
+                "https://example.com/huge",
+                WHY_AGREE,
+                workspace,
+                storage,
+                fetcher=lambda url: oversized,
+            )
+
+
+def test_local_file_submission_over_size_limit_is_rejected(
+    workspace: Config, tmp_path: Path
+) -> None:
+    from wingman.application.interview import INTERVIEW_MAX_SUBMISSION_BYTES
+
+    stimulus = tmp_path / "huge.md"
+    stimulus.write_bytes(b"x" * (INTERVIEW_MAX_SUBMISSION_BYTES + 1))
+    with Storage(workspace.db_path) as storage:
+        with pytest.raises(IngestError, match="interview submission limit"):
+            capture_interview_reaction(
+                "alignment_of_perspective_agree", str(stimulus), WHY_AGREE, workspace, storage
+            )
+
+
+def test_new_targets_beyond_the_per_subtype_cap_are_rejected(
+    workspace: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WINGMAN_INTERVIEW_MAX_PER_SUBTYPE", "2")
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, workspace, storage)
+        capture_interview_reaction("values_pro", "A. Nother Name", WHY_PRO, workspace, storage)
+        with pytest.raises(IngestError, match="already has 2 captures"):
+            capture_interview_reaction("values_pro", "A Third Name", WHY_PRO, workspace, storage)
+        # a different subtype has its own, independent cap
+        capture_interview_reaction("values_con", "A. Public Figure", WHY_CON, workspace, storage)
+
+
+def test_recapturing_an_existing_target_is_exempt_from_the_cap(
+    workspace: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WINGMAN_INTERVIEW_MAX_PER_SUBTYPE", "1")
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, workspace, storage)
+        # updating the SAME target stays allowed even once the subtype is at its cap
+        updated = capture_interview_reaction(
+            "values_pro", "Jane Goodall", WHY_PRO + " Still true.", workspace, storage
+        )
+        assert "superseded" in updated.outcome
+        # but a genuinely new target is still refused
+        with pytest.raises(IngestError, match="already has 1 captures"):
+            capture_interview_reaction("values_pro", "Someone Else", WHY_PRO, workspace, storage)
