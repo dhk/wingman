@@ -21,6 +21,14 @@ interface — today it's raw, sequential terminal prompts. This brief is
 the ask: **take the existing terminal mechanic and design it properly as
 a CLI experience** — "a wingman CLI for interviews and stuff."
 
+**"CLI experience" here means specifically: wingman driven from inside an
+AI-assistant CLI (Claude Code, Claude Desktop, or any MCP client with
+structured-question support), using that client's own native
+question-asking UI — not a bespoke terminal-rendering framework built
+from scratch.** See §4 for the required interaction pattern this implies;
+it's a direct, resolved requirement from the product owner, not one of
+the open questions left for the designer.
+
 ## 2. The mechanic, in plain terms
 
 Every capture is the same three-step shape: **stimulus/nomination →
@@ -89,7 +97,46 @@ already work in this codebase. That path is reasonably solid *because*
 a capable model is doing the conversational work. **The raw terminal path
 has no equivalent — it's the one that needs real design.**
 
-## 4. Concrete gaps in the terminal experience today
+## 4. Required interaction pattern
+
+Two rules, direct from the product owner — not open for the designer to
+relitigate, only to apply:
+
+1. **Each section opens with a short explainer.** Before asking anything
+   in a category (Alignment of perspective, Values, Mission alignment,
+   etc.), the assistant states in plain language what the section is,
+   why it's being asked, and roughly what's coming — e.g. "Values: I'll
+   ask about three people you'd be horrified to be named alongside
+   first, then three you'd have dinner with — for each, why, in your own
+   words."
+2. **Every individual question is asked via `AskUserQuestion`** (or the
+   calling client's equivalent structured-question UI) — clickable
+   options with a free-text/"Other" escape hatch — rather than an
+   open-ended chat turn the user has to parse and respond to unprompted.
+
+This fits naturally onto the flow's *structural* choices: agree/disagree,
+which module to do next, continue-or-stop, subtype selection. It's a
+genuinely awkward fit for fields that are inherently open text by
+design — the nominee's name, and above all the "why," which must never
+be reduced to a preset option (RFC-005's evidence discipline requires it
+verbatim, in the user's own words, never coached or narrowed toward a
+menu). For those, `AskUserQuestion`'s free-text/"Other" path is the right
+tool, not a synthetic multiple-choice menu that would shape the answer.
+
+Practically, this means the primary interaction surface being designed
+is the **chat-driven MCP path**, not a bespoke terminal-rendering
+framework — the actual implementation work is mostly in
+`interview_react`'s and `perspectives_start`'s own docstrings (the
+existing enforcement mechanism this codebase already uses for protocol —
+see `qa_capture`, `resolve_requirement`), possibly with some
+restructuring of what each tool call returns to make the
+explainer-then-`AskUserQuestion` shape easy for a calling assistant to
+follow consistently. `wingman interview`/`wingman perspectives` (the raw,
+non-agent terminal path) stays a valid scriptable primitive underneath,
+but isn't where this required pattern applies — it has no AI harness to
+call `AskUserQuestion` through.
+
+## 5. Concrete gaps in the terminal experience today
 
 - **No visible progress.** Nothing shows "2 of 3 con nominees named" or
   "Tier 1 of 3" — a user re-running the command has no sense of where
@@ -116,7 +163,7 @@ has no equivalent — it's the one that needs real design.**
   about as a near-future fourth category, not something to design against
   yet.
 
-## 5. Constraints/invariants any redesign must preserve
+## 6. Constraints/invariants any redesign must preserve
 
 - **Evidence discipline.** The "why" text is the *only* thing that ever
   becomes evidence; the stimulus/nominee is context only. Copy and layout
@@ -143,40 +190,39 @@ has no equivalent — it's the one that needs real design.**
 - **Local-first.** This is a single-user, local terminal tool — no
   account/login concepts belong here.
 
-## 6. Open questions for the designer
+## 7. Open questions for the designer
 
-We're deliberately not presupposing the answers here:
+§4's explainer-then-`AskUserQuestion` pattern is settled; these are the
+things still genuinely open:
 
-1. **Sequential prompts with richer formatting** (progress markers,
-   colored/labeled pro-con sections, a visible "why this order" note) —
-   or a **full-screen TUI** (e.g., a `textual`-style app with panes,
-   live progress, and in-place editing)? Both are legitimate; they trade
-   off implementation cost against how much the experience can actually
-   *feel* like a designed interview versus a scripted Q&A.
-2. Should there be a **review/edit screen before final commit** for a
+1. Should there be a **review/edit screen before final commit** for a
    whole session's worth of answers, or does today's
    answer-commits-immediately model (which already supports clean
-   re-answering/supersession) stay as-is with just better presentation?
-3. How should the **trust ladder** be surfaced so it reads as a helpful
-   suggested path without becoming a mandatory wizard — progress
-   indicator, a menu the user picks from each time, something else?
-4. Should the **size/count limits** show proactively ("3 of 6 nominees
-   used for Values-con") rather than only appearing as an error at the
-   cap?
-5. Does the **anchor-first Mission-alignment fallback** get built as an
-   actual guided re-ask in this redesign, or stay a documented-but-
-   unbuilt behavior for now?
+   re-answering/supersession) stay as-is, just with an explainer +
+   `AskUserQuestion` in front of each capture?
+2. How should the **trust ladder** be surfaced so it reads as a helpful
+   suggested path without becoming a mandatory wizard — could itself be
+   an `AskUserQuestion` ("what would you like to do — react to
+   something, name people you admire, name organizations, or pick up
+   where you left off?") rather than a fixed menu.
+3. Should the **size/count limits** show proactively ("3 of 6 nominees
+   used for Values-con") — e.g. folded into a section's opening
+   explainer — rather than only appearing as an error at the cap?
+4. Does the **anchor-first Mission-alignment fallback** get built as an
+   actual guided re-ask (its own explainer + `AskUserQuestion`) in this
+   redesign, or stay a documented-but-unbuilt behavior for now?
 
-## 7. Where to start
+## 8. Where to start
 
-Recommend scoping the first design pass to **Perspectives' existing
-entry point and Tier 1 flow** (`wingman perspectives`) — it's the
-smallest, most self-contained piece, and there's already a working (if
-crude) implementation to react against rather than designing from a
-blank page. Values and Mission alignment's fuller con-then-pro flow is
-naturally the next scope once Tier 1's shape is settled, since it reuses
-the same underlying primitives (`wingman interview`,
-`capture_interview_reaction`) with a more structured ordering on top.
+Recommend scoping the first design pass to **`perspectives_start` and
+`interview_react`'s docstrings** for Perspectives' entry point and Tier 1
+flow (Alignment of perspective) — it's the smallest, most self-contained
+piece, and there's already a working (if unstructured) MCP path to react
+against rather than designing from a blank page. Values and Mission
+alignment's fuller con-then-pro flow is naturally the next scope once
+Tier 1's explainer-then-`AskUserQuestion` shape is settled, since it
+reuses the same underlying primitive (`capture_interview_reaction`) with
+a more structured ordering and more questions per section on top.
 
 ---
 
