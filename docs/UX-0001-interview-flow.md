@@ -5,7 +5,7 @@ Code or Claude Desktop.*
 
 | | |
 |---|---|
-| **Status** | Draft · v0.1 |
+| **Status** | Draft · v0.1 — §2's BP-01/03/04/06/07/08/09 and §8's Q2/Q3/Q4 resolutions implemented in `interview_react`/`perspectives_start`'s docstrings and return values (position, resume detection). §10's structured JSON tool-contract (BP-10) not yet built — still docstring-only protocol. |
 | **Answers** | `docs/INTERVIEW-CLI-BRIEF.md` (PR #191) |
 | **Surface** | MCP client chat (Claude Code, Claude Desktop, any MCP client) |
 | **Control** | `AskUserQuestion` (or the client's structured-question equivalent) |
