@@ -363,13 +363,58 @@ skipped — it never blocks the others.
 
 This needs its own, separate root-owned install (it never touches any
 workspace, never reads a key, and root should not share dhk's or Trent's
-own `uv tool` install):
+own `uv tool` install). `dhk/wingman` is a **private** repo, so root needs
+either a credential of its own or a local install source — plain
+`git+https://…` fails with `fatal: could not read Username for
+'https://github.com': terminal prompts disabled`. Two ways to give root
+one of those, in order of setup cost:
+
+**Zero setup — install from dhk's already-cloned checkout** (the same
+local-path pattern Trent's own upgrade uses below):
 
 ```bash
 sudo -i                                            # or: sudo -u root -H bash
-uv tool install git+https://github.com/dhk/wingman.git
+uv tool install /home/dhk/src/wingman
 command -v wingman-upgrade-all                     # note the path for the unit below
 ```
+
+Re-run that same `uv tool install --reinstall /home/dhk/src/wingman`
+whenever `wingman-upgrade-all` itself needs upgrading (i.e. after a
+change to `src/wingman/infrastructure/upgrade_all.py` lands) — after
+dhk's own checkout has pulled that change, same as any local-path
+install below. Ties root's own upgrade path to a human account's
+checkout existing and staying current.
+
+**A few minutes' setup — give root its own read-only credential**, so a
+deployment/operation box like lobster can fetch on its own rather than
+depending on any human account's checkout:
+
+1. Create a **fine-grained** GitHub PAT (github.com → Settings → Developer
+   settings → Fine-grained tokens): repository access limited to just
+   `dhk/wingman`, permissions set to **Contents: Read-only** — nothing
+   else. Treat it exactly like any other secret; rotate it if it ever
+   leaks.
+2. Store it where git's HTTPS auth already looks, root-only-readable,
+   never on a command line or in a unit file (both land in `ps`/journal
+   output):
+   ```bash
+   sudo install -m 600 /dev/null /root/.netrc
+   sudo tee -a /root/.netrc >/dev/null <<'EOF'
+   machine github.com
+   login <your-github-username>
+   password <the-fine-grained-PAT>
+   EOF
+   ```
+3. Root's install line becomes the plain git URL, now that it has
+   credentials:
+   ```bash
+   sudo -i
+   uv tool install git+https://github.com/dhk/wingman.git
+   ```
+
+Either way root ends up with a working `wingman-upgrade-all`; pick
+whichever matches how much you want root's own upgrade path independent
+of any human account.
 
 `/etc/systemd/system/wingman-upgrade-all.service` (a **system** unit,
 root-run — not a `--user` unit like the ones above):
@@ -381,8 +426,16 @@ Description=Upgrade every wingman shape-B user (#125)
 [Service]
 Type=oneshot
 Environment=WINGMAN_UPGRADE_USERS=dhk,trent
+Environment=WINGMAN_UPGRADE_SOURCE_trent=/home/dhk/src/wingman
 ExecStart=/root/.local/bin/wingman-upgrade-all
 ```
+
+Trent has no GitHub access of his own (#167) — omitting
+`WINGMAN_UPGRADE_SOURCE_trent` doesn't skip him, it silently falls back to
+the checkout-shape default (`git -C ~trent/src/wingman pull`), which fails
+outright since that checkout was never meant to exist. Any local-path-shape
+user needs their own `WINGMAN_UPGRADE_SOURCE_<username>` line, pointed at
+whichever checkout-shape user's already-pulled checkout they install from.
 
 `/etc/systemd/system/wingman-upgrade-all.timer`:
 
