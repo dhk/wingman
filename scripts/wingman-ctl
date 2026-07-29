@@ -10,7 +10,35 @@
 #     (that's the point, at upgrade time), and says what must be restarted.
 set -u
 
-REPO="${WINGMAN_REPO:-$HOME/Documents/dev/wingman}"
+# $WINGMAN_REPO wins if already exported (unchanged). Otherwise, before
+# falling back to the historical Mac default, check the canonical host
+# settings file (~/.config/wingman/wingman.env, RFC-046/#122 — WINGMAN_REPO
+# is a non-secret setting, so it lives there rather than in secrets.env)
+# for a WINGMAN_REPO= line: read as data via grep, never sourced, so a
+# file in the same directory as real API keys is never at risk of having
+# its content executed. This closes the same gap alexandria#31 found and
+# fixed for ALEXANDRIA_REPO: a tool invoked from a context that never
+# exported the variable (a fresh SSH session before .bashrc runs, cron,
+# 'sudo -u dhk wingman-ctl ...') silently fell back to a path that only
+# makes sense on the Mac.
+_wingman_repo_from_host_file() {
+  local file="$HOME/.config/wingman/wingman.env" line
+  [ -f "$file" ] || return 1
+  line=$(grep -m1 '^WINGMAN_REPO=' "$file" 2>/dev/null) || return 1
+  line="${line#WINGMAN_REPO=}"
+  line="${line#"${line%%[![:space:]]*}"}"   # trim leading whitespace
+  line="${line%"${line##*[![:space:]]}"}"   # trim trailing whitespace
+  [ -n "$line" ] && printf '%s\n' "$line"
+}
+
+if [ -n "${WINGMAN_REPO:-}" ]; then
+  REPO="$WINGMAN_REPO"
+elif _host_repo="$(_wingman_repo_from_host_file)" && [ -n "$_host_repo" ]; then
+  REPO="$_host_repo"
+else
+  REPO="$HOME/Documents/dev/wingman"
+fi
+unset _host_repo
 case "$(uname -s)" in
   Darwin) LOG="${WINGMAN_LOG:-$HOME/Library/Logs/wingman-mcp.log}" ;;
   *)      LOG="${WINGMAN_LOG:-$HOME/.local/state/wingman-mcp.log}" ;;
