@@ -381,8 +381,16 @@ Description=Upgrade every wingman shape-B user (#125)
 [Service]
 Type=oneshot
 Environment=WINGMAN_UPGRADE_USERS=dhk,trent
+Environment=WINGMAN_UPGRADE_SOURCE_trent=/home/dhk/src/wingman
 ExecStart=/root/.local/bin/wingman-upgrade-all
 ```
+
+Trent has no GitHub access of his own (#167) — omitting
+`WINGMAN_UPGRADE_SOURCE_trent` doesn't skip him, it silently falls back to
+the checkout-shape default (`git -C ~trent/src/wingman pull`), which fails
+outright since that checkout was never meant to exist. Any local-path-shape
+user needs their own `WINGMAN_UPGRADE_SOURCE_<username>` line, pointed at
+whichever checkout-shape user's already-pulled checkout they install from.
 
 `/etc/systemd/system/wingman-upgrade-all.timer`:
 
