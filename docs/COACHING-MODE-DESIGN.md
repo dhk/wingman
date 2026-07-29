@@ -1,11 +1,14 @@
 # Coaching Mode — Design (proposal, not yet an RFC)
 
-**Status.** Design recorded 2026-07-29, from a scoping discussion. Coach-mediated
-confirmed as the shape (no separate coachee login/token); the persona
-mechanic, evidence-classification treatment for coach-authored answers, and
-what's shared vs. scoped are resolved below. Not built — no code in this
-repository implements any part of this document. Graduates to a numbered
-`RFC.md` entry once a v1 slice ships.
+**Status.** Design recorded 2026-07-29, from a scoping discussion; all four
+v1 open questions resolved the same day (naming, active-persona
+persistence + visibility, company-alignment reuse, job-criteria seeding —
+see "Open questions" and "Revisit if"). Coach-mediated confirmed as the
+shape (no separate coachee login/token); the persona mechanic,
+evidence-classification treatment for coach-authored answers, People-graph
+cross-referencing, and what's shared vs. scoped are all resolved. Not
+built — no code in this repository implements any part of this document.
+Graduates to a numbered `RFC.md` entry once a v1 slice ships.
 
 ## Motivation
 
@@ -75,7 +78,12 @@ step-cursor (`infrastructure/doctor_deep.py`) — is the mechanism: a
 reports who's currently active. Every persona-aware tool call defaults to
 whatever's active unless given an explicit override, so "set it once, keep
 going" works the way it was described, while a one-off cross-persona call
-always stays possible without switching the active pointer.
+always stays possible without switching the active pointer. The pointer
+persists until explicitly cleared — no expiry, no time window — but that
+only stays safe if it's never silently applied: every persona-scoped
+tool's response carries a visible "acting as: Mike" indicator, so which
+persona is active is always apparent, not something the coach has to
+remember or separately check.
 
 **Evidence, and "how would Mike answer this."** When the coach types an
 answer *speculating on the persona's behalf* — their own best
@@ -192,23 +200,30 @@ ships, not v1 scope.
 
 ## Open questions
 
-1. **Naming.** This doc uses "Persona," matching how it was described
-   ("modeled as a persona flag"). Confirm, or "Coachee"/"Client" if that
-   reads better once it's a real UI label.
-2. **How long does "active persona" stay set?** Until explicitly cleared,
-   or does it expire (end of MCP session, a time window)? Leaning toward
-   "until explicitly cleared" for simplicity, but worth confirming given
-   the failure mode is misattributed evidence if the coach forgets who's
-   active.
-3. **Company alignment for a persona** — reuses the coach's own
-   already-fetched company research (shared, per "What's shared" above),
-   computed fresh against that persona's own POV. Confirming this is the
-   intended shape, not something requiring its own re-fetch per persona.
-4. **Job-criteria seeding** — does a fresh persona start with an empty
-   criteria doc (the existing seeding interview, run under that persona's
-   scope), or is there ever a reason to clone the coach's own as a
-   starting point? Leaning toward always empty/fresh — a coachee's job
-   criteria shouldn't inherit the coach's.
+Resolved 2026-07-29 (see "Revisit if" for what would reopen each):
+
+- ~~**Naming.**~~ **Resolved: `Persona`.** Matches how it was described
+  ("modeled as a persona flag") — used throughout this document, in code,
+  and in the UI.
+- ~~**How long does "active persona" stay set?**~~ **Resolved: until
+  explicitly cleared, and it must always be apparent which persona is
+  active.** No expiry, no time window — simplicity wins, but the
+  visibility requirement is load-bearing: every persona-scoped tool
+  response carries a visible "acting as: Mike" indicator, not just a
+  silently-applied scope, so it's never ambiguous — and never
+  forgettable — who the coach is currently acting for. `coach_persona`'s
+  "who" action (report the active persona) exists specifically so this is
+  always cheap to check.
+- ~~**Company alignment for a persona.**~~ **Resolved: reuse and
+  re-score.** Company research/dossiers stay shared, exactly as designed
+  above; only the alignment *score* is persona-specific, computed against
+  that persona's own POV instead of the coach's. No per-persona re-fetch.
+- ~~**Job-criteria seeding.**~~ **Resolved: always empty/fresh.** A new
+  persona goes through the same seeding interview the coach did, on their
+  own terms — never a clone of the coach's own criteria, which would risk
+  quietly encoding the coach's preferences as if they were the persona's.
+
+All four v1 open questions are now resolved.
 
 ## Phasing
 
@@ -234,3 +249,9 @@ ships, not v1 scope.
   must not be able to (this design assumes only the coach ever sees
   everything; if personas themselves ever get any direct visibility, their
   mutual privacy becomes a real question this doc hasn't addressed).
+- A persona's company alignment ever needs genuinely different research,
+  not just a different score against shared research — trigger to
+  reconsider the shared-research assumption.
+- Starting every persona's job-criteria from empty proves too slow or
+  frustrating in practice — trigger to reconsider offering the coach's own
+  as an optional, explicitly-opt-in template rather than the default.
