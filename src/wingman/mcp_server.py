@@ -387,14 +387,16 @@ def qa_capture(question: str, answer: str, kind: str = "achievement") -> str:
 @server.tool()
 def interview_react(subtype: str, target: str, why: str, primary_purpose: str = "") -> str:
     """Capture one interview reaction OR nomination as citable profile
-    evidence (docs/PROFILE-BOOTSTRAP-DESIGN.md) — a way to bootstrap
-    profile evidence without pre-existing published writing.
+    evidence (docs/PROFILE-BOOTSTRAP-DESIGN.md, docs/UX-0001-interview-flow.md)
+    — a way to bootstrap profile evidence without pre-existing published
+    writing.
 
     Three mechanics, chosen by subtype:
     - Reaction (Alignment of perspective): target is an https:// URL or a
       local PDF/DOCX/MD/TXT file the user chose to react to. subtype is
-      'alignment_of_perspective_agree' or
-      'alignment_of_perspective_disagree'.
+      'alignment_of_perspective_agree' or 'alignment_of_perspective_disagree'.
+      A mixed/ambiguous reaction ("it's complicated") routes to _disagree
+      and lets 'why' carry the nuance — never invent a third subtype for it.
     - Nomination — Values: target is a person's name (or, for the fallback
       subtypes, a company's). subtype is 'values_pro' / 'values_con'
       (three people, living or dead, they'd have dinner with / be
@@ -413,29 +415,65 @@ def interview_react(subtype: str, target: str, why: str, primary_purpose: str = 
       REQUIRED for this pair only: what the user understands the
       nominated org's primary purpose to be, e.g. "Pepsi sells cola" or
       "the fire department puts out fires" — ask it every time an org is
-      nominated, pro or con. Stored as context alongside the reasoning,
-      never as evidence itself.
+      nominated, pro or con, and present it as context (its own, visually
+      distinct answer), never inside the evidence quote itself.
 
     Either way, why is the user's own reasoning, stored verbatim as the
     ONLY evidence — the target itself (fetched page or nominee name) is
     never quoted as if it were the user's own words. Capturing the same
     target again under the same subtype supersedes the earlier answer.
 
-    Protocol for Values and Mission alignment — conduct each module in
-    this order, this tool does not enforce it: con nominees before pro
-    nominees (ends the interview on a high note); within EACH block, ask
-    why about the SECOND nominee first, then the first, then the third
-    (dodges the rehearsed, front-loaded answer). For Mission alignment,
-    ask the primary-purpose question immediately after each nomination,
-    before asking why.
+    UX-0001's interaction pattern — apply for every category:
+    - BP-01, explain then ask: 2-3 sentences before any question — what
+      this section is, why it's asked, roughly what's coming. No question
+      arrives cold.
+    - BP-02, one decision per card: ask the target/nominee, then the
+      reaction (where one exists), then 'why' as SEPARATE structured
+      questions — never bundle "who, and why" into one turn.
+    - BP-03, options for structure, prose for substance: agree/disagree,
+      which-category-next, and continue-or-stop are fine as preset
+      options. 'why' (and a nominee's name) are NEVER preset options —
+      free text only, not even illustrative examples, which anchor the
+      answer.
+    - BP-04, every card has an exit: free text, "nothing comes to mind"
+      (see the anchor fallback below), and "I'm done for now" stay
+      reachable as options on every question, not things the user has to
+      know to type.
+    - BP-06, echo verbatim before you commit: show the exact 'why' text
+      that will be stored, in a quote block ("Saving this as your own
+      words, verbatim: …"), with Save / Let me reword / Discard options —
+      call this tool only after Save. The single largest risk on this
+      path is a model quietly tidying the user's words before calling
+      this tool; never do that.
+    - BP-07, name the reason for an odd order: say once, in the section's
+      opening explainer, why con comes before pro and nominee #2 before
+      #1 — said, it reads as craft; unsaid, it reads as arbitrary.
+    - BP-08, empty is a valid answer: if nothing comes to mind, one
+      anchor-first re-ask only — "the last thing you sent someone, or
+      argued with" for Alignment of perspective; "an organization you've
+      actually been part of — school, employer, club, team" for Mission
+      alignment — then a clean stop naming the command that would produce
+      a stance later ('wingman pov'/'my_pov'). Never a third attempt;
+      coerced answers become bad evidence.
+    - BP-09, suggest, never gate: every category stays independently
+      reachable, any order, any number of times — perspectives_start's
+      trust-ladder framing is option order, never a locked sequence.
 
-    Same show-before-save discipline as qa_capture otherwise — show the
-    exact target, subtype, and why text (and primary_purpose, where it
-    applies) that will be stored, and save only after the user agrees.
-    Never capture silently, and never paraphrase 'why' on the user's
-    behalf.
+    Protocol for Values and Mission alignment specifically — con nominees
+    before pro nominees (ends the section on a high note); within EACH
+    block, ask why about the SECOND nominee first, then the first, then
+    the third (dodges the rehearsed, front-loaded answer). This tool does
+    not enforce that ordering; it's the calling agent's protocol to
+    follow, same as qa_capture/resolve_requirement elsewhere in this
+    codebase.
+
+    The response reports position ("N of M captured for this subtype")
+    once a subtype reaches half its per-subtype cap
+    (WINGMAN_INTERVIEW_MAX_PER_SUBTYPE, default 6) — fold that into the
+    NEXT section's opening explainer (BP-05) rather than waiting for it to
+    surface as an error at the cap.
     """
-    from wingman.application.interview import capture_interview_reaction
+    from wingman.application.interview import capture_interview_reaction, subtype_progress
 
     config = _ready_config()
     if config is None:
@@ -445,54 +483,96 @@ def interview_react(subtype: str, target: str, why: str, primary_purpose: str = 
             report = capture_interview_reaction(
                 subtype, target, why, config, storage, primary_purpose=primary_purpose
             )
+            count, cap = subtype_progress(storage, subtype)
     except IngestError as exc:
         return f"interview capture failed: {exc}"
     title = f" ({report.title})" if report.title else ""
+    position = (
+        f" Position: {count} of {cap} captured for {subtype} so far." if count * 2 >= cap else ""
+    )
     return (
         f"{report.outcome}: [{report.subtype}] {report.target}{title}\n"
         "Review with 'wingman profile list', or 'my_pov'/'wingman pov' to synthesize "
-        "captures (and any corpus writing) into a cited stance."
+        f"captures (and any corpus writing) into a cited stance.{position}"
     )
 
 
 @server.tool()
 def perspectives_start() -> str:
-    """Perspectives: the onboarding entry point for a new profile (docs/PROFILE-BOOTSTRAP-DESIGN.md)
-    — call this whenever a user is starting fresh, or asks how to build their profile.
+    """Perspectives: the onboarding entry point for a new profile
+    (docs/PROFILE-BOOTSTRAP-DESIGN.md, docs/UX-0001-interview-flow.md) —
+    call this whenever a user is starting fresh, or asks how to build
+    their profile.
 
-    This tool collects nothing itself; it is the branching instruction for
-    whichever agent is driving onboarding. Ask the user directly: do they
-    have existing writing to share (a blog, articles, LinkedIn posts), or
-    would they rather do a quick interview about their values and
-    experience instead? Do not guess or assume — this is the user's call
-    every time, even for someone who might plausibly have both.
+    This tool collects nothing itself; it computes what's already been
+    captured (if anything) and returns the entry card for the calling
+    agent to present via AskUserQuestion (UX-0001 §4) — single select,
+    header "Start". Before the card, 2-3 sentences (BP-01): what
+    Perspectives is, that only their own words ever become evidence, that
+    nothing is saved until they confirm it, and that every option is
+    independently reachable in any order, any number of times, forever
+    (BP-09 — no gating, no locked sequence).
 
-    - "I have writing" -> point them to add it to the corpus (e.g.
-      'wingman corpus add <path>', or this client's own corpus-upload
-      path), then offer the interview afterward too — the two are
-      additive, not either/or.
-    - "Interview me" -> start at tier 1, Alignment of perspective: 2-3
-      pieces of content they already have in mind, agree/disagree + a
-      one-line why, captured one at a time via the interview_react tool.
-      Only offer tier 2 (Values, Mission alignment — see interview_react's
-      own docstring for the con-then-pro/ask-#2-first protocol) once tier
-      1 wraps up, and only if they want to keep going.
+    Card options, in order:
+    - Pick up where I left off — ONLY when prior captures exist (this
+      tool's return says so); promoted to first when present, describing
+      what's already captured.
+    - React to things I've read — suggested first step when nothing's
+      been captured yet: 2-3 things they agree with, 2-3 they don't,
+      ~10 min. Drives interview_react with subtype
+      'alignment_of_perspective_agree'/'_disagree'.
+    - Name people — three they'd have dinner with, three they'd hate to
+      be listed beside, ~8 min. Drives interview_react with subtype
+      'values_pro'/'values_con' (or the 'values_fallback_*' company
+      variant if naming people is hard).
+    - Name organisations — places they'd want, or refuse, to be
+      associated with, ~8 min. Drives interview_react with subtype
+      'mission_alignment_pro'/'mission_alignment_con'.
+    - I do have writing to add — skip the interview; point them to
+      'wingman corpus add <path>' (or this client's own corpus-upload
+      path). Offer the interview afterward too — additive, not either/or.
+    - Other — free text, always present, always last.
 
-    Neither path gates the other, and nothing here is mandatory beyond
-    whatever the user chooses to do first.
+    No option is ever disabled and no category is a prerequisite for any
+    other — the ordering above is a suggested default, not a gate. Once a
+    category is chosen, see interview_react's own docstring for that
+    category's protocol (BP-01…09, con-then-pro/ask-#2-first, echo before
+    save).
     """
+    from wingman.application.interview import capture_progress_summary
+
+    config = _ready_config()
+    summary = None
+    if config is not None:
+        with Storage(config.db_path) as storage:
+            summary = capture_progress_summary(storage)
+
+    resume_line = (
+        f"- Pick up where I left off — you've captured {summary} so far. "
+        "Promote this to the FIRST option; ask which category to continue.\n"
+        if summary
+        else ""
+    )
     return (
-        "Perspectives — profile onboarding. Ask the user directly: do they have "
-        "existing writing to share, or would they rather do a quick interview about "
-        "their values and experience?\n\n"
-        "- Content: point them to 'wingman corpus add <path>' (or this client's own "
-        "corpus-upload path), then offer the interview afterward too — additive, not "
-        "either/or.\n"
-        "- Interview: start at tier 1 (Alignment of perspective) — 2-3 pieces of "
-        "content they already have in mind, agree/disagree + why, one at a time via "
-        "interview_react. Offer tier 2 (Values, Mission alignment) only after tier 1, "
-        "and only if they want to keep going.\n\n"
-        "Neither path is required before the other."
+        "Perspectives — profile onboarding entry point. Present this as a single "
+        'AskUserQuestion (header "Start", single select): "Where would you like to '
+        'start?"\n\n'
+        f"{resume_line}"
+        "- React to things I've read (suggested first step if nothing's captured yet "
+        "— 2-3 things you agree with, 2-3 you don't, ~10 min)\n"
+        "- Name people (three you'd have dinner with, three you'd hate to be listed "
+        "beside, ~8 min)\n"
+        "- Name organisations (places you'd want — or refuse — to be associated with, "
+        "~8 min)\n"
+        "- I do have writing to add (skip the interview — use 'wingman corpus add' or "
+        "this client's own corpus-upload path instead; offer the interview afterward "
+        "too, additive not either/or)\n"
+        "- Other (free text, always present, always last)\n\n"
+        "Before the card: 2-3 sentences (BP-01) — what Perspectives is, that only "
+        "their own words ever become evidence, that nothing is saved until they "
+        "confirm it, and that every option stays reachable in any order, any number "
+        "of times, forever (BP-09, no gating). Then call interview_react for the "
+        "chosen category — see its own docstring for that category's protocol."
     )
 
 

@@ -353,15 +353,49 @@ def test_mcp_interview_react(workspace: Config) -> None:
     # the MCP tool uses the real fetch_url, unreachable in tests — assert the
     # failure path is honest rather than silently swallowed
     assert "interview capture failed" in result
-    assert "Never capture silently" in (interview_react_tool.__doc__ or "")
+    assert "echo verbatim" in (interview_react_tool.__doc__ or "").lower()
 
 
-def test_mcp_perspectives_start_returns_branching_guidance() -> None:
+def test_mcp_interview_react_reports_position_only_past_half_the_cap(
+    workspace: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UX-0001 BP-05/Q3: position surfaces from the halfway point, never
+    from zero, and never only as an error at the cap."""
+    from wingman.mcp_server import interview_react as interview_react_tool
+
+    monkeypatch.setenv("WINGMAN_INTERVIEW_MAX_PER_SUBTYPE", "4")
+    first = interview_react_tool("values_pro", "Jane Goodall", WHY_PRO)
+    assert "Position:" not in first  # 1 of 4 — below half, stay quiet
+
+    interview_react_tool("values_pro", "A. Nother Name", WHY_PRO)
+    third = interview_react_tool("values_pro", "A Third Name", WHY_PRO)
+    assert "Position: 3 of 4 captured for values_pro so far." in third
+
+
+def test_mcp_perspectives_start_returns_branching_guidance(workspace: Config) -> None:
     from wingman.mcp_server import perspectives_start
 
     result = perspectives_start()
-    assert "existing writing" in result
-    assert "interview" in result.lower()
+    assert "writing to add" in result
+    assert "interview_react" in result
+    assert "Pick up where I left off" not in result  # nothing captured yet
+
+
+def test_mcp_perspectives_start_promotes_resume_when_captures_exist(
+    workspace: Config,
+) -> None:
+    from wingman.mcp_server import perspectives_start
+
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, workspace, storage)
+        capture_interview_reaction("values_con", "A. Public Figure", WHY_CON, workspace, storage)
+
+    result = perspectives_start()
+    assert result.startswith(
+        "Perspectives — profile onboarding entry point."
+    )  # explainer framing still leads
+    assert "Pick up where I left off" in result
+    assert "2 Values nominations" in result
 
 
 def test_url_submission_over_size_limit_is_rejected(workspace: Config) -> None:

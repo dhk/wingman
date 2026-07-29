@@ -342,3 +342,42 @@ def list_interview_documents(storage: Storage) -> list[InterviewDocument]:
         for item in storage.list_profile_items()
         if item.kind is ProfileItemKind.INTERVIEW and item.status is ItemStatus.ACTIVE
     ]
+
+
+def subtype_progress(storage: Storage, subtype: str) -> tuple[int, int]:
+    """(active capture count for this subtype, the per-subtype cap) — lets a
+    caller surface UX-0001's BP-05 position ("N of M captured") without
+    reaching into the cap check's own internals."""
+    count = sum(
+        1
+        for item in storage.list_profile_items()
+        if item.kind is ProfileItemKind.INTERVIEW
+        and item.subtype == subtype
+        and item.status is ItemStatus.ACTIVE
+    )
+    return count, _max_submissions_per_subtype()
+
+
+def capture_progress_summary(storage: Storage) -> str | None:
+    """One-line summary of what's been captured so far, across every
+    interview category — None if nothing has been captured yet. Used by
+    perspectives_start (UX-0001 §4) to decide whether to offer, and how to
+    describe, a 'pick up where I left off' option."""
+    items = [
+        item
+        for item in storage.list_profile_items()
+        if item.kind is ProfileItemKind.INTERVIEW and item.status is ItemStatus.ACTIVE
+    ]
+    if not items:
+        return None
+    reactions = sum(1 for item in items if item.subtype in REACTION_SUBTYPES)
+    people = sum(1 for item in items if item.subtype in VALUES_SUBTYPES)
+    orgs = sum(1 for item in items if item.subtype in MISSION_ALIGNMENT_SUBTYPES)
+    parts = []
+    if reactions:
+        parts.append(f"{reactions} reaction{'s' if reactions != 1 else ''}")
+    if people:
+        parts.append(f"{people} Values nomination{'s' if people != 1 else ''}")
+    if orgs:
+        parts.append(f"{orgs} Mission alignment nomination{'s' if orgs != 1 else ''}")
+    return ", ".join(parts)
