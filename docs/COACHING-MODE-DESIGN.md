@@ -128,6 +128,35 @@ Nothing crosses from the coach's own POV into a persona's synthesis on its
 own, matching "my own perspectives/POVs aren't important here — unless we
 specifically do that."
 
+## Cross-referencing the coach's own People graph
+
+Confirmed, and it fits the existing shared/scoped split without needing a
+new mechanism: when working on a persona's behalf, the coach's *entire*
+People watchlist — everyone tracked, warm-path scoring, all of it — stays
+visible for finding candidates. "Who among everyone I know might be
+valuable for Mike" is exactly the "all my material is available to them"
+principle, applied to people instead of writing. Nothing new needed for
+*visibility*; `search`/`people_similar`/`woven_warm_path` already span the
+whole workspace today.
+
+What's new is the *action*: designating a specific person as relevant to a
+specific persona is an explicit coach decision, not a suggestion engine —
+the same "explicit attachment, not automatic" principle as evidence above,
+just applied to People instead of `ProfileItem`s. A lightweight join
+(persona ↔ person, optionally carrying the coach's own note on *why* this
+person might matter for this persona) is the natural v1 shape. The coach
+does the selecting; nothing here auto-suggests overlaps.
+
+## Deferred: a persona's own LinkedIn graph (Woven)
+
+If a persona (e.g. Mike) ever gets *their own* LinkedIn connections export
+uploaded — directly, or through Woven — that's a materially different
+question from anything else in this document: whose graph is it, does it
+merge with or stay separate from the coach's own People watchlist, and what
+"warm path" even means once two people's networks are both in play.
+Explicitly out of scope here, per direction — noted so it isn't lost, not
+designed. Revisit alongside Woven's own roadmap, not as part of this v1.
+
 ## Web UI: a persona tab
 
 A tab to select a persona, then view the same kind of pages wingman already
