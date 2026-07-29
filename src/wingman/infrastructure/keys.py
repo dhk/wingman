@@ -1,19 +1,27 @@
 """API keys: Keychain, host file, workspace file — one resolution ladder
-(RFC-019/034, #122).
+(RFC-019/034/046, #122).
 
 'wingman keys set anthropic' stores a key with the system 'security' CLI —
 no plaintext config files, no wrapper scripts. At startup (CLI and MCP
 server alike) every known key that is absent from the environment is
-hydrated, in order: the Keychain, then the host's canonical key file
-(`~/.config/keys.env`, #122 — one file every consumer on a server host
-reads, instead of shell dotfile exports from one setup session and a
-service EnvironmentFile from another silently drifting apart), then the
-workspace key file (`keys.env` inside the workspace, RFC-034). An
+hydrated, in order: the Keychain, then the host's canonical secrets file
+(`~/.config/wingman/secrets.env`, RFC-046 — one file every consumer on a
+server host reads, instead of shell dotfile exports from one setup session
+and a service EnvironmentFile from another silently drifting apart), then
+the workspace key file (`keys.env` inside the workspace, RFC-034). An
 environment variable that is already set always wins over all three, so
 shell exports, launchd EnvironmentVariables, and a systemd
 `EnvironmentFile=` all behave exactly as before. On systems without the
 'security' binary (Linux, CI) Keychain hydration is a silent no-op and
 'wingman keys' says why.
+
+RFC-046 split the old flat `~/.config/keys.env` (#122/RFC-040) into this
+file (secrets only) plus `~/.config/wingman/wingman.env` (non-secret host
+settings — `wingman.infrastructure.host_config`) — a firm cutover: this
+module never reads the old location itself. 'ensure_env' runs the
+one-time, idempotent migration off it first, so an existing deployment's
+already-populated old file moves automatically and losslessly the first
+time any command runs after upgrading, with nothing left to do by hand.
 
 Secrets are never logged and never printed back by any command here.
 """
@@ -127,8 +135,8 @@ def unset_key(name: str, runner: Runner | None = None) -> bool:
 
 
 KEYS_FILENAME = "keys.env"
-HOST_KEYS_FILENAME = "keys.env"
-HOST_KEYS_SUBDIR = ".config"
+HOST_KEYS_FILENAME = "secrets.env"
+HOST_KEYS_SUBDIR = os.path.join(".config", "wingman")
 
 
 def _parse_known_keys_file(path: Path) -> dict[str, str]:
@@ -154,13 +162,15 @@ def read_workspace_keys(data_dir: Path) -> dict[str, str]:
 
 
 def host_keys_path(home: Path | None = None) -> Path:
-    """The one canonical host key file (#122): '~/.config/keys.env', 0600,
+    """The one canonical host secrets file (RFC-046): '~/.config/wingman/secrets.env',
 
-    read by the CLI, the MCP server, and the overnight timer alike — so a
-    server host has a single place keys live, instead of shell dotfile
-    exports from one setup session and a systemd EnvironmentFile from
-    another silently drifting apart (the failure mode that stalled the
-    2026-07-22 lobster migration).
+    0600, read by the CLI, the MCP server, and the overnight timer alike —
+    so a server host has a single place keys live, instead of shell
+    dotfile exports from one setup session and a systemd EnvironmentFile
+    from another silently drifting apart (the failure mode that stalled
+    the 2026-07-22 lobster migration, #122/RFC-040). Non-secret host
+    settings live alongside it in the sibling 'wingman.env'
+    (`wingman.infrastructure.host_config`), not in this file.
     """
     return (home if home is not None else Path.home()) / HOST_KEYS_SUBDIR / HOST_KEYS_FILENAME
 
@@ -200,17 +210,29 @@ def ensure_env(
     data_dir: Path | None = None,
     home: Path | None = None,
 ) -> list[str]:
-    """Hydrate absent env vars: Keychain, then the host file, then the
-    workspace file.
+    """Migrate the legacy host file if needed, then hydrate absent env vars:
+    Keychain, then the host secrets file, then the workspace file.
 
-    Resolution order (RFC-019/034, #122): a set environment variable always
-    wins; the macOS Keychain fills gaps; the host's canonical key file
-    ('~/.config/keys.env') fills what remains, so the CLI and MCP server
-    work on a fresh shell with zero exports; the workspace 'keys.env'
-    (written by the web UI's validated key form) fills whatever is still
-    missing. Returns the hydrated variable names. Safe to call anywhere,
-    any number of times.
+    Resolution order (RFC-019/034/046, #122): a set environment variable
+    always wins; the macOS Keychain fills gaps; the host's canonical
+    secrets file ('~/.config/wingman/secrets.env') fills what remains, so
+    the CLI and MCP server work on a fresh shell with zero exports; the
+    workspace 'keys.env' (written by the web UI's validated key form)
+    fills whatever is still missing. Returns the hydrated variable names.
+
+    Before any of that, runs the one-time move off the old flat
+    '~/.config/keys.env' (RFC-046) — idempotent and cheap once already
+    migrated, so it is safe (and intentional) to call unconditionally here
+    on every invocation rather than requiring a separate migration step.
+    The CLI and MCP server entrypoints call
+    'host_config.migrate_legacy_host_file' themselves first specifically so
+    they can print its result — this call is the automatic-and-silent
+    safety net for any other/future caller, not the primary place the
+    event is surfaced.
     """
+    from wingman.infrastructure.host_config import migrate_legacy_host_file
+
+    migrate_legacy_host_file(home)
     hydrated: list[str] = []
     if keychain_available():
         for short_name, env_var in KNOWN_KEYS.items():
@@ -236,7 +258,12 @@ def ensure_env(
     return hydrated
 
 
-_SOURCE_LABELS = ("environment", "keychain", "host file (~/.config/keys.env)", "workspace file")
+_SOURCE_LABELS = (
+    "environment",
+    "keychain",
+    "host file (~/.config/wingman/secrets.env)",
+    "workspace file",
+)
 
 
 @dataclass(frozen=True)

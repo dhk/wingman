@@ -197,7 +197,7 @@ def test_workspace_key_file_resolution(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_host_key_file_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """#122: the host file sits between the Keychain and the workspace file."""
+    """RFC-046: the host secrets file sits between the Keychain and the workspace file."""
     from wingman.infrastructure.keys import host_keys_path, read_host_keys
 
     home = tmp_path / "home"
@@ -217,9 +217,18 @@ def test_host_key_file_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-from-host"
 
 
+def test_host_key_file_lives_under_config_wingman(tmp_path: Path) -> None:
+    """RFC-046: 'secrets.env' under '~/.config/wingman/', not the old flat
+    '~/.config/keys.env' (RFC-040) — the split this PR migrates off of."""
+    from wingman.infrastructure.keys import host_keys_path
+
+    home = tmp_path / "home"
+    assert host_keys_path(home) == home / ".config" / "wingman" / "secrets.env"
+
+
 def test_host_file_outranks_workspace_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Ladder order: environment > keychain > host file > workspace file."""
-    from wingman.infrastructure.keys import store_workspace_key
+    from wingman.infrastructure.keys import host_keys_path, store_workspace_key
 
     home = tmp_path / "home"
     data_dir = tmp_path / "workspace"
@@ -228,7 +237,7 @@ def test_host_file_outranks_workspace_file(tmp_path: Path, monkeypatch: pytest.M
     store_workspace_key(data_dir, "anthropic", "sk-ant-workspace")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)  # store_workspace_key hydrated it
 
-    host_file = home / ".config" / "keys.env"
+    host_file = host_keys_path(home)
     host_file.parent.mkdir(parents=True)
     host_file.write_text("ANTHROPIC_API_KEY=sk-ant-host\n", encoding="utf-8")
 
