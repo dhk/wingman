@@ -39,6 +39,7 @@ actually synthesizing these captures into a stance.
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,6 +93,33 @@ VALID_SUBTYPES = REACTION_SUBTYPES | NOMINATION_SUBTYPES
 # docs/PROFILE-BOOTSTRAP-DESIGN.md's resolution of why.
 _EXCLUDED_VALUES_CON_NOMINEES = {"hitler", "adolf hitler"}
 
+# Per-submission size (design doc "Limits and configuration"): an interview
+# stimulus is an article, not a resume — KB-scale, well under webui's 20MB
+# MAX_UPLOAD_BYTES. Applies to both a fetched URL's body and a local file's
+# size, before extraction.
+INTERVIEW_MAX_SUBMISSION_BYTES = 2 * 1024 * 1024
+
+# Submission count "per onboarding pass" (design doc "Limits and
+# configuration"): scoped per subtype rather than globally, since a global
+# cap sized for v0's single reaction pair (~6, "3 agree + 3 disagree") would
+# starve v1's Values/Mission alignment categories, which didn't exist when
+# that number was chosen. A NEW target for a subtype already at the cap is
+# refused; re-capturing an existing target (a supersession, not growth)
+# never counts against it.
+ENV_INTERVIEW_MAX_PER_SUBTYPE = "WINGMAN_INTERVIEW_MAX_PER_SUBTYPE"
+_DEFAULT_MAX_PER_SUBTYPE = 6
+
+
+def _max_submissions_per_subtype(env: dict[str, str] | None = None) -> int:
+    raw = (os.environ if env is None else env).get(ENV_INTERVIEW_MAX_PER_SUBTYPE, "").strip()
+    if not raw:
+        return _DEFAULT_MAX_PER_SUBTYPE
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_MAX_PER_SUBTYPE
+    return value if value > 0 else _DEFAULT_MAX_PER_SUBTYPE
+
 
 def interview_document_key(subtype: str, target: str) -> str:
     """One evolving 'document' per (subtype, target) pair — capturing the
@@ -122,6 +150,12 @@ def _fetch_stimulus(target: str, fetcher: Callable[[str], bytes] | None) -> tupl
             data = fetch(target)
         except FetchError as exc:
             raise IngestError(f"could not fetch {target} ({exc}). Nothing was captured.") from exc
+        if len(data) > INTERVIEW_MAX_SUBMISSION_BYTES:
+            limit_kb = INTERVIEW_MAX_SUBMISSION_BYTES // 1024
+            raise IngestError(
+                f"{target} is larger than the {limit_kb}KB interview submission limit "
+                "(an article, not a full document). Nothing was captured."
+            )
         text, _links = extract_page(data, target)
         if not text.strip():
             raise IngestError(f"{target} had no extractable text. Nothing was captured.")
@@ -130,6 +164,12 @@ def _fetch_stimulus(target: str, fetcher: Callable[[str], bytes] | None) -> tupl
     if not path.is_file():
         raise IngestError(
             f"{target!r} is neither an https:// URL nor an existing file. Nothing was captured."
+        )
+    if path.stat().st_size > INTERVIEW_MAX_SUBMISSION_BYTES:
+        limit_kb = INTERVIEW_MAX_SUBMISSION_BYTES // 1024
+        raise IngestError(
+            f"{path.name} is larger than the {limit_kb}KB interview submission limit "
+            "(an article, not a full document). Nothing was captured."
         )
     return extract_resume_text(path), path.name
 
@@ -169,6 +209,22 @@ def capture_interview_reaction(
         raise IngestError(
             "primary_purpose is required for mission_alignment subtypes — what do you "
             "understand this organization's primary purpose to be? Nothing was captured."
+        )
+
+    active_for_subtype = [
+        item
+        for item in storage.list_profile_items()
+        if item.kind is ProfileItemKind.INTERVIEW
+        and item.subtype == subtype
+        and item.status is ItemStatus.ACTIVE
+    ]
+    is_new_target = not any(item.name == f"{subtype}: {target}" for item in active_for_subtype)
+    max_per_subtype = _max_submissions_per_subtype()
+    if is_new_target and len(active_for_subtype) >= max_per_subtype:
+        raise IngestError(
+            f"{subtype} already has {max_per_subtype} captures — that's the limit per "
+            f"onboarding pass ({ENV_INTERVIEW_MAX_PER_SUBTYPE} to change it). Nothing "
+            "was captured; re-capturing an existing target still works."
         )
 
     # Hashed on the full capture (subtype + target + why [+ primary_purpose

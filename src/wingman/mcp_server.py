@@ -450,7 +450,49 @@ def interview_react(subtype: str, target: str, why: str, primary_purpose: str = 
     title = f" ({report.title})" if report.title else ""
     return (
         f"{report.outcome}: [{report.subtype}] {report.target}{title}\n"
-        "Not yet synthesized into a stance (v1) — review with 'wingman profile list'."
+        "Review with 'wingman profile list', or 'my_pov'/'wingman pov' to synthesize "
+        "captures (and any corpus writing) into a cited stance."
+    )
+
+
+@server.tool()
+def perspectives_start() -> str:
+    """Perspectives: the onboarding entry point for a new profile (docs/PROFILE-BOOTSTRAP-DESIGN.md)
+    — call this whenever a user is starting fresh, or asks how to build their profile.
+
+    This tool collects nothing itself; it is the branching instruction for
+    whichever agent is driving onboarding. Ask the user directly: do they
+    have existing writing to share (a blog, articles, LinkedIn posts), or
+    would they rather do a quick interview about their values and
+    experience instead? Do not guess or assume — this is the user's call
+    every time, even for someone who might plausibly have both.
+
+    - "I have writing" -> point them to add it to the corpus (e.g.
+      'wingman corpus add <path>', or this client's own corpus-upload
+      path), then offer the interview afterward too — the two are
+      additive, not either/or.
+    - "Interview me" -> start at tier 1, Alignment of perspective: 2-3
+      pieces of content they already have in mind, agree/disagree + a
+      one-line why, captured one at a time via the interview_react tool.
+      Only offer tier 2 (Values, Mission alignment — see interview_react's
+      own docstring for the con-then-pro/ask-#2-first protocol) once tier
+      1 wraps up, and only if they want to keep going.
+
+    Neither path gates the other, and nothing here is mandatory beyond
+    whatever the user chooses to do first.
+    """
+    return (
+        "Perspectives — profile onboarding. Ask the user directly: do they have "
+        "existing writing to share, or would they rather do a quick interview about "
+        "their values and experience?\n\n"
+        "- Content: point them to 'wingman corpus add <path>' (or this client's own "
+        "corpus-upload path), then offer the interview afterward too — additive, not "
+        "either/or.\n"
+        "- Interview: start at tier 1 (Alignment of perspective) — 2-3 pieces of "
+        "content they already have in mind, agree/disagree + why, one at a time via "
+        "interview_react. Offer tier 2 (Values, Mission alignment) only after tier 1, "
+        "and only if they want to keep going.\n\n"
+        "Neither path is required before the other."
     )
 
 
