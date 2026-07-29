@@ -1,18 +1,19 @@
-"""Root-run: keep every shape-B user's wingman install current (#125, #167)."""
+"""Root-run: keep every shape-B user's wingman install current (#125).
+
+Every user gets the identical git-free upgrade: 'uv tool install
+--reinstall <source>' (default git+https://github.com/dhk/wingman.git),
+then a restart if wingman-mcp.service was already active.
+"""
 
 from wingman.infrastructure.upgrade_all import (
+    DEFAULT_INSTALL_SOURCE,
     UpgradeTarget,
     _parse_usernames,
-    _source_override_env_var,
     main,
     target_for,
     upgrade_all,
     upgrade_one,
 )
-
-
-def _homes(mapping: dict[str, str]):
-    return lambda username: mapping.get(username)
 
 
 def _uids(mapping: dict[str, int]):
@@ -36,30 +37,20 @@ def _scripted_runner(responses: dict[tuple[str, ...], tuple[int, str]]):
 # --- target resolution -----------------------------------------------
 
 
-def test_target_for_known_user_is_checkout_shape_by_default() -> None:
-    target = target_for("trent", resolve_home=_homes({"trent": "/home/trent"}))
-    assert target == UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
-    )
+def test_target_for_known_user_uses_the_default_source() -> None:
+    target = target_for("trent", resolve_uid=_uids({"trent": 1001}))
+    assert target == UpgradeTarget(user="trent", install_source=DEFAULT_INSTALL_SOURCE)
 
 
-def test_target_for_with_install_source_is_local_path_shape() -> None:
-    """#167: a user with no checkout of their own (e.g. Trent) installs from
-    someone else's already-updated checkout, and has nothing to pull."""
+def test_target_for_honors_an_explicit_source_override() -> None:
     target = target_for(
-        "trent",
-        resolve_home=_homes({"trent": "/home/trent"}),
-        install_source="/home/dhk/src/wingman",
+        "trent", resolve_uid=_uids({"trent": 1001}), install_source="git+https://x/fork.git"
     )
-    assert target == UpgradeTarget(
-        user="trent", install_source="/home/dhk/src/wingman", own_checkout=None
-    )
+    assert target == UpgradeTarget(user="trent", install_source="git+https://x/fork.git")
 
 
 def test_target_for_unknown_user_is_none() -> None:
-    assert target_for("ghost", resolve_home=_homes({})) is None
+    assert target_for("ghost", resolve_uid=_uids({})) is None
 
 
 def test_parse_usernames_accepts_commas_and_whitespace() -> None:
@@ -67,22 +58,13 @@ def test_parse_usernames_accepts_commas_and_whitespace() -> None:
     assert _parse_usernames("") == []
 
 
-def test_source_override_env_var_name() -> None:
-    assert _source_override_env_var("trent") == "WINGMAN_UPGRADE_SOURCE_trent"
-
-
 # --- upgrade_one: the happy path and each failure point -----------------
 
 
-def test_full_upgrade_pulls_reinstalls_and_restarts() -> None:
-    target = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
-    )
+def test_full_upgrade_reinstalls_and_restarts_with_no_local_checkout() -> None:
+    target = UpgradeTarget(user="trent", install_source=DEFAULT_INSTALL_SOURCE)
     run = _scripted_runner(
         {
-            ("sudo", "-u", "trent", "env", "XDG_RUNTIME_DIR=/run/user/1001", "git"): (0, ""),
             ("sudo", "-u", "trent", "env", "XDG_RUNTIME_DIR=/run/user/1001", "uv"): (0, ""),
             (
                 "sudo",
@@ -108,22 +90,20 @@ def test_full_upgrade_pulls_reinstalls_and_restarts() -> None:
     )
     result = upgrade_one(target, run=run, resolve_uid=_uids({"trent": 1001}))
     assert result.ok
-    assert result.steps == ["pulled latest", "reinstalled", "restarted wingman-mcp.service"]
-    # every call ran as the target user, with XDG_RUNTIME_DIR set
+    assert result.steps == ["reinstalled", "restarted wingman-mcp.service"]
+    # every call ran as the target user, with XDG_RUNTIME_DIR set, and none was 'git'
     for call in run.calls:  # type: ignore[attr-defined]
         assert call[:2] == ["sudo", "-u"]
         assert "XDG_RUNTIME_DIR=/run/user/1001" in call
+        assert "git" not in call
 
 
-def test_local_path_shape_skips_pull_entirely() -> None:
-    """#167: Trent's install has nothing of his own to 'git pull' — the
-    upgrade must never attempt it, only reinstall from the source path."""
-    target = UpgradeTarget(user="trent", install_source="/home/dhk/src/wingman", own_checkout=None)
+def test_install_uses_the_configured_source() -> None:
+    target = UpgradeTarget(user="trent", install_source="git+https://x/fork.git@main")
 
     def run(argv: list[str]) -> tuple[int, str]:
-        assert "git" not in argv, f"local-path shape must never pull: {argv}"
         if "uv" in argv:
-            assert argv[-1] == "/home/dhk/src/wingman"  # installs from the SOURCE, not trent's home
+            assert argv[-1] == "git+https://x/fork.git@main"
             return 0, ""
         if "is-active" in argv:
             return 0, "active\n"
@@ -133,50 +113,27 @@ def test_local_path_shape_skips_pull_entirely() -> None:
 
     result = upgrade_one(target, run=run, resolve_uid=_uids({"trent": 1001}))
     assert result.ok
-    assert result.steps == ["reinstalled", "restarted wingman-mcp.service"]  # no "pulled latest"
-
-
-def test_pull_failure_stops_before_reinstall() -> None:
-    target = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
-    )
-    run = _scripted_runner({("sudo", "-u", "trent"): (1, "local changes present")})
-    result = upgrade_one(target, run=run, resolve_uid=_uids({"trent": 1001}))
-    assert not result.ok
-    assert "pull failed, nothing was touched" in result.steps[0]
-    assert "local changes present" in result.steps[0]
-    assert len(result.steps) == 1  # never reached reinstall
 
 
 def test_reinstall_failure_stops_before_restart() -> None:
-    target = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
-    )
+    target = UpgradeTarget(user="trent", install_source=DEFAULT_INSTALL_SOURCE)
 
     def run(argv: list[str]) -> tuple[int, str]:
-        if "git" in argv:
-            return 0, ""
         if "uv" in argv:
             return 1, "disk full"
         raise AssertionError(f"unexpected call after reinstall failure: {argv}")
 
     result = upgrade_one(target, run=run, resolve_uid=_uids({"trent": 1001}))
     assert not result.ok
-    assert "reinstall failed, nothing was restarted" in result.steps[1]
-    assert "disk full" in result.steps[1]
+    assert "reinstall failed, nothing was restarted" in result.steps[0]
+    assert "disk full" in result.steps[0]
 
 
 def test_non_systemd_managed_user_is_reported_ok_without_restart() -> None:
-    target = UpgradeTarget(
-        user="dhk", install_source="/home/dhk/src/wingman", own_checkout="/home/dhk/src/wingman"
-    )
+    target = UpgradeTarget(user="dhk", install_source=DEFAULT_INSTALL_SOURCE)
 
     def run(argv: list[str]) -> tuple[int, str]:
-        if "git" in argv or "uv" in argv:
+        if "uv" in argv:
             return 0, ""
         if "is-active" in argv:
             return 3, "inactive\n"
@@ -188,40 +145,30 @@ def test_non_systemd_managed_user_is_reported_ok_without_restart() -> None:
 
 
 def test_restart_failure_is_reported() -> None:
-    target = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
-    )
+    target = UpgradeTarget(user="trent", install_source=DEFAULT_INSTALL_SOURCE)
 
     def run(argv: list[str]) -> tuple[int, str]:
         if "restart" in argv:
             return 1, "Failed to restart wingman-mcp.service: Unit not found."
         if "is-active" in argv:
             return 0, "active\n"
-        return 0, ""  # git pull / uv reinstall
+        return 0, ""  # uv reinstall
 
     result = upgrade_one(target, run=run, resolve_uid=_uids({"trent": 1001}))
     assert not result.ok
     assert "restart failed" in result.steps[-1]
 
 
-# --- upgrade_all: isolation and sequencing across users -------------------
+# --- upgrade_all: isolation across users -------------------
 
 
 def test_one_users_failure_never_blocks_another() -> None:
-    good = UpgradeTarget(
-        user="dhk", install_source="/home/dhk/src/wingman", own_checkout="/home/dhk/src/wingman"
-    )
-    bad = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
-    )
+    good = UpgradeTarget(user="dhk", install_source=DEFAULT_INSTALL_SOURCE)
+    bad = UpgradeTarget(user="trent", install_source=DEFAULT_INSTALL_SOURCE)
 
     def run(argv: list[str]) -> tuple[int, str]:
         if "-u" in argv and "trent" in argv:
-            return 1, "pull failed for trent"
+            return 1, "reinstall failed for trent"
         if "is-active" in argv:
             return 0, "active\n"
         return 0, ""
@@ -232,16 +179,11 @@ def test_one_users_failure_never_blocks_another() -> None:
     assert by_user["dhk"].ok  # unaffected by trent's failure
 
 
-def test_checkout_shape_users_run_before_local_path_shape_users() -> None:
-    """#167: a local-path target may install from a checkout-shape target's
-    directory, so the checkout must be pulled first regardless of input
-    order — Trent listed before dhk must still upgrade dhk first."""
-    trent_local_path = UpgradeTarget(
-        user="trent", install_source="/home/dhk/src/wingman", own_checkout=None
-    )
-    dhk_checkout = UpgradeTarget(
-        user="dhk", install_source="/home/dhk/src/wingman", own_checkout="/home/dhk/src/wingman"
-    )
+def test_targets_run_in_the_order_given() -> None:
+    """No shape-based reordering anymore — nothing depends on another
+    target's install, so input order is preserved."""
+    trent = UpgradeTarget(user="trent", install_source=DEFAULT_INSTALL_SOURCE)
+    dhk = UpgradeTarget(user="dhk", install_source=DEFAULT_INSTALL_SOURCE)
     order: list[str] = []
 
     def run(argv: list[str]) -> tuple[int, str]:
@@ -252,18 +194,12 @@ def test_checkout_shape_users_run_before_local_path_shape_users() -> None:
             return 0, "active\n"
         return 0, ""
 
-    upgrade_all(
-        [trent_local_path, dhk_checkout], run=run, resolve_uid=_uids({"dhk": 1000, "trent": 1001})
-    )
-    assert order == ["dhk", "trent"]  # checkout-shape first, despite input order
+    upgrade_all([trent, dhk], run=run, resolve_uid=_uids({"dhk": 1000, "trent": 1001}))
+    assert order == ["trent", "dhk"]
 
 
 def test_a_runner_that_raises_is_caught_and_reported() -> None:
-    target = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
-    )
+    target = UpgradeTarget(user="trent", install_source=DEFAULT_INSTALL_SOURCE)
 
     def exploding_run(argv: list[str]) -> tuple[int, str]:
         raise RuntimeError("boom")
@@ -287,21 +223,15 @@ def test_main_exits_nonzero_with_no_users_configured(capsys) -> None:
     assert "nothing to do" in capsys.readouterr().err
 
 
-def test_main_reads_per_user_source_override_from_env(monkeypatch, capsys) -> None:
-    """#167: WINGMAN_UPGRADE_SOURCE_<username> routes that user through the
-    local-path shape end to end via the real CLI entry point."""
+def test_main_installs_every_configured_user_from_git_with_no_checkout(monkeypatch, capsys) -> None:
     import wingman.infrastructure.upgrade_all as upgrade_all_module
 
-    monkeypatch.setenv("WINGMAN_UPGRADE_SOURCE_trent", "/home/dhk/src/wingman")
-    monkeypatch.setattr(
-        upgrade_all_module, "_default_home", lambda u: {"trent": "/home/trent"}.get(u)
-    )
     monkeypatch.setattr(upgrade_all_module, "_default_uid", lambda u: {"trent": 1001}.get(u))
 
     def run(argv: list[str]) -> tuple[int, str]:
         assert "git" not in argv
         if "uv" in argv:
-            assert argv[-1] == "/home/dhk/src/wingman"
+            assert argv[-1] == upgrade_all_module.DEFAULT_INSTALL_SOURCE
         if "is-active" in argv:
             return 0, "active\n"
         return 0, ""
@@ -312,3 +242,25 @@ def test_main_reads_per_user_source_override_from_env(monkeypatch, capsys) -> No
     out = capsys.readouterr().out
     assert "[ok] trent:" in out
     assert "reinstalled" in out
+
+
+def test_main_source_override_applies_to_every_user(monkeypatch, capsys) -> None:
+    import wingman.infrastructure.upgrade_all as upgrade_all_module
+
+    monkeypatch.setattr(
+        upgrade_all_module, "_default_uid", lambda u: {"dhk": 1000, "trent": 1001}.get(u)
+    )
+
+    def run(argv: list[str]) -> tuple[int, str]:
+        if "uv" in argv:
+            assert argv[-1] == "git+https://x/fork.git@testing"
+        if "is-active" in argv:
+            return 0, "active\n"
+        return 0, ""
+
+    monkeypatch.setattr(upgrade_all_module, "_default_runner", run)
+
+    main(["--users", "dhk,trent", "--source", "git+https://x/fork.git@testing"])
+    out = capsys.readouterr().out
+    assert "[ok] dhk:" in out
+    assert "[ok] trent:" in out

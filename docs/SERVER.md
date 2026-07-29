@@ -353,13 +353,16 @@ to it; each instance's own token remains the credential for its own data.
 scale past two people either. `wingman-upgrade-all` is a separate,
 root-run tool (not part of the per-workspace `wingman` CLI, since it acts
 across accounts) that upgrades every configured shape-B user in one
-scheduled pass: `git pull --ff-only`, `uv tool install --reinstall`, then
-`systemctl --user restart wingman-mcp.service` for each — explicitly the
-systemd path, never `wingman-ctl`'s `nohup` path (running `wingman-ctl
-upgrade` under a systemd-managed account kills the process out from under
-systemd and relaunches it unmanaged; `Restart=on-failure` won't recover a
-graceful stop). One user's failed pull or reinstall is reported and
-skipped — it never blocks the others.
+scheduled pass: `uv tool install --reinstall` straight from git (no local
+checkout, for any account — same clone-free pattern as this tool's own
+install just below), then `systemctl --user restart wingman-mcp.service`
+for each — explicitly the systemd path, never `wingman-ctl`'s `nohup`
+path (running `wingman-ctl upgrade` under a systemd-managed account kills
+the process out from under systemd and relaunches it unmanaged;
+`Restart=on-failure` won't recover a graceful stop). One user's failed
+reinstall is reported and skipped — it never blocks the others. Every
+configured user is upgraded identically; there is no per-user checkout to
+keep in sync, so nothing to misconfigure per account.
 
 This needs its own, separate root-owned install (it never touches any
 workspace, never reads a key, and root should not share dhk's or Trent's
@@ -383,6 +386,11 @@ Type=oneshot
 Environment=WINGMAN_UPGRADE_USERS=dhk,trent
 ExecStart=/root/.local/bin/wingman-upgrade-all
 ```
+
+Add `Environment=WINGMAN_UPGRADE_SOURCE=<git url>` only to point every
+user's install at a fork/branch/tag for testing — the default
+(`git+https://github.com/dhk/wingman.git`) is right for normal use, and
+applies identically to every configured user.
 
 `/etc/systemd/system/wingman-upgrade-all.timer`:
 
