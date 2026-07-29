@@ -63,6 +63,31 @@ def test_status_after_init(workspace: Path) -> None:
     assert "Source records: 0" in result.stdout
 
 
+def test_today_reports_curated_titles_without_a_workspace(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """today describes wingman itself, not the user's workspace — it should
+    answer even before 'wingman init' has run, same as the changelog MCP tool."""
+    from datetime import UTC, datetime
+
+    import wingman.changelog_data as data_module
+
+    today = datetime.now(UTC).date().isoformat()
+    monkeypatch.setattr(
+        data_module,
+        "CHANGELOG_DATA",
+        (
+            (today, 200, "Add a brand new feature"),
+            (today, 199, "docs: session snapshot for resume"),
+        ),
+    )
+    result = runner.invoke(app, ["today"])
+    assert result.exit_code == 0, result.output
+    assert "1 new today, 1 in the last 7 days" in result.output
+    assert "Add a brand new feature (#200)" in result.output
+    assert "session snapshot" not in result.output
+
+
 def test_doctor_before_init_fails_with_guidance(workspace: Path) -> None:
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 1

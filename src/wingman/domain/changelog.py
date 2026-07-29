@@ -78,3 +78,20 @@ def counts_today_and_week(entries: list[ChangelogEntry], today: date_cls) -> tup
     today_count = sum(1 for entry in entries if entry.date == today_iso)
     week_count = sum(1 for entry in entries if window_start_iso <= entry.date <= today_iso)
     return today_count, week_count
+
+
+def render_changelog(today: date_cls) -> str:
+    """Plain-text rendering shared by the MCP tool and the CLI: today/week
+    counts up front, then curated entries newest first, capped at
+    DEFAULT_DISPLAY_LIMIT."""
+    entries = user_facing_entries()
+    if not entries:
+        return "No changelog entries."
+    today_count, week_count = counts_today_and_week(entries, today)
+    lines = [f"Changelog — {today_count} new today, {week_count} in the last 7 days.", ""]
+    lines.extend(
+        f"- {entry.date} {entry.title} (#{entry.pr})" for entry in entries[:DEFAULT_DISPLAY_LIMIT]
+    )
+    if len(entries) > DEFAULT_DISPLAY_LIMIT:
+        lines.append("- …older entries omitted")
+    return "\n".join(lines)

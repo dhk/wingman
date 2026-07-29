@@ -2126,6 +2126,19 @@ def digest(
 
 
 @app.command()
+def today() -> None:
+    """What's new in wingman itself — recent user-facing changes, dated newest
+    first (RFC-038, #145). Describes the tool, not your workspace — needs no
+    initialized workspace to answer "what's new in wingman?"."""
+    configure_logging()
+    from datetime import UTC, datetime
+
+    from wingman.domain.changelog import render_changelog
+
+    typer.echo(render_changelog(datetime.now(UTC).date()))
+
+
+@app.command()
 def pack(
     query: str = typer.Argument(..., help="Part of the assessed role's title, e.g. 'staff mle'."),
     company: str = typer.Option(

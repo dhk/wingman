@@ -1666,23 +1666,9 @@ def changelog() -> str:
     workspace, so it needs no initialized workspace to answer "what's new
     in wingman?".
     """
-    from wingman.domain.changelog import (
-        DEFAULT_DISPLAY_LIMIT,
-        counts_today_and_week,
-        user_facing_entries,
-    )
+    from wingman.domain.changelog import render_changelog
 
-    entries = user_facing_entries()
-    if not entries:
-        return "No changelog entries."
-    today_count, week_count = counts_today_and_week(entries, datetime.now(UTC).date())
-    lines = [f"Changelog — {today_count} new today, {week_count} in the last 7 days.", ""]
-    lines.extend(
-        f"- {entry.date} {entry.title} (#{entry.pr})" for entry in entries[:DEFAULT_DISPLAY_LIMIT]
-    )
-    if len(entries) > DEFAULT_DISPLAY_LIMIT:
-        lines.append("- …older entries omitted")
-    return "\n".join(lines)
+    return render_changelog(datetime.now(UTC).date())
 
 
 @server.tool()
