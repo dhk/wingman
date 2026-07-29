@@ -162,6 +162,19 @@ still uses as originally written.)
   to specific people's intellectual, ethical, or professional
   perspectives.
 
+### Network admired (v1)
+
+- **Pro only, no con.** Three people you genuinely admire, given as their
+  LinkedIn profile URL — preferably first-degree connections of yours (a
+  soft preference, not a hard requirement), and why, in a few words.
+- **Why a URL, not a name.** Unlike Values (admiration by name, no
+  networking angle), the target here is a dereferenceable identifier on
+  purpose: it doubles as a warm-path candidate. Motivated by coaching
+  mode's "who among everyone I know might be valuable for this persona"
+  cross-referencing (`docs/COACHING-MODE-DESIGN.md`), but useful standalone
+  too — the LinkedIn URL is captured as an identifier only, same as any
+  other nomination target; it is never fetched or scraped.
+
 ### Company-alignment variant (v2, job-search-specific)
 
 The same stimulus/reaction/reasoning loop as Mission alignment, but
