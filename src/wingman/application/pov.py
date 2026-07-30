@@ -26,6 +26,7 @@ from wingman.application.similarity import company_key
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.interview import InterviewDocument
 from wingman.domain.person import ExternalDocument
+from wingman.domain.persona import Persona
 from wingman.domain.pov import PovCard, PovProposal, Stance, StanceDimension
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -57,6 +58,17 @@ CORPUS_PERSON_NAME = "Your corpus"
 
 # Company theme cards live in the same table under a reserved id per company.
 COMPANY_POV_PREFIX = "__company__"
+
+# A persona's own POV (docs/COACHING-MODE-DESIGN.md) lives in the same
+# table under a reserved id per persona — distinct from CORPUS_PERSON_ID
+# (the coach's own), so building one never collides with or overwrites
+# the other.
+PERSONA_POV_PREFIX = "__persona__"
+
+
+def persona_card_id(persona_id: str) -> str:
+    """pov_cards identity for a persona's own synthesized stance."""
+    return f"{PERSONA_POV_PREFIX}{persona_id}"
 
 
 def company_card_id(key: str) -> str:
@@ -231,8 +243,11 @@ def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovR
     return PovReport(card=card, rejected=rejected)
 
 
-def build_own_pov(storage: Storage, provider: ModelProvider) -> PovReport:
-    """Build (or rebuild) the POV card for the user's own corpus.
+def build_own_pov(
+    storage: Storage, provider: ModelProvider, persona: Persona | None = None
+) -> PovReport:
+    """Build (or rebuild) the POV card for the user's own corpus, or (with
+    persona set) a coached Persona's own stance instead.
 
     The same machinery as a person's card, pointed at the user's writing
     AND their captured interview reactions/nominations (docs/PROFILE-
@@ -242,6 +257,13 @@ def build_own_pov(storage: Storage, provider: ModelProvider) -> PovReport:
     empty corpus (the bootstrap path for someone without published
     writing); a corpus, when present, simply adds more candidate
     documents to the same pool. Stored under the reserved CORPUS_PERSON_ID.
+
+    With persona set (docs/COACHING-MODE-DESIGN.md), the corpus is
+    deliberately EXCLUDED — that's the coach's own writing, and nothing
+    crosses into a persona's synthesis unless explicitly captured under
+    their name. Only that persona's own scoped interview captures feed
+    their stance. Stored under persona_card_id(persona.persona_id),
+    distinct from the coach's own card.
     """
     # Local import: application.interview -> application.research ->
     # application.pov (for COMPANY_POV_PREFIX/company_card_id) is already a
@@ -250,9 +272,16 @@ def build_own_pov(storage: Storage, provider: ModelProvider) -> PovReport:
     # qa_capture/capture_interview_reaction at CLI/MCP call sites.
     from wingman.application.interview import list_interview_documents
 
-    corpus_documents = storage.list_corpus_documents()
-    interview_documents = list_interview_documents(storage)
+    persona_id = persona.persona_id if persona is not None else None
+    corpus_documents = [] if persona is not None else storage.list_corpus_documents()
+    interview_documents = list_interview_documents(storage, persona_id=persona_id)
     if not corpus_documents and not interview_documents:
+        if persona is not None:
+            raise IngestError(
+                f"nothing has been captured for {persona.name} yet — 'coach_persona set "
+                f"{persona.name!r}' first, then capture with 'wingman interview' or "
+                "interview_react."
+            )
         raise IngestError(
             "your corpus is empty and you haven't captured any interview reactions yet — "
             "add writing with 'wingman corpus add', or capture one with 'wingman interview'."
@@ -296,8 +325,8 @@ def build_own_pov(storage: Storage, provider: ModelProvider) -> PovReport:
             "The card was not stored; re-run to retry."
         )
     card = PovCard(
-        person_id=CORPUS_PERSON_ID,
-        person_name=CORPUS_PERSON_NAME,
+        person_id=persona_card_id(persona.persona_id) if persona is not None else CORPUS_PERSON_ID,
+        person_name=persona.name if persona is not None else CORPUS_PERSON_NAME,
         stances=stances,
         topics=[topic.strip() for topic in proposal.topics if topic.strip()][:8],
         documents_used=len(documents),
@@ -307,7 +336,8 @@ def build_own_pov(storage: Storage, provider: ModelProvider) -> PovReport:
     )
     storage.save_pov_card(card)
     _logger.info(
-        "own_pov documents=%d stances=%d rejected=%d provider=%s model=%s",
+        "own_pov persona_id=%s documents=%d stances=%d rejected=%d provider=%s model=%s",
+        persona_id,
         len(documents),
         len(stances),
         len(rejected),

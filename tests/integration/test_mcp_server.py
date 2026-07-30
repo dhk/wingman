@@ -91,6 +91,7 @@ def test_all_tools_are_registered() -> None:
         "feature_request",
         "changelog",
         "woven_warm_path",
+        "coach_persona",
     }
 
 

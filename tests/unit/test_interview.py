@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from wingman.application.coaching import find_or_create_persona
 from wingman.application.ingest import IngestError
 from wingman.application.interview import (
     INTERVIEW_SOURCE_TYPE,
@@ -391,9 +392,7 @@ def test_mcp_perspectives_start_promotes_resume_when_captures_exist(
         capture_interview_reaction("values_con", "A. Public Figure", WHY_CON, workspace, storage)
 
     result = perspectives_start()
-    assert result.startswith(
-        "Perspectives — profile onboarding entry point."
-    )  # explainer framing still leads
+    assert result.startswith("Acting as: yourself.\nPerspectives — profile onboarding entry point.")
     assert "Pick up where I left off" in result
     assert "2 Values nominations" in result
 
@@ -426,6 +425,248 @@ def test_local_file_submission_over_size_limit_is_rejected(
             capture_interview_reaction(
                 "alignment_of_perspective_agree", str(stimulus), WHY_AGREE, workspace, storage
             )
+
+
+def test_persona_scoped_capture_uses_hypothesis_by_default(workspace: Config) -> None:
+    """Coaching mode (docs/COACHING-MODE-DESIGN.md): the coach speculating
+    on a persona's behalf is never stored as a verified statement."""
+    from wingman.domain.provenance import ClaimClassification
+
+    with Storage(workspace.db_path) as storage:
+        persona = find_or_create_persona("Mike Chen", storage)
+        capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            WHY_PRO,
+            workspace,
+            storage,
+            persona_id=persona.persona_id,
+        )
+        items = storage.list_profile_items()
+        assert len(items) == 1
+        item = items[0]
+        assert item.persona_id == persona.persona_id
+        assert item.classification is ClaimClassification.HYPOTHESIS
+        assert item.confidence == 0.6
+        assert item.extracted_by == "coach"
+
+
+def test_persona_authored_capture_uses_fact(workspace: Config) -> None:
+    """persona_authored=True means the persona answered themselves — a
+    verified first-person statement, just like the coach's own."""
+    from wingman.domain.provenance import ClaimClassification
+
+    with Storage(workspace.db_path) as storage:
+        persona = find_or_create_persona("Mike Chen", storage)
+        capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            WHY_PRO,
+            workspace,
+            storage,
+            persona_id=persona.persona_id,
+            persona_authored=True,
+        )
+        item = storage.list_profile_items()[0]
+        assert item.classification is ClaimClassification.FACT
+        assert item.confidence == 1.0
+        assert item.extracted_by == "persona"
+
+
+def test_unscoped_capture_is_unchanged_fact_from_user(workspace: Config) -> None:
+    """persona_id=None (the coach's own work) is byte-identical to every
+    capture before coaching mode existed."""
+    from wingman.domain.provenance import ClaimClassification
+
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, workspace, storage)
+        item = storage.list_profile_items()[0]
+        assert item.persona_id is None
+        assert item.classification is ClaimClassification.FACT
+        assert item.confidence == 1.0
+        assert item.extracted_by == "user"
+
+
+def test_persona_scoped_captures_are_isolated_from_coach_and_each_other(
+    workspace: Config,
+) -> None:
+    """The same nominee, captured for the coach's own work AND for two
+    different personas, never collides or supersedes across scopes —
+    RFC-028's lineage discipline, extended to the persona axis."""
+    from wingman.application.interview import list_interview_documents, subtype_progress
+
+    with Storage(workspace.db_path) as storage:
+        mike = find_or_create_persona("Mike Chen", storage)
+        priya = find_or_create_persona("Priya Nair", storage)
+
+        capture_interview_reaction(
+            "values_pro", "Jane Goodall", "coach's own reason.", workspace, storage
+        )
+        capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            "Mike's reason.",
+            workspace,
+            storage,
+            persona_id=mike.persona_id,
+        )
+        capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            "Priya's reason.",
+            workspace,
+            storage,
+            persona_id=priya.persona_id,
+        )
+
+        active = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
+        assert len(active) == 3  # none superseded each other
+
+        assert {doc.body for doc in list_interview_documents(storage)} == {"coach's own reason."}
+        assert {
+            doc.body for doc in list_interview_documents(storage, persona_id=mike.persona_id)
+        } == {"Mike's reason."}
+        assert {
+            doc.body for doc in list_interview_documents(storage, persona_id=priya.persona_id)
+        } == {"Priya's reason."}
+
+        assert subtype_progress(storage, "values_pro") == (1, 6)
+        assert subtype_progress(storage, "values_pro", persona_id=mike.persona_id) == (1, 6)
+
+
+def test_persona_scoped_recapture_supersedes_only_within_that_scope(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        mike = find_or_create_persona("Mike Chen", storage)
+        capture_interview_reaction(
+            "values_pro", "Jane Goodall", WHY_PRO, workspace, storage, persona_id=mike.persona_id
+        )
+        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, workspace, storage)
+        report = capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            "Mike's revised reason.",
+            workspace,
+            storage,
+            persona_id=mike.persona_id,
+        )
+        assert "superseded" in report.outcome
+        active = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
+        assert len(active) == 2  # the coach's own capture untouched
+        by_persona = {i.persona_id: i.detail for i in active}
+        assert by_persona[mike.persona_id] == "Mike's revised reason."
+        assert by_persona[None] == WHY_PRO
+
+
+def test_persona_scoped_cap_is_independent_of_the_coachs_own(
+    workspace: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WINGMAN_INTERVIEW_MAX_PER_SUBTYPE", "1")
+    with Storage(workspace.db_path) as storage:
+        mike = find_or_create_persona("Mike Chen", storage)
+        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, workspace, storage)
+        # Mike's own cap is untouched by the coach's own capture
+        capture_interview_reaction(
+            "values_pro",
+            "Someone Else",
+            WHY_PRO,
+            workspace,
+            storage,
+            persona_id=mike.persona_id,
+        )
+        with pytest.raises(IngestError, match="already has 1 captures"):
+            capture_interview_reaction(
+                "values_pro",
+                "A Third Name",
+                WHY_PRO,
+                workspace,
+                storage,
+                persona_id=mike.persona_id,
+            )
+
+
+def test_persona_scoped_capture_progress_summary(workspace: Config) -> None:
+    from wingman.application.interview import capture_progress_summary
+
+    with Storage(workspace.db_path) as storage:
+        mike = find_or_create_persona("Mike Chen", storage)
+        assert capture_progress_summary(storage, persona_id=mike.persona_id) is None
+        capture_interview_reaction(
+            "values_pro", "Jane Goodall", WHY_PRO, workspace, storage, persona_id=mike.persona_id
+        )
+        assert capture_progress_summary(storage) is None  # the coach's own is still empty
+        summary = capture_progress_summary(storage, persona_id=mike.persona_id)
+        assert summary is not None and "1 Values nomination" in summary
+
+
+def test_interview_document_key_distinguishes_persona_from_coach_and_from_each_other() -> None:
+    coach_key = interview_document_key("values_pro", "Jane Goodall")
+    mike_key = interview_document_key("values_pro", "Jane Goodall", "persona-mike")
+    priya_key = interview_document_key("values_pro", "Jane Goodall", "persona-priya")
+    assert len({coach_key, mike_key, priya_key}) == 3
+    # persona_id=None keeps the exact key shape from before coaching mode existed
+    assert coach_key == "interview: values_pro: jane goodall"
+
+
+def test_mcp_coach_persona_and_interview_react_scoping(workspace: Config) -> None:
+    from wingman.mcp_server import coach_persona, interview_react
+
+    set_result = coach_persona("set", "Mike Chen")
+    assert "Acting as: coach for Mike Chen." in set_result
+
+    result = interview_react("values_pro", "Jane Goodall", WHY_PRO)
+    assert result.startswith("Acting as: coach for Mike Chen.")
+
+    items = storage_items(workspace)
+    assert len(items) == 1 and items[0].persona_id is not None
+
+    # an explicit override captures for someone else without disturbing the active pointer
+    override_result = interview_react(
+        "values_con", "A. Public Figure", WHY_CON, persona="Priya Nair"
+    )
+    assert "Acting as: coach for Priya Nair." in override_result
+    assert coach_persona("who") == "Acting as: coach for Mike Chen."
+
+
+def storage_items(workspace: Config) -> list:
+    with Storage(workspace.db_path) as storage:
+        return storage.list_profile_items()
+
+
+def test_cli_interview_persona_flags(workspace: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+
+    monkeypatch.setenv(ENV_DATA_DIR, str(workspace.data_dir))
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "interview",
+            "values_pro",
+            "Jane Goodall",
+            WHY_PRO,
+            "--persona",
+            "Mike Chen",
+            "--persona-authored",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Acting as: coach for Mike Chen." in result.output
+    assert "saved" in result.output
+
+    from wingman.domain.provenance import ClaimClassification
+
+    items = storage_items(workspace)
+    assert len(items) == 1
+    assert items[0].classification is ClaimClassification.FACT  # persona-authored
+    assert items[0].extracted_by == "persona"
+
+    # without --persona and no active one, it's unscoped (unchanged behavior)
+    result = runner.invoke(app, ["interview", "values_con", "A. Public Figure", WHY_CON])
+    assert result.exit_code == 0
+    assert "Acting as: yourself." in result.output
 
 
 def test_new_targets_beyond_the_per_subtype_cap_are_rejected(
