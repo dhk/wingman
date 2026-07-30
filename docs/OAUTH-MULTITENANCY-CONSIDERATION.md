@@ -43,9 +43,10 @@ through individually:
 2. **The missing env file.** A configuration-discoverability gap (which of
    two plausible files was actually in effect), already fixed tonight
    (#122, `~/.config/keys.env` as one canonical host key file wingman
-   itself reads, `wingman doctor` naming the winning source). This class of
-   bug is not tenancy-shaped: a multi-tenant server still needs secrets
-   configured somewhere, and a misconfigured *shared* secrets store is a
+   itself reads, `wingman doctor` naming the winning source; later split
+   into `~/.config/wingman/{secrets.env,wingman.env}` by RFC-046). This
+   class of bug is not tenancy-shaped: a multi-tenant server still needs
+   secrets configured somewhere, and a misconfigured *shared* secrets store is a
    worse incident (affects every tenant at once) than a misconfigured
    *per-account* one.
 

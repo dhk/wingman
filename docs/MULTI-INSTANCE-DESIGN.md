@@ -63,8 +63,9 @@ about dhk's instance needs to be known at all.
 ### Shape B — shared always-on server, one Unix user each
 
 The SERVER.md deployment, multiplied by OS accounts: each person gets a
-Unix user, their own canonical `~/.config/keys.env` (0600 keys, #122 —
-one file per account, since each account has its own `$HOME`), their own
+Unix user, their own canonical `~/.config/wingman/{secrets.env,wingman.env}`
+(0600 each, RFC-046/#122 — one pair of files per account, since each
+account has its own `$HOME`), their own
 user-level systemd units (`wingman-mcp.service` on a distinct port,
 `wingman-overnight.timer`), their own workspace under their own home.
 Isolation is enforced by file permissions, not politeness. Each person's
@@ -77,9 +78,10 @@ Requires: distinct `--port` per user (exists), nothing else.
 Same binary, same account, env-var-switched workspaces. Acceptable for
 a household machine where both parties trust each other with root
 anyway; unacceptable wherever "trusted friend" shouldn't mean "can read
-my job search." One account means one `~/.config/keys.env` — #122's host
-file is *shared* across every workspace on this shape, unlike shape B, so
-it cannot be how two instances get different keys. If chosen, per-service
+my job search." One account means one `~/.config/wingman/secrets.env` —
+#122/RFC-046's host secrets file is *shared* across every workspace on
+this shape, unlike shape B, so it cannot be how two instances get
+different keys. If chosen, per-service
 `EnvironmentFile`s keep keys separate (a real exported env var still
 outranks the host file in the resolution ladder), and every cron/systemd
 unit must pin `WINGMAN_DATA_DIR` explicitly — a unit that forgets inherits

@@ -131,6 +131,7 @@ from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import people_like as people_like_use_case
 from wingman.domain.person import FeedAttribution, FeedKind, FeedSource, Person
 from wingman.infrastructure.config import Config, load_config
+from wingman.infrastructure.host_config import migrate_legacy_host_file
 from wingman.infrastructure.keys import ensure_env
 from wingman.infrastructure.logs import configure_logging, get_logger
 from wingman.infrastructure.mcp_process import (
@@ -2451,6 +2452,13 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     configure_logging()
     get_logger("mcp").info("wingman-mcp %s starting", wingman_version())
+    # One-time move off the legacy flat '~/.config/keys.env' (RFC-046) —
+    # idempotent, so this logs nothing on every subsequent start; called
+    # here (not just inside 'ensure_env') so a migration on someone's
+    # production box is never a silent background action.
+    migration = migrate_legacy_host_file()
+    if migration.migrated:
+        get_logger("mcp").info("one-time host config migration: %s", migration.detail)
     # Hydrate missing API keys: Keychain (RFC-019), then the workspace
     # key file written by the web UI's validated form (RFC-034).
     ensure_env(data_dir=load_config().data_dir)

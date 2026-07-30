@@ -85,11 +85,17 @@ from wingman.infrastructure.keys import (
     KNOWN_KEYS,
     KeyStoreError,
     ensure_env,
+    host_keys_path,
     key_status,
     resolve_key_sources,
     set_key,
     test_keys,
     unset_key,
+)
+from wingman.infrastructure.host_config import (
+    legacy_host_keys_path,
+    migrate_legacy_host_file,
+    wingman_env_path,
 )
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.telemetry import (
@@ -223,8 +229,12 @@ def _bootstrap(
         help="Print the installed build (git-derived) and exit.",
     ),
 ) -> None:
-    """Hydrate missing API keys (Keychain, host file, workspace file) before any command."""
+    """Migrate the legacy host file if needed, then hydrate missing API keys
+    (Keychain, host file, workspace file) before any command."""
     global _pre_hydration_env
+    migration = migrate_legacy_host_file()
+    if migration.migrated:
+        typer.echo(f"one-time host config migration: {migration.detail}", err=True)
     _pre_hydration_env = dict(os.environ)
     ensure_env(data_dir=load_config().data_dir)
 
@@ -391,6 +401,32 @@ def doctor(
                 True,
                 f"{embedder.provider_name}/{embedder.model}{key_note}",
             )
+
+    legacy = legacy_host_keys_path()
+    wingman_env = wingman_env_path()
+    secrets_env = host_keys_path()
+    if legacy.is_file():
+        # '_bootstrap' already ran the migration once before this command
+        # body started — reaching this point with the legacy file still
+        # here means migration was skipped because the new files already
+        # existed (RFC-046 never overwrites a layout a human may have set
+        # up by hand), so the leftover old file needs a human's eyes, not
+        # another silent auto-migration attempt.
+        report(
+            "host config",
+            False,
+            f"legacy {legacy} is still present even though the new layout "
+            f"({wingman_env.name}, {secrets_env.name}) already exists at {wingman_env.parent} — "
+            "verify the new files hold everything you need, then remove the old one by hand "
+            "(never auto-deleted)",
+        )
+    else:
+        report(
+            "host config",
+            True,
+            f"{wingman_env.parent} ({wingman_env.name} for host settings, "
+            f"{secrets_env.name} for secrets)",
+        )
 
     for source in resolve_key_sources(_pre_hydration_env, data_dir=config.data_dir):
         detail = source.winning_source

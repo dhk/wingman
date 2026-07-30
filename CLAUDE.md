@@ -35,9 +35,17 @@ the same protocol as wingman's own MCP tool).
 
 - **lobster** — the owner's Ubuntu server hosting wingman. All CODE
   checkouts live under `~/src` (repo at `~/src/wingman`; set
-  `WINGMAN_REPO=$HOME/src/wingman` for wingman-ctl). Data/workspace stays
-  at the XDG default (`~/.local/share/wingman`). GitHub access is via
-  SSH — use `git@github.com:` URLs in any command meant for lobster.
+  `WINGMAN_REPO=$HOME/src/wingman` for wingman-ctl — a separate,
+  as-yet-unmerged PR would let wingman-ctl read this from the canonical
+  host settings file below instead; until that lands, export it).
+  Data/workspace stays at the XDG default (`~/.local/share/wingman`). API
+  keys live in the canonical host file, split RFC-046-style:
+  `~/.config/wingman/secrets.env` (`ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`)
+  and `~/.config/wingman/wingman.env` (non-secret host settings) — an
+  existing box's old flat `~/.config/keys.env` (RFC-040) migrates to this
+  automatically the first time any wingman command runs after upgrading.
+  GitHub access is via SSH — use `git@github.com:` URLs in any command
+  meant for lobster.
 - **Mac** — the owner's laptop. **Global convention: every repo checkout
   lives under `~/Documents/dev`** (e.g. `~/Documents/dev/wingman`,
   `~/Documents/dev/alexandria`) — not specific to this repo, applies
