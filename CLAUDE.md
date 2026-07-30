@@ -46,6 +46,9 @@ the same protocol as wingman's own MCP tool).
   flat `~/.config/keys.env` (RFC-040) migrates to this automatically the
   first time any wingman command runs after upgrading. GitHub access is
   via SSH — use `git@github.com:` URLs in any command meant for lobster.
+  `wg` is aliased to `scripts/wingman-ctl` here too (same as the Mac,
+  below) — `wg upgrade` refreshes just this account, `wg upgrade-all`
+  triggers the cross-account `wingman-upgrade-all.service` (dhk + trent).
 - **Mac** — the owner's laptop. **Global convention: every repo checkout
   lives under `~/Documents/dev`** (e.g. `~/Documents/dev/wingman`,
   `~/Documents/dev/alexandria`) — not specific to this repo, applies
