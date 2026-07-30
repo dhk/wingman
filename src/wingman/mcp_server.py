@@ -386,7 +386,14 @@ def qa_capture(question: str, answer: str, kind: str = "achievement") -> str:
 
 
 @server.tool()
-def interview_react(subtype: str, target: str, why: str, primary_purpose: str = "") -> str:
+def interview_react(
+    subtype: str,
+    target: str,
+    why: str,
+    primary_purpose: str = "",
+    persona: str = "",
+    persona_authored: bool = False,
+) -> str:
     """Capture one interview reaction OR nomination as citable profile
     evidence (docs/PROFILE-BOOTSTRAP-DESIGN.md, docs/UX-0001-interview-flow.md)
     — a way to bootstrap profile evidence without pre-existing published
@@ -482,7 +489,20 @@ def interview_react(subtype: str, target: str, why: str, primary_purpose: str = 
     (WINGMAN_INTERVIEW_MAX_PER_SUBTYPE, default 6) — fold that into the
     NEXT section's opening explainer (BP-05) rather than waiting for it to
     surface as an error at the cap.
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
+    (coach_persona 'set'), this capture is scoped to them automatically —
+    leave persona="" to use whatever's active, or pass a name to act for
+    someone else for just this one call without switching the active
+    pointer. persona_authored distinguishes who's actually answering:
+    False (the default) means YOU are speculating on the persona's
+    behalf ("how would Mike answer this") — stored as your own inference
+    about them, never presented as Mike's own words. True means the
+    persona is answering for themselves right now (e.g. dictating while
+    you type) — a verified first-person statement, same as any other
+    interview capture. Every response echoes who this was captured for.
     """
+    from wingman.application.coaching import render_acting_as, resolve_persona
     from wingman.application.interview import capture_interview_reaction, subtype_progress
 
     config = _ready_config()
@@ -490,10 +510,19 @@ def interview_react(subtype: str, target: str, why: str, primary_purpose: str = 
         return _NOT_INITIALIZED
     try:
         with Storage(config.db_path) as storage:
+            active_persona = resolve_persona(persona, storage, config)
+            persona_id = active_persona.persona_id if active_persona is not None else None
             report = capture_interview_reaction(
-                subtype, target, why, config, storage, primary_purpose=primary_purpose
+                subtype,
+                target,
+                why,
+                config,
+                storage,
+                primary_purpose=primary_purpose,
+                persona_id=persona_id,
+                persona_authored=persona_authored,
             )
-            count, cap = subtype_progress(storage, subtype)
+            count, cap = subtype_progress(storage, subtype, persona_id=persona_id)
     except IngestError as exc:
         return f"interview capture failed: {exc}"
     title = f" ({report.title})" if report.title else ""
@@ -501,6 +530,7 @@ def interview_react(subtype: str, target: str, why: str, primary_purpose: str = 
         f" Position: {count} of {cap} captured for {subtype} so far." if count * 2 >= cap else ""
     )
     return (
+        f"{render_acting_as(active_persona)}\n"
         f"{report.outcome}: [{report.subtype}] {report.target}{title}\n"
         "Review with 'wingman profile list', or 'my_pov'/'wingman pov' to synthesize "
         f"captures (and any corpus writing) into a cited stance.{position}"
@@ -548,14 +578,26 @@ def perspectives_start() -> str:
     category is chosen, see interview_react's own docstring for that
     category's protocol (BP-01…09, con-then-pro/ask-#2-first, echo before
     save).
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
+    (coach_persona 'set'), "pick up where I left off" and every category
+    below are automatically scoped to them, not the coach's own work —
+    the response says who. "I do have writing to add" always means the
+    COACH's own shared corpus, even with a persona active, since corpus
+    isn't persona-scoped — call that out plainly rather than letting it
+    read as if it were the persona's own writing.
     """
+    from wingman.application.coaching import get_active_persona, render_acting_as
     from wingman.application.interview import capture_progress_summary
 
     config = _ready_config()
     summary = None
+    active_persona = None
     if config is not None:
         with Storage(config.db_path) as storage:
-            summary = capture_progress_summary(storage)
+            active_persona = get_active_persona(storage, config)
+            persona_id = active_persona.persona_id if active_persona is not None else None
+            summary = capture_progress_summary(storage, persona_id=persona_id)
 
     resume_line = (
         f"- Pick up where I left off — you've captured {summary} so far. "
@@ -563,7 +605,14 @@ def perspectives_start() -> str:
         if summary
         else ""
     )
+    corpus_note = (
+        " (this is always YOUR OWN corpus, even while acting as a persona — corpus isn't "
+        "persona-scoped, say so plainly)"
+        if active_persona is not None
+        else ""
+    )
     return (
+        f"{render_acting_as(active_persona)}\n"
         "Perspectives — profile onboarding entry point. Present this as a single "
         'AskUserQuestion (header "Start", single select): "Where would you like to '
         'start?"\n\n'
@@ -574,9 +623,9 @@ def perspectives_start() -> str:
         "beside, ~8 min)\n"
         "- Name organisations (places you'd want — or refuse — to be associated with, "
         "~8 min)\n"
-        "- I do have writing to add (skip the interview — use 'wingman corpus add' or "
-        "this client's own corpus-upload path instead; offer the interview afterward "
-        "too, additive not either/or)\n"
+        f"- I do have writing to add{corpus_note} (skip the interview — use 'wingman "
+        "corpus add' or this client's own corpus-upload path instead; offer the "
+        "interview afterward too, additive not either/or)\n"
         "- Other (free text, always present, always last)\n\n"
         "Before the card: 2-3 sentences (BP-01) — what Perspectives is, that only "
         "their own words ever become evidence, that nothing is saved until they "
@@ -584,6 +633,78 @@ def perspectives_start() -> str:
         "of times, forever (BP-09, no gating). Then call interview_react for the "
         "chosen category — see its own docstring for that category's protocol."
     )
+
+
+@server.tool()
+def coach_persona(action: str, name: str = "") -> str:
+    """Coaching mode (docs/COACHING-MODE-DESIGN.md): act as coach for
+    someone, or check/clear who's currently active.
+
+    action:
+    - 'set': name required. Finds-or-creates a persona by that name
+      (case/whitespace-insensitive — "Mike" and "mike " are the same
+      persona) and makes it the default scope for every persona-aware
+      tool call (interview_react, perspectives_start, my_pov, ...) until
+      cleared. "Act as coach for Mike" then behaves exactly that way —
+      you keep typing, but every capture and every POV call is scoped to
+      Mike unless a call explicitly overrides it.
+    - 'clear': back to your own work.
+    - 'who': reports the currently active persona, or that none is set —
+      cheap to call any time you're not sure.
+    - 'list': every persona ever coached, so you can tell 'set' apart
+      from accidentally creating a near-duplicate (e.g. "Mike" vs "Mike
+      Chen").
+
+    Coach-mediated only: you always drive every call yourself, on a
+    persona's behalf — there is no separate login or access token for
+    them (a deliberate v1 boundary, not an oversight). Everything you
+    already know — corpus, watchlist, company research — stays visible
+    regardless of which persona is active, via the same 'search' tool as
+    always; only a persona's OWN captured evidence (interview answers,
+    profile items, POV) is scoped to them, and nothing crosses from your
+    own POV into theirs unless you explicitly capture it under their
+    name. When you type an answer speculating on a persona's behalf
+    ("how would Mike answer this") rather than something they said
+    themselves, that's exactly what interview_react's own docstring
+    covers — pass persona_authored=False (the default) so it's stored as
+    your own inference about them, not mistaken later for their verified
+    words.
+    """
+    from wingman.application.coaching import (
+        clear_active_persona_and_report,
+        get_active_persona,
+        render_acting_as,
+        set_active_persona,
+    )
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    action = action.strip().lower()
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "set":
+                if not name.strip():
+                    return "coach_persona 'set' needs a name — nothing changed."
+                persona = set_active_persona(name, storage, config)
+                return f"{render_acting_as(persona)} Everything from here scopes to them."
+            if action == "clear":
+                clear_active_persona_and_report(config)
+                return render_acting_as(None)
+            if action == "who":
+                return render_acting_as(get_active_persona(storage, config))
+            if action == "list":
+                personas = storage.list_personas()
+                if not personas:
+                    return "No personas yet — 'coach_persona set <name>' starts one."
+                lines = [
+                    f"- {persona.name}" + (f" — {persona.notes}" if persona.notes else "")
+                    for persona in personas
+                ]
+                return "Personas coached so far:\n" + "\n".join(lines)
+    except IngestError as exc:
+        return f"coach_persona failed: {exc}"
+    return f"unknown action {action!r}; use set, clear, who, or list."
 
 
 @server.tool()
@@ -1472,18 +1593,36 @@ def my_pov(refresh: bool = False) -> str:
     The same evidence-validated card machinery as people_pov, pointed at the
     user's own writing (a model call on refresh). Use it to help the user
     choose which of their positions to lead with in outreach.
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
+    (coach_persona 'set'), this builds THEIR stance instead — from only
+    their own scoped interview captures, never the coach's corpus or POV
+    (deliberately excluded, not just unused). Says so in the response
+    either way.
     """
+    from wingman.application.coaching import get_active_persona, render_acting_as
+    from wingman.application.pov import persona_card_id
+
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
     with Storage(config.db_path) as storage:
+        active_persona = get_active_persona(storage, config)
+        card_id = (
+            persona_card_id(active_persona.persona_id)
+            if active_persona is not None
+            else CORPUS_PERSON_ID
+        )
         if not refresh:
-            stored = storage.get_pov_card(CORPUS_PERSON_ID)
+            stored = storage.get_pov_card(card_id)
             if stored is not None:
-                return render_pov_card(stored) + "\n\n(stored card — rebuild with refresh=True)"
+                return (
+                    f"{render_acting_as(active_persona)}\n"
+                    f"{render_pov_card(stored)}\n\n(stored card — rebuild with refresh=True)"
+                )
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
-            report = build_own_pov(storage, provider)
+            report = build_own_pov(storage, provider, persona=active_persona)
         except ProposalParseError as exc:
             return f"pov failed: {exc}. Nothing was stored; call again to retry."
         except (IngestError, ModelConfigError, ProviderError) as exc:
@@ -1491,7 +1630,7 @@ def my_pov(refresh: bool = False) -> str:
     rejected = "".join(
         f"\n  rejected stance {item.statement!r}: {item.reason}" for item in report.rejected
     )
-    return render_pov_card(report.card) + rejected
+    return f"{render_acting_as(active_persona)}\n{render_pov_card(report.card)}{rejected}"
 
 
 def _miso_lines(report: MisoReport) -> str:

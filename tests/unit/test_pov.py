@@ -320,6 +320,166 @@ def test_own_pov_merges_corpus_and_interview_documents(workspace: Path) -> None:
         assert quotes == {"show their work", "never wavered"}
 
 
+def test_own_pov_with_persona_excludes_corpus_and_uses_only_their_captures(
+    workspace: Path,
+) -> None:
+    """Coaching mode (docs/COACHING-MODE-DESIGN.md): "corpus is shared but
+    never automatic evidence" — a persona's synthesized stance never sees
+    the coach's own writing, only their own scoped interview captures."""
+    from wingman.application.coaching import find_or_create_persona
+    from wingman.application.corpus import add_to_corpus
+    from wingman.application.interview import capture_interview_reaction
+    from wingman.application.pov import CORPUS_PERSON_ID, build_own_pov, persona_card_id
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        essay = workspace / "essay.md"
+        essay.write_text("Coach's own essay text, never Mike's stance.", encoding="utf-8")
+        add_to_corpus(essay, "writing", config, storage)
+
+        persona = find_or_create_persona("Mike Chen", storage)
+        capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            "Mike never wavered on one cause.",
+            config,
+            storage,
+            persona_id=persona.persona_id,
+        )
+        mike_doc_id = [
+            item for item in storage.list_profile_items() if item.persona_id == persona.persona_id
+        ][0].item_id
+
+        provider = ScriptedProvider(
+            {
+                "stances": [
+                    {
+                        "statement": "Mike values sustained commitment.",
+                        "quote": "never wavered",
+                        "doc_id": mike_doc_id,
+                        "dimension": "values",
+                    }
+                ],
+                "topics": ["persistence"],
+            }
+        )
+        report = build_own_pov(storage, provider, persona=persona)
+        assert provider.last_prompt is not None
+        assert "Coach's own essay" not in provider.last_prompt
+        assert len(report.card.stances) == 1
+
+        stored = storage.get_pov_card(persona_card_id(persona.persona_id))
+        assert stored is not None
+        assert stored.person_name == "Mike Chen"
+        # the coach's own corpus card, if it exists, is untouched/separate
+        assert storage.get_pov_card(CORPUS_PERSON_ID) is None
+
+
+def test_own_pov_with_persona_error_message_is_persona_specific(workspace: Path) -> None:
+    from wingman.application.coaching import find_or_create_persona
+    from wingman.application.pov import build_own_pov
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        persona = find_or_create_persona("Mike Chen", storage)
+        with pytest.raises(IngestError, match="nothing has been captured for Mike Chen"):
+            build_own_pov(storage, ScriptedProvider({"stances": [], "topics": []}), persona=persona)
+
+
+def test_own_pov_with_persona_ignores_coachs_own_interview_captures(workspace: Path) -> None:
+    """Only the persona's OWN captures feed their stance — not the coach's
+    unscoped ones, even though both live in the same interview mechanic."""
+    from wingman.application.coaching import find_or_create_persona
+    from wingman.application.interview import capture_interview_reaction
+    from wingman.application.pov import build_own_pov
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        capture_interview_reaction(
+            "values_pro", "Jane Goodall", "The coach's own reason.", config, storage
+        )
+        persona = find_or_create_persona("Mike Chen", storage)
+        with pytest.raises(IngestError, match="nothing has been captured for Mike Chen"):
+            build_own_pov(storage, ScriptedProvider({"stances": [], "topics": []}), persona=persona)
+
+
+def test_mcp_my_pov_reads_the_active_personas_own_stored_card(workspace: Path) -> None:
+    """my_pov's stored-card path (no model call) reads whichever persona is
+    active, under their own card_id — never the coach's CORPUS_PERSON_ID
+    card, even if one exists."""
+    from wingman.application.coaching import find_or_create_persona
+    from wingman.application.pov import CORPUS_PERSON_ID, CORPUS_PERSON_NAME, persona_card_id
+    from wingman.domain.pov import PovCard
+    from wingman.mcp_server import coach_persona, my_pov
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        persona = find_or_create_persona("Mike Chen", storage)
+        own_card = PovCard(
+            person_id=CORPUS_PERSON_ID,
+            person_name=CORPUS_PERSON_NAME,
+            documents_used=1,
+            provider="scripted",
+            model="scripted-1",
+            prompt_version="v0",
+        )
+        storage.save_pov_card(own_card)
+        mike_card = PovCard(
+            person_id=persona_card_id(persona.persona_id),
+            person_name="Mike Chen",
+            documents_used=1,
+            provider="scripted",
+            model="scripted-1",
+            prompt_version="v0",
+        )
+        storage.save_pov_card(mike_card)
+
+    coach_persona("set", "Mike Chen")
+    result = my_pov(refresh=False)
+    assert result.startswith("Acting as: coach for Mike Chen.")
+    assert "Mike Chen" in result
+    assert "Your corpus" not in result
+
+    coach_persona("clear")
+    own_result = my_pov(refresh=False)
+    assert own_result.startswith("Acting as: yourself.")
+    assert "Your corpus" in own_result
+
+
+def test_cli_pov_reads_the_active_personas_own_stored_card(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from wingman.application.coaching import find_or_create_persona
+    from wingman.application.pov import persona_card_id
+    from wingman.cli.main import app
+    from wingman.domain.pov import PovCard
+    from wingman.infrastructure.config import ENV_DATA_DIR
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        persona = find_or_create_persona("Mike Chen", storage)
+        storage.save_pov_card(
+            PovCard(
+                person_id=persona_card_id(persona.persona_id),
+                person_name="Mike Chen",
+                documents_used=1,
+                provider="scripted",
+                model="scripted-1",
+                prompt_version="v0",
+            )
+        )
+
+    monkeypatch.setenv(ENV_DATA_DIR, str(config.data_dir))
+    runner = CliRunner()
+    runner.invoke(app, ["coach-persona", "set", "Mike Chen"])
+    result = runner.invoke(app, ["pov"])
+    assert result.exit_code == 0
+    assert "Acting as: coach for Mike Chen." in result.output
+    assert "Mike Chen" in result.output
+
+
 def test_own_pov_never_sees_the_stimulus_only_the_users_own_why(workspace: Path) -> None:
     """The security property discussed for this slice: the stimulus's own
     fetched content never reaches the prompt at all (interview.py discards

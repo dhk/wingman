@@ -1490,6 +1490,70 @@ def people_discover(
     typer.echo('Add one with: wingman people add "<Name>" --substack <url>')
 
 
+@app.command("coach-persona")
+def coach_persona_cmd(
+    action: str = typer.Argument(..., help="One of: set, clear, who, list."),
+    name: str = typer.Argument("", help="Required for 'set': the persona's name."),
+) -> None:
+    """Coaching mode (docs/COACHING-MODE-DESIGN.md): act as coach for
+    someone, or check/clear who's currently active.
+
+    'set <name>' finds-or-creates a persona (case/whitespace-insensitive
+    matching) and makes it the default scope for every persona-aware
+    command (interview, perspectives, pov, ...) until 'clear'. 'who'
+    reports the currently active persona — cheap to call any time you're
+    not sure. 'list' shows every persona ever coached, so you can tell
+    'set' apart from accidentally creating a near-duplicate.
+
+    Coach-mediated only: you always drive every command yourself, on a
+    persona's behalf — there is no separate login for them. Everything
+    you already know stays visible regardless of which persona is
+    active; only a persona's own captured evidence is scoped to them.
+    """
+    from wingman.application.coaching import (
+        clear_active_persona_and_report,
+        get_active_persona,
+        render_acting_as,
+        set_active_persona,
+    )
+
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "changed")
+    action = action.strip().lower()
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "set":
+                if not name.strip():
+                    typer.echo("coach-persona 'set' needs a name — nothing changed.", err=True)
+                    raise typer.Exit(code=1)
+                persona = set_active_persona(name, storage, config)
+                typer.echo(f"{render_acting_as(persona)} Everything from here scopes to them.")
+                return
+            if action == "clear":
+                clear_active_persona_and_report(config)
+                typer.echo(render_acting_as(None))
+                return
+            if action == "who":
+                typer.echo(render_acting_as(get_active_persona(storage, config)))
+                return
+            if action == "list":
+                personas = storage.list_personas()
+                if not personas:
+                    typer.echo("No personas yet — 'coach-persona set <name>' starts one.")
+                    return
+                typer.echo("Personas coached so far:")
+                for persona in personas:
+                    suffix = f" — {persona.notes}" if persona.notes else ""
+                    typer.echo(f"- {persona.name}{suffix}")
+                return
+    except IngestError as exc:
+        typer.echo(f"coach-persona failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"unknown action {action!r}; use set, clear, who, or list.", err=True)
+    raise typer.Exit(code=1)
+
+
 @app.command()
 def pov(
     refresh: bool = typer.Option(
@@ -1503,20 +1567,35 @@ def pov(
     documents verbatim. Use it to decide which of your positions to lead
     with in outreach. A stored card is shown without any model call;
     --refresh rebuilds.
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
+    ('wingman coach-persona set <name>'), this builds THEIR stance
+    instead — from only their own scoped interview captures, never your
+    corpus or POV.
     """
+    from wingman.application.coaching import get_active_persona, render_acting_as
+    from wingman.application.pov import persona_card_id
+
     configure_logging()
     config = load_config()
     _require_workspace(config, "summarized")
     with Storage(config.db_path) as storage:
+        active_persona = get_active_persona(storage, config)
+        typer.echo(render_acting_as(active_persona))
+        card_id = (
+            persona_card_id(active_persona.persona_id)
+            if active_persona is not None
+            else CORPUS_PERSON_ID
+        )
         if not refresh:
-            stored = storage.get_pov_card(CORPUS_PERSON_ID)
+            stored = storage.get_pov_card(card_id)
             if stored is not None:
                 typer.echo(render_pov_card(stored))
                 typer.echo("\n(stored card — rebuild with --refresh)")
                 return
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
-            report = build_own_pov(storage, provider)
+            report = build_own_pov(storage, provider, persona=active_persona)
         except (IngestError, ModelConfigError, ProviderError) as exc:
             typer.echo(f"pov failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
@@ -2902,6 +2981,18 @@ def interview_react(
         "organization's primary purpose to be, e.g. 'Pepsi sells cola'. Stored as "
         "context alongside the capture, never as evidence.",
     ),
+    persona: str = typer.Option(
+        "",
+        "--persona",
+        help="Capture for this persona instead of the active one (or your own work, if "
+        "none is active) for just this one call — see 'wingman coach-persona'.",
+    ),
+    persona_authored: bool = typer.Option(
+        False,
+        "--persona-authored",
+        help="The persona answered this themselves (a verified statement) rather than "
+        "you speculating on their behalf (the default, stored as your own inference).",
+    ),
 ) -> None:
     """Capture one interview reaction or nomination as citable profile evidence (docs/PROFILE-BOOTSTRAP-DESIGN.md).
 
@@ -2914,19 +3005,33 @@ def interview_react(
     Values' and Mission alignment's con-then-pro ordering, with ask-#2-first
     nested inside each block, is this interview module's own protocol —
     conduct it in that order; it isn't enforced by this command itself.
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): with an active persona
+    ('wingman coach-persona set <name>'), this is scoped to them
+    automatically — --persona overrides for just this one call.
     """
     configure_logging()
+    from wingman.application.coaching import render_acting_as, resolve_persona
     from wingman.application.interview import capture_interview_reaction, render_interview_reaction
 
     config = load_config()
     try:
         with Storage(config.db_path) as storage:
+            active_persona = resolve_persona(persona, storage, config)
             report = capture_interview_reaction(
-                subtype, target, why, config, storage, primary_purpose=primary_purpose
+                subtype,
+                target,
+                why,
+                config,
+                storage,
+                primary_purpose=primary_purpose,
+                persona_id=active_persona.persona_id if active_persona is not None else None,
+                persona_authored=persona_authored,
             )
     except IngestError as exc:
         typer.echo(f"interview capture failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    typer.echo(render_acting_as(active_persona))
     typer.echo(render_interview_reaction(report))
 
 

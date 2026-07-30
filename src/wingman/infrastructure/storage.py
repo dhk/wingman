@@ -17,6 +17,7 @@ from wingman.domain.heap import HeapItem
 from wingman.domain.opportunity import Opportunity
 from wingman.domain.outreach import OutreachBrief
 from wingman.domain.person import ExternalDocument, NewsItem, Person, PersonOrigin
+from wingman.domain.persona import Persona
 from wingman.domain.pov import PovCard
 from wingman.domain.relationship import RelationshipLogEntry, RelationshipObjective
 from wingman.domain.research import CompanySource, NewLinkEvent, ResearchSnapshot
@@ -41,6 +42,12 @@ CREATE TABLE IF NOT EXISTS profile_items (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_profile_items_key ON profile_items (kind, name_key);
+CREATE TABLE IF NOT EXISTS personas (
+    persona_id TEXT PRIMARY KEY,
+    name_key TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS opportunities (
     opportunity_id TEXT PRIMARY KEY,
     source_record_id TEXT NOT NULL UNIQUE,
@@ -349,6 +356,39 @@ class Storage:
         cursor = self._conn.execute("SELECT COUNT(*) FROM profile_items")
         count: int = cursor.fetchone()[0]
         return count
+
+    def add_persona(self, persona: Persona) -> None:
+        try:
+            self._conn.execute(
+                "INSERT INTO personas (persona_id, name_key, payload, created_at)"
+                " VALUES (?, ?, ?, ?)",
+                (
+                    persona.persona_id,
+                    persona.name_key,
+                    persona.model_dump_json(),
+                    persona.created_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRecordError(f"a persona named {persona.name!r} already exists") from exc
+        self._conn.commit()
+
+    def get_persona(self, persona_id: str) -> Persona | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM personas WHERE persona_id = ?", (persona_id,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return Persona.model_validate_json(row[0]) if row else None
+
+    def find_persona_by_name(self, name: str) -> Persona | None:
+        name_key = " ".join(name.lower().split())
+        cursor = self._conn.execute("SELECT payload FROM personas WHERE name_key = ?", (name_key,))
+        row: tuple[str] | None = cursor.fetchone()
+        return Persona.model_validate_json(row[0]) if row else None
+
+    def list_personas(self) -> list[Persona]:
+        cursor = self._conn.execute("SELECT payload FROM personas ORDER BY created_at")
+        return [Persona.model_validate_json(row[0]) for row in cursor.fetchall()]
 
     def save_opportunity(self, opportunity: Opportunity) -> None:
         """Insert or replace the opportunity for its source record (assessments evolve)."""

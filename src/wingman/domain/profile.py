@@ -47,6 +47,12 @@ class ProfileItem(BaseModel):
     item_id: str = Field(default_factory=lambda: str(uuid4()))
     kind: ProfileItemKind
     subtype: str | None = None
+    # None = the coach's own item (every item in every workspace today is
+    # implicitly this — zero migration needed). Set = scoped to that
+    # Persona (docs/COACHING-MODE-DESIGN.md) — "my evidence and their
+    # point of view never mix" (domain/person.py's own invariant) extended
+    # to a second axis: coach vs. persona, and persona vs. persona.
+    persona_id: str | None = None
     name: str
     detail: str = ""
     classification: ClaimClassification

@@ -133,10 +133,19 @@ def _max_submissions_per_subtype(env: dict[str, str] | None = None) -> int:
     return value if value > 0 else _DEFAULT_MAX_PER_SUBTYPE
 
 
-def interview_document_key(subtype: str, target: str) -> str:
-    """One evolving 'document' per (subtype, target) pair — capturing the
-    same target again under the same subtype supersedes it (RFC-028)."""
-    return f"interview: {subtype}: " + " ".join(target.strip().lower().split())
+def interview_document_key(subtype: str, target: str, persona_id: str | None = None) -> str:
+    """One evolving 'document' per (subtype, target[, persona]) tuple —
+    capturing the same target again under the same subtype (for the same
+    persona, or the coach's own work) supersedes it (RFC-028).
+    persona_id=None keeps the exact key shape every capture had before
+    coaching mode existed — backward compatible with document_keys
+    already in storage; a set persona_id gets its own, distinct key so
+    the coach nominating "Jane Goodall" for themselves and for Mike don't
+    supersede each other."""
+    key = f"interview: {subtype}: " + " ".join(target.strip().lower().split())
+    if persona_id is not None:
+        key += f": persona:{persona_id}"
+    return key
 
 
 class InterviewReactionReport(BaseModel):
@@ -186,6 +195,45 @@ def _fetch_stimulus(target: str, fetcher: Callable[[str], bytes] | None) -> tupl
     return extract_resume_text(path), path.name
 
 
+def _item_name(subtype: str, target: str, persona_id: str | None) -> str:
+    """The ProfileItem.name (and thus its dedup/conflict name_key) for one
+    capture. persona_id=None keeps the exact shape every capture had
+    before coaching mode existed. A set persona_id gets a distinct name —
+    without this, persist_items' name_key-based find_active_item would
+    match the coach's own "values_pro: Jane Goodall" against a persona's
+    identically-named capture and incorrectly merge/conflict/supersede
+    across scopes, the same collision interview_document_key already
+    guards against on the source-record side."""
+    name = f"{subtype}: {target}"
+    if persona_id is not None:
+        name += f" (persona:{persona_id})"
+    return name
+
+
+def _provenance_for(
+    persona_id: str | None, persona_authored: bool
+) -> tuple[ClaimClassification, float, str]:
+    """(classification, confidence, extracted_by) for one capture
+    (docs/COACHING-MODE-DESIGN.md).
+
+    persona_id=None (the coach's own work — every capture before coaching
+    mode existed, unchanged): FACT/1.0/"user", exactly as always.
+    persona_id set and persona_authored=True (the persona is literally
+    answering themselves, e.g. dictating while the coach types): also a
+    verified first-person statement, just a different first person —
+    FACT/1.0/"persona". persona_id set and persona_authored=False (the
+    default): the coach's own speculation on the persona's behalf ("how
+    would Mike answer this") — never a verified statement, so
+    HYPOTHESIS/0.6/"coach", distinguishable from either FACT case forever,
+    not just at capture time.
+    """
+    if persona_id is None:
+        return ClaimClassification.FACT, 1.0, INTERVIEW_EXTRACTOR
+    if persona_authored:
+        return ClaimClassification.FACT, 1.0, "persona"
+    return ClaimClassification.HYPOTHESIS, 0.6, "coach"
+
+
 def capture_interview_reaction(
     subtype: str,
     target: str,
@@ -194,6 +242,8 @@ def capture_interview_reaction(
     storage: Storage,
     fetcher: Callable[[str], bytes] | None = None,
     primary_purpose: str | None = None,
+    persona_id: str | None = None,
+    persona_authored: bool = False,
 ) -> InterviewReactionReport:
     """Persist one interview capture — a reaction to fetched content
     (Alignment of perspective), or a nomination by name (Values, Mission
@@ -207,6 +257,12 @@ def capture_interview_reaction(
     ("Pepsi sells cola"); it is written to the inbox note alongside the
     capture (like qa_capture's own note file) so it stays retrievable, but
     it never becomes the evidence quote itself.
+
+    persona_id scopes this capture to a Persona (docs/COACHING-MODE-
+    DESIGN.md) instead of the coach's own work — None (the default) is
+    unchanged, existing behavior. persona_authored distinguishes the
+    persona's own verified words (True) from the coach's speculation on
+    their behalf (False, the default) — see _provenance_for.
     """
     subtype = subtype.strip().lower()
     if subtype not in VALID_SUBTYPES:
@@ -229,8 +285,11 @@ def capture_interview_reaction(
         if item.kind is ProfileItemKind.INTERVIEW
         and item.subtype == subtype
         and item.status is ItemStatus.ACTIVE
+        and item.persona_id == persona_id
     ]
-    is_new_target = not any(item.name == f"{subtype}: {target}" for item in active_for_subtype)
+    is_new_target = not any(
+        item.name == _item_name(subtype, target, persona_id) for item in active_for_subtype
+    )
     max_per_subtype = _max_submissions_per_subtype()
     if is_new_target and len(active_for_subtype) >= max_per_subtype:
         raise IngestError(
@@ -250,6 +309,8 @@ def capture_interview_reaction(
     content = f"# Interview capture\n\nSubtype: {subtype}\n\nTarget: {target}\n\nWhy: {why}\n"
     if primary_purpose is not None:
         content += f"\nUnderstood primary purpose: {primary_purpose}\n"
+    if persona_id is not None:
+        content += f"\nPersona: {persona_id}\n"
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     record = storage.get_source_record_by_hash(content_hash)
 
@@ -284,7 +345,7 @@ def capture_interview_reaction(
                 source_type=INTERVIEW_SOURCE_TYPE,
                 source_locator=locator,
                 content_hash=content_hash,
-                document_key=interview_document_key(subtype, target),
+                document_key=interview_document_key(subtype, target, persona_id),
             )
             storage.add_source_record(record)
     else:
@@ -294,23 +355,25 @@ def capture_interview_reaction(
                 source_type=INTERVIEW_SOURCE_TYPE,
                 source_locator=target,
                 content_hash=content_hash,
-                document_key=interview_document_key(subtype, target),
+                document_key=interview_document_key(subtype, target, persona_id),
             )
             storage.add_source_record(record)
 
+    classification, confidence, extracted_by = _provenance_for(persona_id, persona_authored)
     item = ProfileItem(
         kind=ProfileItemKind.INTERVIEW,
         subtype=subtype,
-        name=f"{subtype}: {target}",
+        persona_id=persona_id,
+        name=_item_name(subtype, target, persona_id),
         detail=why,
-        classification=ClaimClassification.FACT,  # the user's own stated reaction
-        confidence=1.0,  # first-person statement; there is no better source
+        classification=classification,
+        confidence=confidence,
         evidence=[EvidenceSpan(source_record_id=record.record_id, quote=why)],
         prompt_version=INTERVIEW_PROMPT_VERSION,
-        extracted_by=INTERVIEW_EXTRACTOR,
+        extracted_by=extracted_by,
     )
     earlier = storage.record_ids_for_document(
-        interview_document_key(subtype, target), exclude_record_id=record.record_id
+        interview_document_key(subtype, target, persona_id), exclude_record_id=record.record_id
     )
     counts = persist_items([item], storage, superseded_records=earlier)
     if counts.updated or counts.retired:
@@ -332,9 +395,18 @@ def render_interview_reaction(report: InterviewReactionReport) -> str:
     return f"{report.subtype}: {report.target}{title} — {report.outcome}"
 
 
-def list_interview_documents(storage: Storage) -> list[InterviewDocument]:
-    """Every active interview capture, read back as a build_own_pov
-    candidate document — the read side of every subtype captured above.
+def list_interview_documents(
+    storage: Storage, persona_id: str | None = None
+) -> list[InterviewDocument]:
+    """Every active interview capture in scope, read back as a
+    build_own_pov candidate document — the read side of every subtype
+    captured above.
+
+    persona_id=None (the default) is the coach's own captures, exactly as
+    before coaching mode existed. A set persona_id returns ONLY that
+    persona's own captures — never the coach's, never another persona's —
+    docs/COACHING-MODE-DESIGN.md's "my evidence and their point of view
+    never mix," extended to this axis.
 
     body is ALWAYS item.detail (the 'why'), never anything derived from the
     target/stimulus — see InterviewDocument's own docstring for why that is
@@ -352,33 +424,41 @@ def list_interview_documents(storage: Storage) -> list[InterviewDocument]:
             source_record_id=item.evidence[0].source_record_id,
         )
         for item in storage.list_profile_items()
-        if item.kind is ProfileItemKind.INTERVIEW and item.status is ItemStatus.ACTIVE
+        if item.kind is ProfileItemKind.INTERVIEW
+        and item.status is ItemStatus.ACTIVE
+        and item.persona_id == persona_id
     ]
 
 
-def subtype_progress(storage: Storage, subtype: str) -> tuple[int, int]:
-    """(active capture count for this subtype, the per-subtype cap) — lets a
-    caller surface UX-0001's BP-05 position ("N of M captured") without
-    reaching into the cap check's own internals."""
+def subtype_progress(
+    storage: Storage, subtype: str, persona_id: str | None = None
+) -> tuple[int, int]:
+    """(active capture count for this subtype[, persona], the per-subtype
+    cap) — lets a caller surface UX-0001's BP-05 position ("N of M
+    captured") without reaching into the cap check's own internals."""
     count = sum(
         1
         for item in storage.list_profile_items()
         if item.kind is ProfileItemKind.INTERVIEW
         and item.subtype == subtype
         and item.status is ItemStatus.ACTIVE
+        and item.persona_id == persona_id
     )
     return count, _max_submissions_per_subtype()
 
 
-def capture_progress_summary(storage: Storage) -> str | None:
+def capture_progress_summary(storage: Storage, persona_id: str | None = None) -> str | None:
     """One-line summary of what's been captured so far, across every
-    interview category — None if nothing has been captured yet. Used by
+    interview category, scoped to persona_id (None = the coach's own) —
+    None if nothing has been captured yet in that scope. Used by
     perspectives_start (UX-0001 §4) to decide whether to offer, and how to
     describe, a 'pick up where I left off' option."""
     items = [
         item
         for item in storage.list_profile_items()
-        if item.kind is ProfileItemKind.INTERVIEW and item.status is ItemStatus.ACTIVE
+        if item.kind is ProfileItemKind.INTERVIEW
+        and item.status is ItemStatus.ACTIVE
+        and item.persona_id == persona_id
     ]
     if not items:
         return None
