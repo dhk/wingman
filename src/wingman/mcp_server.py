@@ -417,6 +417,15 @@ def interview_react(subtype: str, target: str, why: str, primary_purpose: str = 
       "the fire department puts out fires" — ask it every time an org is
       nominated, pro or con, and present it as context (its own, visually
       distinct answer), never inside the evidence quote itself.
+    - Nomination — Network admired: target is a LinkedIn profile URL
+      (never fetched — captured as an identifier only, same as any other
+      nomination target). subtype is 'network_admired' — pro-only, no con
+      counterpart. Ask for three people the user genuinely admires,
+      preferably first-degree LinkedIn connections of theirs (a soft
+      preference, not a hard requirement — capture whoever they name), and
+      why, in a few words rather than a full essay. Distinct from Values:
+      the point here isn't a values signal, it's surfacing admired people
+      who are also reachable through the user's own network.
 
     Either way, why is the user's own reasoning, stored verbatim as the
     ONLY evidence — the target itself (fetched page or nominee name) is

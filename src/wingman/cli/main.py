@@ -2848,12 +2848,15 @@ def interview_react(
         "services you're proud to buy / would never buy — use these if "
         "people-naming struggles), mission_alignment_pro, mission_alignment_con "
         "(companies, clubs, or any group aligned for a purpose that you'd be "
-        "proud/horrified to be associated with — requires --primary-purpose).",
+        "proud/horrified to be associated with — requires --primary-purpose), "
+        "network_admired (a LinkedIn profile URL of someone you admire, "
+        "preferably a first-degree connection — pro-only, no con).",
     ),
     target: str = typer.Argument(
         ...,
         help="For a reaction subtype: an https:// URL, or a local PDF/DOCX/MD/TXT file. "
-        "For a nomination subtype: the person's or organization's name.",
+        "For a nomination subtype: the person's or organization's name, or (for "
+        "network_admired) their LinkedIn profile URL.",
     ),
     why: str = typer.Argument(..., help="Your reasoning — stored verbatim as evidence."),
     primary_purpose: str = typer.Option(

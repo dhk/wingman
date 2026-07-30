@@ -8,15 +8,16 @@ dispatched by `subtype`:
   content (an https:// URL, or a local PDF/DOCX/Markdown/text file), states
   agree/disagree, and explains why. The content is fetched only far enough
   to extract a title and a content hash for provenance.
-- **Nomination** (v1, Values and Mission alignment): the user names a
-  person or organization and explains why — no fetch at all, there is
-  nothing to reduce. A nomination's target is a bare name, not a
-  dereferenceable location, so (unlike a reaction) the capture note is
-  written to the inbox — qa_capture.py's exact pattern — so 'why' and, for
-  Mission alignment, the primary-purpose answer both stay retrievable
-  there. Mission alignment captures what the person understands the
-  nominated org's primary purpose to be ("Pepsi sells cola") as context
-  alongside the reasoning, never as evidence.
+- **Nomination** (v1, Values, Mission alignment, Network admired): the
+  user names a person, organization, or (Network admired) a LinkedIn
+  profile URL, and explains why — no fetch at all, there is nothing to
+  reduce (LinkedIn is never scraped; the URL is captured as an
+  identifier, not dereferenced). The capture note is written to the
+  inbox — qa_capture.py's exact pattern — so 'why' and, for Mission
+  alignment, the primary-purpose answer both stay retrievable there.
+  Mission alignment captures what the person understands the nominated
+  org's primary purpose to be ("Pepsi sells cola") as context alongside
+  the reasoning, never as evidence.
 
 Either way, the "why" is the ONLY thing that ever becomes evidence,
 mirroring qa_capture.py's pattern exactly — the stimulus/nominee/purpose
@@ -84,7 +85,18 @@ MISSION_ALIGNMENT_SUBTYPES = {
     "mission_alignment_pro",
     "mission_alignment_con",
 }
-NOMINATION_SUBTYPES = VALUES_SUBTYPES | MISSION_ALIGNMENT_SUBTYPES
+# Network admired (v1): nominate a first-degree LinkedIn connection you
+# admire, by profile URL — pro-only, no con counterpart. Distinct from
+# Values (admiration by name, no networking angle): the target here is a
+# dereferenceable identifier specifically because it doubles as a
+# warm-path candidate, e.g. for docs/COACHING-MODE-DESIGN.md's "who among
+# everyone I know might be valuable for this persona" cross-referencing —
+# still a NOMINATION shape (no fetch; LinkedIn is never scraped), the
+# target is just a URL instead of a bare name.
+NETWORK_ADMIRED_SUBTYPES = {
+    "network_admired",
+}
+NOMINATION_SUBTYPES = VALUES_SUBTYPES | MISSION_ALIGNMENT_SUBTYPES | NETWORK_ADMIRED_SUBTYPES
 VALID_SUBTYPES = REACTION_SUBTYPES | NOMINATION_SUBTYPES
 
 # values_con excludes Hitler — too easy a nomination to discriminate

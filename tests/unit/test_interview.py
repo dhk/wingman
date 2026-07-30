@@ -455,3 +455,78 @@ def test_recapturing_an_existing_target_is_exempt_from_the_cap(
         # but a genuinely new target is still refused
         with pytest.raises(IngestError, match="already has 1 captures"):
             capture_interview_reaction("values_pro", "Someone Else", WHY_PRO, workspace, storage)
+
+
+WHY_ADMIRED = "She's built three companies and never lost her sense of humor doing it."
+
+
+def test_network_admired_is_captured_with_no_fetch_and_no_hitler_exclusion(
+    workspace: Config,
+) -> None:
+    """A LinkedIn URL is captured as an identifier only — never fetched — and
+    network_admired has no con side, so nothing scopes an exclusion to it."""
+    with Storage(workspace.db_path) as storage:
+        report = capture_interview_reaction(
+            "network_admired",
+            "https://www.linkedin.com/in/janedoe/",
+            WHY_ADMIRED,
+            workspace,
+            storage,
+        )
+        assert report.outcome == "saved" and report.title is None
+        items = {
+            i.subtype: i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE
+        }
+        assert items["network_admired"].name == (
+            "network_admired: https://www.linkedin.com/in/janedoe/"
+        )
+        assert items["network_admired"].detail == WHY_ADMIRED
+        # nomination shape: archived to the inbox, never fetched as a URL
+        record = storage.get_source_record(items["network_admired"].evidence[0].source_record_id)
+        assert record is not None
+        note = workspace.data_dir / record.source_locator
+        assert note.exists() and WHY_ADMIRED in note.read_text(encoding="utf-8")
+
+        # Hitler is excluded from values_con specifically — not from network_admired
+        assert (
+            capture_interview_reaction(
+                "network_admired",
+                "https://www.linkedin.com/in/hitler/",
+                WHY_ADMIRED,
+                workspace,
+                storage,
+            ).outcome
+            == "saved"
+        )
+
+
+def test_network_admired_does_not_require_primary_purpose(workspace: Config) -> None:
+    """Only mission_alignment subtypes require primary_purpose."""
+    with Storage(workspace.db_path) as storage:
+        report = capture_interview_reaction(
+            "network_admired",
+            "https://www.linkedin.com/in/anotherconnection/",
+            WHY_ADMIRED,
+            workspace,
+            storage,
+        )
+        assert report.outcome == "saved"
+
+
+def test_renominating_the_same_connection_supersedes(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction(
+            "network_admired",
+            "https://www.linkedin.com/in/janedoe/",
+            WHY_ADMIRED,
+            workspace,
+            storage,
+        )
+        updated = capture_interview_reaction(
+            "network_admired",
+            "https://www.linkedin.com/in/janedoe/",
+            WHY_ADMIRED + " Still true today.",
+            workspace,
+            storage,
+        )
+        assert "superseded" in updated.outcome
