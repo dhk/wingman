@@ -121,6 +121,43 @@ def test_atom_feed_fetch_with_attach(workspace: Path) -> None:
         assert document.published_at is not None and document.published_at.year == 2026
 
 
+def test_one_dead_source_does_not_stop_the_others(workspace: Path) -> None:
+    """A 404 on one feed must not abort every other configured source for
+    the same person (overnight P2 — Peter Hazlehurst's dead Synctera feed
+    stalled fetch/pov/brief for sources that were otherwise fine)."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Peter", storage)
+        person = attach_feed(person, FeedSource(url="https://dead.example.com/blog/feed"), storage)
+        person = attach_feed(person, FeedSource(url="https://live.example.com/feed"), storage)
+
+        def fetch(url: str) -> bytes:
+            if url == "https://dead.example.com/blog/feed":
+                raise FetchError(f"HTTP 404 fetching {url}")
+            return RSS_FEED
+
+        report = fetch_person_feed(person, config, storage, fetcher=fetch)
+        assert report.added == 1
+        assert len(report.failed_sources) == 1
+        assert "dead.example.com" in report.failed_sources[0]
+        # the live source's post still got indexed despite the dead one
+        assert storage.list_external_documents(person.person_id)
+
+
+def test_fetch_raises_only_when_every_source_fails(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("No Live Sources", storage)
+        person = attach_feed(person, FeedSource(url="https://a.example.com/feed"), storage)
+        person = attach_feed(person, FeedSource(url="https://b.example.com/feed"), storage)
+
+        def always_fails(url: str) -> bytes:
+            raise FetchError(f"HTTP 404 {url}")
+
+        with pytest.raises(IngestError, match="every source failed"):
+            fetch_person_feed(person, config, storage, fetcher=always_fails)
+
+
 def test_attach_rejects_duplicate_source(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:

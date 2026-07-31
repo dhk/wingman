@@ -195,6 +195,44 @@ class OvernightReport(BaseModel):
 _JOBISH = ("job", "career", "opening", "position", "role")
 _MAX_ACTIONS = 10
 _MAX_ACTION_EVIDENCE = 3
+_EVIDENCE_URL = re.compile(r"\]\((https?://\S+)\)$")
+
+
+def _evidence_url(entry: str) -> str | None:
+    """The URL an evidence line is about, whether it's a bare link or a
+    '[title](url)' markdown link (#109); anything else (e.g. a 'run: ...'
+    command line) has no URL of its own to dedupe on."""
+    match = _EVIDENCE_URL.search(entry)
+    if match:
+        return match.group(1).rstrip("/")
+    if entry.startswith("http://") or entry.startswith("https://"):
+        return entry.rstrip("/")
+    return None
+
+
+def _dedupe_actions_by_evidence(actions: list[ActionItem]) -> list[ActionItem]:
+    """Drop actions whose evidence links were already surfaced by an earlier
+    action of the *same kind* for the same subject this run — a company's
+    watched pages (blog/news/newsroom/about) often cross-link the same new
+    post, generating one near-identical research action per page instead of
+    one (overnight P3). Scoped to the key's prefix (e.g. 'research') so this
+    never collapses two genuinely different actions that happen to cite the
+    same fresh post, such as a 'read the new posts' action and a
+    relationship tickler citing that same post as its evidence."""
+    seen: dict[tuple[str, str], set[str]] = {}
+    deduped: list[ActionItem] = []
+    for action in actions:
+        prefix = action.key.split(":", 1)[0] if action.key else None
+        urls = {url for entry in action.evidence if (url := _evidence_url(entry)) is not None}
+        if prefix and urls:
+            already = seen.setdefault((action.who, prefix), set())
+            if urls.issubset(already):
+                continue
+            already.update(urls)
+        deduped.append(action)
+    return deduped
+
+
 # RFC-037's own motivating example set the cadence: "tickle him in a week
 # when X happens". Past this many days without the objective being touched,
 # the tickler fires on staleness alone, not just fresh material.
@@ -370,7 +408,7 @@ def _company_deep(
 ) -> OvernightTarget:
     from wingman.application.pov import build_company_pov
     from wingman.providers.base import CapabilityClass
-    from wingman.providers.router import get_provider
+    from wingman.providers.router import ModelConfigError, get_provider
 
     titles = titles if titles is not None else _TitleBudget()
     target = OvernightTarget(name=name, kind="company", status="ok")
@@ -433,9 +471,10 @@ def _company_deep(
     if anchor is not None and anchor.sources:
         try:
             feeds = fetch_company_feeds(name, config, storage)
-            target.lines.append(
-                f"company feeds: {feeds.added} new post(s) from {len(anchor.sources)} feed(s)"
-            )
+            line = f"company feeds: {feeds.added} new post(s) from {len(anchor.sources)} feed(s)"
+            if feeds.failed_sources:
+                line += f"; {len(feeds.failed_sources)} failed: " + "; ".join(feeds.failed_sources)
+            target.lines.append(line)
             if feeds.added:
                 actions.append(
                     ActionItem(
@@ -452,8 +491,11 @@ def _company_deep(
         provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
         themes = build_company_pov(name, storage, provider)
         target.lines.append(f"themes refreshed: {len(themes.card.stances)} stances")
-    except Exception as exc:  # noqa: BLE001 — every failure is reported, none is fatal
+    except ModelConfigError as exc:
         target.lines.append(f"themes skipped: {exc}")
+    except Exception as exc:  # noqa: BLE001 — every failure is reported, none is fatal
+        target.status = "failed"
+        target.lines.append(f"themes failed: {exc}")
     try:
         miso = make_it_so(name, config, storage, kind="company")
         target.lines.append(f"dossier: {miso.export_path}")
@@ -620,6 +662,7 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     # item can't crowd out a live one.
     from wingman.application.triage import filter_actions
 
+    actions = _dedupe_actions_by_evidence(actions)
     actions, suppressed = filter_actions(actions, storage)
     actions = actions[:_MAX_ACTIONS]
 

@@ -1225,6 +1225,8 @@ def people_fetch(
             )
             for title in report.titles:
                 typer.echo(f"  + {title}")
+            for failure in report.failed_sources:
+                typer.echo(f"  ! {failure}", err=True)
     if failures:
         raise typer.Exit(code=1)
 
@@ -2495,6 +2497,8 @@ def company_fetch(
     )
     for title in report.titles:
         typer.echo(f"  + {title}")
+    for failure in report.failed_sources:
+        typer.echo(f"  ! {failure}", err=True)
 
 
 @company_app.command("research")

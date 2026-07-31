@@ -197,6 +197,78 @@ def test_second_run_actions_carry_new_link_evidence(
     assert "**Assess the new opening(s) at Acme**" in text
 
 
+def test_new_link_shared_by_two_sources_is_one_action_not_two(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A company's /careers and /blog pages both linking the same new post
+    must surface once, not once per source (overnight P3 — openai.com's
+    /news, /newsroom, and /about all surfaced the same link in one run)."""
+    import wingman.application.news as news_module
+    import wingman.application.people as people_module
+    import wingman.application.research as research_module
+
+    config = load_config()
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(news_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(research_module, "fetch_url", lambda url: CAREERS_PAGE)
+    grown = (
+        b'<html><body><a href="/jobs/researcher">R</a><a href="/jobs/staff-mle">S</a></body></html>'
+    )
+    with Storage(config.db_path) as storage:
+        # both /careers and /blog are approved as research sources, and both
+        # happen to link the same new posting once it appears
+        follow_company(
+            "Acme", storage, url="https://acme.example.com", fetcher=lambda url: CAREERS_PAGE
+        )
+        overnight_run(config, storage)  # baseline snapshot for both sources
+        monkeypatch.setattr(research_module, "fetch_url", lambda url: grown)
+        report = overnight_run(config, storage)
+    opening_actions = [a for a in report.actions if "opening" in a.what]
+    assert len(opening_actions) == 1
+    assert opening_actions[0].evidence == [
+        "[link](https://acme.example.com/jobs/staff-mle)",
+        'run: wingman assess --url "https://acme.example.com/jobs/staff-mle"',
+    ]
+
+
+def test_themes_failure_flips_target_status_instead_of_being_swallowed(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real themes-generation failure (e.g. the Anthropic auth error from
+    overnight P1) must mark the company target failed, not report '✓' with
+    the error tucked away in a 'themes skipped' line."""
+    import wingman.application.news as news_module
+    import wingman.application.people as people_module
+    import wingman.application.pov as pov_module
+    import wingman.application.research as research_module
+
+    config = load_config()
+    config.models_config_path.write_text(
+        '[models.embed_semantic]\nprovider = "hashed"\n'
+        '[models.synthesize_balanced]\nprovider = "recorded"\npath = "'
+        + str(config.data_dir / "recorded.json")
+        + '"\n',
+        encoding="utf-8",
+    )
+    (config.data_dir / "recorded.json").write_text('{"items": []}', encoding="utf-8")
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(news_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(research_module, "fetch_url", lambda url: CAREERS_PAGE)
+
+    def broken_themes(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("Could not resolve authentication method")
+
+    monkeypatch.setattr(pov_module, "build_company_pov", broken_themes)
+    with Storage(config.db_path) as storage:
+        follow_company(
+            "Acme", storage, url="https://acme.example.com", fetcher=lambda url: CAREERS_PAGE
+        )
+        report = overnight_run(config, storage)
+    acme = next(t for t in report.targets if t.name == "Acme")
+    assert acme.status == "failed"
+    assert any("themes failed" in line for line in acme.lines)
+
+
 def test_latest_digest_and_out_dir(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from wingman.application.focus import latest_digest
 
