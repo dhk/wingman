@@ -5,19 +5,26 @@ user says "feature request: <idea>", the model asks whatever clarifying
 questions the idea needs, composes a title and body, and shows the exact
 issue for confirmation — and the gate is structural, not behavioral: the
 filing function refuses to run until confirmation is explicit, and the CLI
-previews and prompts unless --yes. Filing uses the user's own `gh` CLI and
-its auth, into a repo the user configured once; Wingman holds no GitHub
-credential and still never sends outreach on anyone's behalf.
+previews and prompts unless --yes. Filing uses `gh`, authenticated either
+by whatever the invoking account already has set up (its own `gh auth
+login`), or by GITHUB_API_ISSUES_KEY (issue #205) when an account shares a
+single fine-grained PAT rather than holding its own GitHub identity — in
+that case GitHub's own "opened by" field can no longer say who actually
+submitted it, so 'stamp_operator' appends a WINGMAN_OPERATOR_NAME line to
+the body instead, before the issue is ever previewed or filed.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Callable
+from pathlib import Path
 
 from pydantic import BaseModel
 
 from wingman.application.ingest import IngestError
+from wingman.infrastructure import host_config
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.telemetry import record_event
@@ -32,10 +39,33 @@ Runner = Callable[[list[str]], tuple[int, str, str]]
 
 
 def _default_runner(argv: list[str]) -> tuple[int, str, str]:
+    # GITHUB_API_ISSUES_KEY is wingman's own name for this credential (the
+    # resolution ladder in infrastructure/keys.py hydrates it); gh itself
+    # only recognizes GH_TOKEN/GITHUB_TOKEN natively, so translate it here
+    # rather than making every caller know both names. When unset, gh falls
+    # back to whatever it already had configured (e.g. 'gh auth login') —
+    # unchanged from before this existed.
+    env = dict(os.environ)
+    github_key = env.get("GITHUB_API_ISSUES_KEY", "").strip()
+    if github_key:
+        env["GH_TOKEN"] = github_key
     result = subprocess.run(  # noqa: S603 — fixed binary, no shell
-        argv, capture_output=True, text=True, check=False
+        argv, capture_output=True, text=True, check=False, env=env
     )
     return result.returncode, result.stdout, result.stderr
+
+
+def stamp_operator(body: str, home: Path | None = None) -> str:
+    """Append 'Submitted by: <name>' when WINGMAN_OPERATOR_NAME is set,
+    unchanged otherwise (an account with its own GitHub identity has no
+    need for this — GitHub's own 'opened by' field already answers it).
+    Callers stamp ONCE and pass the same body to both render_preview and
+    file_feature_request, so what's previewed is exactly what gets filed."""
+    name = host_config.operator_name(home)
+    if not name:
+        return body
+    separator = "\n\n" if body.strip() else ""
+    return f"{body.rstrip()}{separator}Submitted by: {name}"
 
 
 class FiledIssue(BaseModel):

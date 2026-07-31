@@ -5,10 +5,12 @@ from pathlib import Path
 import pytest
 
 from wingman.application.feature_request import (
+    _default_runner,
     file_feature_request,
     get_feature_repo,
     render_preview,
     set_feature_repo,
+    stamp_operator,
 )
 from wingman.application.ingest import IngestError
 from wingman.infrastructure.config import load_config
@@ -85,6 +87,104 @@ def test_gh_failures_are_actionable(workspace: Path) -> None:
 
     with pytest.raises(IngestError, match="gh auth login"):
         file_feature_request(config, "Add X", "b", runner=missing)
+
+
+def test_stamp_operator_appends_submitted_by_when_set(tmp_path: Path) -> None:
+    from wingman.infrastructure.host_config import wingman_env_path
+
+    home = tmp_path / "home"
+    path = wingman_env_path(home)
+    path.parent.mkdir(parents=True)
+    path.write_text("WINGMAN_OPERATOR_NAME=Trent\n", encoding="utf-8")
+
+    assert stamp_operator("Because Y.", home=home) == "Because Y.\n\nSubmitted by: Trent"
+    assert stamp_operator("", home=home) == "Submitted by: Trent"
+
+
+def test_stamp_operator_is_a_noop_when_unset(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    assert stamp_operator("Because Y.", home=home) == "Because Y."
+    assert stamp_operator("", home=home) == ""
+
+
+def test_default_runner_translates_github_api_issues_key_to_gh_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResult:
+        returncode = 0
+        stdout = "https://github.com/dhk/wingman/issues/1\n"
+        stderr = ""
+
+    def fake_run(argv: list[str], **kwargs: object) -> FakeResult:
+        captured["argv"] = argv
+        captured["env"] = kwargs.get("env")
+        return FakeResult()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "ghp-shared-token")
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    _default_runner(["gh", "issue", "create"])
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["GH_TOKEN"] == "ghp-shared-token"
+
+
+def test_default_runner_leaves_gh_token_alone_when_no_shared_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResult:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv: list[str], **kwargs: object) -> FakeResult:
+        captured["env"] = kwargs.get("env")
+        return FakeResult()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.delenv("GITHUB_API_ISSUES_KEY", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "already-authenticated-token")
+
+    _default_runner(["gh", "issue", "create"])
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["GH_TOKEN"] == "already-authenticated-token"  # untouched, not overwritten
+
+
+def test_mcp_tool_stamps_operator_name_into_the_preview(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The preview must show exactly what gets filed — stamping happens
+    once, before both the preview and the actual filing."""
+    from wingman import mcp_server
+    from wingman.application import feature_request as feature_request_module
+
+    config = load_config()
+    set_feature_repo(config, "dhk/wingman")
+    monkeypatch.setattr(
+        feature_request_module.host_config, "operator_name", lambda home=None: "Trent"
+    )
+
+    preview = mcp_server.feature_request("Add X", "Because Y.", confirmed=False)
+    assert "Submitted by: Trent" in preview
+
+    calls: list[list[str]] = []
+
+    def fake_gh(argv: list[str]) -> tuple[int, str, str]:
+        calls.append(argv)
+        return 0, "https://github.com/dhk/wingman/issues/99\n", ""
+
+    monkeypatch.setattr(feature_request_module, "_default_runner", fake_gh)
+    mcp_server.feature_request("Add X", "Because Y.", confirmed=True)
+    [argv] = calls
+    assert "Submitted by: Trent" in argv[argv.index("--body") + 1]
 
 
 def test_mcp_tool_gates_on_confirmation(workspace: Path) -> None:

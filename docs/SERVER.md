@@ -72,6 +72,30 @@ old file is ever still present alongside the new one (that combination
 means it was left alone on purpose — see RFC-046 — and needs a human's
 eyes, not another automatic pass).
 
+**A credential shared by every account on the box** (RFC-047) — today
+that's `GITHUB_API_ISSUES_KEY`, one fine-grained GitHub PAT (scoped to
+Issues only, on whichever repo(s) should accept feature requests) used by
+every account that files `wingman feature-request` issues, for an account
+that has no GitHub identity of its own. One-time setup:
+
+```bash
+sudo groupadd wingman                              # once per box
+sudo usermod -aG wingman dhk && sudo usermod -aG wingman trent   # per account that needs it
+# each added account needs a fresh login (or `newgrp wingman`) for the group to take effect
+
+sudo install -d -m 750 -o root -g wingman /etc/wingman
+sudo install -m 640 -o root -g wingman /dev/null /etc/wingman/global-secrets.env
+echo "GITHUB_API_ISSUES_KEY=github_pat_..." | sudo tee -a /etc/wingman/global-secrets.env
+```
+
+Sits below each account's own `secrets.env` in the resolution ladder — an
+account-specific override always wins over the shared default. Since
+GitHub's own "opened by" field will show whichever account owns the PAT
+regardless of who actually filed it, pair this with a per-account
+`WINGMAN_OPERATOR_NAME=<name>` line in that account's own `wingman.env` —
+`wingman feature-request` stamps `Submitted by: <name>` into the issue
+body automatically, once, before it's ever previewed or filed.
+
 ## 3. Migrate the workspace from a Mac (optional)
 
 The workspace is fully self-contained, so migration is one backup:
