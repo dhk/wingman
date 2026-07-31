@@ -72,6 +72,7 @@ class FeedFetchReport(BaseModel):
     skipped_duplicates: int
     skipped_empty: int
     titles: list[str] = Field(default_factory=list)
+    failed_sources: list[str] = Field(default_factory=list)
 
 
 def add_person(
@@ -502,7 +503,13 @@ def fetch_person_feed(
     storage: Storage,
     fetcher: Callable[[str], bytes] | None = None,
 ) -> FeedFetchReport:
-    """Fetch every configured source for a person and index new posts (RFC-009/011)."""
+    """Fetch every configured source for a person and index new posts (RFC-009/011).
+
+    One dead source is isolated and reported, not fatal to the rest — a
+    person with several feeds still gets writing indexed from the live ones
+    even when one has gone stale (#overnight-P2). Only when every source
+    fails does the whole call raise.
+    """
     sources = person.sources
     if not sources:
         raise IngestError(
@@ -512,6 +519,7 @@ def fetch_person_feed(
         )
     fetch = fetcher if fetcher is not None else fetch_url
     tally = _Tally()
+    failed_sources: list[str] = []
     for source in sources:
         try:
             if source.kind == FeedKind.INDEX_PAGE:
@@ -540,15 +548,23 @@ def fetch_person_feed(
                     tally,
                 )
         except FetchError as exc:
-            raise IngestError(f"{exc}. Nothing further was added for this source.") from exc
+            failed_sources.append(f"{source.url}: {exc}")
+    if len(failed_sources) == len(sources):
+        raise IngestError(
+            f"every source failed for {person.name}: "
+            + "; ".join(failed_sources)
+            + ". Nothing was added."
+        )
     _logger.info(
-        "feed_fetch person=%s sources=%d items=%d added=%d skipped_dup=%d skipped_empty=%d",
+        "feed_fetch person=%s sources=%d items=%d added=%d skipped_dup=%d skipped_empty=%d"
+        " failed=%d",
         person.name,
         len(sources),
         tally.items,
         tally.added,
         tally.skipped_duplicates,
         tally.skipped_empty,
+        len(failed_sources),
     )
     return FeedFetchReport(
         person_name=person.name,
@@ -558,6 +574,7 @@ def fetch_person_feed(
         skipped_duplicates=tally.skipped_duplicates,
         skipped_empty=tally.skipped_empty,
         titles=tally.titles,
+        failed_sources=failed_sources,
     )
 
 

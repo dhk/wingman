@@ -90,12 +90,12 @@ def _person_pipeline(
     if person.sources:
         try:
             fetched = fetch_person_feed(person, config, storage)
-            _step(
-                report,
-                "fetch",
-                "ok",
-                f"{fetched.items} items seen, {fetched.added} added",
-            )
+            detail = f"{fetched.items} items seen, {fetched.added} added"
+            if fetched.failed_sources:
+                detail += f"; {len(fetched.failed_sources)} source(s) failed: " + "; ".join(
+                    fetched.failed_sources
+                )
+            _step(report, "fetch", "ok", detail)
         except IngestError as exc:
             _step(report, "fetch", "failed", str(exc))
     else:

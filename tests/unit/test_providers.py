@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from wingman.infrastructure.config import ENV_DATA_DIR, load_config
-from wingman.providers.base import CapabilityClass, ModelRequest
+from wingman.providers.anthropic_provider import AnthropicProvider
+from wingman.providers.base import CapabilityClass, ModelRequest, ProviderError
 from wingman.providers.recorded import RecordedProvider
 from wingman.providers.router import DEFAULT_MODELS_TOML, ModelConfigError, get_provider
 
@@ -12,6 +13,16 @@ def test_recorded_provider_replays_text() -> None:
     response = RecordedProvider("hello").complete(ModelRequest(system="s", prompt="p"))
     assert response.text == "hello"
     assert response.provider == "recorded"
+
+
+def test_anthropic_provider_fails_loud_with_no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing ANTHROPIC_API_KEY must raise a clear ProviderError at
+    construction time, not surface later as the SDK's bare TypeError from
+    request header validation (overnight P1)."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    with pytest.raises(ProviderError, match="ANTHROPIC_API_KEY"):
+        AnthropicProvider("claude-x")
 
 
 def test_router_requires_config_file(tmp_path: Path) -> None:

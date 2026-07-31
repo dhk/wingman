@@ -20,6 +20,13 @@ class AnthropicProvider:
             raise ProviderError(
                 "Anthropic client could not be created. Set ANTHROPIC_API_KEY and retry."
             ) from exc
+        # The SDK itself doesn't fail at construction when no key is set —
+        # it defers to a bare TypeError raised deep in request header
+        # validation, which none of complete()'s except clauses catch. Check
+        # here so a missing key fails loud and clear instead of surfacing as
+        # a cryptic error the first time a request is made (overnight P1).
+        if not self._client.api_key and not self._client.auth_token:
+            raise ProviderError("No Anthropic credentials found. Set ANTHROPIC_API_KEY and retry.")
 
     def complete(self, request: ModelRequest) -> ModelResponse:
         start = perf_counter()
