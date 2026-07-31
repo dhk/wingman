@@ -213,3 +213,26 @@ def test_read_host_settings_raises_with_file_and_line_on_bad_quoting(tmp_path: P
 
 def test_read_host_settings_missing_file_is_empty(tmp_path: Path) -> None:
     assert read_host_settings(tmp_path / "home") == {}
+
+
+def test_operator_name_reads_the_setting(tmp_path: Path) -> None:
+    from wingman.infrastructure.host_config import operator_name
+
+    home = tmp_path / "home"
+    assert operator_name(home) is None
+
+    path = wingman_env_path(home)
+    path.parent.mkdir(parents=True)
+    path.write_text("WINGMAN_OPERATOR_NAME=Trent\n", encoding="utf-8")
+    assert operator_name(home) == "Trent"
+
+
+def test_read_host_settings_recognizes_operator_name_alongside_repo(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    path = wingman_env_path(home)
+    path.parent.mkdir(parents=True)
+    path.write_text("WINGMAN_REPO=/x/wingman\nWINGMAN_OPERATOR_NAME=Dave\n", encoding="utf-8")
+    assert read_host_settings(home) == {
+        "WINGMAN_REPO": "/x/wingman",
+        "WINGMAN_OPERATOR_NAME": "Dave",
+    }

@@ -30,6 +30,7 @@ from wingman.application.feature_request import (
     get_feature_repo,
     render_preview,
     set_feature_repo,
+    stamp_operator,
 )
 from wingman.application.pack import build_application_pack
 from wingman.application.pipeline import MisoReport, make_it_so
@@ -2695,6 +2696,7 @@ def feature_request_cmd(
     """
     configure_logging()
     config = load_config()
+    body = stamp_operator(body)
     typer.echo(render_preview(get_feature_repo(config), title, body))
     if not yes and not typer.confirm("File this issue?", default=False):
         typer.echo("Nothing was filed.")

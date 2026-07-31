@@ -16,7 +16,7 @@ from wingman.infrastructure.keys import (
     unset_key,
 )
 
-_KNOWN_ENV_VARS = ("ANTHROPIC_API_KEY", "VOYAGE_API_KEY")
+_KNOWN_ENV_VARS = ("ANTHROPIC_API_KEY", "VOYAGE_API_KEY", "GITHUB_API_ISSUES_KEY")
 
 
 @pytest.fixture(autouse=True)
@@ -159,11 +159,28 @@ def test_test_keys_covers_every_known_key(
 ) -> None:
     monkeypatch.setattr(keys_module, "_test_anthropic", lambda _key: (True, "working"))
     monkeypatch.setattr(keys_module, "_test_voyage", lambda _key: (True, "working"))
+    monkeypatch.setattr(keys_module, "_test_github", lambda _key: (True, "working"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
     monkeypatch.setenv("VOYAGE_API_KEY", "pa-x")
+    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "ghp-x")
     rows = keys_module.test_keys(runner=chain)
     assert {row[0] for row in rows} == set(KNOWN_KEYS)
     assert all(row[2] for row in rows)  # all worked
+
+
+def test_test_key_github_reports_provider_result(
+    chain: FakeKeychain, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "ghp-whatever")
+    seen: list[str] = []
+
+    def fake_github(api_key: str) -> tuple[bool, str]:
+        seen.append(api_key)
+        return True, "working"
+
+    monkeypatch.setattr(keys_module, "_test_github", fake_github)
+    assert keys_module.test_key("github", runner=chain) == (True, "working")
+    assert seen == ["ghp-whatever"]
 
 
 def test_workspace_key_file_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -276,6 +293,69 @@ def test_resolve_key_sources_flags_a_conflicting_duplicate(
     by_name = {source.short_name: source for source in sources}
     assert by_name["anthropic"].winning_source == "environment"
     assert by_name["anthropic"].shadowed_by == ["workspace file"]
+
+
+def test_global_keys_file_fills_gaps_below_the_host_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #205: a credential meant to be shared box-wide, not per-account
+    — the global file fills what neither the environment nor the
+    account's own host file set, but never overrides either."""
+    from wingman.infrastructure.keys import ensure_env, read_global_keys
+
+    home = tmp_path / "home"
+    global_file = tmp_path / "etc" / "global-secrets.env"
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    monkeypatch.delenv("GITHUB_API_ISSUES_KEY", raising=False)
+
+    assert read_global_keys(global_file) == {}
+
+    global_file.parent.mkdir(parents=True)
+    global_file.write_text("GITHUB_API_ISSUES_KEY=ghp-shared\n", encoding="utf-8")
+    assert read_global_keys(global_file) == {"GITHUB_API_ISSUES_KEY": "ghp-shared"}
+
+    hydrated = ensure_env(home=home, global_path=global_file)
+    assert "GITHUB_API_ISSUES_KEY" in hydrated
+    assert os.environ["GITHUB_API_ISSUES_KEY"] == "ghp-shared"
+
+
+def test_host_file_outranks_global_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An account's own secrets.env always overrides the shared default —
+    never the other way around."""
+    from wingman.infrastructure.keys import ensure_env, host_keys_path
+
+    home = tmp_path / "home"
+    global_file = tmp_path / "etc" / "global-secrets.env"
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    monkeypatch.delenv("GITHUB_API_ISSUES_KEY", raising=False)
+
+    global_file.parent.mkdir(parents=True)
+    global_file.write_text("GITHUB_API_ISSUES_KEY=ghp-global\n", encoding="utf-8")
+
+    host_file = host_keys_path(home)
+    host_file.parent.mkdir(parents=True)
+    host_file.write_text("GITHUB_API_ISSUES_KEY=ghp-per-account\n", encoding="utf-8")
+
+    ensure_env(home=home, global_path=global_file)
+    assert os.environ["GITHUB_API_ISSUES_KEY"] == "ghp-per-account"
+
+
+def test_resolve_key_sources_names_the_global_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure.keys import resolve_key_sources
+
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    global_file = tmp_path / "etc" / "global-secrets.env"
+    global_file.parent.mkdir(parents=True)
+    global_file.write_text("GITHUB_API_ISSUES_KEY=ghp-shared\n", encoding="utf-8")
+
+    sources = resolve_key_sources(
+        {}, data_dir=tmp_path / "ws", home=tmp_path / "home", global_path=global_file
+    )
+    by_name = {source.short_name: source for source in sources}
+    assert by_name["github"].winning_source == "global file (/etc/wingman/global-secrets.env)"
+    assert by_name["github"].shadowed_by == []
 
 
 def test_resolve_key_sources_no_warning_when_duplicate_values_agree(

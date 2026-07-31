@@ -50,6 +50,7 @@ class KeyStoreError(Exception):
 KNOWN_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "voyage": "VOYAGE_API_KEY",
+    "github": "GITHUB_API_ISSUES_KEY",
 }
 _ACCOUNT = "wingman"
 
@@ -180,6 +181,24 @@ def read_host_keys(home: Path | None = None) -> dict[str, str]:
     return _parse_known_keys_file(host_keys_path(home))
 
 
+# One credential meant to be shared by every account on a box, not
+# per-account (RFC-046 follow-up, issue #205's "global keys" gap):
+# GITHUB_API_ISSUES_KEY is the same fine-grained PAT for every account that
+# should be able to file feature requests, so it needs a home outside any
+# one account's ~/.config — /etc/wingman/global-secrets.env, root-owned,
+# group-readable by whichever accounts need it. Sits below the per-account
+# host file in the ladder: an account's own secrets.env always overrides
+# the shared default, never the other way around.
+GLOBAL_KEYS_PATH = Path("/etc/wingman/global-secrets.env")
+
+
+def read_global_keys(path: Path | None = None) -> dict[str, str]:
+    """NAME=value lines from the global (box-wide) secrets file; unknown
+    names ignored. 'path' is injectable for tests — production callers
+    always get the real /etc/wingman/global-secrets.env."""
+    return _parse_known_keys_file(path if path is not None else GLOBAL_KEYS_PATH)
+
+
 def store_workspace_key(data_dir: Path, name: str, value: str) -> bool:
     """Store one key in the workspace file (0600) and hydrate it if env is unset.
 
@@ -209,15 +228,19 @@ def ensure_env(
     runner: Runner | None = None,
     data_dir: Path | None = None,
     home: Path | None = None,
+    global_path: Path | None = None,
 ) -> list[str]:
     """Migrate the legacy host file if needed, then hydrate absent env vars:
-    Keychain, then the host secrets file, then the workspace file.
+    Keychain, then the host secrets file, then the global secrets file,
+    then the workspace file.
 
-    Resolution order (RFC-019/034/046, #122): a set environment variable
+    Resolution order (RFC-019/034/046, #205): a set environment variable
     always wins; the macOS Keychain fills gaps; the host's canonical
     secrets file ('~/.config/wingman/secrets.env') fills what remains, so
     the CLI and MCP server work on a fresh shell with zero exports; the
-    workspace 'keys.env' (written by the web UI's validated key form)
+    box-wide global secrets file ('/etc/wingman/global-secrets.env')
+    fills what's shared across every account rather than set per-account;
+    the workspace 'keys.env' (written by the web UI's validated key form)
     fills whatever is still missing. Returns the hydrated variable names.
 
     Before any of that, runs the one-time move off the old flat
@@ -247,6 +270,11 @@ def ensure_env(
             continue
         os.environ[env_var] = value
         hydrated.append(env_var)
+    for env_var, value in read_global_keys(global_path).items():
+        if os.environ.get(env_var, "").strip():
+            continue
+        os.environ[env_var] = value
+        hydrated.append(env_var)
     if data_dir is not None:
         for env_var, value in read_workspace_keys(data_dir).items():
             if os.environ.get(env_var, "").strip():
@@ -262,6 +290,7 @@ _SOURCE_LABELS = (
     "environment",
     "keychain",
     "host file (~/.config/wingman/secrets.env)",
+    "global file (/etc/wingman/global-secrets.env)",
     "workspace file",
 )
 
@@ -289,6 +318,7 @@ def resolve_key_sources(
     data_dir: Path | None = None,
     home: Path | None = None,
     runner: Runner | None = None,
+    global_path: Path | None = None,
 ) -> list[KeySource]:
     """Per known key: which source wins, and which others disagree (#122).
 
@@ -299,6 +329,7 @@ def resolve_key_sources(
     unlike 'ensure_env'.
     """
     host_values = read_host_keys(home)
+    global_values = read_global_keys(global_path)
     workspace_values = read_workspace_keys(data_dir) if data_dir is not None else {}
     results: list[KeySource] = []
     for short_name, env_var in KNOWN_KEYS.items():
@@ -312,8 +343,10 @@ def resolve_key_sources(
                 candidates.append((_SOURCE_LABELS[1], keychain_value))
         if env_var in host_values:
             candidates.append((_SOURCE_LABELS[2], host_values[env_var]))
+        if env_var in global_values:
+            candidates.append((_SOURCE_LABELS[3], global_values[env_var]))
         if env_var in workspace_values:
-            candidates.append((_SOURCE_LABELS[3], workspace_values[env_var]))
+            candidates.append((_SOURCE_LABELS[4], workspace_values[env_var]))
         if not candidates:
             results.append(KeySource(short_name, env_var, "not set"))
             continue
@@ -369,6 +402,30 @@ def _test_voyage(api_key: str) -> tuple[bool, str]:
     return True, "working"
 
 
+def _test_github(api_key: str) -> tuple[bool, str]:
+    """One cheap authenticated call (GET /user) — works for a fine-grained
+    PAT regardless of which repo(s) it's scoped to, since account identity
+    isn't a repo-scoped permission."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        "https://api.github.com/user",
+        headers={"Authorization": f"Bearer {api_key}", "Accept": "application/vnd.github+json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
+            json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            return False, "GitHub rejected the key (invalid or revoked)"
+        return False, f"GitHub API returned {exc.code}"
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        return False, f"could not reach the GitHub API ({exc})"
+    return True, "working"
+
+
 def test_key(short_name: str, runner: Runner | None = None) -> tuple[bool, str]:
     """Actually call the provider to confirm a key works, not just that it's
 
@@ -387,6 +444,8 @@ def test_key(short_name: str, runner: Runner | None = None) -> tuple[bool, str]:
         return _test_anthropic(value)
     if key == "voyage":
         return _test_voyage(value)
+    if key == "github":
+        return _test_github(value)
     raise AssertionError(f"no live test defined for {key!r}")  # unreachable — _require_name guards
 
 

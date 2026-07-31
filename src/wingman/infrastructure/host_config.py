@@ -40,14 +40,27 @@ _logger = get_logger("infrastructure.host_config")
 WINGMAN_ENV_FILENAME = "wingman.env"
 
 # Non-secret settings this codebase actually reads from wingman.env today.
-# Table-driven and easy to extend (mirrors KNOWN_KEYS's shape) — the only
-# concrete need right now is WINGMAN_REPO (scripts/wingman-ctl's host-file
-# fallback, #<wingman-ctl PR>). WINGMAN_DATA_DIR and friends stay
-# environment/systemd-Environment=-only for now: nothing currently reads
-# them from a host file, and adding that ladder without a driving need
-# would be exactly the gold-plating the design brief warned against — the
-# frozenset below is where a future one gets added, one name at a time.
-HOST_SETTINGS = frozenset({"WINGMAN_REPO"})
+# Table-driven and easy to extend (mirrors KNOWN_KEYS's shape). WINGMAN_REPO
+# is scripts/wingman-ctl's host-file fallback; WINGMAN_OPERATOR_NAME is the
+# per-account label (e.g. "Trent") that feature_request.py stamps into a
+# filed issue's body when the same GitHub credential is shared across
+# accounts (issue #205's follow-up) — attribution the token itself can no
+# longer provide once it's shared, so the app supplies it in the body
+# instead. WINGMAN_DATA_DIR and friends stay environment/systemd-
+# Environment=-only for now: nothing currently reads them from a host
+# file, and adding that ladder without a driving need would be exactly the
+# gold-plating the design brief warned against — the frozenset below is
+# where a future one gets added, one name at a time.
+HOST_SETTINGS = frozenset({"WINGMAN_REPO", "WINGMAN_OPERATOR_NAME"})
+
+
+def operator_name(home: Path | None = None) -> str | None:
+    """The WINGMAN_OPERATOR_NAME setting, or None when unset — the label
+    feature_request.py stamps into a filed issue's body to say who actually
+    submitted it, since a shared GITHUB_API_ISSUES_KEY can no longer let
+    GitHub's own 'opened by' field answer that question."""
+    return read_host_settings(home).get("WINGMAN_OPERATOR_NAME")
+
 
 # The pre-#122-split flat file this migration retires: '~/.config/keys.env'.
 _LEGACY_HOST_KEYS_FILENAME = "keys.env"

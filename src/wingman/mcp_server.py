@@ -48,6 +48,7 @@ from wingman.application.feature_request import (
     file_feature_request,
     get_feature_repo,
     render_preview,
+    stamp_operator,
 )
 from wingman.application.focus import (
     follow_company,
@@ -1856,6 +1857,7 @@ def feature_request(title: str = "", body: str = "", confirmed: bool = False) ->
         return _NOT_INITIALIZED
     if not title.strip():
         return "feature_request needs a title. Gather the idea first (see the protocol)."
+    body = stamp_operator(body)
     if not confirmed:
         return (
             render_preview(get_feature_repo(config), title, body)
