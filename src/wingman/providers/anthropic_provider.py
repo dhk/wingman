@@ -17,12 +17,26 @@ class AnthropicProvider:
     before this parameter existed. An explicit key lets callers resolve
     credentials themselves (docs/RFC.md RFC-048's per-tenant resolution)
     instead of relying on process-wide environment state.
+
+    'strict', when True, suppresses that env fallback even when 'api_key'
+    is None or empty — required for tenant isolation under a shared
+    multi-tenant process (RFC-048): a tenant with no key configured must
+    fail loud, never silently pick up whatever ANTHROPIC_API_KEY happens
+    to be set in the shared process's environment. The Anthropic SDK
+    itself only consults env when NO explicit credential argument was
+    passed (checked via 'is not None', not truthiness) — so strict mode
+    passes 'api_key=""' rather than omitting the argument.
     """
 
-    def __init__(self, model: str, api_key: str | None = None) -> None:
+    def __init__(self, model: str, api_key: str | None = None, strict: bool = False) -> None:
         self._model = model
         try:
-            self._client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+            if strict:
+                self._client = anthropic.Anthropic(api_key=api_key or "")
+            elif api_key:
+                self._client = anthropic.Anthropic(api_key=api_key)
+            else:
+                self._client = anthropic.Anthropic()
         except anthropic.AnthropicError as exc:
             raise ProviderError(
                 "Anthropic client could not be created. Set ANTHROPIC_API_KEY and retry."

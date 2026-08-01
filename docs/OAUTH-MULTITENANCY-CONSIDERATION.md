@@ -1,5 +1,17 @@
 # OAuth and multi-tenant server support — a considered "not yet"
 
+**Superseded by RFC-048** (`docs/RFC.md`) as of the fourth tenant (`jason`,
+`bob` joining `dhk`/`trent`) — exactly this document's own named trigger,
+*"a third user appears… three friends is a product,"* now real and acted
+on explicitly rather than inferred from operational pain. RFC-048 does
+not overturn this document's reasoning about the tenant-count-vs-overhead
+trade-off, which held correctly at n=2; it records that the owner made
+the multi-tenancy call in daylight, as its own decision, the way this
+document's own "Revisit if" asked for. The auth-model conclusion below —
+capability tokens, not OAuth — was re-affirmed, not revisited: RFC-048
+still avoids a second auth system. Left in place, not deleted, per this
+repo's convention for superseded entries (e.g. RFC-040/RFC-046).
+
 **Status.** Reflection recorded 2026-07-24, prompted by a night of hands-on
 lobster operation that surfaced four concrete pains: a `pgrep` pattern
 matching a substring shared across two different Unix users' processes
