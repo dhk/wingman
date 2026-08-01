@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextvars
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 
 from platformdirs import user_data_dir
@@ -26,6 +28,15 @@ class Config(BaseModel):
     # tenant instead of relying on process-wide environment state.
     anthropic_api_key: str | None = None
     voyage_api_key: str | None = None
+    # True only for a per-tenant Config built by a shared multi-tenant
+    # process (RFC-048, infrastructure.tenants.Tenant.config()). Tells
+    # providers.router to resolve keys from these two fields ALONE — never
+    # keys.resolve_provider_key's env-or-workspace-file fallback, and never
+    # a provider's own internal env read — so a tenant with no key
+    # configured fails loud instead of silently inheriting whatever key
+    # happens to be set in the shared process's environment. False
+    # (default) preserves today's single-tenant/CLI/stdio ladder exactly.
+    strict_provider_keys: bool = False
 
     @property
     def db_path(self) -> Path:
@@ -48,12 +59,49 @@ class Config(BaseModel):
         return self.data_dir / "installations.toml"
 
 
-def load_config(env: Mapping[str, str] | None = None) -> Config:
-    """Resolve the data directory: WINGMAN_DATA_DIR if set, else the platform user data dir.
+# Bound only by the shared multi-tenant HTTP server (RFC-048) for the
+# duration of one incoming request, via 'tenant_config_scope' below. CLI
+# and stdio-mode MCP (single-workspace-per-invocation) never touch this —
+# their calls always fall through to the env-var resolution unchanged.
+_tenant_config: contextvars.ContextVar[Config | None] = contextvars.ContextVar(
+    "wingman_tenant_config", default=None
+)
 
-    Never defaults to a path relative to the invoking directory — an installed
-    CLI must not scatter data wherever it happens to be run.
+
+@contextmanager
+def tenant_config_scope(config: Config) -> Iterator[None]:
+    """Bind 'config' as the Config every 'load_config()' call returns for
+    the duration of this block (and anything awaited within it — safe
+    under asyncio, since a ContextVar is copied per task, not shared
+    process-wide like 'os.environ').
+
+    The shared multi-tenant HTTP server uses this to scope one incoming
+    request to its resolved tenant, instead of threading a tenant
+    parameter through every tool function and 'load_config()' call site
+    individually.
     """
+    token = _tenant_config.set(config)
+    try:
+        yield
+    finally:
+        _tenant_config.reset(token)
+
+
+def load_config(env: Mapping[str, str] | None = None) -> Config:
+    """Resolve the data directory: a bound tenant Config first (see
+    'tenant_config_scope'), else WINGMAN_DATA_DIR if set, else the
+    platform user data dir.
+
+    An explicit 'env' always bypasses tenant binding — it's a deliberate
+    "resolve as if this were the environment" request, used by tests and
+    by any caller that wants env-based resolution regardless of context.
+    Never defaults to a path relative to the invoking directory — an
+    installed CLI must not scatter data wherever it happens to be run.
+    """
+    if env is None:
+        tenant_config = _tenant_config.get()
+        if tenant_config is not None:
+            return tenant_config
     environment = os.environ if env is None else env
     override = environment.get(ENV_DATA_DIR, "").strip()
     if override:

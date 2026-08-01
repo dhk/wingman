@@ -34,8 +34,28 @@ from wingman.reporting.design_tokens import DESIGN_TOKENS_CSS
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
+    from wingman.infrastructure.tenants import TenantIndex
 
 _logger = get_logger("webui")
+
+# Set only by the shared multi-tenant HTTP server (RFC-048) at startup.
+# None (the default) preserves today's single-workspace token-file
+# compare exactly — the still-separate shape-B processes (dhk, trent)
+# that stay on that model through the phased migration are unaffected.
+_tenant_index: "TenantIndex | None" = None
+
+
+def configure_tenant_index(index: "TenantIndex | None") -> None:
+    """Bind (or clear) the tenant index '_authorized' consults, and gate
+    the self-restart panel/route on. Call once at shared-process startup,
+    BEFORE 'register_ui' — 'register_ui' decides whether to mount the
+    restart route at call time, so setting the index after it would leave
+    the route mounted. An index set here also disables the per-tenant
+    restart button (see 'register_ui'), since restarting the one process
+    every tenant shares is an ops action, not a tenant self-service one.
+    """
+    global _tenant_index
+    _tenant_index = index
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 _RESUME_SUFFIXES = {".md", ".markdown", ".txt", ".pdf", ".docx", ".tex"}
@@ -199,13 +219,25 @@ def _page(title: str, body: str, shell: str = "ui") -> HTMLResponse:
 
 
 def _authorized(request: Request) -> Config | None:
-    """The path token is the credential (RFC-017 shape); wrong or absent -> None."""
+    """The path token is the credential (RFC-017 shape); wrong or absent -> None.
+
+    Under a shared multi-tenant process ('configure_tenant_index' called),
+    the token identifies WHICH tenant, not just whether one is authorized —
+    resolved via the tenant index's hash lookup (no per-tenant compare
+    loop needed, and no request-scoped context var either: this function
+    already receives the token directly and returns that tenant's Config
+    straight to its caller). Single-tenant mode (the default, no index
+    configured) is the exact single-file 'compare_digest' check unchanged.
+    """
+    presented = str(request.path_params.get("token", ""))
+    if _tenant_index is not None:
+        tenant = _tenant_index.resolve(presented)
+        return tenant.config() if tenant is not None else None
     config = load_config()
     token_path = config.data_dir / "mcp-http-token"
     if not token_path.exists():
         return None
     expected = token_path.read_text(encoding="utf-8").strip()
-    presented = str(request.path_params.get("token", ""))
     if not secrets.compare_digest(presented, expected):
         return None
     return config
@@ -562,7 +594,24 @@ def _restart_panel() -> str:
     """Self-restart (#133): a single-click POST, same trust level as the
     key form and upload button above it — no extra JS confirm dialog
     (this page is deliberately JS-free), matched by the fact that a
-    restart is brief downtime, not data loss."""
+    restart is brief downtime, not data loss.
+
+    Withheld entirely under a shared multi-tenant process ('_tenant_index'
+    set, RFC-048): RFC-041's premise for trusting this button was that
+    restarting only ever affects the token-holder's OWN process, inside
+    their own Unix account boundary. Under one shared process there is no
+    such boundary — any tenant's own token, used exactly as designed
+    here, would restart every other tenant's in-flight session too. A
+    shared-process restart is an ops action, not a tenant self-service one.
+    """
+    if _tenant_index is not None:
+        return (
+            '<div class="panel"><span class="stepno">Restart</span>'
+            "<p>This workspace runs on a shared server alongside other tenants — "
+            "restarting it here would also restart theirs, so that action isn't "
+            "offered from this panel. Restarting the shared process is an "
+            "operator action.</p></div>"
+        )
     from wingman.infrastructure.self_restart import systemd_manages_this_instance
 
     if not systemd_manages_this_instance():
@@ -911,7 +960,16 @@ async def ui_keys(request: Request) -> Response:
 async def ui_restart(request: Request) -> Response:
     """Self-restart (#133): the token that authorizes this request is this
     instance's own — never reachable with any other instance's token, and
-    never surfaced anywhere but this instance's own Manage panel."""
+    never surfaced anywhere but this instance's own Manage panel.
+
+    Refuses outright under a shared multi-tenant process (RFC-048), as a
+    second, independent layer of defense alongside 'register_ui' not
+    mounting this route at all in that mode — belt and suspenders, since
+    a mistakenly-reachable restart here would take down every tenant's
+    session, not just the token-holder's own.
+    """
+    if _tenant_index is not None:
+        return _not_found()
     if _authorized(request) is None:
         return _not_found()
     from wingman.infrastructure.self_restart import systemd_manages_this_instance, trigger_restart
@@ -983,5 +1041,10 @@ def register_ui(server: "FastMCP", prefix: str = "") -> None:
     server.custom_route(f"{mount}/ui/{{token}}/file/{{path:path}}", methods=["GET"])(ui_file)
     server.custom_route(f"{mount}/ui/{{token}}/upload", methods=["POST"])(ui_upload)
     server.custom_route(f"{mount}/ui/{{token}}/keys", methods=["POST"])(ui_keys)
-    server.custom_route(f"{mount}/ui/{{token}}/restart", methods=["POST"])(ui_restart)
+    # Not mounted at all under a shared multi-tenant process
+    # ('configure_tenant_index' called before this runs, RFC-048) — see
+    # 'ui_restart'/'_restart_panel' for why a per-tenant restart button is
+    # unsafe once the process is no longer one-account-per-instance.
+    if _tenant_index is None:
+        server.custom_route(f"{mount}/ui/{{token}}/restart", methods=["POST"])(ui_restart)
     server.custom_route(f"{mount}/health", methods=["GET"])(ui_health)

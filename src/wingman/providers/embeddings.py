@@ -59,21 +59,39 @@ def _normalize(vector: list[float]) -> list[float]:
 
 
 class VoyageEmbeddingProvider:
-    """Voyage AI embeddings over plain HTTPS (no SDK dependency)."""
+    """Voyage AI embeddings over plain HTTPS (no SDK dependency).
+
+    'strict', when True, suppresses the 'os.environ' fallback below even
+    when no 'api_key' was given — required for tenant isolation under a
+    shared multi-tenant process (RFC-048): a tenant with no key configured
+    must fail loud, never silently pick up whatever VOYAGE_API_KEY happens
+    to be set in the shared process's environment (which the constructor's
+    'api_key' parameter alone does not prevent, since 'embed' otherwise
+    checks 'os.environ' itself on every call).
+    """
 
     provider_name = "voyage"
 
-    def __init__(self, model: str, api_key: str | None = None) -> None:
+    def __init__(self, model: str, api_key: str | None = None, strict: bool = False) -> None:
         self.model = model
         self._api_key = api_key
+        self._strict = strict
 
     def embed(self, texts: list[str], input_type: InputType) -> list[list[float]]:
-        api_key = self._api_key or os.environ.get(_VOYAGE_ENV_KEY, "").strip()
-        if not api_key:
-            raise EmbeddingError(
-                f"{_VOYAGE_ENV_KEY} is not set. Export it (see https://www.voyageai.com) "
-                "or switch [models.embed_semantic] to provider = 'hashed' in models.toml."
-            )
+        if self._strict:
+            api_key = self._api_key or ""
+            if not api_key:
+                raise EmbeddingError(
+                    f"no {_VOYAGE_ENV_KEY} configured for this workspace. "
+                    "Set it via Manage → Keys."
+                )
+        else:
+            api_key = self._api_key or os.environ.get(_VOYAGE_ENV_KEY, "").strip()
+            if not api_key:
+                raise EmbeddingError(
+                    f"{_VOYAGE_ENV_KEY} is not set. Export it (see https://www.voyageai.com) "
+                    "or switch [models.embed_semantic] to provider = 'hashed' in models.toml."
+                )
         payload = json.dumps(
             {
                 "input": [text[:TEXT_CHAR_LIMIT] for text in texts],

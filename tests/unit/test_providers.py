@@ -63,6 +63,21 @@ def test_router_falls_back_to_workspace_key_file(
     assert provider._client.api_key == "sk-ant-workspace"
 
 
+def test_router_strict_mode_never_falls_back_to_process_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-048: a tenant with no key configured must fail loud, never
+    silently inherit whatever key happens to be set in the shared
+    process's environment — the core cross-tenant leak this closes."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-shared-process-env")
+    config = Config(data_dir=tmp_path, data_dir_source="test", strict_provider_keys=True)
+    config.models_config_path.write_text(
+        '[models.extract_fast]\nprovider = "anthropic"\nmodel = "claude-x"\n', encoding="utf-8"
+    )
+    with pytest.raises(ProviderError, match="ANTHROPIC_API_KEY"):
+        get_provider(CapabilityClass.EXTRACT_FAST, config)
+
+
 def test_router_requires_config_file(tmp_path: Path) -> None:
     config = load_config(env={ENV_DATA_DIR: str(tmp_path)})
     with pytest.raises(ModelConfigError, match="wingman init"):
