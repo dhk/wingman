@@ -272,7 +272,14 @@ def test_key_form_validates_before_storing(
     assert (workspace_keys_path(config.data_dir).stat().st_mode & 0o777) == 0o600
     import os
 
-    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-good"  # live immediately
+    from wingman.infrastructure.keys import resolve_provider_key
+
+    # RFC-048: storing a key must never mutate process-wide os.environ (a
+    # shared multi-tenant process would leak one tenant's key to every
+    # other tenant) — "live immediately" instead means the next resolution
+    # reads the workspace file fresh, with no process-wide side effect.
+    assert "ANTHROPIC_API_KEY" not in os.environ
+    assert resolve_provider_key("ANTHROPIC_API_KEY", config.data_dir) == "sk-ant-good"
 
     empty = http.post(f"/ui/{token}/keys", data={})
     assert "No key was entered" in empty.text

@@ -10,12 +10,19 @@ from wingman.providers.base import ModelRequest, ModelResponse, ProviderError
 
 
 class AnthropicProvider:
-    """Calls the Anthropic Messages API. Reads credentials from the environment."""
+    """Calls the Anthropic Messages API.
 
-    def __init__(self, model: str) -> None:
+    Reads credentials from 'api_key' when given; otherwise falls back to
+    the SDK's own environment read (ANTHROPIC_API_KEY), unchanged from
+    before this parameter existed. An explicit key lets callers resolve
+    credentials themselves (docs/RFC.md RFC-048's per-tenant resolution)
+    instead of relying on process-wide environment state.
+    """
+
+    def __init__(self, model: str, api_key: str | None = None) -> None:
         self._model = model
         try:
-            self._client = anthropic.Anthropic()
+            self._client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
         except anthropic.AnthropicError as exc:
             raise ProviderError(
                 "Anthropic client could not be created. Set ANTHROPIC_API_KEY and retry."
