@@ -21,11 +21,13 @@ _KNOWN_ENV_VARS = ("ANTHROPIC_API_KEY", "VOYAGE_API_KEY", "GITHUB_API_ISSUES_KEY
 
 @pytest.fixture(autouse=True)
 def _restore_real_env() -> None:
-    """'ensure_env'/'store_workspace_key' hydrate the REAL process
-    environment by design (that's the point — a key becomes live with no
-    subprocess restart), bypassing monkeypatch's own tracking. Without this,
-    a test that hydrates a key here leaks it into every test that runs
-    afterward, in this file or any other, until the process exits.
+    """'ensure_env' hydrates the REAL process environment by design (that's
+    the point — a key becomes live with no subprocess restart), bypassing
+    monkeypatch's own tracking. Without this, a test that hydrates a key
+    here leaks it into every test that runs afterward, in this file or any
+    other, until the process exits. 'store_workspace_key' deliberately does
+    NOT hydrate env (RFC-048 — see test_store_workspace_key_never_mutates_env)
+    but this fixture stays broad-safety-net-shaped regardless.
     """
     originals = {name: os.environ.get(name) for name in _KNOWN_ENV_VARS}
     yield
@@ -213,6 +215,54 @@ def test_workspace_key_file_resolution(tmp_path: Path, monkeypatch: pytest.Monke
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-env"
 
 
+def test_store_workspace_key_never_mutates_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-048: under a shared multi-tenant process, mutating os.environ here
+    would make one tenant's just-submitted key silently become every other
+    tenant's key. 'store_workspace_key' must only write the workspace file —
+    'resolve_provider_key' is the read path that picks it up instead."""
+    from wingman.infrastructure.keys import store_workspace_key
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+    assert store_workspace_key(tmp_path, "anthropic", "sk-ant-stored") is True
+    assert store_workspace_key(tmp_path, "voyage", "pa-stored") is True
+    assert "ANTHROPIC_API_KEY" not in os.environ
+    assert "VOYAGE_API_KEY" not in os.environ
+
+
+def test_resolve_provider_key_reads_workspace_file_without_mutating_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure.keys import resolve_provider_key, store_workspace_key
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    store_workspace_key(tmp_path, "anthropic", "sk-ant-stored")
+    assert resolve_provider_key("ANTHROPIC_API_KEY", tmp_path) == "sk-ant-stored"
+    assert "ANTHROPIC_API_KEY" not in os.environ  # read-only, still
+
+
+def test_resolve_provider_key_env_always_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure.keys import resolve_provider_key, store_workspace_key
+
+    store_workspace_key(tmp_path, "anthropic", "sk-ant-workspace")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+    assert resolve_provider_key("ANTHROPIC_API_KEY", tmp_path) == "sk-ant-env"
+
+
+def test_resolve_provider_key_none_when_unset_anywhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure.keys import resolve_provider_key
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert resolve_provider_key("ANTHROPIC_API_KEY", tmp_path) is None
+    assert resolve_provider_key("ANTHROPIC_API_KEY", None) is None
+
+
 def test_host_key_file_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """RFC-046: the host secrets file sits between the Keychain and the workspace file."""
     from wingman.infrastructure.keys import host_keys_path, read_host_keys
@@ -252,7 +302,7 @@ def test_host_file_outranks_workspace_file(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
     store_workspace_key(data_dir, "anthropic", "sk-ant-workspace")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)  # store_workspace_key hydrated it
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)  # belt-and-suspenders; nothing to undo
 
     host_file = host_keys_path(home)
     host_file.parent.mkdir(parents=True)

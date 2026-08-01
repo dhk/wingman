@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 
 from wingman.infrastructure.config import Config
+from wingman.infrastructure.keys import KNOWN_KEYS, resolve_provider_key
 from wingman.providers.anthropic_provider import AnthropicProvider
 from wingman.providers.base import CapabilityClass, ModelProvider
 from wingman.providers.embeddings import (
@@ -72,7 +73,10 @@ def get_provider(capability: CapabilityClass, config: Config) -> ModelProvider:
         model = entry.get("model")
         if not isinstance(model, str) or not model:
             raise ModelConfigError(f"[models.{capability.value}] needs a 'model' name in {path}.")
-        return AnthropicProvider(model=model)
+        api_key = config.anthropic_api_key or resolve_provider_key(
+            KNOWN_KEYS["anthropic"], config.data_dir
+        )
+        return AnthropicProvider(model=model, api_key=api_key)
     if provider == "recorded":
         raw_path = entry.get("path")
         if not isinstance(raw_path, str) or not raw_path:
@@ -96,8 +100,11 @@ def get_embedding_provider(config: Config) -> EmbeddingProvider:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ModelConfigError(f"Model configuration {path} could not be parsed: {exc}") from exc
     entry = data.get("models", {}).get("embed_semantic")
+    voyage_api_key = config.voyage_api_key or resolve_provider_key(
+        KNOWN_KEYS["voyage"], config.data_dir
+    )
     if entry is None:
-        return VoyageEmbeddingProvider(model=DEFAULT_EMBEDDING[1])
+        return VoyageEmbeddingProvider(model=DEFAULT_EMBEDDING[1], api_key=voyage_api_key)
     if not isinstance(entry, dict):
         raise ModelConfigError(f"[models.embed_semantic] in {path} must be a table.")
     provider_name = entry.get("provider")
@@ -105,7 +112,7 @@ def get_embedding_provider(config: Config) -> EmbeddingProvider:
         model = entry.get("model")
         if not isinstance(model, str) or not model:
             raise ModelConfigError(f"[models.embed_semantic] needs a 'model' name in {path}.")
-        return VoyageEmbeddingProvider(model=model)
+        return VoyageEmbeddingProvider(model=model, api_key=voyage_api_key)
     if provider_name == "hashed":
         return HashedEmbeddingProvider()
     raise ModelConfigError(

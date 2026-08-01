@@ -200,10 +200,17 @@ def read_global_keys(path: Path | None = None) -> dict[str, str]:
 
 
 def store_workspace_key(data_dir: Path, name: str, value: str) -> bool:
-    """Store one key in the workspace file (0600) and hydrate it if env is unset.
+    """Store one key in the workspace file (0600).
 
-    Returns True when the key is live in this process now; False when an
-    already-set environment variable shadows it (env always wins, RFC-019).
+    Returns True when the key will actually be used (nothing in the
+    environment already shadows it, RFC-019's "env always wins"); False
+    when an already-set environment variable takes precedence instead.
+    Deliberately does NOT touch 'os.environ' — under a single shared
+    process serving multiple tenants (docs/RFC.md RFC-048), mutating the
+    process environment here would make one tenant's just-submitted key
+    silently become every other tenant's key for the rest of the process's
+    life. Provider construction reads the workspace file fresh via
+    'resolve_provider_key' instead of relying on this having hydrated env.
     """
     short = _require_name(name)
     env_var = KNOWN_KEYS[short]
@@ -218,10 +225,28 @@ def store_workspace_key(data_dir: Path, name: str, value: str) -> bool:
     )
     path.chmod(0o600)
     _logger.info("workspace key stored var=%s", env_var)  # never the value
-    if os.environ.get(env_var, "").strip():
-        return False
-    os.environ[env_var] = value.strip()
-    return True
+    return not os.environ.get(env_var, "").strip()
+
+
+def resolve_provider_key(env_var: str, data_dir: Path | None = None) -> str | None:
+    """The value a provider should use for one known env var, read-only.
+
+    An already-set environment variable always wins (RFC-019); otherwise
+    the workspace key file is read fresh. This is the read-only
+    counterpart to the env-mutating hydration in 'ensure_env' — call it on
+    every provider construction instead of relying on a prior mutation
+    (e.g. 'store_workspace_key''s former env write) having happened, so a
+    key submitted through the web form takes effect on the very next call
+    with no process-wide state change.
+    """
+    value = os.environ.get(env_var, "").strip()
+    if value:
+        return value
+    if data_dir is not None:
+        workspace_value = read_workspace_keys(data_dir).get(env_var, "").strip()
+        if workspace_value:
+            return workspace_value
+    return None
 
 
 def ensure_env(

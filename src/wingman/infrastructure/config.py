@@ -18,6 +18,14 @@ class Config(BaseModel):
 
     data_dir: Path
     data_dir_source: str
+    # Explicit per-workspace provider credentials (docs/RFC.md RFC-048).
+    # None means "no override" — providers.router falls back to
+    # keys.resolve_provider_key's read-only env-or-workspace-file lookup,
+    # unchanged from single-tenant behavior. A caller that resolves
+    # multiple tenants in one process (RFC-048) sets these explicitly per
+    # tenant instead of relying on process-wide environment state.
+    anthropic_api_key: str | None = None
+    voyage_api_key: str | None = None
 
     @property
     def db_path(self) -> Path:
