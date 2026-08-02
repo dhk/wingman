@@ -26,6 +26,23 @@ from wingman.infrastructure.keys import KNOWN_KEYS, read_workspace_keys
 
 _TOKEN_FILENAME = "mcp-http-token"  # mirrors mcp_server._TOKEN_FILENAME
 
+# RFC-047-style default: root-provisioned, matching the global-secrets
+# tier's convention of one canonical box-wide path under /etc/wingman/.
+DEFAULT_REGISTRY_PATH = Path("/etc/wingman/tenants.toml")
+
+
+def tenant_registry_path(home: Path | None = None) -> Path:
+    """Where the tenant registry lives: the WINGMAN_TENANT_REGISTRY host
+    setting if set (host_config.HOST_SETTINGS), else DEFAULT_REGISTRY_PATH.
+    Shared by 'wingman-mcp --http --tenant-registry' (when the flag omits
+    an explicit path) and the 'wingman tenant' CLI commands, so an
+    operator sets it once per box instead of passing --registry everywhere.
+    """
+    from wingman.infrastructure.host_config import read_host_settings
+
+    override = read_host_settings(home).get("WINGMAN_TENANT_REGISTRY")
+    return Path(override).expanduser() if override else DEFAULT_REGISTRY_PATH
+
 
 class TenantRegistryError(Exception):
     """The tenant registry file is missing, malformed, or names a bad tenant."""

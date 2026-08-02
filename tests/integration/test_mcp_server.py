@@ -92,6 +92,7 @@ def test_all_tools_are_registered() -> None:
         "changelog",
         "woven_warm_path",
         "coach_persona",
+        "tenant_url",
     }
 
 

@@ -8,9 +8,13 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 import typer
+
+if TYPE_CHECKING:
+    from wingman.infrastructure.tenants import Tenant
 
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job, fetch_job_posting
@@ -192,6 +196,10 @@ mcp_app = typer.Typer(
     help="The HTTP MCP server process: status and stop, via its pidfile (RFC-032)."
 )
 app.add_typer(mcp_app, name="mcp")
+tenant_app = typer.Typer(
+    help="Operator actions over the shared multi-tenant registry (RFC-048, #209/#210)."
+)
+app.add_typer(tenant_app, name="tenant")
 criteria_app = typer.Typer(
     help="The job-criteria doc that scores new openings in the digest (RFC-035)."
 )
@@ -2887,6 +2895,123 @@ def mcp_url(
         typer.echo(
             "(no tunnel hostname detected — is Tailscale up? or pass --allowed-host explicitly)"
         )
+
+
+def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path]:
+    """Shared lookup for the 'tenant' commands below: resolves the
+    registry (explicit --registry, else WINGMAN_TENANT_REGISTRY, else the
+    RFC-047-style default), loads it, and exits(1) with a clear message on
+    any failure — never a bare traceback for an operator-facing command."""
+    from wingman.infrastructure.tenants import TenantRegistryError, load_registry, tenant_registry_path
+
+    registry_path = registry or tenant_registry_path()
+    try:
+        tenants = load_registry(registry_path)
+    except TenantRegistryError as exc:
+        typer.echo(f"tenant registry {registry_path} is malformed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    tenant = next((t for t in tenants if t.slug == slug), None)
+    if tenant is None:
+        typer.echo(f"No tenant {slug!r} in the registry ({registry_path}).", err=True)
+        raise typer.Exit(code=1)
+    return tenant, registry_path
+
+
+@tenant_app.command("url")
+def tenant_url_cmd(
+    slug: str = typer.Argument(..., help="The tenant's slug in the registry."),
+    registry: Path | None = typer.Option(
+        None, "--registry", help="Tenant registry path (default: WINGMAN_TENANT_REGISTRY host setting)."
+    ),
+    host: str = typer.Option("127.0.0.1", help="Bind address the shared server was started with."),
+    port: int = typer.Option(8787, help="Port the shared server was started with."),
+    allowed_host: list[str] = typer.Option(  # noqa: B008 — typer's documented pattern
+        [], "--allowed-host", help="Extra --allowed-host flag(s) the shared server was started with."
+    ),
+    tunnel_port: int | None = typer.Option(
+        None, "--tunnel-port", help="External tunnel port, if not the implicit 443."
+    ),
+) -> None:
+    """Print a registered tenant's connector URLs, by slug (#209).
+
+    Operator-assisted URL recovery: no self-service flow, no new
+    credential — just a lookup over the tenant registry and that
+    tenant's own token file, for whoever already has access to run this.
+    """
+    configure_logging()
+    from wingman.mcp_server import _extra_allowed_hosts, _tunnel_port, render_urls
+
+    tenant, registry_path = _load_tenant_or_exit(slug, registry)
+    token = tenant.read_token()
+    if token is None:
+        typer.echo(
+            f"Tenant {slug!r} has no token yet ({tenant.token_path()} is missing or empty).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    extra_hosts = _extra_allowed_hosts(allowed_host or None)
+    for line in render_urls(
+        token, extra_hosts, host=host, port=port, tunnel_port=_tunnel_port(tunnel_port)
+    ):
+        typer.echo(line)
+    if not extra_hosts:
+        typer.echo(
+            "(no tunnel hostname detected — is Tailscale up? or pass --allowed-host explicitly)"
+        )
+
+
+@tenant_app.command("rotate-token")
+def tenant_rotate_token_cmd(
+    slug: str = typer.Argument(..., help="The tenant's slug in the registry."),
+    registry: Path | None = typer.Option(
+        None, "--registry", help="Tenant registry path (default: WINGMAN_TENANT_REGISTRY host setting)."
+    ),
+    host: str = typer.Option("127.0.0.1", help="Bind address the shared server was started with."),
+    port: int = typer.Option(8787, help="Port the shared server was started with."),
+    tunnel_port: int | None = typer.Option(
+        None, "--tunnel-port", help="External tunnel port, if not the implicit 443."
+    ),
+) -> None:
+    """Rotate one tenant's capability token — invalidate and reissue in a
+    single step (#210).
+
+    Writing a fresh token to the tenant's own file, by itself,
+    invalidates the old one (only the file's CURRENT content is ever
+    indexed) and mints the new one — there is no separate "invalidate"
+    step. A SIGHUP to the running shared process reloads its in-memory
+    index so this takes effect immediately: no restart (which would drop
+    every OTHER tenant's session too), and no draining, since the index
+    is only ever consulted once per request, at the start.
+    """
+    configure_logging()
+    import secrets as secrets_module
+
+    from wingman.infrastructure.tenant_process import signal_reload
+    from wingman.mcp_server import _extra_allowed_hosts, _tunnel_port, render_urls
+
+    tenant, registry_path = _load_tenant_or_exit(slug, registry)
+    token_path = tenant.token_path()
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    new_token = secrets_module.token_urlsafe(24)
+    token_path.write_text(new_token + "\n", encoding="utf-8")
+    token_path.chmod(0o600)
+
+    signaled_pid = signal_reload(registry_path)
+    if signaled_pid is not None:
+        typer.echo(f"Signaled the running shared process (pid {signaled_pid}) to reload.")
+    else:
+        typer.echo(
+            "No running shared process found for this registry — the new token is written, "
+            "but won't take effect until the process starts (or is otherwise reloaded).",
+            err=True,
+        )
+
+    typer.echo(f"New token for {slug!r}:")
+    extra_hosts = _extra_allowed_hosts(None)
+    for line in render_urls(
+        new_token, extra_hosts, host=host, port=port, tunnel_port=_tunnel_port(tunnel_port)
+    ):
+        typer.echo(line)
 
 
 @admin_app.command("url")
