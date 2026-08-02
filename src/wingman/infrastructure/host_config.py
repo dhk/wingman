@@ -50,8 +50,12 @@ WINGMAN_ENV_FILENAME = "wingman.env"
 # Environment=-only for now: nothing currently reads them from a host
 # file, and adding that ladder without a driving need would be exactly the
 # gold-plating the design brief warned against — the frozenset below is
-# where a future one gets added, one name at a time.
-HOST_SETTINGS = frozenset({"WINGMAN_REPO", "WINGMAN_OPERATOR_NAME"})
+# where a future one gets added, one name at a time. WINGMAN_TENANT_REGISTRY
+# (RFC-048, infrastructure.tenants.tenant_registry_path) is the newest
+# resident: the shared multi-tenant process's registry path, set once per
+# box so 'wingman-mcp --http --tenant-registry' and every 'wingman tenant
+# ...' command agree on the same file without an explicit flag each time.
+HOST_SETTINGS = frozenset({"WINGMAN_REPO", "WINGMAN_OPERATOR_NAME", "WINGMAN_TENANT_REGISTRY"})
 
 
 def operator_name(home: Path | None = None) -> str | None:

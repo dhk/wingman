@@ -185,6 +185,24 @@ cmd_upgrade_all() {
   sudo journalctl -u wingman-upgrade-all.service --no-pager -n 10
 }
 
+cmd_tenant() {
+  # Thin wrapper over the real implementation ('wingman tenant ...',
+  # RFC-048 #209/#210) — same shape as every other wingman-ctl command
+  # that just delegates to the Python CLI (e.g. cmd_stop).
+  local sub="${1:-}" slug="${2:-}"
+  case "$sub" in
+    url)
+      [ -n "$slug" ] || { say "usage: $0 tenant url <slug>"; return 2; }
+      wingman tenant url "$slug" ;;
+    rotate-token)
+      [ -n "$slug" ] || { say "usage: $0 tenant rotate-token <slug>"; return 2; }
+      wingman tenant rotate-token "$slug" ;;
+    *)
+      say "usage: $0 tenant url <slug> | tenant rotate-token <slug>"
+      return 2 ;;
+  esac
+}
+
 case "${1:-}" in
   status)      cmd_status ;;
   start)       cmd_start ;;
@@ -193,8 +211,9 @@ case "${1:-}" in
   upgrade)     cmd_upgrade ;;
   cycle)       cmd_cycle ;;
   upgrade-all) cmd_upgrade_all ;;
+  tenant)      cmd_tenant "${2:-}" "${3:-}" ;;
   *)
-    say "usage: $0 status|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all"
+    say "usage: $0 status|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|tenant ..."
     say "  status       what's running, who owns each process, what's safe to stop"
     say "  start        the HTTP server (wingman-mcp --http), backgrounded + logged"
     say "  stop         the HTTP server only (pidfile-verified; never touches clients)"
@@ -204,5 +223,8 @@ case "${1:-}" in
     say "  upgrade-all  trigger the cross-account scheduled upgrade (you + every other"
     say "               configured user, e.g. Trent) — needs sudo, needs the systemd"
     say "               unit installed (docs/SERVER.md §7)"
+    say "  tenant url <slug>           print a tenant's connector URLs (RFC-048, #209)"
+    say "  tenant rotate-token <slug>  invalidate + reissue a tenant's token in one step,"
+    say "                              no restart, no drain (RFC-048, #210)"
     exit 2 ;;
 esac

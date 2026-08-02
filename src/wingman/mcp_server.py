@@ -2491,6 +2491,41 @@ def telemetry(action: str = "status", limit: int = 20) -> str:
     return f"unknown action {action!r}; use status or show."
 
 
+@server.tool()
+def tenant_url(slug: str, host: str = "127.0.0.1", port: int = 8787) -> str:
+    """A registered tenant's MCP + web UI connector URLs, by slug (#209,
+    RFC-048's operator-assisted URL recovery). 'host'/'port' should match
+    how the shared process was actually started, same as 'wingman mcp
+    url' for a single-tenant instance. Operator-only: refuses when called
+    from within any tenant's own scoped session, so a tenant can never
+    use their own MCP session to look up another tenant's URL.
+
+    Every tenant Config built by Tenant.config() sets
+    strict_provider_keys=True by construction (RFC-048's key-isolation
+    invariant); this reuses that same flag as the gate here, rather than
+    inventing a second "is this an operator" concept — a genuinely
+    single-tenant instance (an operator's own) never sets it.
+    """
+    config = load_config()
+    if config.strict_provider_keys:
+        return "Not available from a tenant session — this is an operator-only tool."
+    from wingman.infrastructure.tenants import TenantRegistryError, load_registry, tenant_registry_path
+
+    registry_path = tenant_registry_path()
+    try:
+        tenants = load_registry(registry_path)
+    except TenantRegistryError as exc:
+        return f"Could not read the tenant registry ({registry_path}): {exc}"
+    tenant = next((t for t in tenants if t.slug == slug), None)
+    if tenant is None:
+        return f"No tenant {slug!r} in the registry ({registry_path})."
+    token = tenant.read_token()
+    if token is None:
+        return f"Tenant {slug!r} has no token yet ({tenant.token_path()} is missing or empty)."
+    extra_hosts = _extra_allowed_hosts(None)
+    return "\n".join(render_urls(token, extra_hosts, host=host, port=port))
+
+
 def _instrument_tools() -> None:
     """Wrap every registered tool so calls land in the opt-in journal (RFC-023).
 
@@ -2590,9 +2625,27 @@ def main(argv: list[str] | None = None) -> None:
         "instance sharing this Tailscale hostname on its own funnel port. Only changes the "
         "printed/displayed URLs, not the local bind. Falls back to WINGMAN_TUNNEL_PORT.",
     )
+    parser.add_argument(
+        "--tenant-registry",
+        default=None,
+        metavar="PATH",
+        help="Serve a SHARED multi-tenant process instead of one workspace (RFC-048): PATH to "
+        "the tenant registry TOML ({slug, data_dir} per tenant, no secrets — see "
+        "infrastructure.tenants). Presence of this flag switches to tenant mode; --host/--port/"
+        "--prefix/--allowed-host/--tunnel-port still apply (uniformly, to every tenant), but "
+        "--rotate-token does not — each tenant's own token lives in their own data_dir; rotate "
+        "one via 'wingman tenant rotate-token <slug>'.",
+    )
     args = parser.parse_args(argv)
     configure_logging()
     get_logger("mcp").info("wingman-mcp %s starting", wingman_version())
+    if args.tenant_registry and not args.http:
+        parser.error("--tenant-registry only makes sense with --http")
+    if args.tenant_registry and args.rotate_token:
+        parser.error(
+            "--rotate-token doesn't apply with --tenant-registry — each tenant's own token "
+            "lives in their own data_dir; rotate one via 'wingman tenant rotate-token <slug>'"
+        )
     # One-time move off the legacy flat '~/.config/keys.env' (RFC-046) —
     # idempotent, so this logs nothing on every subsequent start; called
     # here (not just inside 'ensure_env') so a migration on someone's
@@ -2600,14 +2653,32 @@ def main(argv: list[str] | None = None) -> None:
     migration = migrate_legacy_host_file()
     if migration.migrated:
         get_logger("mcp").info("one-time host config migration: %s", migration.detail)
-    # Hydrate missing API keys: Keychain (RFC-019), then the workspace
-    # key file written by the web UI's validated form (RFC-034).
-    ensure_env(data_dir=load_config().data_dir)
+    if args.tenant_registry:
+        # No single workspace to hydrate the workspace tier for (RFC-048)
+        # — each tenant's Anthropic/Voyage keys are resolved strictly from
+        # their OWN workspace file at request time (Tenant.config's
+        # strict_provider_keys), never from process env. Keychain/host/
+        # global tiers still get hydrated normally (e.g. GITHUB_API_ISSUES_KEY,
+        # RFC-047's deliberately-shared credential).
+        ensure_env()
+    else:
+        # Hydrate missing API keys: Keychain (RFC-019), then the workspace
+        # key file written by the web UI's validated form (RFC-034).
+        ensure_env(data_dir=load_config().data_dir)
     if not args.http:
         if args.rotate_token:
             parser.error("--rotate-token only makes sense with --http")
         server.run()
         return
+
+    from wingman.webui import normalize_prefix
+
+    prefix = normalize_prefix(args.prefix)
+
+    if args.tenant_registry:
+        _run_tenant_server(args, prefix)
+        return
+
     config = load_config()
     # Preflight before anything is printed or rotated: uvicorn's bind error
     # arrives AFTER the full banner and reads like a crash — and when the
@@ -2631,21 +2702,8 @@ def main(argv: list[str] | None = None) -> None:
             file=sys.stderr,
         )
         sys.exit(1)
-    family = socket.AF_INET6 if ":" in args.host else socket.AF_INET
-    with socket.socket(family, socket.SOCK_STREAM) as probe:
-        try:
-            probe.bind((args.host, args.port))
-        except OSError as exc:
-            print(
-                f"ERROR: cannot bind {args.host}:{args.port} ({exc.strerror}). "
-                f"Something else holds the port — find it with: lsof -ti :{args.port}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+    _probe_bind(args.host, args.port)
     token = _http_token(config, rotate=args.rotate_token)
-    from wingman.webui import normalize_prefix
-
-    prefix = normalize_prefix(args.prefix)
     server.settings.host = args.host
     server.settings.port = args.port
     server.settings.streamable_http_path = f"{prefix}/mcp/{token}"
@@ -2696,6 +2754,110 @@ def main(argv: list[str] | None = None) -> None:
     write_pidfile(config)
     atexit.register(clear_pidfile, config)
     server.run(transport="streamable-http")
+
+
+def _probe_bind(host: str, port: int) -> None:
+    """Fail loud, before anything is printed or rotated: uvicorn's own
+    bind error arrives after the full banner and reads like a crash."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind((host, port))
+        except OSError as exc:
+            print(
+                f"ERROR: cannot bind {host}:{port} ({exc.strerror}). "
+                f"Something else holds the port — find it with: lsof -ti :{port}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+
+def _run_tenant_server(args: argparse.Namespace, prefix: str) -> None:
+    """The shared multi-tenant process (RFC-048): one OS process, share-
+    nothing per-tenant data, capability tokens per tenant. Bypasses
+    'server.run()' deliberately — FastMCP exposes no hook to run tenant
+    resolution before its own routing, so this builds the same Starlette
+    app 'server.run(transport="streamable-http")' would internally
+    (verified against FastMCP's own 'run_streamable_http_async', which
+    does exactly 'streamable_http_app()' + 'uvicorn.Config'/'Server') and
+    wraps ONE route with 'bind_tenant_routing' before serving it by hand.
+    """
+    import uvicorn
+
+    from wingman.infrastructure.tenant_asgi import bind_tenant_routing
+    from wingman.infrastructure.tenant_process import (
+        clear_tenant_pidfile,
+        read_tenant_process_pid,
+        register_reload_handler,
+        write_tenant_pidfile,
+    )
+    from wingman.infrastructure.tenants import TenantIndex, TenantRegistryError
+    from wingman.webui import configure_tenant_index, register_ui
+
+    registry_path = Path(args.tenant_registry).expanduser()
+    try:
+        index = TenantIndex.from_registry_path(registry_path)
+    except TenantRegistryError as exc:
+        print(f"ERROR: tenant registry {registry_path} is malformed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if len(index) == 0:
+        print(
+            f"WARNING: tenant registry {registry_path} lists no tenants yet — "
+            "the server will start, but every request will 401.",
+            file=sys.stderr,
+        )
+    existing = read_tenant_process_pid(registry_path)
+    if existing is not None:
+        print(
+            f"ERROR: a shared multi-tenant server is already running (pid {existing}) for "
+            f"{registry_path}. Stop it first, or point --tenant-registry at a different file.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    _probe_bind(args.host, args.port)
+
+    server.settings.host = args.host
+    server.settings.port = args.port
+    server.settings.streamable_http_path = f"{prefix}/mcp/{{token}}"
+    extra_hosts = _extra_allowed_hosts(args.allowed_host)
+    if args.host in _LOOPBACK_HOSTS:
+        server.settings.transport_security = build_transport_security(extra_hosts)
+    else:
+        server.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False
+        )
+    if args.host not in _LOOPBACK_HOSTS:
+        print(
+            f"WARNING: binding {args.host} exposes every tenant's workspace to that network. "
+            "The capability path is the only guard, per tenant. Prefer 127.0.0.1 plus a tunnel.",
+            file=sys.stderr,
+        )
+
+    # Order matters: configure_tenant_index BEFORE register_ui, so the
+    # per-tenant restart route is never mounted at all (RFC-041 withdrawal
+    # — see webui.configure_tenant_index's own docstring).
+    configure_tenant_index(index)
+    register_ui(server, prefix=prefix)
+    from wingman.admin import register_admin
+
+    register_admin(server)
+
+    app = server.streamable_http_app()
+    bind_tenant_routing(app, f"{prefix}/mcp/{{token}}", index)
+    register_reload_handler(index, registry_path)
+
+    print(f"Shared multi-tenant server (RFC-048) — {len(index)} tenant(s) from {registry_path}")
+    for tenant in sorted(index.tenants, key=lambda t: t.slug):
+        print(f"  {tenant.slug}: wingman tenant url {tenant.slug}")
+    print("Rotate a leaked token: wingman tenant rotate-token <slug>")
+    print("Reload after editing the registry by hand: kill -HUP " + str(os.getpid()))
+    print(f"Reach it from elsewhere via your own tunnel, e.g.: tailscale serve {args.port}")
+    sys.stdout.flush()
+    logging.getLogger("uvicorn.access").disabled = True
+
+    write_tenant_pidfile(registry_path)
+    atexit.register(clear_tenant_pidfile, registry_path)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":
