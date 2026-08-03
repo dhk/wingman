@@ -57,7 +57,9 @@ def test_two_tenants_key_forms_never_cross_contaminate(
     jason_response = client.post(
         "/e2e-keys/ui/tok-jason-e2e/keys", data={"anthropic": "sk-ant-jason-own"}
     )
-    bob_response = client.post("/e2e-keys/ui/tok-bob-e2e/keys", data={"anthropic": "sk-ant-bob-own"})
+    bob_response = client.post(
+        "/e2e-keys/ui/tok-bob-e2e/keys", data={"anthropic": "sk-ant-bob-own"}
+    )
     assert "verified and live now" in jason_response.text
     assert "verified and live now" in bob_response.text
 

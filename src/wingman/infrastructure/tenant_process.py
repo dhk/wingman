@@ -81,7 +81,9 @@ def clear_tenant_pidfile(registry_path: Path) -> None:
     tenant_pidfile_path(registry_path).unlink(missing_ok=True)
 
 
-def read_tenant_process_pid(registry_path: Path, command_of: CommandOf = _ps_command_of) -> int | None:
+def read_tenant_process_pid(
+    registry_path: Path, command_of: CommandOf = _ps_command_of
+) -> int | None:
     """The recorded shared-process pid, verified; a stale pidfile is
     removed on sight — mirrors 'mcp_process.read_server_pid's rigor."""
     path = tenant_pidfile_path(registry_path)

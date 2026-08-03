@@ -57,6 +57,7 @@ def configure_tenant_index(index: "TenantIndex | None") -> None:
     global _tenant_index
     _tenant_index = index
 
+
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 _RESUME_SUFFIXES = {".md", ".markdown", ".txt", ".pdf", ".docx", ".tex"}
 _SERVE_TYPES = {

@@ -85,9 +85,7 @@ def test_register_reload_handler_reloads_the_index_on_sighup(tmp_path: Path) -> 
     jason_dir.mkdir()
     (jason_dir / "mcp-http-token").write_text("tok-old", encoding="utf-8")
     registry = tmp_path / "tenants.toml"
-    registry.write_text(
-        f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n', encoding="utf-8"
-    )
+    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n', encoding="utf-8")
     index = TenantIndex.from_registry_path(registry)
     assert index.resolve("tok-old") is not None
 
