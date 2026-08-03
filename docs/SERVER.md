@@ -587,12 +587,53 @@ Rotation invalidates the old token and issues a new one in the same
 step — no restart of the shared process, no effect on any other
 tenant's session (`infrastructure/tenant_process.py`'s SIGHUP reload).
 
-**Known gap.** Nothing runs `wingman overnight` for tenants under the
-shared process yet — they have no per-account systemd timer to hang it
-off (§4 is per-account by construction). Until an overnight-loop
-replacement is built (RFC-048's own "small build gaps" list), a manual
-per-tenant run is the only way they get a digest:
+**Overnight for every tenant, one timer instead of one per account.**
+Tenants under the shared process have no per-account systemd timer to
+hang §4's pattern off of, so `wingman tenant overnight` loops the whole
+registry in one process invocation — each tenant gets its own strict
+`Tenant.config()` (never a shared key, never a shell-out with
+`WINGMAN_DATA_DIR` set, which would use the full env ladder and risk one
+tenant's run spending a key that isn't theirs), and one tenant's failure
+(nothing enrolled, a fetch error) is reported without blocking the rest,
+mirroring §7's `wingman-upgrade-all` isolation.
+
+`~/.config/systemd/user/wingman-tenant-overnight.service` (as
+`wingman-shared`):
+
+```ini
+[Unit]
+Description=Wingman overnight run, every tenant (RFC-048)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/wingman/wingman.env
+EnvironmentFile=-%h/.config/wingman/secrets.env
+ExecStart=%h/.local/bin/wingman tenant overnight
+```
+
+`~/.config/systemd/user/wingman-tenant-overnight.timer`:
+
+```ini
+[Unit]
+Description=Run wingman tenant overnight every morning
+
+[Timer]
+OnCalendar=*-*-* 05:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
 
 ```bash
-sudo -iu wingman-shared bash -c 'export PATH="$HOME/.local/bin:$PATH"; WINGMAN_DATA_DIR=~/tenants/<slug> wingman overnight'
+sudo -u wingman-shared env XDG_RUNTIME_DIR=/run/user/$(id -u wingman-shared) \
+  systemctl --user daemon-reload
+sudo -u wingman-shared env XDG_RUNTIME_DIR=/run/user/$(id -u wingman-shared) \
+  systemctl --user enable --now wingman-tenant-overnight.timer
 ```
+
+(the `sudo -u ... env XDG_RUNTIME_DIR=...` shape, not `sudo -iu`, for the
+same reason §9's provisioning script needs it — see the pitfalls list
+above.) Logs: `sudo -u wingman-shared env XDG_RUNTIME_DIR=/run/user/$(id -u wingman-shared) journalctl --user -u wingman-tenant-overnight.service`.
+
+A one-off run any time: `sudo -iu wingman-shared bash -c 'export PATH="$HOME/.local/bin:$PATH"; wingman tenant overnight'`.
