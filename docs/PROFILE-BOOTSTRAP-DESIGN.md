@@ -184,6 +184,35 @@ answers "does this org's thinking actually match mine" directly, as an
 alternative or supplement to the existing indirect embedding-similarity
 path (`company_alignment()`).
 
+### Nominee research (issue #214)
+
+For every nomination module above (Values, Values fallback, Mission
+alignment, Network admired) — not Alignment of perspective, whose target
+already has real fetched content: once a nominee is named, before asking
+"why," identify them via search, prompting to disambiguate if the name is
+ambiguous (a common name, several notable people). Look for their
+values/background (Wikipedia preferred) and, if they're alive, their
+current writing.
+
+Deliberately built with no new wingman-side search infrastructure — the
+calling agent already has its own web-search capability, so this lives
+entirely as a protocol instruction in `interview_react`'s own docstring
+(the same place con-then-pro ordering and echo-before-save already live),
+not as new Python code. This keeps the invariant above — the nominee's
+own content is never fetched or quoted as evidence, only "why," verbatim,
+ever is — completely unchanged: research here is a conversational aid for
+asking one better follow-up question, never a source of evidence, and
+nothing it finds is persisted anywhere.
+
+After a *living* nominee's capture is saved, offer to track them via the
+existing watchlist (`people_add`) — reusing infrastructure, not inventing
+a second one. Never offered for someone who has died.
+
+Whether research findings about a nominee should ever be persisted — so
+re-nominating the same public figure later doesn't mean re-researching
+from scratch — is deliberately out of scope here; see issue #215 (data
+scope: user/group/all) for that separate, harder question.
+
 ## Trust ladder
 
 | Tier | Ask | Commitment |
