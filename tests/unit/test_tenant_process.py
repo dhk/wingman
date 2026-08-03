@@ -20,9 +20,32 @@ def _fake_command_of(alive: dict[int, str]):
     return lambda pid: alive.get(pid, "")
 
 
-def test_pidfile_lives_alongside_the_registry(tmp_path: Path) -> None:
+def test_pidfile_lives_under_tempdir_not_alongside_the_registry(tmp_path: Path) -> None:
+    """The registry conventionally lives under a root-owned, non-group-
+    writable directory (RFC-047's /etc/wingman/) — the account actually
+    running the shared process usually cannot write there at all, even
+    as a 'wingman' group member (read+traverse only, never write)."""
+    import tempfile
+
     registry = tmp_path / "tenants.toml"
-    assert tenant_pidfile_path(registry) == tmp_path / "tenants.toml.pid"
+    path = tenant_pidfile_path(registry)
+    assert path.parent == Path(tempfile.gettempdir())
+    assert path != tmp_path / "tenants.toml.pid"
+
+
+def test_pidfile_path_is_a_pure_function_of_the_resolved_registry_path(tmp_path: Path) -> None:
+    """Same registry, spelled two different ways (plain vs. through a
+    '.' segment), must resolve to the same pidfile — the whole point of
+    hashing the RESOLVED path rather than the raw string."""
+    registry = tmp_path / "tenants.toml"
+    spelled_differently = tmp_path / "." / "tenants.toml"
+    assert tenant_pidfile_path(registry) == tenant_pidfile_path(spelled_differently)
+
+
+def test_different_registries_get_different_pidfiles(tmp_path: Path) -> None:
+    a = tmp_path / "a" / "tenants.toml"
+    b = tmp_path / "b" / "tenants.toml"
+    assert tenant_pidfile_path(a) != tenant_pidfile_path(b)
 
 
 def test_write_read_clear_roundtrip(tmp_path: Path) -> None:
