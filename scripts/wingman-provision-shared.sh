@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# wingman-provision-shared.sh — stand up the RFC-048 shared multi-tenant
+# wingman-mcp process on a fresh Ubuntu/Debian box (root-run, once per box).
+#
+# Idempotent by design: every step checks its own precondition before
+# acting, so re-running after a partial failure (or against a box that's
+# already partway through) only does whatever is still missing — the
+# exact gap a hand-run version of this checklist kept tripping on
+# (missing 'wingman' group, HTTPS clone URLs prompting for GitHub
+# credentials on a fresh service account with no git identity, '~'
+# silently expanding in the CALLING shell instead of the target
+# account's, PATH not surviving a non-interactive 'bash -c').
+#
+# Usage: sudo ./wingman-provision-shared.sh
+# Env overrides: WINGMAN_SHARED_USER (default wingman-shared),
+#                WINGMAN_SHARED_PORT (default 8789),
+#                WINGMAN_SHARED_TAILSCALE_PATH (default /shared)
+#
+# What this does NOT do: create per-tenant workspaces or tokens — run
+# 'wingman-add-tenant.sh <slug>' once per tenant afterward. Nor does it
+# populate this account's own ~/.config/wingman/{wingman.env,secrets.env}
+# (RFC-046) — tenant Anthropic/Voyage keys are resolved strictly from
+# each TENANT's own workspace file (RFC-048's strict_provider_keys), so
+# this account needs no API keys of its own for the core flow to work.
+
+set -euo pipefail
+
+SERVICE_USER="${WINGMAN_SHARED_USER:-wingman-shared}"
+PORT="${WINGMAN_SHARED_PORT:-8789}"
+TAILSCALE_PATH="${WINGMAN_SHARED_TAILSCALE_PATH:-/shared}"
+REPO_URL="git@github.com:dhk/wingman.git"
+REGISTRY_PATH="/etc/wingman/tenants.toml"
+
+say() { printf '==> %s\n' "$*"; }
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run as root: sudo $0" >&2
+  exit 1
+fi
+
+say "1/7 wingman group"
+getent group wingman >/dev/null || groupadd wingman
+
+say "2/7 service account: $SERVICE_USER"
+if ! id "$SERVICE_USER" >/dev/null 2>&1; then
+  useradd -m -s /bin/bash "$SERVICE_USER"
+fi
+usermod -aG wingman "$SERVICE_USER"
+loginctl enable-linger "$SERVICE_USER"
+
+say "3/7 registry directory + file (root-owned, group-readable, no secrets in it)"
+install -d -m 750 -o root -g wingman /etc/wingman
+[ -f "$REGISTRY_PATH" ] || install -m 644 /dev/null "$REGISTRY_PATH"
+
+say "4/7 SSH deploy key — this account has no GitHub identity of its own"
+SSH_DIR="/home/$SERVICE_USER/.ssh"
+KEY_PATH="$SSH_DIR/id_ed25519"
+if [ ! -f "$KEY_PATH" ]; then
+  sudo -iu "$SERVICE_USER" bash -c "ssh-keygen -t ed25519 -C '$SERVICE_USER@$(hostname)' -f ~/.ssh/id_ed25519 -N ''"
+  echo
+  say "New deploy key — add this as a READ-ONLY deploy key on dhk/wingman"
+  say "(GitHub -> repo -> Settings -> Deploy keys -> Add deploy key), then press enter:"
+  cat "$KEY_PATH.pub"
+  read -r _
+fi
+
+say "5/7 clone + install wingman (SSH URL — this box's git identity is deploy-key-only, HTTPS prompts for credentials that don't exist)"
+if [ ! -d "/home/$SERVICE_USER/wingman/.git" ]; then
+  sudo -iu "$SERVICE_USER" bash -c "git clone $REPO_URL ~/wingman"
+fi
+sudo -iu "$SERVICE_USER" bash -c "cd ~/wingman && uv tool install --reinstall ."
+
+say "6/7 systemd unit"
+UNIT_DIR="/home/$SERVICE_USER/.config/systemd/user"
+sudo -iu "$SERVICE_USER" mkdir -p "$UNIT_DIR"
+cat > "$UNIT_DIR/wingman-mcp.service" <<EOF
+[Unit]
+Description=Wingman shared multi-tenant MCP server (RFC-048)
+After=network.target
+
+[Service]
+EnvironmentFile=-%h/.config/wingman/wingman.env
+EnvironmentFile=-%h/.config/wingman/secrets.env
+ExecStart=%h/.local/bin/wingman-mcp --http --port $PORT --tenant-registry $REGISTRY_PATH
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+chown "$SERVICE_USER:$SERVICE_USER" "$UNIT_DIR/wingman-mcp.service"
+sudo -iu "$SERVICE_USER" bash -c 'systemctl --user daemon-reload && systemctl --user enable --now wingman-mcp.service'
+
+say "7/7 tailscale mount (stripping proxy — the shared process itself runs with no --prefix)"
+if command -v tailscale >/dev/null 2>&1; then
+  tailscale serve --bg --set-path "$TAILSCALE_PATH" "http://127.0.0.1:$PORT"
+else
+  say "tailscale not found — skipping. Run manually later:"
+  say "  tailscale serve --bg --set-path $TAILSCALE_PATH http://127.0.0.1:$PORT"
+fi
+
+echo
+say "Done. Add tenants with: sudo ./wingman-add-tenant.sh <slug>"
+say "Check status with:      sudo -iu $SERVICE_USER wg tenant url <slug> --port $PORT"

@@ -517,3 +517,75 @@ file on the box. Assumes each listed user's checkout lives at
 `~/src/wingman` (this repo's own documented convention, §1) — a user who
 deviates isn't a candidate for automatic upgrade and should be upgraded
 by hand.
+
+## 9. Shared multi-tenant deployment (RFC-048)
+
+Everything above is shape B: one Unix account, one workspace, one port,
+per person. RFC-048 adds a second shape for when per-account overhead
+stops paying for itself (a third-plus person, per `docs/RFC.md`'s own
+trigger) — one shared process, share-nothing data (one SQLite DB per
+tenant, unchanged), capability tokens per tenant. dhk and trent are not
+required to move onto this — the two shapes coexist on the same box,
+each on its own port.
+
+**Run the provisioning scripts, don't hand-type this.** The steps below
+were worked out live against a real box and hit exactly the pitfalls the
+scripts (`scripts/wingman-provision-shared.sh`,
+`scripts/wingman-add-tenant.sh`) now guard against automatically — listed
+here so the reasoning survives, not as a checklist to retype:
+
+- **SSH clone URL, never HTTPS.** A fresh service account has no GitHub
+  identity and no cached credential helper; `https://github.com/...`
+  prompts for a username that doesn't exist. `git@github.com:...` with a
+  **read-only deploy key** (added once, on `dhk/wingman` → Settings →
+  Deploy keys) is the whole fix — this account never needs push access.
+- **`sudo -iu <user> <command> ~/path`** expands `~` in the CALLING
+  shell, before `sudo` ever runs — silently operating on your own home
+  directory instead of the target account's. Always wrap in
+  `sudo -iu <user> bash -c '... ~/path ...'` so expansion happens inside
+  the right shell.
+- **`bash -c '...'` doesn't source `.profile`/`.bashrc`** the way an
+  actual login does, so PATH fixes made via `uv tool update-shell` don't
+  reach it — export PATH explicitly inside each such command instead of
+  assuming it's inherited.
+- **The `wingman` group** (§2, for reading `/etc/wingman/`) has to exist
+  *before* adding the shared-process account to it — easy to reach this
+  step before ever setting up RFC-047's global-secrets tier on a given box.
+
+```bash
+# once per box
+sudo scripts/wingman-provision-shared.sh
+# once per tenant
+sudo scripts/wingman-add-tenant.sh jason
+sudo scripts/wingman-add-tenant.sh bob
+```
+
+Both are idempotent — safe to re-run after a partial failure, or against
+a box that's already partway through by hand; each step checks its own
+precondition first. `WINGMAN_SHARED_USER`/`WINGMAN_SHARED_PORT`/
+`WINGMAN_SHARED_TAILSCALE_PATH` env vars override the defaults
+(`wingman-shared`, `8789`, `/shared`).
+
+**Recovering or rotating a tenant's URL** (#209/#210) — no self-service
+flow, no new credential, by design (RFC-048's trust surface stays
+exactly the tenant registry + per-tenant token files, nothing added for
+this):
+
+```bash
+sudo -iu wingman-shared wg tenant url <slug> --port 8789
+sudo -iu wingman-shared wg tenant rotate-token <slug> --port 8789
+```
+
+Rotation invalidates the old token and issues a new one in the same
+step — no restart of the shared process, no effect on any other
+tenant's session (`infrastructure/tenant_process.py`'s SIGHUP reload).
+
+**Known gap.** Nothing runs `wingman overnight` for tenants under the
+shared process yet — they have no per-account systemd timer to hang it
+off (§4 is per-account by construction). Until an overnight-loop
+replacement is built (RFC-048's own "small build gaps" list), a manual
+per-tenant run is the only way they get a digest:
+
+```bash
+sudo -iu wingman-shared bash -c 'export PATH="$HOME/.local/bin:$PATH"; WINGMAN_DATA_DIR=~/tenants/<slug> wingman overnight'
+```
