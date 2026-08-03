@@ -18,9 +18,11 @@ the start (infrastructure.tenant_asgi.TenantRoutingASGIApp).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import signal
 import subprocess
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -62,10 +64,22 @@ def _alive(pid: int) -> bool:
 
 
 def tenant_pidfile_path(registry_path: Path) -> Path:
-    """Alongside the registry file itself — e.g. 'tenants.toml.pid' next
-    to 'tenants.toml' — rather than inventing a separate data directory
-    for a process that, by definition, has no single workspace."""
-    return registry_path.with_name(registry_path.name + PIDFILE_SUFFIX)
+    """Under the system temp dir, NOT alongside the registry file itself.
+
+    Hit live on the first real deployment: the registry conventionally
+    lives under a root-owned, non-group-writable directory (RFC-047's
+    '/etc/wingman/', mode 750 — deliberately not group-writable, since it
+    also holds 'global-secrets.env') that the account actually running
+    the shared process usually cannot write into at all, even as a
+    member of the 'wingman' group (which only grants read+traverse).
+    Keyed by a hash of the registry's own resolved absolute path — not
+    the running account's home directory — so this stays a pure function
+    of 'registry_path' alone, giving the same answer everywhere,
+    regardless of which account ends up running the process or how the
+    path was spelled (relative, symlinked, etc.) at each call site.
+    """
+    digest = hashlib.sha256(str(registry_path.resolve()).encode("utf-8")).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"wingman-tenants-{digest}{PIDFILE_SUFFIX}"
 
 
 def write_tenant_pidfile(registry_path: Path) -> Path:
