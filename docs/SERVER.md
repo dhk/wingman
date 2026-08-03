@@ -15,14 +15,43 @@ for other distros.
 ```bash
 sudo apt update && sudo apt install -y git nodejs npm   # node only for PDF exports
 curl -LsSf https://astral.sh/uv/install.sh | sh          # uv, if not present
-git clone https://github.com/dhk/wingman.git ~/wingman
-cd ~/wingman && uv tool install .
+mkdir -p ~/src && git clone git@github.com:dhk/wingman.git ~/src/wingman
+cd ~/src/wingman && uv tool install .
 wingman --version
 ```
+
+This is a **private repo over SSH**, not HTTPS — `git clone
+https://github.com/dhk/wingman.git` prompts for a GitHub username that
+doesn't resolve to anything useful; if this account has no SSH key
+registered with GitHub yet (a fresh service account, e.g.), generate one
+(`ssh-keygen -t ed25519`) and add it as a deploy key (repo → Settings →
+Deploy keys) before cloning — read-only is enough, this account never
+needs to push.
+
+`~/src/wingman` (not `~/wingman`, `~/code/wingman`, or anywhere else) is
+the code-location convention every other piece of tooling here assumes
+— `infrastructure/upgrade_all.py`'s `REPO_SUBPATH` looks for exactly this
+path when sweeping every configured account's checkout during the
+nightly cross-account upgrade (§7), and `scripts/wingman-ctl`'s own
+`WINGMAN_REPO` fallback (§2) is this same path. Deviating means either
+every future command needs an explicit override, or upgrade-all silently
+looks in the wrong place — not worth it for a install-time shortcut.
 
 The workspace defaults to `~/.local/share/wingman` (XDG). Set
 `WINGMAN_DATA_DIR` before `wingman init` if you want it elsewhere —
 consistently, including inside the systemd units below.
+
+**The `wg` alias, explicitly** — `uv tool install` puts `wingman` and
+`wingman-mcp` on `PATH`, but `scripts/wingman-ctl` is a plain repo script,
+not an installed entry point, so it needs its own alias:
+
+```bash
+echo "alias wg='$HOME/src/wingman/scripts/wingman-ctl'" >> ~/.bashrc
+source ~/.bashrc
+wg status   # confirms the alias resolved
+```
+
+(`~/.zshrc` instead of `~/.bashrc` on macOS/zsh setups.)
 
 ## 2. Host config: secrets and settings (the Keychain is macOS-only)
 
@@ -181,6 +210,23 @@ design. The token lives in `<workspace>/mcp-http-token` (0600); it is the
 credential, treat it like one. `wingman-mcp --rotate-token` mints a new
 one (then restart the service and update any connector).
 
+**Troubleshooting: `systemctl --user status` shows `Result: resources`.**
+Almost always a missing or unreadable `EnvironmentFile` (the tolerant `-`
+prefix means a missing file is skipped silently at *parse* time, but a
+genuinely broken one — wrong permissions, a syntax error — still fails
+the unit). Check the file exists and is readable as this account
+(`test -r ~/.config/wingman/wingman.env`), then:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user reset-failed wingman-mcp.service   # clears the failed state
+systemctl --user start wingman-mcp.service
+```
+
+`reset-failed` is the step that's easy to miss — without it, systemd
+refuses to retry a unit it's already marked failed, and `start` silently
+no-ops.
+
 ## 6. Reach it from claude.ai via Tailscale
 
 Install Tailscale (`https://tailscale.com/download/linux`), `sudo
@@ -213,8 +259,31 @@ non-default flags). It computes the same lines the banner prints, straight
 from the token file and Tailscale auto-detection.
 
 In claude.ai: Settings → Connectors → Add custom connector → paste that
-URL. The same URL works in Claude Desktop and the Claude mobile apps once
-the connector is added to your account.
+URL. Use the `/mcp/<token>` URL for the connector field, not the
+`/ui/<token>/` one — the two are easy to confuse since `wingman mcp url`
+prints both together. The same URL works in Claude Desktop and the
+Claude mobile apps once the connector is added to your account.
+
+**Troubleshooting: connector add fails on first try.** An
+OAuth-registration-shaped error against a *fresh* funnel domain right
+after `tailscale funnel` first comes up is often transient — Tailscale's
+own DNS/TLS provisioning for a brand-new hostname can lag a few seconds
+to a minute behind the CLI reporting success. Wait a moment and retry
+before assuming the token or URL is wrong.
+
+**Verify each stage, in order, before assuming something downstream is
+broken:**
+
+```bash
+systemctl --user status wingman-mcp.service   # process actually running?
+tailscale funnel status                        # tunnel actually mapped?
+wingman mcp url                                 # URL matches what you're pasting?
+curl -i http://127.0.0.1:8787/ui/$(cat ~/.local/share/wingman/mcp-http-token)/
+```
+
+A failure at any step points at that step specifically — e.g. a 200 from
+the loopback `curl` but a connector-add failure means the problem is
+Tailscale/DNS, not wingman itself.
 
 **The trade, plainly:** `serve` keeps the endpoint inside your tailnet —
 strongest posture, but claude.ai's servers can't reach it, so it only
@@ -265,7 +334,7 @@ signal to revisit the hosted-tier assessment instead.
   Tarballs land in `<workspace>/backups/`, pruned to keep-N (default 10,
   `wingman backup --keep`). `Persistent=true` catches a missed run the
   same way §4's does. Logs: `journalctl --user -u wingman-backup.service`.
-- **Updates:** `cd ~/wingman && git pull && uv tool install --reinstall .`
+- **Updates:** `cd ~/src/wingman && git pull && uv tool install --reinstall .`
   then `systemctl --user restart wingman-mcp.service`.
 - **Telemetry:** `wingman telemetry on` once, if you want the usage
   journal; it is per-workspace and local-only (RFC-023).
@@ -478,7 +547,7 @@ Description=Upgrade every wingman shape-B user (#125)
 
 [Service]
 Type=oneshot
-Environment=WINGMAN_UPGRADE_USERS=dhk,trent
+Environment=WINGMAN_UPGRADE_USERS=dhk,trent,wingman-shared
 Environment=WINGMAN_UPGRADE_SOURCE_trent=/home/dhk/src/wingman
 ExecStart=/root/.local/bin/wingman-upgrade-all
 ```
@@ -489,6 +558,16 @@ the checkout-shape default (`git -C ~trent/src/wingman pull`), which fails
 outright since that checkout was never meant to exist. Any local-path-shape
 user needs their own `WINGMAN_UPGRADE_SOURCE_<username>` line, pointed at
 whichever checkout-shape user's already-pulled checkout they install from.
+
+`wingman-shared` (§9's shared multi-tenant account) needs no override —
+it's checkout-shape just like dhk (its own real deploy-key-backed
+checkout at `~/src/wingman`, §9), so it sweeps into the same rotation
+with nothing beyond adding its name to the list. `systemctl --user
+restart wingman-mcp.service` after its `git pull` restarts the ONE
+shared process — briefly interrupting every tenant on it (Jason, Bob,
+...) at once, the same accepted code-upgrade trade-off shape-B accounts
+already take for themselves; only config/token changes (`wingman tenant
+rotate-token`) avoid a restart, per RFC-048.
 
 `/etc/systemd/system/wingman-upgrade-all.timer`:
 
