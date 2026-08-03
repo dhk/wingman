@@ -551,6 +551,13 @@ here so the reasoning survives, not as a checklist to retype:
 - **The `wingman` group** (§2, for reading `/etc/wingman/`) has to exist
   *before* adding the shared-process account to it — easy to reach this
   step before ever setting up RFC-047's global-secrets tier on a given box.
+- **`systemctl --user` can't reach a fresh account's session bus at all**
+  without `XDG_RUNTIME_DIR` pointed at `/run/user/<uid>` explicitly —
+  `sudo -iu <user> ...` alone isn't enough, and fails with `Failed to
+  connect to bus: No medium found`. The same fix `upgrade_all.py` already
+  needed for this exact reason (RFC-042); `wingman-provision-shared.sh`
+  forces the user manager up first, then passes the var explicitly on
+  every `systemctl --user` call.
 
 ```bash
 # once per box
