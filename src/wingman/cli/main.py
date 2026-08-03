@@ -3024,6 +3024,75 @@ def tenant_rotate_token_cmd(
         typer.echo(line)
 
 
+@tenant_app.command("overnight")
+def tenant_overnight_cmd(
+    registry: Path | None = typer.Option(
+        None,
+        "--registry",
+        help="Tenant registry path (default: WINGMAN_TENANT_REGISTRY host setting).",
+    ),
+) -> None:
+    """Deep-refresh every tenant in the registry, one after another
+    (RFC-048's overnight-loop gap — tenants under the shared process have
+    no per-account systemd timer to hang RFC-018's 'wingman overnight' off
+    of, unlike shape B).
+
+    Calls the exact same 'overnight_run' the single-workspace 'wingman
+    overnight' command does, once per tenant, each with that TENANT's own
+    strict Config (Tenant.config() — resolves Anthropic/Voyage keys only
+    from that tenant's own workspace file, never falls through to a
+    shared tier) — never a shell-out with WINGMAN_DATA_DIR set, which
+    would use the full ladder and risk one tenant's run spending a key
+    that isn't theirs. One tenant's failure (nothing enrolled, a fetch
+    error, whatever) is reported and never blocks the rest — mirrors
+    'upgrade_all.py's same per-user isolation.
+    """
+    configure_logging()
+    from wingman.application.focus import overnight_run
+    from wingman.application.ingest import IngestError
+    from wingman.infrastructure.storage import Storage
+    from wingman.infrastructure.tenants import (
+        TenantRegistryError,
+        load_registry,
+        tenant_registry_path,
+    )
+
+    registry_path = registry or tenant_registry_path()
+    try:
+        tenants = load_registry(registry_path)
+    except TenantRegistryError as exc:
+        typer.echo(f"tenant registry {registry_path} is malformed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not tenants:
+        typer.echo(f"no tenants in the registry ({registry_path}) — nothing to do.")
+        return
+
+    failures = 0
+    for tenant in tenants:
+        config = tenant.config()
+        if not config.db_path.exists():
+            typer.echo(f"{tenant.slug}: no workspace yet ({config.db_path} missing) — skipped.")
+            failures += 1
+            continue
+        try:
+            with Storage(config.db_path) as storage:
+                report = overnight_run(config, storage)
+        except IngestError as exc:
+            typer.echo(f"{tenant.slug}: failed — {exc}")
+            failures += 1
+            continue
+        typer.echo(
+            f"{tenant.slug}: {report.processed} targets, {report.failed} with failures, "
+            f"{len(report.actions)} actions. Digest: {report.digest_path}"
+        )
+        if report.failed:
+            failures += 1
+
+    typer.echo(f"{len(tenants) - failures}/{len(tenants)} tenants completed cleanly.")
+    if failures:
+        raise typer.Exit(code=1)
+
+
 @admin_app.command("url")
 def admin_url(
     host: str = typer.Option("127.0.0.1", help="Bind address the server was started with."),
