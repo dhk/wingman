@@ -33,7 +33,9 @@ def _write_registry(tmp_path: Path, *entries: tuple[str, Path]) -> Path:
 def test_tenant_url_prints_connector_urls(tmp_path: Path) -> None:
     data_dir = _make_tenant(tmp_path, "jason", "tok-jason")
     registry = _write_registry(tmp_path, ("jason", data_dir))
-    result = cli.invoke(app, ["tenant", "url", "jason", "--registry", str(registry), "--port", "9920"])
+    result = cli.invoke(
+        app, ["tenant", "url", "jason", "--registry", str(registry), "--port", "9920"]
+    )
     assert result.exit_code == 0
     assert "tok-jason" in result.output
     assert "9920" in result.output

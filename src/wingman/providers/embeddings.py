@@ -82,8 +82,7 @@ class VoyageEmbeddingProvider:
             api_key = self._api_key or ""
             if not api_key:
                 raise EmbeddingError(
-                    f"no {_VOYAGE_ENV_KEY} configured for this workspace. "
-                    "Set it via Manage → Keys."
+                    f"no {_VOYAGE_ENV_KEY} configured for this workspace. Set it via Manage → Keys."
                 )
         else:
             api_key = self._api_key or os.environ.get(_VOYAGE_ENV_KEY, "").strip()

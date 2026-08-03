@@ -2509,7 +2509,11 @@ def tenant_url(slug: str, host: str = "127.0.0.1", port: int = 8787) -> str:
     config = load_config()
     if config.strict_provider_keys:
         return "Not available from a tenant session — this is an operator-only tool."
-    from wingman.infrastructure.tenants import TenantRegistryError, load_registry, tenant_registry_path
+    from wingman.infrastructure.tenants import (
+        TenantRegistryError,
+        load_registry,
+        tenant_registry_path,
+    )
 
     registry_path = tenant_registry_path()
     try:

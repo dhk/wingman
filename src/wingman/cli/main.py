@@ -2902,7 +2902,11 @@ def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path
     registry (explicit --registry, else WINGMAN_TENANT_REGISTRY, else the
     RFC-047-style default), loads it, and exits(1) with a clear message on
     any failure — never a bare traceback for an operator-facing command."""
-    from wingman.infrastructure.tenants import TenantRegistryError, load_registry, tenant_registry_path
+    from wingman.infrastructure.tenants import (
+        TenantRegistryError,
+        load_registry,
+        tenant_registry_path,
+    )
 
     registry_path = registry or tenant_registry_path()
     try:
@@ -2921,12 +2925,16 @@ def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path
 def tenant_url_cmd(
     slug: str = typer.Argument(..., help="The tenant's slug in the registry."),
     registry: Path | None = typer.Option(
-        None, "--registry", help="Tenant registry path (default: WINGMAN_TENANT_REGISTRY host setting)."
+        None,
+        "--registry",
+        help="Tenant registry path (default: WINGMAN_TENANT_REGISTRY host setting).",
     ),
     host: str = typer.Option("127.0.0.1", help="Bind address the shared server was started with."),
     port: int = typer.Option(8787, help="Port the shared server was started with."),
     allowed_host: list[str] = typer.Option(  # noqa: B008 — typer's documented pattern
-        [], "--allowed-host", help="Extra --allowed-host flag(s) the shared server was started with."
+        [],
+        "--allowed-host",
+        help="Extra --allowed-host flag(s) the shared server was started with.",
     ),
     tunnel_port: int | None = typer.Option(
         None, "--tunnel-port", help="External tunnel port, if not the implicit 443."
@@ -2964,7 +2972,9 @@ def tenant_url_cmd(
 def tenant_rotate_token_cmd(
     slug: str = typer.Argument(..., help="The tenant's slug in the registry."),
     registry: Path | None = typer.Option(
-        None, "--registry", help="Tenant registry path (default: WINGMAN_TENANT_REGISTRY host setting)."
+        None,
+        "--registry",
+        help="Tenant registry path (default: WINGMAN_TENANT_REGISTRY host setting).",
     ),
     host: str = typer.Option("127.0.0.1", help="Bind address the shared server was started with."),
     port: int = typer.Option(8787, help="Port the shared server was started with."),
