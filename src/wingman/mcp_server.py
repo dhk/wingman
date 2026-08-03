@@ -485,6 +485,25 @@ def interview_react(
     follow, same as qa_capture/resolve_requirement elsewhere in this
     codebase.
 
+    Nominee research (issue #214) — for every NOMINATION subtype only
+    (Values, Values fallback, Mission alignment, Network admired; not
+    Alignment of perspective, whose target already has real fetched
+    content): once a nominee is named, before asking 'why', search to
+    identify them — if the name is ambiguous (a common name, several
+    notable people), ask which one before continuing. Look for their
+    values/background (Wikipedia preferred) and, if they're alive, their
+    current writing. This is a conversational aid only, never evidence —
+    nothing found this way becomes part of what gets captured, and the
+    nominee is still never fetched or quoted as evidence, unchanged from
+    every other nomination (only 'why', in the user's own words, ever
+    is). Once 'why' is given, weigh it against what the search turned up
+    and let a genuine gap or resonance prompt ONE real follow-up question
+    before the BP-06 echo-and-save step — not a checklist item, only
+    where the research actually earns a question. After a LIVING
+    nominee's capture is saved, offer to track them (the 'people_add'
+    tool — the existing watchlist, not a new mechanism); never offer this
+    for someone who has died.
+
     The response reports position ("N of M captured for this subtype")
     once a subtype reaches half its per-subtype cap
     (WINGMAN_INTERVIEW_MAX_PER_SUBTYPE, default 6) — fold that into the
