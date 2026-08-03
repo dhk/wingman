@@ -9,7 +9,11 @@
 # (missing 'wingman' group, HTTPS clone URLs prompting for GitHub
 # credentials on a fresh service account with no git identity, '~'
 # silently expanding in the CALLING shell instead of the target
-# account's, PATH not surviving a non-interactive 'bash -c').
+# account's, PATH not surviving a non-interactive 'bash -c', and
+# 'systemctl --user' unable to reach a fresh account's session bus at
+# all without XDG_RUNTIME_DIR pointed at it explicitly — the same fix
+# 'infrastructure/upgrade_all.py' already needed for this exact reason,
+# RFC-042).
 #
 # Usage: sudo ./wingman-provision-shared.sh
 # Env overrides: WINGMAN_SHARED_USER (default wingman-shared),
@@ -47,6 +51,12 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
 fi
 usermod -aG wingman "$SERVICE_USER"
 loginctl enable-linger "$SERVICE_USER"
+SERVICE_UID="$(id -u "$SERVICE_USER")"
+# Force the user manager (and its /run/user/<uid> runtime dir) up now,
+# rather than hoping linger's own timing wins a race against step 6's
+# 'systemctl --user' calls below — a fresh account has no login session
+# to have started it yet.
+systemctl start "user@${SERVICE_UID}.service" 2>/dev/null || true
 
 say "3/7 registry directory + file (root-owned, group-readable, no secrets in it)"
 install -d -m 750 -o root -g wingman /etc/wingman
@@ -88,7 +98,15 @@ Restart=on-failure
 WantedBy=default.target
 EOF
 chown "$SERVICE_USER:$SERVICE_USER" "$UNIT_DIR/wingman-mcp.service"
-sudo -iu "$SERVICE_USER" bash -c 'systemctl --user daemon-reload && systemctl --user enable --now wingman-mcp.service'
+# 'systemctl --user' needs XDG_RUNTIME_DIR pointed at this account's own
+# runtime dir to reach its session bus at all when invoked via sudo from
+# root — 'sudo -iu' alone isn't enough (this is the exact fix
+# 'infrastructure/upgrade_all.py' already needed, RFC-042); without it
+# this fails with "Failed to connect to bus: No medium found".
+sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
+  systemctl --user daemon-reload
+sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
+  systemctl --user enable --now wingman-mcp.service
 
 say "7/7 tailscale mount (stripping proxy — the shared process itself runs with no --prefix)"
 if command -v tailscale >/dev/null 2>&1; then
