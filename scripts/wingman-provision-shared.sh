@@ -75,10 +75,15 @@ if [ ! -f "$KEY_PATH" ]; then
 fi
 
 say "5/7 clone + install wingman (SSH URL — this box's git identity is deploy-key-only, HTTPS prompts for credentials that don't exist)"
-if [ ! -d "/home/$SERVICE_USER/wingman/.git" ]; then
-  sudo -iu "$SERVICE_USER" bash -c "git clone $REPO_URL ~/wingman"
+# ~/src/wingman, not ~/wingman: infrastructure/upgrade_all.py's
+# REPO_SUBPATH assumes this exact convention (CLAUDE.md's documented
+# code-location default, every account) for the cross-account
+# wingman-upgrade-all sweep to find this checkout without an explicit
+# WINGMAN_UPGRADE_SOURCE_<user> override.
+if [ ! -d "/home/$SERVICE_USER/src/wingman/.git" ]; then
+  sudo -iu "$SERVICE_USER" bash -c "mkdir -p ~/src && git clone $REPO_URL ~/src/wingman"
 fi
-sudo -iu "$SERVICE_USER" bash -c "cd ~/wingman && uv tool install --reinstall ."
+sudo -iu "$SERVICE_USER" bash -c "cd ~/src/wingman && uv tool install --reinstall ."
 
 say "6/7 systemd unit"
 UNIT_DIR="/home/$SERVICE_USER/.config/systemd/user"
@@ -119,3 +124,6 @@ fi
 echo
 say "Done. Add tenants with: sudo ./wingman-add-tenant.sh <slug>"
 say "Check status with:      sudo -iu $SERVICE_USER wg tenant url <slug> --port $PORT"
+say "One more step, by hand: add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS in"
+say "root's wingman-upgrade-all.service (docs/SERVER.md §7/§9), so this account's"
+say "checkout gets swept into the same nightly automated upgrade as everyone else."
