@@ -16,7 +16,7 @@ from wingman.domain.corpus import CorpusDocument
 from wingman.domain.heap import HeapItem
 from wingman.domain.opportunity import Opportunity
 from wingman.domain.outreach import OutreachBrief
-from wingman.domain.person import ExternalDocument, NewsItem, Person, PersonOrigin
+from wingman.domain.person import ExternalDocument, NewsItem, Person, PersonDossier, PersonOrigin
 from wingman.domain.persona import Persona
 from wingman.domain.pov import PovCard
 from wingman.domain.relationship import RelationshipLogEntry, RelationshipObjective
@@ -80,6 +80,12 @@ CREATE INDEX IF NOT EXISTS idx_external_documents_person ON external_documents (
 CREATE VIRTUAL TABLE IF NOT EXISTS external_fts USING fts5(doc_id UNINDEXED, title, body);
 CREATE TABLE IF NOT EXISTS pov_cards (
     card_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS person_dossiers (
+    dossier_id TEXT PRIMARY KEY,
     person_id TEXT NOT NULL UNIQUE,
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
@@ -530,8 +536,8 @@ class Storage:
 
     def delete_person(self, person_id: str) -> bool:
         """Delete a person and everything keyed to them: documents (+FTS+embeddings),
-        POV card, news, outreach brief, relationship objective/log, and any
-        watchlist membership."""
+        POV card, deep-dive dossier, news, outreach brief, relationship
+        objective/log, and any watchlist membership."""
         person = self.get_person(person_id)
         if person is None:
             return False
@@ -540,6 +546,7 @@ class Storage:
             self._conn.execute("DELETE FROM external_fts WHERE doc_id = ?", (doc.doc_id,))
             self._conn.execute("DELETE FROM embeddings WHERE doc_id = ?", (doc.doc_id,))
         self._conn.execute("DELETE FROM pov_cards WHERE person_id = ?", (person_id,))
+        self._conn.execute("DELETE FROM person_dossiers WHERE person_id = ?", (person_id,))
         self._conn.execute("DELETE FROM news_items WHERE person_id = ?", (person_id,))
         self._conn.execute("DELETE FROM outreach_briefs WHERE person_id = ?", (person_id,))
         self._conn.execute("DELETE FROM relationship_objectives WHERE person_id = ?", (person_id,))
@@ -671,6 +678,13 @@ class Storage:
             )
         else:
             self._conn.execute("DELETE FROM pov_cards WHERE person_id = ?", (absorb_id,))
+        if self.get_person_dossier(keep_id) is None:
+            self._conn.execute(
+                "UPDATE person_dossiers SET person_id = ? WHERE person_id = ?",
+                (keep_id, absorb_id),
+            )
+        else:
+            self._conn.execute("DELETE FROM person_dossiers WHERE person_id = ?", (absorb_id,))
         if self.get_outreach_brief(keep_id) is None:
             self._conn.execute(
                 "UPDATE outreach_briefs SET person_id = ? WHERE person_id = ?",
@@ -766,6 +780,29 @@ class Storage:
     def list_pov_cards(self) -> list[PovCard]:
         cursor = self._conn.execute("SELECT payload FROM pov_cards ORDER BY created_at")
         return [PovCard.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def save_person_dossier(self, dossier: PersonDossier) -> None:
+        """Insert or replace the dossier for its person (rebuilt, not versioned — #222)."""
+        self._conn.execute(
+            "INSERT INTO person_dossiers (dossier_id, person_id, payload, created_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(person_id) DO UPDATE SET dossier_id = excluded.dossier_id,"
+            " payload = excluded.payload, created_at = excluded.created_at",
+            (
+                dossier.dossier_id,
+                dossier.person_id,
+                dossier.model_dump_json(),
+                dossier.generated_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def get_person_dossier(self, person_id: str) -> PersonDossier | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM person_dossiers WHERE person_id = ?", (person_id,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return PersonDossier.model_validate_json(row[0]) if row else None
 
     def save_objective(self, objective: RelationshipObjective) -> None:
         """Insert or replace the objective for its person (RFC-037: revised, not versioned)."""

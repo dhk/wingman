@@ -72,6 +72,7 @@ from wingman.application.people import (
     seed_from_connections,
 )
 from wingman.application.dossier import build_company_dossier, delete_dossier_reports
+from wingman.application.dossier_research import research_person_dossier, save_person_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import (
@@ -1613,6 +1614,101 @@ def people_pov(name: str, refresh: bool = False) -> str:
 
 
 @server.tool()
+def people_deep_dive(name: str, confirmed: bool = False) -> str:
+    """One-shot open-web research on a named person (#222): current role,
+    background, public viewpoints, recent activity — with citations.
+
+    The only wingman lookup that reaches the open web (RESEARCH_WEBSEARCH,
+    via OpenRouter) and the only one that costs API usage per call — every
+    other lookup stays inside approved sources or stored data.
+
+    PROTOCOL:
+    1. Call with confirmed=false first (the default): makes NO network call
+       and costs nothing — just a warning to show the user before spending.
+       Ask them to confirm before proceeding.
+    2. Only after they explicitly agree, call again with confirmed=true —
+       THIS call is the paid one. It returns the findings as free text with
+       a Sources section. Nothing is stored yet.
+    3. Show the findings to the user. Only after they approve storing them,
+       call people_deep_dive_save(name, content=<the findings text from
+       step 2, unchanged>) — a separate tool, so nothing is written without
+       that second, explicit act.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    if not name.strip():
+        return "people_deep_dive needs a name."
+    if not confirmed:
+        return (
+            f"About to research {name!r} via OpenRouter's web-search-grounded "
+            "model — this reaches the open web and costs API usage, unlike "
+            "every other wingman lookup. Nothing has been searched or stored "
+            "yet.\n\nAsk the user to confirm, then call again with confirmed=true."
+        )
+    try:
+        provider = get_provider(CapabilityClass.RESEARCH_WEBSEARCH, config)
+        response = research_person_dossier(name, provider)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        return f"people deep-dive failed: {exc}"
+    return (
+        f"{response.text}\n\n"
+        "Not stored. Show the findings above to the user — call "
+        f"people_deep_dive_save({name!r}, content=<the findings text above, "
+        "unchanged>) only after they explicitly approve storing them."
+    )
+
+
+@server.tool()
+def people_deep_dive_save(name: str, content: str) -> str:
+    """Store deep-dive findings from a prior people_deep_dive call (#222).
+
+    Call only after showing that exact content to the user and getting
+    their explicit approval — this call is itself the storage approval
+    gate (no separate confirmed flag: the reviewed content in hand is the
+    proof, same shape as feed_discover/feed_attach). Creates the person if
+    they aren't already on the watchlist. Overwrites any previous dossier
+    for this person (rebuilt, not versioned — same as a POV card).
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        provider_name = getattr(
+            get_provider(CapabilityClass.RESEARCH_WEBSEARCH, config), "provider_name", ""
+        )
+    except (ModelConfigError, ProviderError):
+        provider_name = ""
+    with Storage(config.db_path) as storage:
+        try:
+            person = save_person_dossier(name, content, storage, provider=provider_name)
+        except IngestError as exc:
+            return f"people deep-dive save failed: {exc}"
+    return f"Stored deep-dive for {person.name} ({len(content)} chars)."
+
+
+@server.tool()
+def people_dossier(name: str) -> str:
+    """This person's stored deep-dive dossier (#222), or say there isn't one.
+
+    Read-only — no network call. Build one first with people_deep_dive
+    (+ people_deep_dive_save).
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        found = _find_person(storage, name)
+        if isinstance(found, str):
+            return found
+        person = found
+        dossier = storage.get_person_dossier(person.person_id)
+    if dossier is None:
+        return f"No deep-dive stored for {person.name} yet — try people_deep_dive."
+    return dossier.content
+
+
+@server.tool()
 def company_pov(name: str, refresh: bool = False) -> str:
     """Synthesized company themes from its people's writing (a model call on refresh).
 
@@ -2454,6 +2550,7 @@ def connector_urls(
     port: int = 8787,
     prefix: str = "",
     tunnel_port: int | None = None,
+    tunnel_prefix: str = "",
 ) -> list[tuple[str, str]]:
     """(label, url) pairs: loopback MCP + web UI, plus a tunnel pair per
     accepted hostname. The single source of truth behind both 'render_urls'
@@ -2463,18 +2560,32 @@ def connector_urls(
     implicit 443 (e.g. a second instance on the same Tailscale hostname via
     a distinct funnel port) — orthogonal to 'port', which is always the
     local bind.
+
+    'tunnel_prefix', when given, OVERRIDES 'prefix' for the tunnel pairs
+    only — the local loopback lines always use 'prefix'. Left at its
+    default ("") the tunnel pairs fall back to 'prefix' too, unchanged
+    from before this parameter existed: a pass-through front (nginx,
+    Caddy) sees the same path the server itself listens on, so one
+    prefix naturally describes both. 'tunnel_prefix' exists for the
+    opposite case — a STRIPPING front, e.g. RFC-048's 'tailscale serve
+    --set-path /shared', which the backend process (deliberately started
+    with no --prefix of its own, per that script's own comment) never
+    sees at all, so only the tunnel-visible path needs it. Mirrors
+    'tunnel_port': only changes the printed/displayed tunnel URLs, never
+    the local bind or the server's own routing.
     """
     from wingman.webui import normalize_prefix
 
     prefix = normalize_prefix(prefix)
+    tunnel_prefix = normalize_prefix(tunnel_prefix) or prefix
     pairs = [
         ("MCP over HTTP", f"http://{host}:{port}{prefix}/mcp/{token}"),
         ("Web UI (read + upload)", f"http://{host}:{port}{prefix}/ui/{token}"),
     ]
     for tunnel_host in extra_hosts:
         authority = tunnel_host if tunnel_port is None else f"{tunnel_host}:{tunnel_port}"
-        pairs.append(("Tunnel MCP connector", f"https://{authority}{prefix}/mcp/{token}"))
-        pairs.append(("Tunnel web UI", f"https://{authority}{prefix}/ui/{token}/"))
+        pairs.append(("Tunnel MCP connector", f"https://{authority}{tunnel_prefix}/mcp/{token}"))
+        pairs.append(("Tunnel web UI", f"https://{authority}{tunnel_prefix}/ui/{token}/"))
     return pairs
 
 
@@ -2485,13 +2596,14 @@ def render_urls(
     port: int = 8787,
     prefix: str = "",
     tunnel_port: int | None = None,
+    tunnel_prefix: str = "",
 ) -> list[str]:
     """The ready-to-paste URL lines, formatted from 'connector_urls' — backs
     both the --http startup banner and 'wingman mcp url', which computes
     those fresh from the token file and Tailscale auto-detection without
     starting a server.
     """
-    pairs = connector_urls(token, extra_hosts, host, port, prefix, tunnel_port)
+    pairs = connector_urls(token, extra_hosts, host, port, prefix, tunnel_port, tunnel_prefix)
     return [f"{label}: {url}" for label, url in pairs]
 
 
@@ -2548,13 +2660,22 @@ def telemetry(action: str = "status", limit: int = 20) -> str:
 
 
 @server.tool()
-def tenant_url(slug: str, host: str = "127.0.0.1", port: int = 8787) -> str:
+def tenant_url(
+    slug: str, host: str = "127.0.0.1", port: int = 8787, tunnel_prefix: str = ""
+) -> str:
     """A registered tenant's MCP + web UI connector URLs, by slug (#209,
     RFC-048's operator-assisted URL recovery). 'host'/'port' should match
     how the shared process was actually started, same as 'wingman mcp
     url' for a single-tenant instance. Operator-only: refuses when called
     from within any tenant's own scoped session, so a tenant can never
     use their own MCP session to look up another tenant's URL.
+
+    'tunnel_prefix' matches WINGMAN_SHARED_TAILSCALE_PATH (default
+    '/shared') when the tunnel front strips a path prefix before
+    forwarding — e.g. wingman-provision-shared.sh's 'tailscale serve
+    --set-path'. Only changes the printed tunnel URLs; the shared process
+    itself always runs with no --prefix, so leaving this unset when the
+    tunnel needs it prints a URL that 404s at the tunnel, not at wingman.
 
     Every tenant Config built by Tenant.config() sets
     strict_provider_keys=True by construction (RFC-048's key-isolation
@@ -2583,7 +2704,9 @@ def tenant_url(slug: str, host: str = "127.0.0.1", port: int = 8787) -> str:
     if token is None:
         return f"Tenant {slug!r} has no token yet ({tenant.token_path()} is missing or empty)."
     extra_hosts = _extra_allowed_hosts(None)
-    return "\n".join(render_urls(token, extra_hosts, host=host, port=port))
+    return "\n".join(
+        render_urls(token, extra_hosts, host=host, port=port, tunnel_prefix=tunnel_prefix)
+    )
 
 
 def _instrument_tools() -> None:

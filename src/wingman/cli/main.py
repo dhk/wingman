@@ -55,6 +55,7 @@ from wingman.domain.person import Person
 from wingman.reporting.export import export_career, export_company, export_person
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
 from wingman.application.dossier import build_company_dossier, delete_dossier_reports
+from wingman.application.dossier_research import research_person_dossier, save_person_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import (
@@ -1394,6 +1395,64 @@ def people_pov(
     typer.echo(render_pov_card(report.card))
     for rejected in report.rejected:
         typer.echo(f"  rejected stance {rejected.statement!r}: {rejected.reason}")
+
+
+@people_app.command("deep-dive")
+def people_deep_dive(
+    name: str = typer.Argument(..., help="Person to research."),
+    yes: bool = typer.Option(False, "--yes", help="Skip both confirmation prompts."),
+) -> None:
+    """One-shot open-web research on a person (#222): current role,
+    background, public viewpoints, recent activity — with citations.
+
+    The only wingman lookup that reaches the open web (via OpenRouter) and
+    the only one that costs API usage per call — every other lookup stays
+    inside approved sources or stored data. Asks before searching (the
+    paid call) and again before storing what it finds.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "researched")
+    if not yes and not typer.confirm(
+        f"Research {name!r} via OpenRouter's web-search-grounded model? "
+        "This reaches the open web and costs API usage.",
+        default=False,
+    ):
+        typer.echo("Nothing was searched.")
+        raise typer.Exit(code=1)
+    try:
+        provider = get_provider(CapabilityClass.RESEARCH_WEBSEARCH, config)
+        response = research_person_dossier(name, provider)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        typer.echo(f"deep-dive failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(response.text)
+    typer.echo("")
+    if not yes and not typer.confirm(f"Store this as {name}'s deep-dive?", default=False):
+        typer.echo("Nothing was stored.")
+        return
+    with Storage(config.db_path) as storage:
+        person = save_person_dossier(
+            name, response.text, storage, provider=response.provider, model=response.model
+        )
+    typer.echo(f"Stored deep-dive for {person.name}.")
+
+
+@people_app.command("dossier")
+def people_dossier(
+    name: str = typer.Argument(..., help="Person whose stored dossier to show."),
+) -> None:
+    """Show a person's stored deep-dive dossier (#222). Read-only — no network call."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "shown")
+    with Storage(config.db_path) as storage:
+        person = _resolve_person(storage, name, "shown")
+        dossier = storage.get_person_dossier(person.person_id)
+    if dossier is None:
+        typer.echo(f"No deep-dive stored for {person.name} yet — try 'wingman people deep-dive'.")
+        return
+    typer.echo(dossier.content)
 
 
 @people_app.command("brief")
@@ -2981,6 +3040,15 @@ def tenant_url_cmd(
     tunnel_port: int | None = typer.Option(
         None, "--tunnel-port", help="External tunnel port, if not the implicit 443."
     ),
+    tunnel_prefix: str = typer.Option(
+        "",
+        "--tunnel-prefix",
+        help="Path prefix a STRIPPING tunnel front mounts this process under (e.g. /shared, "
+        "matching WINGMAN_SHARED_TAILSCALE_PATH and wingman-provision-shared.sh's "
+        "'tailscale serve --set-path'). Only changes the printed tunnel URLs -- the shared "
+        "process itself runs with no --prefix, so omitting this when the tunnel needs it "
+        "prints a URL that 404s at the tunnel, not at wingman.",
+    ),
 ) -> None:
     """Print a registered tenant's connector URLs, by slug (#209).
 
@@ -3001,7 +3069,12 @@ def tenant_url_cmd(
         raise typer.Exit(code=1)
     extra_hosts = _extra_allowed_hosts(allowed_host or None)
     for line in render_urls(
-        token, extra_hosts, host=host, port=port, tunnel_port=_tunnel_port(tunnel_port)
+        token,
+        extra_hosts,
+        host=host,
+        port=port,
+        tunnel_port=_tunnel_port(tunnel_port),
+        tunnel_prefix=tunnel_prefix,
     ):
         typer.echo(line)
     if not extra_hosts:
@@ -3022,6 +3095,12 @@ def tenant_rotate_token_cmd(
     port: int = typer.Option(8787, help="Port the shared server was started with."),
     tunnel_port: int | None = typer.Option(
         None, "--tunnel-port", help="External tunnel port, if not the implicit 443."
+    ),
+    tunnel_prefix: str = typer.Option(
+        "",
+        "--tunnel-prefix",
+        help="Path prefix a STRIPPING tunnel front mounts this process under (e.g. /shared, "
+        "matching WINGMAN_SHARED_TAILSCALE_PATH). Only changes the printed tunnel URLs.",
     ),
 ) -> None:
     """Rotate one tenant's capability token — invalidate and reissue in a
@@ -3061,7 +3140,12 @@ def tenant_rotate_token_cmd(
     typer.echo(f"New token for {slug!r}:")
     extra_hosts = _extra_allowed_hosts(None)
     for line in render_urls(
-        new_token, extra_hosts, host=host, port=port, tunnel_port=_tunnel_port(tunnel_port)
+        new_token,
+        extra_hosts,
+        host=host,
+        port=port,
+        tunnel_port=_tunnel_port(tunnel_port),
+        tunnel_prefix=tunnel_prefix,
     ):
         typer.echo(line)
 

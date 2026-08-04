@@ -123,7 +123,7 @@ fi
 
 echo
 say "Done. Add tenants with: sudo ./wingman-add-tenant.sh <slug>"
-say "Check status with:      sudo -iu $SERVICE_USER wg tenant url <slug> --port $PORT"
+say "Check status with:      sudo -iu $SERVICE_USER wg tenant url <slug> --port $PORT --tunnel-prefix $TAILSCALE_PATH"
 say "One more step, by hand: add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS in"
 say "root's wingman-upgrade-all.service (docs/SERVER.md §7/§9), so this account's"
 say "checkout gets swept into the same nightly automated upgrade as everyone else."

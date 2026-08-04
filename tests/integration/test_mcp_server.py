@@ -65,6 +65,9 @@ def test_all_tools_are_registered() -> None:
         "people_import_connections",
         "ingest_resume_url",
         "people_pov",
+        "people_deep_dive",
+        "people_deep_dive_save",
+        "people_dossier",
         "people_brief",
         "company_similar",
         "company_like",
@@ -311,6 +314,46 @@ def test_people_pov_via_mcp_with_recorded_provider(
     # second call serves the stored card without a model call
     stored = people_pov("Jane Author")
     assert "stored card" in stored
+
+
+def test_people_deep_dive_via_mcp_with_recorded_provider(
+    workspace: Path, tmp_path: Path
+) -> None:
+    from wingman.mcp_server import people_deep_dive, people_deep_dive_save, people_dossier
+
+    # confirmed=False: no provider is configured at all, so a network call
+    # here would raise — proving the preview path never reaches the provider.
+    preview = people_deep_dive("Scott Brady")
+    assert "Ask the user to confirm" in preview
+    assert "confirmed=true" in preview
+
+    response_path = tmp_path / "dossier-response.txt"
+    response_path.write_text(
+        "Scott Brady is a founding partner at Innovation Endeavors.\n\n"
+        "Sources:\n- [Bio](https://example.com/bio)",
+        encoding="utf-8",
+    )
+    config = load_config()
+    config.models_config_path.write_text(
+        f'[models.research_websearch]\nprovider = "recorded"\npath = "{response_path}"\n',
+        encoding="utf-8",
+    )
+
+    found = people_deep_dive("Scott Brady", confirmed=True)
+    assert "Scott Brady is a founding partner" in found
+    assert "https://example.com/bio" in found
+    assert "Not stored" in found
+    # people_deep_dive never touches storage — no one named Scott Brady exists yet.
+    assert "No person named" in people_dossier("Scott Brady")
+
+    saved = people_deep_dive_save(
+        "Scott Brady",
+        "Scott Brady is a founding partner at Innovation Endeavors.\n\n"
+        "Sources:\n- [Bio](https://example.com/bio)",
+    )
+    assert "Stored deep-dive for Scott Brady" in saved
+    stored = people_dossier("Scott Brady")
+    assert "https://example.com/bio" in stored
 
 
 def test_new_tools_report_uninitialized_workspace(
