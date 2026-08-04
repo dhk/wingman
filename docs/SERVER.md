@@ -716,3 +716,22 @@ same reason §9's provisioning script needs it — see the pitfalls list
 above.) Logs: `sudo -u wingman-shared env XDG_RUNTIME_DIR=/run/user/$(id -u wingman-shared) journalctl --user -u wingman-tenant-overnight.service`.
 
 A one-off run any time: `sudo -iu wingman-shared bash -c 'export PATH="$HOME/.local/bin:$PATH"; wingman tenant overnight'`.
+
+**Redeploying the shared process** (#150's "safe restart primitive" —
+deliberately not wired to any automatic CI/CD trigger; every tenant on
+the shared process is briefly interrupted by a restart, and this repo
+merges often enough that auto-deploy-on-every-merge would mean surprise
+interruptions for people who aren't the one deploying — a decision worth
+making explicitly later, not defaulted into now). One command instead of
+hand-constructing the pull/reinstall/restart/verify sequence live —
+exactly the class of mistake that produced the systemd bus and pidfile
+bugs earlier tonight:
+
+```bash
+sudo scripts/wingman-redeploy-shared.sh
+```
+
+Pulls, reinstalls, restarts, then polls `/health` (unauthenticated,
+version + start time only, RFC-033) until it returns 200 with a NEW
+`started_at` — confirming the restart actually took effect, not just
+that the port answers.
