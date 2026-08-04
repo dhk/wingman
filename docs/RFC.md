@@ -46,7 +46,7 @@ Append a numbered section with: the decision, the alternatives considered, the r
 
 ## RFC-004: Model routing through capability classes
 
-**Decision.** Application code requests a capability class — `extract_fast`, `synthesize_balanced`, `reason_frontier`, `critic_independent` — and configuration maps each class to a concrete provider and model. Model IDs never appear in domain or application code.
+**Decision.** Application code requests a capability class — `extract_fast`, `synthesize_balanced`, `reason_frontier`, `critic_independent`, `research_websearch` — and configuration maps each class to a concrete provider and model. Model IDs never appear in domain or application code.
 
 **Durable decision** — not expected to be revisited casually: domain and application code depend on internal interfaces, never provider SDKs; provider-specific implementations live under `src/wingman/providers/`. Accepted consequences: tests can use fakes; provider-specific features require explicit adapters; a small abstraction layer is the up-front cost. (Folded from former ADR 0002.)
 
@@ -59,6 +59,7 @@ This entry is the single home for runtime model-routing policy; other documents 
 | Routine synthesis and drafting | `synthesize_balanced` |
 | Difficult synthesis, high-consequence reasoning | `reason_frontier` |
 | Independent critique of candidate artifacts | `critic_independent` |
+| Open-web research (#222's person deep-dive) — the only class whose provider reaches beyond approved/named sources or user-dropped items | `research_websearch` |
 | External-action policy checks | No model, deterministic policy engine (RFC-006) |
 
 Build-time tooling (which model writes the code) is a separate concern, owned by [`product/BUILD_PLAN.md`](product/BUILD_PLAN.md) — the one place a concrete build-model name may appear.
@@ -67,7 +68,7 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 
 **Rationale.** Model names, prices, and relative strengths change monthly. Capability classes make "swap the extraction model" a one-line config change and make model-comparison benchmarks (see [`EVALUATION.md`](EVALUATION.md)) possible without code churn.
 
-**Revisit if.** The four classes prove to be the wrong granularity in practice.
+**Revisit if.** The five classes prove to be the wrong granularity in practice.
 
 ## RFC-005: Provenance metadata on every influential record
 

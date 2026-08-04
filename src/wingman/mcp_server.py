@@ -72,6 +72,7 @@ from wingman.application.people import (
     seed_from_connections,
 )
 from wingman.application.dossier import build_company_dossier, delete_dossier_reports
+from wingman.application.dossier_research import research_person_dossier, save_person_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import (
@@ -1573,6 +1574,101 @@ def people_pov(name: str, refresh: bool = False) -> str:
         f"\n  rejected stance {item.statement!r}: {item.reason}" for item in report.rejected
     )
     return render_pov_card(report.card) + rejected
+
+
+@server.tool()
+def people_deep_dive(name: str, confirmed: bool = False) -> str:
+    """One-shot open-web research on a named person (#222): current role,
+    background, public viewpoints, recent activity — with citations.
+
+    The only wingman lookup that reaches the open web (RESEARCH_WEBSEARCH,
+    via OpenRouter) and the only one that costs API usage per call — every
+    other lookup stays inside approved sources or stored data.
+
+    PROTOCOL:
+    1. Call with confirmed=false first (the default): makes NO network call
+       and costs nothing — just a warning to show the user before spending.
+       Ask them to confirm before proceeding.
+    2. Only after they explicitly agree, call again with confirmed=true —
+       THIS call is the paid one. It returns the findings as free text with
+       a Sources section. Nothing is stored yet.
+    3. Show the findings to the user. Only after they approve storing them,
+       call people_deep_dive_save(name, content=<the findings text from
+       step 2, unchanged>) — a separate tool, so nothing is written without
+       that second, explicit act.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    if not name.strip():
+        return "people_deep_dive needs a name."
+    if not confirmed:
+        return (
+            f"About to research {name!r} via OpenRouter's web-search-grounded "
+            "model — this reaches the open web and costs API usage, unlike "
+            "every other wingman lookup. Nothing has been searched or stored "
+            "yet.\n\nAsk the user to confirm, then call again with confirmed=true."
+        )
+    try:
+        provider = get_provider(CapabilityClass.RESEARCH_WEBSEARCH, config)
+        response = research_person_dossier(name, provider)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        return f"people deep-dive failed: {exc}"
+    return (
+        f"{response.text}\n\n"
+        "Not stored. Show the findings above to the user — call "
+        f"people_deep_dive_save({name!r}, content=<the findings text above, "
+        "unchanged>) only after they explicitly approve storing them."
+    )
+
+
+@server.tool()
+def people_deep_dive_save(name: str, content: str) -> str:
+    """Store deep-dive findings from a prior people_deep_dive call (#222).
+
+    Call only after showing that exact content to the user and getting
+    their explicit approval — this call is itself the storage approval
+    gate (no separate confirmed flag: the reviewed content in hand is the
+    proof, same shape as feed_discover/feed_attach). Creates the person if
+    they aren't already on the watchlist. Overwrites any previous dossier
+    for this person (rebuilt, not versioned — same as a POV card).
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        provider_name = getattr(
+            get_provider(CapabilityClass.RESEARCH_WEBSEARCH, config), "provider_name", ""
+        )
+    except (ModelConfigError, ProviderError):
+        provider_name = ""
+    with Storage(config.db_path) as storage:
+        try:
+            person = save_person_dossier(name, content, storage, provider=provider_name)
+        except IngestError as exc:
+            return f"people deep-dive save failed: {exc}"
+    return f"Stored deep-dive for {person.name} ({len(content)} chars)."
+
+
+@server.tool()
+def people_dossier(name: str) -> str:
+    """This person's stored deep-dive dossier (#222), or say there isn't one.
+
+    Read-only — no network call. Build one first with people_deep_dive
+    (+ people_deep_dive_save).
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        found = _find_person(storage, name)
+        if isinstance(found, str):
+            return found
+        person = found
+        dossier = storage.get_person_dossier(person.person_id)
+    if dossier is None:
+        return f"No deep-dive stored for {person.name} yet — try people_deep_dive."
+    return dossier.content
 
 
 @server.tool()

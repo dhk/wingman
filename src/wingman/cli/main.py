@@ -55,6 +55,7 @@ from wingman.domain.person import Person
 from wingman.reporting.export import export_career, export_company, export_person
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
 from wingman.application.dossier import build_company_dossier, delete_dossier_reports
+from wingman.application.dossier_research import research_person_dossier, save_person_dossier
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import (
@@ -1394,6 +1395,64 @@ def people_pov(
     typer.echo(render_pov_card(report.card))
     for rejected in report.rejected:
         typer.echo(f"  rejected stance {rejected.statement!r}: {rejected.reason}")
+
+
+@people_app.command("deep-dive")
+def people_deep_dive(
+    name: str = typer.Argument(..., help="Person to research."),
+    yes: bool = typer.Option(False, "--yes", help="Skip both confirmation prompts."),
+) -> None:
+    """One-shot open-web research on a person (#222): current role,
+    background, public viewpoints, recent activity — with citations.
+
+    The only wingman lookup that reaches the open web (via OpenRouter) and
+    the only one that costs API usage per call — every other lookup stays
+    inside approved sources or stored data. Asks before searching (the
+    paid call) and again before storing what it finds.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "researched")
+    if not yes and not typer.confirm(
+        f"Research {name!r} via OpenRouter's web-search-grounded model? "
+        "This reaches the open web and costs API usage.",
+        default=False,
+    ):
+        typer.echo("Nothing was searched.")
+        raise typer.Exit(code=1)
+    try:
+        provider = get_provider(CapabilityClass.RESEARCH_WEBSEARCH, config)
+        response = research_person_dossier(name, provider)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        typer.echo(f"deep-dive failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(response.text)
+    typer.echo("")
+    if not yes and not typer.confirm(f"Store this as {name}'s deep-dive?", default=False):
+        typer.echo("Nothing was stored.")
+        return
+    with Storage(config.db_path) as storage:
+        person = save_person_dossier(
+            name, response.text, storage, provider=response.provider, model=response.model
+        )
+    typer.echo(f"Stored deep-dive for {person.name}.")
+
+
+@people_app.command("dossier")
+def people_dossier(
+    name: str = typer.Argument(..., help="Person whose stored dossier to show."),
+) -> None:
+    """Show a person's stored deep-dive dossier (#222). Read-only — no network call."""
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "shown")
+    with Storage(config.db_path) as storage:
+        person = _resolve_person(storage, name, "shown")
+        dossier = storage.get_person_dossier(person.person_id)
+    if dossier is None:
+        typer.echo(f"No deep-dive stored for {person.name} yet — try 'wingman people deep-dive'.")
+        return
+    typer.echo(dossier.content)
 
 
 @people_app.command("brief")
