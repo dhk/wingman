@@ -48,16 +48,18 @@ sudo_user_ctl() {
 }
 
 say "1/4 pulling latest code (~/src/wingman)"
-sudo -iu "$SERVICE_USER" bash -c '
-  export PATH="$HOME/.local/bin:$PATH"
-  cd ~/src/wingman && git pull --ff-only
-'
+# One line, ';'-joined — not a multi-line 'bash -c' payload. A newline
+# between two commands inside a single-quoted 'bash -c' argument proved
+# unreliable live under 'sudo -iu': the second line's words silently
+# became extra arguments to the first line's command instead of running
+# as their own command (harmlessly absorbed by 'export' when they
+# happened to be valid identifiers, a confusing hard failure — 'not a
+# valid identifier' — when they weren't, e.g. 'cd ~/src/wingman').
+# ';' on one line was the only shape that behaved consistently in testing.
+sudo -iu "$SERVICE_USER" bash -c 'export PATH="$HOME/.local/bin:$PATH"; cd ~/src/wingman && git pull --ff-only'
 
 say "2/4 reinstalling"
-sudo -iu "$SERVICE_USER" bash -c '
-  export PATH="$HOME/.local/bin:$PATH"
-  cd ~/src/wingman && uv tool install --reinstall .
-'
+sudo -iu "$SERVICE_USER" bash -c 'export PATH="$HOME/.local/bin:$PATH"; cd ~/src/wingman && uv tool install --reinstall .'
 
 say "3/4 restarting wingman-mcp.service"
 BEFORE_STARTED_AT=$(curl -s "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -o '"started_at":"[^"]*"' || true)
