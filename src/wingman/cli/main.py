@@ -2939,6 +2939,15 @@ def tenant_url_cmd(
     tunnel_port: int | None = typer.Option(
         None, "--tunnel-port", help="External tunnel port, if not the implicit 443."
     ),
+    tunnel_prefix: str = typer.Option(
+        "",
+        "--tunnel-prefix",
+        help="Path prefix a STRIPPING tunnel front mounts this process under (e.g. /shared, "
+        "matching WINGMAN_SHARED_TAILSCALE_PATH and wingman-provision-shared.sh's "
+        "'tailscale serve --set-path'). Only changes the printed tunnel URLs -- the shared "
+        "process itself runs with no --prefix, so omitting this when the tunnel needs it "
+        "prints a URL that 404s at the tunnel, not at wingman.",
+    ),
 ) -> None:
     """Print a registered tenant's connector URLs, by slug (#209).
 
@@ -2959,7 +2968,12 @@ def tenant_url_cmd(
         raise typer.Exit(code=1)
     extra_hosts = _extra_allowed_hosts(allowed_host or None)
     for line in render_urls(
-        token, extra_hosts, host=host, port=port, tunnel_port=_tunnel_port(tunnel_port)
+        token,
+        extra_hosts,
+        host=host,
+        port=port,
+        tunnel_port=_tunnel_port(tunnel_port),
+        tunnel_prefix=tunnel_prefix,
     ):
         typer.echo(line)
     if not extra_hosts:
@@ -2980,6 +2994,12 @@ def tenant_rotate_token_cmd(
     port: int = typer.Option(8787, help="Port the shared server was started with."),
     tunnel_port: int | None = typer.Option(
         None, "--tunnel-port", help="External tunnel port, if not the implicit 443."
+    ),
+    tunnel_prefix: str = typer.Option(
+        "",
+        "--tunnel-prefix",
+        help="Path prefix a STRIPPING tunnel front mounts this process under (e.g. /shared, "
+        "matching WINGMAN_SHARED_TAILSCALE_PATH). Only changes the printed tunnel URLs.",
     ),
 ) -> None:
     """Rotate one tenant's capability token — invalidate and reissue in a
@@ -3019,7 +3039,12 @@ def tenant_rotate_token_cmd(
     typer.echo(f"New token for {slug!r}:")
     extra_hosts = _extra_allowed_hosts(None)
     for line in render_urls(
-        new_token, extra_hosts, host=host, port=port, tunnel_port=_tunnel_port(tunnel_port)
+        new_token,
+        extra_hosts,
+        host=host,
+        port=port,
+        tunnel_port=_tunnel_port(tunnel_port),
+        tunnel_prefix=tunnel_prefix,
     ):
         typer.echo(line)
 

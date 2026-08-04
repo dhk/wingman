@@ -658,9 +658,16 @@ exactly the tenant registry + per-tenant token files, nothing added for
 this):
 
 ```bash
-sudo -iu wingman-shared wg tenant url <slug> --port 8789
-sudo -iu wingman-shared wg tenant rotate-token <slug> --port 8789
+sudo -iu wingman-shared wg tenant url <slug> --port 8789 --tunnel-prefix /shared
+sudo -iu wingman-shared wg tenant rotate-token <slug> --port 8789 --tunnel-prefix /shared
 ```
+
+`--tunnel-prefix` must match `WINGMAN_SHARED_TAILSCALE_PATH` (default
+`/shared`, set at `wingman-provision-shared.sh` time) — it only changes
+the printed *tunnel* URL, since `tailscale serve --set-path` strips that
+prefix before forwarding and the shared process itself always runs with
+no `--prefix` of its own. Omitting it prints a URL that 404s at the
+tunnel, not at wingman — easy to mistake for a broken deployment.
 
 Rotation invalidates the old token and issues a new one in the same
 step — no restart of the shared process, no effect on any other

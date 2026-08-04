@@ -2417,6 +2417,7 @@ def connector_urls(
     port: int = 8787,
     prefix: str = "",
     tunnel_port: int | None = None,
+    tunnel_prefix: str = "",
 ) -> list[tuple[str, str]]:
     """(label, url) pairs: loopback MCP + web UI, plus a tunnel pair per
     accepted hostname. The single source of truth behind both 'render_urls'
@@ -2426,18 +2427,32 @@ def connector_urls(
     implicit 443 (e.g. a second instance on the same Tailscale hostname via
     a distinct funnel port) — orthogonal to 'port', which is always the
     local bind.
+
+    'tunnel_prefix', when given, OVERRIDES 'prefix' for the tunnel pairs
+    only — the local loopback lines always use 'prefix'. Left at its
+    default ("") the tunnel pairs fall back to 'prefix' too, unchanged
+    from before this parameter existed: a pass-through front (nginx,
+    Caddy) sees the same path the server itself listens on, so one
+    prefix naturally describes both. 'tunnel_prefix' exists for the
+    opposite case — a STRIPPING front, e.g. RFC-048's 'tailscale serve
+    --set-path /shared', which the backend process (deliberately started
+    with no --prefix of its own, per that script's own comment) never
+    sees at all, so only the tunnel-visible path needs it. Mirrors
+    'tunnel_port': only changes the printed/displayed tunnel URLs, never
+    the local bind or the server's own routing.
     """
     from wingman.webui import normalize_prefix
 
     prefix = normalize_prefix(prefix)
+    tunnel_prefix = normalize_prefix(tunnel_prefix) or prefix
     pairs = [
         ("MCP over HTTP", f"http://{host}:{port}{prefix}/mcp/{token}"),
         ("Web UI (read + upload)", f"http://{host}:{port}{prefix}/ui/{token}"),
     ]
     for tunnel_host in extra_hosts:
         authority = tunnel_host if tunnel_port is None else f"{tunnel_host}:{tunnel_port}"
-        pairs.append(("Tunnel MCP connector", f"https://{authority}{prefix}/mcp/{token}"))
-        pairs.append(("Tunnel web UI", f"https://{authority}{prefix}/ui/{token}/"))
+        pairs.append(("Tunnel MCP connector", f"https://{authority}{tunnel_prefix}/mcp/{token}"))
+        pairs.append(("Tunnel web UI", f"https://{authority}{tunnel_prefix}/ui/{token}/"))
     return pairs
 
 
@@ -2448,13 +2463,14 @@ def render_urls(
     port: int = 8787,
     prefix: str = "",
     tunnel_port: int | None = None,
+    tunnel_prefix: str = "",
 ) -> list[str]:
     """The ready-to-paste URL lines, formatted from 'connector_urls' — backs
     both the --http startup banner and 'wingman mcp url', which computes
     those fresh from the token file and Tailscale auto-detection without
     starting a server.
     """
-    pairs = connector_urls(token, extra_hosts, host, port, prefix, tunnel_port)
+    pairs = connector_urls(token, extra_hosts, host, port, prefix, tunnel_port, tunnel_prefix)
     return [f"{label}: {url}" for label, url in pairs]
 
 
@@ -2511,13 +2527,22 @@ def telemetry(action: str = "status", limit: int = 20) -> str:
 
 
 @server.tool()
-def tenant_url(slug: str, host: str = "127.0.0.1", port: int = 8787) -> str:
+def tenant_url(
+    slug: str, host: str = "127.0.0.1", port: int = 8787, tunnel_prefix: str = ""
+) -> str:
     """A registered tenant's MCP + web UI connector URLs, by slug (#209,
     RFC-048's operator-assisted URL recovery). 'host'/'port' should match
     how the shared process was actually started, same as 'wingman mcp
     url' for a single-tenant instance. Operator-only: refuses when called
     from within any tenant's own scoped session, so a tenant can never
     use their own MCP session to look up another tenant's URL.
+
+    'tunnel_prefix' matches WINGMAN_SHARED_TAILSCALE_PATH (default
+    '/shared') when the tunnel front strips a path prefix before
+    forwarding — e.g. wingman-provision-shared.sh's 'tailscale serve
+    --set-path'. Only changes the printed tunnel URLs; the shared process
+    itself always runs with no --prefix, so leaving this unset when the
+    tunnel needs it prints a URL that 404s at the tunnel, not at wingman.
 
     Every tenant Config built by Tenant.config() sets
     strict_provider_keys=True by construction (RFC-048's key-isolation
@@ -2546,7 +2571,9 @@ def tenant_url(slug: str, host: str = "127.0.0.1", port: int = 8787) -> str:
     if token is None:
         return f"Tenant {slug!r} has no token yet ({tenant.token_path()} is missing or empty)."
     extra_hosts = _extra_allowed_hosts(None)
-    return "\n".join(render_urls(token, extra_hosts, host=host, port=port))
+    return "\n".join(
+        render_urls(token, extra_hosts, host=host, port=port, tunnel_prefix=tunnel_prefix)
+    )
 
 
 def _instrument_tools() -> None:
