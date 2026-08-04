@@ -1841,6 +1841,72 @@ def my_pov(refresh: bool = False) -> str:
     return f"{render_acting_as(active_persona)}\n{render_pov_card(report.card)}{rejected}"
 
 
+@server.tool()
+def my_values(refresh: bool = False) -> str:
+    """Your inferred value dimensions (v2 of issue #240 — inference only,
+    no chart; v3 is a separate, later tool that will render these axes as
+    a radar chart, and will read this tool's ValueAxis.score/label as its
+    stable input contract).
+
+    Reads your own accumulated Values/Mission-alignment interview
+    nominations (see interview_react/'wingman interview') and infers a
+    small, named set of value axes (3-6) describing what you actually
+    care about, each backed by the specific captured item_ids that
+    informed it — never a black-box number. Refuses below a
+    minimum-evidence floor (currently 6 captured items spanning at least
+    2 subtypes) rather than guessing from too little evidence — the
+    returned message says exactly what to capture more of. Returns the
+    stored profile when one exists; refresh=True rebuilds it (a model
+    call — synthesize_balanced — that only groups and names axes; the
+    numeric score is always computed deterministically afterward from
+    each cited item's own captured intensity and pro/con polarity, never
+    asked of the model).
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
+    (coach_persona 'set'), this builds THEIR profile instead — from only
+    their own scoped interview captures, never the coach's.
+    """
+    from wingman.application.coaching import get_active_persona, render_acting_as
+    from wingman.application.pov import persona_card_id
+    from wingman.application.values import (
+        build_value_profile,
+        new_captures_since,
+        render_value_profile,
+    )
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        active_persona = get_active_persona(storage, config)
+        subject_id = (
+            persona_card_id(active_persona.persona_id)
+            if active_persona is not None
+            else CORPUS_PERSON_ID
+        )
+        persona_id = active_persona.persona_id if active_persona is not None else None
+        if not refresh:
+            stored = storage.get_value_profile(subject_id)
+            if stored is not None:
+                stale = new_captures_since(storage, stored, persona_id=persona_id)
+                return (
+                    f"{render_acting_as(active_persona)}\n"
+                    f"{render_value_profile(stored, stale_new_captures=stale)}\n\n"
+                    "(stored profile — rebuild with refresh=True)"
+                )
+        try:
+            provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+            report = build_value_profile(storage, provider, persona=active_persona)
+        except ProposalParseError as exc:
+            return f"values failed: {exc}. Nothing was stored; call again to retry."
+        except (IngestError, ModelConfigError, ProviderError) as exc:
+            return f"values failed: {exc}"
+    rejected = "".join(
+        f"\n  rejected axis {item.name!r}: {item.reason}" for item in report.rejected
+    )
+    return f"{render_acting_as(active_persona)}\n{render_value_profile(report.profile)}{rejected}"
+
+
 def _miso_lines(report: MisoReport) -> str:
     marks = {"ok": "✓", "skipped": "–", "failed": "✗"}
     lines = [f"{report.target} ({report.kind}):"]

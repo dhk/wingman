@@ -22,6 +22,7 @@ from wingman.domain.pov import PovCard
 from wingman.domain.relationship import RelationshipLogEntry, RelationshipObjective
 from wingman.domain.research import CompanySource, NewLinkEvent, ResearchSnapshot
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
+from wingman.domain.values import ValueProfile
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_records (
@@ -81,6 +82,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS external_fts USING fts5(doc_id UNINDEXED, tit
 CREATE TABLE IF NOT EXISTS pov_cards (
     card_id TEXT PRIMARY KEY,
     person_id TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS value_profiles (
+    profile_id TEXT PRIMARY KEY,
+    subject_id TEXT NOT NULL UNIQUE,
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
@@ -780,6 +787,30 @@ class Storage:
     def list_pov_cards(self) -> list[PovCard]:
         cursor = self._conn.execute("SELECT payload FROM pov_cards ORDER BY created_at")
         return [PovCard.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def save_value_profile(self, profile: ValueProfile) -> None:
+        """Insert or replace the profile for its subject (rebuilt, not
+        versioned — same lifecycle as save_pov_card)."""
+        self._conn.execute(
+            "INSERT INTO value_profiles (profile_id, subject_id, payload, created_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(subject_id) DO UPDATE SET profile_id = excluded.profile_id,"
+            " payload = excluded.payload, created_at = excluded.created_at",
+            (
+                profile.profile_id,
+                profile.subject_id,
+                profile.model_dump_json(),
+                profile.generated_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def get_value_profile(self, subject_id: str) -> ValueProfile | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM value_profiles WHERE subject_id = ?", (subject_id,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return ValueProfile.model_validate_json(row[0]) if row else None
 
     def save_person_dossier(self, dossier: PersonDossier) -> None:
         """Insert or replace the dossier for its person (rebuilt, not versioned — #222)."""

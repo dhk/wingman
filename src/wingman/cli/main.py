@@ -1719,6 +1719,69 @@ def pov(
         typer.echo(f"  rejected stance {rejected.statement!r}: {rejected.reason}")
 
 
+@app.command()
+def values(
+    refresh: bool = typer.Option(
+        False, "--refresh", help="Rebuild the profile (a model call) even if one is stored."
+    ),
+) -> None:
+    """Your inferred value dimensions (v2 of issue #240 — inference only,
+    no chart; v3 is a separate, later PR that will render these axes as a
+    radar chart).
+
+    Reads your own accumulated Values/Mission-alignment interview
+    nominations (see 'wingman interview') and infers a small, named set of
+    value axes describing what you actually care about — each backed by
+    the specific captures that informed it, never a black-box number.
+    Refuses (below a minimum-evidence floor) rather than guessing from too
+    little. A model call (synthesize_balanced) on refresh; a stored
+    profile is shown without one.
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
+    ('wingman coach-persona set <name>'), this builds THEIR profile
+    instead — from only their own scoped interview captures.
+    """
+    from wingman.application.coaching import get_active_persona, render_acting_as
+    from wingman.application.pov import CORPUS_PERSON_ID, persona_card_id
+    from wingman.application.values import (
+        build_value_profile,
+        new_captures_since,
+        render_value_profile,
+    )
+
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "profiled")
+    with Storage(config.db_path) as storage:
+        active_persona = get_active_persona(storage, config)
+        typer.echo(render_acting_as(active_persona))
+        subject_id = (
+            persona_card_id(active_persona.persona_id)
+            if active_persona is not None
+            else CORPUS_PERSON_ID
+        )
+        persona_id = active_persona.persona_id if active_persona is not None else None
+        if not refresh:
+            stored = storage.get_value_profile(subject_id)
+            if stored is not None:
+                stale = new_captures_since(storage, stored, persona_id=persona_id)
+                typer.echo(render_value_profile(stored, stale_new_captures=stale))
+                typer.echo("\n(stored profile — rebuild with --refresh)")
+                return
+        try:
+            provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+            report = build_value_profile(storage, provider, persona=active_persona)
+        except (IngestError, ModelConfigError, ProviderError) as exc:
+            typer.echo(f"values failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        except ProposalParseError as exc:
+            typer.echo(f"values failed: {exc}. Nothing was stored; re-run to retry.", err=True)
+            raise typer.Exit(code=1) from exc
+    typer.echo(render_value_profile(report.profile))
+    for rejected in report.rejected:
+        typer.echo(f"  rejected axis {rejected.name!r}: {rejected.reason}")
+
+
 _STEP_MARKS = {"ok": "✓", "skipped": "–", "failed": "✗"}
 
 
