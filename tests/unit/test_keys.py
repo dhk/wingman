@@ -16,7 +16,12 @@ from wingman.infrastructure.keys import (
     unset_key,
 )
 
-_KNOWN_ENV_VARS = ("ANTHROPIC_API_KEY", "VOYAGE_API_KEY", "GITHUB_API_ISSUES_KEY")
+_KNOWN_ENV_VARS = (
+    "ANTHROPIC_API_KEY",
+    "VOYAGE_API_KEY",
+    "GITHUB_API_ISSUES_KEY",
+    "OPENROUTER_API_KEY",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -162,9 +167,11 @@ def test_test_keys_covers_every_known_key(
     monkeypatch.setattr(keys_module, "_test_anthropic", lambda _key: (True, "working"))
     monkeypatch.setattr(keys_module, "_test_voyage", lambda _key: (True, "working"))
     monkeypatch.setattr(keys_module, "_test_github", lambda _key: (True, "working"))
+    monkeypatch.setattr(keys_module, "_test_openrouter", lambda _key: (True, "working"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
     monkeypatch.setenv("VOYAGE_API_KEY", "pa-x")
     monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "ghp-x")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-x")
     rows = keys_module.test_keys(runner=chain)
     assert {row[0] for row in rows} == set(KNOWN_KEYS)
     assert all(row[2] for row in rows)  # all worked
@@ -183,6 +190,21 @@ def test_test_key_github_reports_provider_result(
     monkeypatch.setattr(keys_module, "_test_github", fake_github)
     assert keys_module.test_key("github", runner=chain) == (True, "working")
     assert seen == ["ghp-whatever"]
+
+
+def test_test_key_openrouter_reports_provider_result(
+    chain: FakeKeychain, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-whatever")
+    seen: list[str] = []
+
+    def fake_openrouter(api_key: str) -> tuple[bool, str]:
+        seen.append(api_key)
+        return True, "working"
+
+    monkeypatch.setattr(keys_module, "_test_openrouter", fake_openrouter)
+    assert keys_module.test_key("openrouter", runner=chain) == (True, "working")
+    assert seen == ["sk-or-whatever"]
 
 
 def test_workspace_key_file_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
