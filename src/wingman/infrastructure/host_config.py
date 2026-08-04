@@ -55,7 +55,26 @@ WINGMAN_ENV_FILENAME = "wingman.env"
 # resident: the shared multi-tenant process's registry path, set once per
 # box so 'wingman-mcp --http --tenant-registry' and every 'wingman tenant
 # ...' command agree on the same file without an explicit flag each time.
-HOST_SETTINGS = frozenset({"WINGMAN_REPO", "WINGMAN_OPERATOR_NAME", "WINGMAN_TENANT_REGISTRY"})
+# WINGMAN_GDRIVE_CLIENT_ID / WINGMAN_GDRIVE_CLIENT_SECRET (RFC-053, #205)
+# identify wingman's own OAuth client to Google's device-authorization
+# flow — one shared client for every account on a box, the same value on
+# dhk's and trent's Drive pushes alike, not a per-account secret (the same
+# reasoning `gh`/`rclone` ship their own public client id/secret: it
+# names the app, not any one server or user). That makes it a host
+# SETTING, not a KNOWN_KEYS secret — it belongs here rather than in
+# secrets.env's per-account ladder. infrastructure.gdrive_auth reads it
+# with its own extra fallback beneath this file: an environment variable
+# wins over a wingman.env line, which wins over the placeholder default
+# compiled into the module (no real Google Cloud project exists yet).
+HOST_SETTINGS = frozenset(
+    {
+        "WINGMAN_REPO",
+        "WINGMAN_OPERATOR_NAME",
+        "WINGMAN_TENANT_REGISTRY",
+        "WINGMAN_GDRIVE_CLIENT_ID",
+        "WINGMAN_GDRIVE_CLIENT_SECRET",
+    }
+)
 
 
 def operator_name(home: Path | None = None) -> str | None:

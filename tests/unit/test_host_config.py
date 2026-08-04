@@ -236,3 +236,21 @@ def test_read_host_settings_recognizes_operator_name_alongside_repo(tmp_path: Pa
         "WINGMAN_REPO": "/x/wingman",
         "WINGMAN_OPERATOR_NAME": "Dave",
     }
+
+
+def test_read_host_settings_recognizes_gdrive_client_id_and_secret(tmp_path: Path) -> None:
+    """RFC-053 (#205): the Drive OAuth client identifiers are a host
+    SETTING (same value for every account on a box), not a per-account
+    KNOWN_KEYS secret — they belong in wingman.env, not secrets.env."""
+    home = tmp_path / "home"
+    path = wingman_env_path(home)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "WINGMAN_GDRIVE_CLIENT_ID=abc.apps.googleusercontent.com\n"
+        "WINGMAN_GDRIVE_CLIENT_SECRET=shh\n",
+        encoding="utf-8",
+    )
+    assert read_host_settings(home) == {
+        "WINGMAN_GDRIVE_CLIENT_ID": "abc.apps.googleusercontent.com",
+        "WINGMAN_GDRIVE_CLIENT_SECRET": "shh",
+    }
