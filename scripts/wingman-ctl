@@ -55,6 +55,26 @@ print_urls() {
   wingman mcp url 2>/dev/null | sed 's/^/  /'
 }
 
+check_tailscale() {
+  # Offers to bring Tailscale up when it's why 'wingman mcp url' has no
+  # tunnel hostname to print (#94) — reuses that exact detection (itself
+  # 'tailscale status --json', mcp_server._tailscale_dns_name) rather than
+  # a second, bash-side notion of "is Tailscale up." Never auto-runs —
+  # 'tailscale up' can prompt for interactive login, and #94 asks for an
+  # offer, not a silent action, same as cmd_stop_all's confirmation below.
+  command -v tailscale >/dev/null 2>&1 || return 0
+  wingman mcp url 2>/dev/null | grep -q 'no tunnel hostname detected' || return 0
+  say ""
+  say "Tailscale has no tunnel hostname for this box — wingman is only"
+  say "reachable at http://127.0.0.1:<port> until it's up."
+  say "Start it now with 'sudo tailscale up'? [y/N]"
+  read -r answer
+  case "$answer" in
+    y|Y) sudo tailscale up ;;
+    *)   say "Skipping — run 'sudo tailscale up' manually when ready." ;;
+  esac
+}
+
 stdio_pids() {
   # wingman-mcp processes WITHOUT --http: the client-owned stdio servers.
   pgrep -f 'wingman-mcp' 2>/dev/null | while read -r pid; do
@@ -98,6 +118,7 @@ cmd_start() {
   if http_running; then
     wingman mcp status
     print_urls
+    check_tailscale
     return 0
   fi
   mkdir -p "$(dirname "$LOG")"
@@ -112,6 +133,7 @@ cmd_start() {
   fi
   wingman mcp status
   print_urls
+  check_tailscale
   say "log: $LOG"
 }
 
@@ -215,7 +237,8 @@ case "${1:-}" in
   *)
     say "usage: $0 status|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|tenant ..."
     say "  status       what's running, who owns each process, what's safe to stop"
-    say "  start        the HTTP server (wingman-mcp --http), backgrounded + logged"
+    say "  start        the HTTP server (wingman-mcp --http), backgrounded + logged;"
+    say "               offers to bring Tailscale up if it has no tunnel hostname (#94)"
     say "  stop         the HTTP server only (pidfile-verified; never touches clients)"
     say "  stop-all     HTTP + client-owned stdio servers (asks first; -y skips)"
     say "  upgrade      pull → reinstall → stop-all → restart HTTP if it was running (YOU only)"
