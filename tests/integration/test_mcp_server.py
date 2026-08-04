@@ -315,9 +315,7 @@ def test_people_pov_via_mcp_with_recorded_provider(
     assert "stored card" in stored
 
 
-def test_people_deep_dive_via_mcp_with_recorded_provider(
-    workspace: Path, tmp_path: Path
-) -> None:
+def test_people_deep_dive_via_mcp_with_recorded_provider(workspace: Path, tmp_path: Path) -> None:
     from wingman.mcp_server import people_deep_dive, people_deep_dive_save, people_dossier
 
     # confirmed=False: no provider is configured at all, so a network call

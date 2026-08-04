@@ -8,7 +8,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 — full history, not the default shallow clone.
+      # tests/unit/test_changelog_freshness.py (#202) walks git log to catch
+      # a stale src/wingman/changelog_data.py; a depth-1 checkout would make
+      # every run look infinitely stale (false positive) rather than
+      # actually checking against real history.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
