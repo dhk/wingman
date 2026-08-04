@@ -142,12 +142,27 @@ HOST_KEYS_SUBDIR = os.path.join(".config", "wingman")
 
 
 def _parse_known_keys_file(path: Path) -> dict[str, str]:
-    """NAME=value lines from a keys.env-shaped file; unknown names ignored."""
-    if not path.exists():
+    """NAME=value lines from a keys.env-shaped file; unknown names ignored.
+
+    A file this account can't even stat/read (most likely RFC-047's global
+    tier, when the account isn't in the 'wingman' group) is treated the
+    same as a missing one, not an error: 'ensure_env' walks all four tiers
+    on every single wingman invocation, so one inaccessible tier must
+    never crash every command for that account. Python 3.12 tightened
+    'Path.exists()' to propagate PermissionError instead of swallowing it
+    the way it used to — this was discovered as a live crash during
+    RFC-048 Phase 3, migrating dhk's own account, of all things.
+    """
+    try:
+        if not path.exists():
+            return {}
+        text = path.read_text(encoding="utf-8")
+    except PermissionError:
+        _logger.warning("cannot read %s (permission denied) — treating as empty", path)
         return {}
     known = set(KNOWN_KEYS.values())
     values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         name, _, value = line.partition("=")
         if name.strip() in known and value.strip():
             values[name.strip()] = value.strip()
