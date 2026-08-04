@@ -109,6 +109,25 @@ class NewsItem(BaseModel):
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class PersonDossier(BaseModel):
+    """A one-shot open-web research dossier for a person (#222).
+
+    Unlike PovCard/OutreachBrief, there's no locally stored document to
+    verify a quote against — trust rests on the provider's own citation
+    metadata (OpenRouterProvider's 'Sources:' block), not a verbatim-match
+    gate. Free text, not a structured/validated record. Rebuilt on demand,
+    same as a POV card — one dossier per person, not versioned.
+    """
+
+    dossier_id: str = Field(default_factory=lambda: str(uuid4()))
+    person_id: str
+    person_name: str
+    content: str = Field(min_length=1)
+    provider: str = ""
+    model: str = ""
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class ExternalEvidenceHit(BaseModel):
     """One search result over people's writing: document, excerpt, and author."""
 
