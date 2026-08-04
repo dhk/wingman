@@ -162,6 +162,13 @@ cmd_upgrade() {
   was_running=0; http_running && was_running=1
   say "→ refreshing $REPO from github…"
   ( cd "$REPO" && git pull --ff-only ) || { say "pull failed — nothing was touched"; return 1; }
+  # Keeps the changelog from drifting silently (#202): regenerated fresh from
+  # THIS pull's history right before the wheel that ships it gets built.
+  # Best-effort — a checkout with a broken/absent git history (rare, but
+  # possible on a shallow or detached clone) must never block the upgrade
+  # itself over a data file nobody's waiting on.
+  ( cd "$REPO" && uv run python3 scripts/generate_changelog.py ) \
+    || say "  (changelog regeneration skipped — non-fatal, continuing)"
   say "→ reinstalling…"
   ( cd "$REPO" && uv tool install --reinstall . ) || { say "reinstall failed — nothing was killed"; return 1; }
   say "→ stopping everything on the old build…"

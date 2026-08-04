@@ -15,6 +15,18 @@ Titles render verbatim — no model rewrite (issue #145 scope). The
 user-facing filter below is a deliberately loose, deterministic heuristic:
 only titles that unambiguously read as internal repo/process bookkeeping
 are excluded, per the issue's own "when in doubt, include" instruction.
+
+#202: the static file went 61 PRs stale with no signal — `changelog`
+reported a confident "0 new" instead of an unverified one. Since there is
+still no live git access at runtime (RFC-038's constraint didn't change),
+the fix is a same-shape defense: the generator now stamps the exact commit
+it ran at (`changelog_data.GENERATED_FROM_COMMIT`); `render_changelog`
+compares that against the running build's own hatch-vcs-embedded commit
+hash (`wingman.version`) and leads with a plain warning when they diverge,
+rather than silently rendering counts from data it can't vouch for.
+`wingman-ctl upgrade`/`cycle` also now regenerate the file as part of every
+upgrade, so drift should stay at most one commit in practice — the
+runtime check is the backstop for whenever that doesn't happen.
 """
 
 from __future__ import annotations
@@ -70,6 +82,51 @@ def user_facing_entries() -> list[ChangelogEntry]:
     return sorted(entries, key=lambda entry: entry.date, reverse=True)
 
 
+def internal_only_entries() -> list[ChangelogEntry]:
+    """Entries the curation filter rejected — the other half of user_facing_entries,
+    surfaced so a real zero can be told apart from a filtered one (#202)."""
+    entries = [entry for entry in load_entries() if not is_user_facing(entry.title)]
+    return sorted(entries, key=lambda entry: entry.date, reverse=True)
+
+
+_COMMIT_HASH_RE = re.compile(r"\+g([0-9a-f]+)$")
+
+
+def _running_commit_hash(version_string: str) -> str | None:
+    """The commit hash hatch-vcs baked into this build's version string, or
+    None on an exact-tag build (no '+gHASH' suffix) or an unparseable one —
+    both cases mean 'can't verify', not 'stale', so callers must treat None
+    as silence, never as a mismatch."""
+    match = _COMMIT_HASH_RE.search(version_string)
+    return match.group(1) if match else None
+
+
+def staleness_note(version_string: str) -> str | None:
+    """None when the changelog data is known current (or verification isn't
+    possible); a plain-language warning when it's known to be behind (#202).
+
+    'Known behind' means GENERATED_FROM_COMMIT (the commit
+    scripts/generate_changelog.py last ran at) doesn't match the commit this
+    exact build was installed from — the one honest, always-available signal
+    that needs no live git access (see wingman.version's own docstring).
+    A mismatch doesn't say how many merges are missing, only that the data
+    cannot be vouched for past that point — the tool must say so rather than
+    silently report counts computed from a list it knows is incomplete.
+    """
+    from wingman.changelog_data import GENERATED_FROM_COMMIT
+
+    running = _running_commit_hash(version_string)
+    if running is None or GENERATED_FROM_COMMIT.startswith(running):
+        return None
+    return (
+        f"Note: this list was generated at commit {GENERATED_FROM_COMMIT[:9]}, but "
+        f"the running build is at a different commit ({running}) — merges after "
+        "generation time may be missing. Regenerate with "
+        "'python scripts/generate_changelog.py' (or 'wingman-ctl upgrade', which "
+        "does this automatically) before treating this list as complete."
+    )
+
+
 def counts_today_and_week(entries: list[ChangelogEntry], today: date_cls) -> tuple[int, int]:
     """(# dated today, # dated within the trailing 7-day window including today)."""
     window_start = today - timedelta(days=6)
@@ -80,15 +137,34 @@ def counts_today_and_week(entries: list[ChangelogEntry], today: date_cls) -> tup
     return today_count, week_count
 
 
-def render_changelog(today: date_cls) -> str:
+def render_changelog(today: date_cls, version_string: str | None = None) -> str:
     """Plain-text rendering shared by the MCP tool and the CLI: today/week
     counts up front, then curated entries newest first, capped at
-    DEFAULT_DISPLAY_LIMIT."""
+    DEFAULT_DISPLAY_LIMIT.
+
+    Never a confident zero (#202): a staleness note leads when the running
+    build is known to be ahead of this data, and the header names how many
+    entries the curation filter rejected in the same window, so a quiet
+    week and a filtered one don't look identical. version_string defaults
+    to the real running build; a caller only ever overrides it in tests.
+    """
+    if version_string is None:
+        from wingman.version import wingman_version
+
+        version_string = wingman_version()
+    note = staleness_note(version_string)
     entries = user_facing_entries()
-    if not entries:
-        return "No changelog entries."
+    internal = internal_only_entries()
+    if not entries and not internal:
+        body = "No changelog entries."
+        return f"{note}\n\n{body}" if note else body
     today_count, week_count = counts_today_and_week(entries, today)
-    lines = [f"Changelog — {today_count} new today, {week_count} in the last 7 days.", ""]
+    _, internal_week_count = counts_today_and_week(internal, today)
+    header = f"Changelog — {today_count} new today, {week_count} in the last 7 days."
+    if internal_week_count:
+        header += f" ({internal_week_count} internal-only filtered from the last 7 days)."
+    lines = [note, ""] if note else []
+    lines.extend([header, ""])
     lines.extend(
         f"- {entry.date} {entry.title} (#{entry.pr})" for entry in entries[:DEFAULT_DISPLAY_LIMIT]
     )
