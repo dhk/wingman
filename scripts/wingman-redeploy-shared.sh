@@ -48,14 +48,27 @@ sudo_user_ctl() {
 }
 
 say "1/4 pulling latest code (~/src/wingman)"
-# One line, ';'-joined — not a multi-line 'bash -c' payload. A newline
-# between two commands inside a single-quoted 'bash -c' argument proved
-# unreliable live under 'sudo -iu': the second line's words silently
-# became extra arguments to the first line's command instead of running
-# as their own command (harmlessly absorbed by 'export' when they
-# happened to be valid identifiers, a confusing hard failure — 'not a
-# valid identifier' — when they weren't, e.g. 'cd ~/src/wingman').
-# ';' on one line was the only shape that behaved consistently in testing.
+# One line, ';'-joined — never a multi-line 'bash -c' payload under
+# 'sudo -i'. This is a hard constraint of sudo, not a style preference,
+# and not the flakiness it first looks like: 'sudo -i'/'-s' do not exec
+# argv directly. They join argv with spaces and backslash-escape every
+# character outside [A-Za-z0-9_-$], then run '<login shell> -c "<one big
+# string>"' (sudo's parse_args.c). An embedded newline therefore arrives
+# as backslash-newline — a line continuation — which the login shell
+# deletes outright, collapsing both lines into a single command.
+#
+# So the second line's words become extra arguments to the first line's
+# command, 100% deterministically. 'export PATH=... cd ~/src/wingman &&
+# git pull' fails with "not a valid identifier" naming the EXPANDED path
+# ('cd' is itself a valid name, so it's silently exported; the path
+# isn't), and '&&' then short-circuits so the pull never runs. The worse
+# case is when every stray word happens to be a valid identifier:
+# 'export' absorbs them all, exit 0, no output, a silent no-op.
+#
+# Also note sudo deliberately does NOT escape '$', so the '$HOME'/'$PATH'
+# below are expanded by the target account's login shell rather than by
+# this inner bash — the same values here, so harmless, but the single
+# quotes are not protecting what they appear to protect.
 sudo -iu "$SERVICE_USER" bash -c 'export PATH="$HOME/.local/bin:$PATH"; cd ~/src/wingman && git pull --ff-only'
 
 say "2/4 reinstalling"
