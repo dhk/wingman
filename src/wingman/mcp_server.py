@@ -910,26 +910,28 @@ def coach_persona(action: str, name: str = "") -> str:
 
 @server.tool()
 def carve_off_persona(persona: str, target_dir: str) -> str:
-    """Phase 1 of #235: export a coached persona's captured interview data
-    and seed it as a BRAND-NEW Wingman workspace's own first-person profile.
+    """#235: export a coached persona's captured interview data and write
+    it into a Wingman workspace's own first-person profile — brand-new or
+    already populated.
 
     Gathers every ACTIVE profile item captured under this persona in YOUR
     own workspace (docs/COACHING-MODE-DESIGN.md) and writes it into
     target_dir — a local directory this creates if needed — as THAT
     workspace's own profile (persona_id cleared), via the same
-    dedup/supersede machinery ('profile_store.persist_items') every other
-    ingestion path in this codebase uses. Evidence quotes are preserved
-    verbatim; each cited source record is replaced with an
-    honestly-labeled placeholder in the new workspace (docs/RFC.md
+    dedup/supersede/conflict machinery ('profile_store.persist_items')
+    every other ingestion path in this codebase uses. Evidence quotes are
+    preserved verbatim; each cited source record is replaced with an
+    honestly-labeled placeholder in the target workspace (docs/RFC.md
     RFC-049) since the coach's own original records live only in the
     coach's own workspace and are not copied there.
 
-    Refuses outright if target_dir already has any profile items —
-    merging into an ALREADY-POPULATED workspace, using RFC-028's conflict
-    rule, is Phase 2 of #235 (a planned follow-up, not yet built). Point
-    this only at a brand-new/empty workspace — e.g. a fresh
-    $WINGMAN_DATA_DIR meant for the real person this persona was carved
-    off for, not any workspace already in use.
+    target_dir may already have its own profile items (docs/RFC.md
+    RFC-054): a carved-off item matching nothing there is added; one
+    matching an existing item's value merges evidence; one that genuinely
+    contradicts an existing item is NEVER silently overwritten — it lands
+    as a CONFLICT for the person to resolve themselves (profile_manage
+    action='list' / 'resolve', run against target_dir). The returned
+    report says how many items landed which way.
     """
     from wingman.application.persona_carveoff import carve_off_persona as _carve_off_persona
     from wingman.application.persona_carveoff import render_carveoff_report

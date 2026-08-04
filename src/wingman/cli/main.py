@@ -1655,27 +1655,34 @@ def carve_off_persona_cmd(
         ..., help="Persona name (or id) to carve off — see 'wingman coach-persona list'."
     ),
     target: Path = typer.Argument(
-        ..., help="Target workspace directory — must be brand-new/empty (created if missing)."
+        ...,
+        help=(
+            "Target workspace directory — brand-new (created if missing) or one that "
+            "already has its own profile; either way, a merge."
+        ),
     ),
 ) -> None:
-    """Phase 1 of #235: export a coached persona's captured interview data
-    and seed it as a BRAND-NEW Wingman workspace's own first-person profile.
+    """#235: export a coached persona's captured interview data and write
+    it into a Wingman workspace's own first-person profile — brand-new or
+    already populated.
 
     Gathers every ACTIVE profile item captured under this persona in YOUR
     own workspace (docs/COACHING-MODE-DESIGN.md) and writes it into
     <target> — created if needed — as that workspace's own profile
-    (persona_id cleared), via the same dedup/supersede machinery
+    (persona_id cleared), via the same dedup/supersede/conflict machinery
     ('profile_store.persist_items') every other ingestion path in this
     codebase uses. Evidence quotes are preserved verbatim; each cited
     source record is replaced with an honestly-labeled placeholder in the
-    new workspace (docs/RFC.md RFC-049) since the coach's own original
+    target workspace (docs/RFC.md RFC-049) since the coach's own original
     records live only in the coach's own workspace and are not copied.
 
-    Refuses outright if <target> already has any profile items — merging
-    into an ALREADY-POPULATED workspace, using RFC-028's conflict rule, is
-    Phase 2 of #235 (a planned follow-up, not yet built). Point this only
-    at a brand-new/empty workspace, e.g. a fresh $WINGMAN_DATA_DIR for the
-    real person this persona is carved off for.
+    <target> may already have its own profile items (docs/RFC.md
+    RFC-054): a carved-off item matching nothing there is added; one
+    matching an existing item's value merges evidence; one that genuinely
+    contradicts an existing item is NEVER silently overwritten — it lands
+    as a CONFLICT for the person to resolve themselves ('wingman profile
+    list' / 'wingman profile resolve <id>', run against <target>). The
+    printed report says how many items landed which way.
     """
     from wingman.application.persona_carveoff import carve_off_persona, render_carveoff_report
 
