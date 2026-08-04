@@ -145,3 +145,84 @@ def test_tenant_rotate_token_unknown_slug_exits_nonzero(tmp_path: Path) -> None:
 # monkeypatch through this CLI-level default-argument call, matching how
 # the existing mcp_process CLI commands (mcp_status/mcp_stop) are also
 # only tested this way at the unit level, not through the CLI.
+
+
+# --- 'wingman tenant urls' (plural, #238's carve-off follow-up) -----------
+
+
+def test_tenant_urls_with_slug_matches_tenant_url(tmp_path: Path) -> None:
+    """A slug given to 'urls' behaves exactly like the singular 'url'."""
+    data_dir = _make_tenant(tmp_path, "jason", "tok-jason")
+    registry = _write_registry(tmp_path, ("jason", data_dir))
+    singular = cli.invoke(
+        app, ["tenant", "url", "jason", "--registry", str(registry), "--port", "9920"]
+    )
+    plural = cli.invoke(
+        app, ["tenant", "urls", "jason", "--registry", str(registry), "--port", "9920"]
+    )
+    assert singular.exit_code == plural.exit_code == 0
+    assert singular.output == plural.output
+
+
+def test_tenant_urls_with_unknown_slug_exits_nonzero(tmp_path: Path) -> None:
+    registry = _write_registry(tmp_path)  # empty
+    result = cli.invoke(app, ["tenant", "urls", "nobody", "--registry", str(registry)])
+    assert result.exit_code == 1
+    assert "No tenant 'nobody'" in result.output
+
+
+def test_tenant_urls_with_slug_missing_token_exits_nonzero(tmp_path: Path) -> None:
+    data_dir = _make_tenant(tmp_path, "jason", token=None)
+    registry = _write_registry(tmp_path, ("jason", data_dir))
+    result = cli.invoke(app, ["tenant", "urls", "jason", "--registry", str(registry)])
+    assert result.exit_code == 1
+    assert "has no token yet" in result.output
+
+
+def test_tenant_urls_without_slug_lists_every_tenant(tmp_path: Path) -> None:
+    connected = _make_tenant(tmp_path, "jason", "tok-jason")
+    not_connected = _make_tenant(tmp_path, "bob", token=None)
+    registry = _write_registry(tmp_path, ("jason", connected), ("bob", not_connected))
+    result = cli.invoke(app, ["tenant", "urls", "--registry", str(registry), "--port", "9920"])
+    assert result.exit_code == 0
+    assert "jason:" in result.output
+    assert "tok-jason" in result.output
+    assert "bob: not yet connected (no token minted)" in result.output
+
+
+def test_tenant_urls_without_slug_and_empty_registry(tmp_path: Path) -> None:
+    registry = _write_registry(tmp_path)  # empty
+    result = cli.invoke(app, ["tenant", "urls", "--registry", str(registry)])
+    assert result.exit_code == 0
+    assert "No tenants in the registry" in result.output
+
+
+def test_tenant_urls_without_slug_malformed_registry_exits_nonzero(tmp_path: Path) -> None:
+    registry = tmp_path / "tenants.toml"
+    registry.write_text("not [ valid toml", encoding="utf-8")
+    result = cli.invoke(app, ["tenant", "urls", "--registry", str(registry)])
+    assert result.exit_code == 1
+    assert "malformed" in result.output
+
+
+def test_tenant_urls_tunnel_prefix_reaches_every_tenant(tmp_path: Path) -> None:
+    connected = _make_tenant(tmp_path, "jason", "tok-jason")
+    registry = _write_registry(tmp_path, ("jason", connected))
+    result = cli.invoke(
+        app,
+        [
+            "tenant",
+            "urls",
+            "--registry",
+            str(registry),
+            "--port",
+            "8789",
+            "--allowed-host",
+            "lobster.tail.ts.net",
+            "--tunnel-prefix",
+            "/shared",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "http://127.0.0.1:8789/mcp/tok-jason" in result.output  # loopback: no prefix
+    assert "https://lobster.tail.ts.net/shared/mcp/tok-jason" in result.output  # tunnel: has it

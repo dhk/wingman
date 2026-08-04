@@ -154,6 +154,7 @@ from wingman.infrastructure.telemetry import (
 )
 from wingman.infrastructure.telemetry import record_event
 from wingman.infrastructure.storage import CorpusSearchError, Storage
+from wingman.infrastructure.tenants import Tenant
 from wingman.providers.base import CapabilityClass, ProviderError
 from wingman.providers.embeddings import EmbeddingError
 from wingman.providers.router import ModelConfigError, get_embedding_provider, get_provider
@@ -726,6 +727,43 @@ def coach_persona(action: str, name: str = "") -> str:
     except IngestError as exc:
         return f"coach_persona failed: {exc}"
     return f"unknown action {action!r}; use set, clear, who, or list."
+
+
+@server.tool()
+def carve_off_persona(persona: str, target_dir: str) -> str:
+    """Phase 1 of #235: export a coached persona's captured interview data
+    and seed it as a BRAND-NEW Wingman workspace's own first-person profile.
+
+    Gathers every ACTIVE profile item captured under this persona in YOUR
+    own workspace (docs/COACHING-MODE-DESIGN.md) and writes it into
+    target_dir — a local directory this creates if needed — as THAT
+    workspace's own profile (persona_id cleared), via the same
+    dedup/supersede machinery ('profile_store.persist_items') every other
+    ingestion path in this codebase uses. Evidence quotes are preserved
+    verbatim; each cited source record is replaced with an
+    honestly-labeled placeholder in the new workspace (docs/RFC.md
+    RFC-049) since the coach's own original records live only in the
+    coach's own workspace and are not copied there.
+
+    Refuses outright if target_dir already has any profile items —
+    merging into an ALREADY-POPULATED workspace, using RFC-028's conflict
+    rule, is Phase 2 of #235 (a planned follow-up, not yet built). Point
+    this only at a brand-new/empty workspace — e.g. a fresh
+    $WINGMAN_DATA_DIR meant for the real person this persona was carved
+    off for, not any workspace already in use.
+    """
+    from wingman.application.persona_carveoff import carve_off_persona as _carve_off_persona
+    from wingman.application.persona_carveoff import render_carveoff_report
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            report = _carve_off_persona(persona, config, storage, Path(target_dir).expanduser())
+    except IngestError as exc:
+        return f"carve_off_persona failed: {exc}"
+    return render_carveoff_report(report)
 
 
 @server.tool()
@@ -2570,6 +2608,81 @@ def render_urls(
     return [f"{label}: {url}" for label, url in pairs]
 
 
+def render_tenant_urls(
+    tenants: Sequence[Tenant],
+    slug: str | None,
+    registry_path: Path,
+    extra_hosts: Sequence[str],
+    host: str = "127.0.0.1",
+    port: int = 8787,
+    tunnel_port: int | None = None,
+    tunnel_prefix: str = "",
+) -> tuple[list[str], bool]:
+    """The printable lines for a single named tenant (slug given) or for
+    EVERY tenant in the registry at once (slug is None) — one shared
+    helper behind 'tenant url'/'tenant urls' and their MCP twins
+    (tenant_url/tenant_urls, #209/#238's carve-off follow-up), so "a
+    single named person or all people" is one code path with two entry
+    shapes rather than two independently-maintained ones.
+
+    A given slug behaves exactly like the original single-tenant lookup
+    always has: the same connector-URL lines, and the same wording for an
+    unknown slug or a tenant with no token minted yet. Omitting the slug
+    walks every tenant in the registry, each one labeled by slug in turn;
+    a tenant with no token yet is listed as '<slug>: not yet connected
+    (no token minted)' rather than erroring or being silently skipped —
+    the whole point of the roster view is a complete picture, not an
+    all-or-nothing lookup.
+
+    Returns (lines, ok). 'ok' is False only for a single-slug lookup that
+    failed (unknown slug, or that tenant has no token yet) — the signal a
+    CLI caller uses to exit(1), exactly as 'tenant url <slug>' always
+    has. The all-tenants path is always ok=True.
+    """
+    if slug is not None:
+        tenant = next((t for t in tenants if t.slug == slug), None)
+        if tenant is None:
+            return [f"No tenant {slug!r} in the registry ({registry_path})."], False
+        token = tenant.read_token()
+        if token is None:
+            return (
+                [f"Tenant {slug!r} has no token yet ({tenant.token_path()} is missing or empty)."],
+                False,
+            )
+        return (
+            render_urls(
+                token,
+                extra_hosts,
+                host=host,
+                port=port,
+                tunnel_port=tunnel_port,
+                tunnel_prefix=tunnel_prefix,
+            ),
+            True,
+        )
+    if not tenants:
+        return [f"No tenants in the registry ({registry_path})."], True
+    lines: list[str] = []
+    for tenant in tenants:
+        token = tenant.read_token()
+        if token is None:
+            lines.append(f"{tenant.slug}: not yet connected (no token minted)")
+            continue
+        lines.append(f"{tenant.slug}:")
+        lines.extend(
+            f"  {line}"
+            for line in render_urls(
+                token,
+                extra_hosts,
+                host=host,
+                port=port,
+                tunnel_port=tunnel_port,
+                tunnel_prefix=tunnel_prefix,
+            )
+        )
+    return lines, True
+
+
 def build_transport_security(extra_hosts: Sequence[str]) -> TransportSecuritySettings:
     """DNS-rebinding settings for a loopback bind: the SDK's loopback allow-list
     plus each extra hostname (#100). Protection stays ON — a tunnel widens the
@@ -2660,16 +2773,66 @@ def tenant_url(
         tenants = load_registry(registry_path)
     except TenantRegistryError as exc:
         return f"Could not read the tenant registry ({registry_path}): {exc}"
-    tenant = next((t for t in tenants if t.slug == slug), None)
-    if tenant is None:
-        return f"No tenant {slug!r} in the registry ({registry_path})."
-    token = tenant.read_token()
-    if token is None:
-        return f"Tenant {slug!r} has no token yet ({tenant.token_path()} is missing or empty)."
     extra_hosts = _extra_allowed_hosts(None)
-    return "\n".join(
-        render_urls(token, extra_hosts, host=host, port=port, tunnel_prefix=tunnel_prefix)
+    lines, _ok = render_tenant_urls(
+        tenants, slug, registry_path, extra_hosts, host=host, port=port, tunnel_prefix=tunnel_prefix
     )
+    return "\n".join(lines)
+
+
+@server.tool()
+def tenant_urls(
+    slug: str = "", host: str = "127.0.0.1", port: int = 8787, tunnel_prefix: str = ""
+) -> str:
+    """Connector URLs for one tenant, or for EVERY tenant in the registry
+    at once — the roster-view sibling to 'tenant_url' (#209/#238's
+    carve-off follow-up: once a carved-off workspace is registered as a
+    tenant via wingman-add-tenant.sh, this is how its URL gets found).
+
+    slug: a specific tenant's slug — behaves exactly like 'tenant_url'
+    (same URLs, same failure text for an unknown slug or a tenant with no
+    token minted yet). Leave it empty (the default) to list every tenant
+    in the registry at once, each one labeled by slug in turn; a tenant
+    with no token yet is listed as '<slug>: not yet connected (no token
+    minted)' rather than erroring or being silently skipped — the point
+    of the roster view is a complete picture of who's onboarded, not an
+    all-or-nothing lookup.
+
+    'host'/'port'/'tunnel_prefix' match 'tenant_url' exactly, applied
+    uniformly to every tenant printed — they're all served by the same
+    shared process, so the same host/port/tunnel shape applies to all of
+    them.
+
+    Operator-only, same gate as 'tenant_url': refuses when called from
+    within any tenant's own scoped session (config.strict_provider_keys),
+    so a tenant can never use their own MCP session to look up anyone
+    else's URL, or the whole roster.
+    """
+    config = load_config()
+    if config.strict_provider_keys:
+        return "Not available from a tenant session — this is an operator-only tool."
+    from wingman.infrastructure.tenants import (
+        TenantRegistryError,
+        load_registry,
+        tenant_registry_path,
+    )
+
+    registry_path = tenant_registry_path()
+    try:
+        tenants = load_registry(registry_path)
+    except TenantRegistryError as exc:
+        return f"Could not read the tenant registry ({registry_path}): {exc}"
+    extra_hosts = _extra_allowed_hosts(None)
+    lines, _ok = render_tenant_urls(
+        tenants,
+        slug.strip() or None,
+        registry_path,
+        extra_hosts,
+        host=host,
+        port=port,
+        tunnel_prefix=tunnel_prefix,
+    )
+    return "\n".join(lines)
 
 
 def _instrument_tools() -> None:
