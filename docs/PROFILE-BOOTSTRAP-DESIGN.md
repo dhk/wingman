@@ -94,15 +94,18 @@ variant) into named categories with a settled internal structure.
 - **Con.** Three people, living or dead, you'd be horrified to see your
   name in print alongside — excluding Hitler (too easy a nomination to
   discriminate anything about the person's actual values).
-- **Ordering.** Ask why about every con nominee before any pro nominee —
-  ends the block on a high note, a bet on continued-engagement UX
+- **Ordering (issue #242).** Four separate steps, never a combined
+  name-and-why pass: (1) name all three pro nominees, no why yet; (2)
+  name all three con nominees, no why yet; (3) ask why about every con
+  nominee, in #2/#1/#3 order — skips the rehearsed, front-loaded first
+  answer; (4) ask why about every pro nominee, same #2/#1/#3 order —
+  ends the section on a high note, a bet on continued-engagement UX
   (dwelling on the negative first, resolving positive last) rather than
-  purely on evidence quality. Within each block (con, then pro), the
-  original ask-#2-first order still applies: #2, then #1, then #3 —
-  skips the rehearsed, front-loaded first answer.
+  purely on evidence quality. Naming happens pro-then-con; why-asking
+  happens con-then-pro — deliberately asymmetric, not a copy-paste error.
 - **Fallback, when someone struggles to name people.** Swap the stimulus
   to companies: three whose products/services they're proud to buy, three
-  they'd never buy — same pro/con, con-then-pro, ask-#2-first structure as
+  they'd never buy — same pro/con, same four-step ordering as
   the people version (an assumption, not independently confirmed — the
   rescue path could reasonably be lighter, e.g. one of each, but full
   structure was chosen for consistency rather than inventing a second,
@@ -132,12 +135,14 @@ purpose: a company, a club, a professional organization.
   "worst company" the way there's an obvious lazy answer for a person, so
   this relies on verbatim capture and the pro/con pairing itself to
   surface real signal instead of a hardcoded banned-org list.
-- **Ordering.** Same con-then-pro block ordering and nested ask-#2-first
-  logic as Values, carried over for consistency (not independently
+- **Ordering.** Same four-step naming-then-why structure as Values
+  (issue #242), carried over for consistency (not independently
   confirmed for this category — an assumption to revisit if it doesn't
   hold up in practice).
-- **Primary-purpose check.** Whenever an org is nominated (pro or con),
-  ask what the person understands that org's primary purpose to be —
+- **Primary-purpose check.** Asked alongside each nomination, during the
+  naming steps (not the why steps) — it's context about the org, not
+  part of the alignment reasoning. Whenever an org is nominated (pro or
+  con), ask what the person understands that org's primary purpose to be —
   "Pepsi sells cola," "the fire department puts out fires." Captured as
   context alongside the alignment reasoning, never as evidence itself.
 

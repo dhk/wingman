@@ -85,6 +85,84 @@ def test_tenant_url_tool_reports_unknown_slug(
     assert "No tenant 'nobody'" in result
 
 
+# --- tenant_urls (plural, #238's carve-off follow-up) ----------------------
+
+
+def test_tenant_urls_tool_refuses_from_a_tenant_session(tmp_path: Path) -> None:
+    from wingman.infrastructure.config import tenant_config_scope
+    from wingman.infrastructure.tenants import Tenant
+    from wingman.mcp_server import tenant_urls as tenant_urls_tool
+
+    tenant = Tenant(slug="jason", data_dir=tmp_path / "jason")
+    with tenant_config_scope(tenant.config()):
+        result = tenant_urls_tool()
+    assert "operator-only" in result
+
+
+def test_tenant_urls_tool_with_slug_matches_tenant_url_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.mcp_server import tenant_urls as tenant_urls_tool
+
+    monkeypatch.delenv("WINGMAN_DATA_DIR", raising=False)
+    data_dir = _make_tenant(tmp_path, "jason", "tok-jason")
+    registry = _write_registry(tmp_path, ("jason", data_dir))
+    monkeypatch.setattr(
+        "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
+    )
+    singular = tenant_url_tool("jason", port=9921)
+    plural = tenant_urls_tool("jason", port=9921)
+    assert singular == plural
+
+
+def test_tenant_urls_tool_with_unknown_slug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.mcp_server import tenant_urls as tenant_urls_tool
+
+    monkeypatch.delenv("WINGMAN_DATA_DIR", raising=False)
+    registry = _write_registry(tmp_path)  # empty
+    monkeypatch.setattr(
+        "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
+    )
+    result = tenant_urls_tool("nobody")
+    assert "No tenant 'nobody'" in result
+
+
+def test_tenant_urls_tool_without_slug_lists_every_tenant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.mcp_server import tenant_urls as tenant_urls_tool
+
+    monkeypatch.delenv("WINGMAN_DATA_DIR", raising=False)
+    connected = _make_tenant(tmp_path, "jason", "tok-jason")
+    not_connected = tmp_path / "bob"
+    not_connected.mkdir()
+    Storage(not_connected / "wingman.db").close()  # no token file written
+    registry = _write_registry(tmp_path, ("jason", connected), ("bob", not_connected))
+    monkeypatch.setattr(
+        "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
+    )
+    result = tenant_urls_tool(port=9921)
+    assert "jason:" in result
+    assert "tok-jason" in result
+    assert "bob: not yet connected (no token minted)" in result
+
+
+def test_tenant_urls_tool_without_slug_and_empty_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.mcp_server import tenant_urls as tenant_urls_tool
+
+    monkeypatch.delenv("WINGMAN_DATA_DIR", raising=False)
+    registry = _write_registry(tmp_path)  # empty
+    monkeypatch.setattr(
+        "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
+    )
+    result = tenant_urls_tool()
+    assert "No tenants in the registry" in result
+
+
 def test_tenant_registry_path_resolves_from_host_setting(tmp_path: Path) -> None:
     from wingman.infrastructure.tenants import DEFAULT_REGISTRY_PATH, tenant_registry_path
 
