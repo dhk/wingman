@@ -728,6 +728,43 @@ def coach_persona(action: str, name: str = "") -> str:
 
 
 @server.tool()
+def carve_off_persona(persona: str, target_dir: str) -> str:
+    """Phase 1 of #235: export a coached persona's captured interview data
+    and seed it as a BRAND-NEW Wingman workspace's own first-person profile.
+
+    Gathers every ACTIVE profile item captured under this persona in YOUR
+    own workspace (docs/COACHING-MODE-DESIGN.md) and writes it into
+    target_dir — a local directory this creates if needed — as THAT
+    workspace's own profile (persona_id cleared), via the same
+    dedup/supersede machinery ('profile_store.persist_items') every other
+    ingestion path in this codebase uses. Evidence quotes are preserved
+    verbatim; each cited source record is replaced with an
+    honestly-labeled placeholder in the new workspace (docs/RFC.md
+    RFC-049) since the coach's own original records live only in the
+    coach's own workspace and are not copied there.
+
+    Refuses outright if target_dir already has any profile items —
+    merging into an ALREADY-POPULATED workspace, using RFC-028's conflict
+    rule, is Phase 2 of #235 (a planned follow-up, not yet built). Point
+    this only at a brand-new/empty workspace — e.g. a fresh
+    $WINGMAN_DATA_DIR meant for the real person this persona was carved
+    off for, not any workspace already in use.
+    """
+    from wingman.application.persona_carveoff import carve_off_persona as _carve_off_persona
+    from wingman.application.persona_carveoff import render_carveoff_report
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            report = _carve_off_persona(persona, config, storage, Path(target_dir).expanduser())
+    except IngestError as exc:
+        return f"carve_off_persona failed: {exc}"
+    return render_carveoff_report(report)
+
+
+@server.tool()
 def relationship_objective(
     action: str, person: str, goal: str = "", thesis: str = "", next_move: str = ""
 ) -> str:

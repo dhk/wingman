@@ -1565,6 +1565,48 @@ def coach_persona_cmd(
     raise typer.Exit(code=1)
 
 
+@app.command("carve-off-persona")
+def carve_off_persona_cmd(
+    persona: str = typer.Argument(
+        ..., help="Persona name (or id) to carve off — see 'wingman coach-persona list'."
+    ),
+    target: Path = typer.Argument(
+        ..., help="Target workspace directory — must be brand-new/empty (created if missing)."
+    ),
+) -> None:
+    """Phase 1 of #235: export a coached persona's captured interview data
+    and seed it as a BRAND-NEW Wingman workspace's own first-person profile.
+
+    Gathers every ACTIVE profile item captured under this persona in YOUR
+    own workspace (docs/COACHING-MODE-DESIGN.md) and writes it into
+    <target> — created if needed — as that workspace's own profile
+    (persona_id cleared), via the same dedup/supersede machinery
+    ('profile_store.persist_items') every other ingestion path in this
+    codebase uses. Evidence quotes are preserved verbatim; each cited
+    source record is replaced with an honestly-labeled placeholder in the
+    new workspace (docs/RFC.md RFC-049) since the coach's own original
+    records live only in the coach's own workspace and are not copied.
+
+    Refuses outright if <target> already has any profile items — merging
+    into an ALREADY-POPULATED workspace, using RFC-028's conflict rule, is
+    Phase 2 of #235 (a planned follow-up, not yet built). Point this only
+    at a brand-new/empty workspace, e.g. a fresh $WINGMAN_DATA_DIR for the
+    real person this persona is carved off for.
+    """
+    from wingman.application.persona_carveoff import carve_off_persona, render_carveoff_report
+
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "carved off")
+    try:
+        with Storage(config.db_path) as storage:
+            report = carve_off_persona(persona, config, storage, target)
+    except IngestError as exc:
+        typer.echo(f"carve-off-persona failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_carveoff_report(report))
+
+
 @app.command()
 def pov(
     refresh: bool = typer.Option(
