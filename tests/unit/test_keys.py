@@ -391,6 +391,31 @@ def test_global_keys_file_fills_gaps_below_the_host_file(
     assert os.environ["GITHUB_API_ISSUES_KEY"] == "ghp-shared"
 
 
+def test_unreadable_file_is_treated_as_empty_not_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tier this account can't stat/read (e.g. not in the 'wingman' group
+    for RFC-047's global file) must degrade to 'nothing here', not raise —
+    Python 3.12 propagates PermissionError out of 'Path.exists()' where
+    older Python swallowed it, and this crashed every 'wingman' command
+    for an account lacking access to the global tier (live, on lobster,
+    migrating dhk's own account for RFC-048 Phase 3)."""
+    from wingman.infrastructure.keys import read_global_keys
+
+    global_file = tmp_path / "global-secrets.env"
+    global_file.write_text("GITHUB_API_ISSUES_KEY=ghp-shared\n", encoding="utf-8")
+
+    real_exists = Path.exists
+
+    def _denied_exists(self: Path) -> bool:
+        if self == global_file:
+            raise PermissionError(13, "Permission denied", str(global_file))
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _denied_exists)
+    assert read_global_keys(global_file) == {}
+
+
 def test_host_file_outranks_global_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An account's own secrets.env always overrides the shared default —
     never the other way around."""
