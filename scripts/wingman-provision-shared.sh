@@ -114,11 +114,20 @@ sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
   systemctl --user enable --now wingman-mcp.service
 
 say "7/7 tailscale mount (stripping proxy — the shared process itself runs with no --prefix)"
+# 'funnel', never plain 'serve': funnel is a per-HOSTNAME toggle, not a
+# per-path one — a bare 'tailscale serve --set-path ...' silently drops
+# Funnel for the WHOLE hostname (every other mounted path too, not just
+# this one), demoting dhk/trent/alexandria's already-public instances
+# back to tailnet-only as a side effect. Hit live twice on the same box:
+# once by hand, then again because this exact line still said 'serve'
+# when this script was first written, and a later re-run of the
+# (idempotent) provisioning script replayed the same mistake against
+# production.
 if command -v tailscale >/dev/null 2>&1; then
-  tailscale serve --bg --set-path "$TAILSCALE_PATH" "http://127.0.0.1:$PORT"
+  tailscale funnel --bg --set-path "$TAILSCALE_PATH" "http://127.0.0.1:$PORT"
 else
   say "tailscale not found — skipping. Run manually later:"
-  say "  tailscale serve --bg --set-path $TAILSCALE_PATH http://127.0.0.1:$PORT"
+  say "  tailscale funnel --bg --set-path $TAILSCALE_PATH http://127.0.0.1:$PORT"
 fi
 
 echo

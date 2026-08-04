@@ -3052,7 +3052,7 @@ def tenant_url_cmd(
         "--tunnel-prefix",
         help="Path prefix a STRIPPING tunnel front mounts this process under (e.g. /shared, "
         "matching WINGMAN_SHARED_TAILSCALE_PATH and wingman-provision-shared.sh's "
-        "'tailscale serve --set-path'). Only changes the printed tunnel URLs -- the shared "
+        "'tailscale funnel --set-path'). Only changes the printed tunnel URLs -- the shared "
         "process itself runs with no --prefix, so omitting this when the tunnel needs it "
         "prints a URL that 404s at the tunnel, not at wingman.",
     ),
@@ -3115,7 +3115,7 @@ def tenant_urls_cmd(
         "--tunnel-prefix",
         help="Path prefix a STRIPPING tunnel front mounts this process under (e.g. /shared, "
         "matching WINGMAN_SHARED_TAILSCALE_PATH and wingman-provision-shared.sh's "
-        "'tailscale serve --set-path'). Only changes the printed tunnel URLs -- the shared "
+        "'tailscale funnel --set-path'). Only changes the printed tunnel URLs -- the shared "
         "process itself runs with no --prefix, so omitting this when the tunnel needs it "
         "prints a URL that 404s at the tunnel, not at wingman.",
     ),

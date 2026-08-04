@@ -2579,7 +2579,7 @@ def connector_urls(
     from before this parameter existed: a pass-through front (nginx,
     Caddy) sees the same path the server itself listens on, so one
     prefix naturally describes both. 'tunnel_prefix' exists for the
-    opposite case — a STRIPPING front, e.g. RFC-048's 'tailscale serve
+    opposite case — a STRIPPING front, e.g. RFC-048's 'tailscale funnel
     --set-path /shared', which the backend process (deliberately started
     with no --prefix of its own, per that script's own comment) never
     sees at all, so only the tunnel-visible path needs it. Mirrors
@@ -2759,7 +2759,7 @@ def tenant_url(
 
     'tunnel_prefix' matches WINGMAN_SHARED_TAILSCALE_PATH (default
     '/shared') when the tunnel front strips a path prefix before
-    forwarding — e.g. wingman-provision-shared.sh's 'tailscale serve
+    forwarding — e.g. wingman-provision-shared.sh's 'tailscale funnel
     --set-path'. Only changes the printed tunnel URLs; the shared process
     itself always runs with no --prefix, so leaving this unset when the
     tunnel needs it prints a URL that 404s at the tunnel, not at wingman.
