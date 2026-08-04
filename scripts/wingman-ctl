@@ -161,6 +161,13 @@ cmd_stop_all() {
 cmd_upgrade() {
   was_running=0; http_running && was_running=1
   say "→ refreshing $REPO from github…"
+  # Discard any local regeneration of changelog_data.py left over from a
+  # PRIOR run of this same command (below) — safe to drop unconditionally,
+  # since it gets rebuilt fresh moments after this pull anyway. Without
+  # this, a leftover uncommitted regeneration makes 'git pull --ff-only'
+  # refuse to fast-forward the moment a new upstream commit also touches
+  # that file — every future pull after any merge, not a one-off (#249).
+  ( cd "$REPO" && git checkout -- src/wingman/changelog_data.py 2>/dev/null || true )
   ( cd "$REPO" && git pull --ff-only ) || { say "pull failed — nothing was touched"; return 1; }
   # Keeps the changelog from drifting silently (#202): regenerated fresh from
   # THIS pull's history right before the wheel that ships it gets built.
