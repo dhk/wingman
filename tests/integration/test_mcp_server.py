@@ -77,6 +77,7 @@ def test_all_tools_are_registered() -> None:
         "export_pdf",
         "my_pov",
         "my_values",
+        "values_chart",
         "people_docs",
         "people_news",
         "make_it_so",
