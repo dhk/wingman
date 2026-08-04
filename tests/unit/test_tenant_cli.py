@@ -44,7 +44,7 @@ def test_tenant_url_prints_connector_urls(tmp_path: Path) -> None:
 
 def test_tenant_url_tunnel_prefix_reaches_the_tunnel_line(tmp_path: Path) -> None:
     """RFC-048's shared process sits behind a STRIPPING tailscale front
-    ('tailscale serve --set-path /shared') -- the printed tunnel URL
+    ('tailscale funnel --set-path /shared') -- the printed tunnel URL
     needs that prefix even though the loopback URL never does. Found
     live migrating dhk's own account to the shared process (Phase 3):
     the un-prefixed URL 404'd at the tunnel, not at wingman."""

@@ -113,7 +113,7 @@ def test_render_urls_honors_an_explicit_tunnel_port() -> None:
 
 def test_render_urls_tunnel_prefix_only_touches_tunnel_lines() -> None:
     """RFC-048's shared process is mounted behind a STRIPPING tailscale
-    front ('tailscale serve --set-path /shared') and itself always runs
+    front ('tailscale funnel --set-path /shared') and itself always runs
     with no --prefix -- 'tunnel_prefix' is a separate knob from 'prefix'
     for exactly that split: it must appear in the tunnel URLs and nowhere
     else, or a shared-process operator gets a URL that 404s at the

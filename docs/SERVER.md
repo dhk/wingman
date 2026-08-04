@@ -664,10 +664,19 @@ sudo -iu wingman-shared wg tenant rotate-token <slug> --port 8789 --tunnel-prefi
 
 `--tunnel-prefix` must match `WINGMAN_SHARED_TAILSCALE_PATH` (default
 `/shared`, set at `wingman-provision-shared.sh` time) — it only changes
-the printed *tunnel* URL, since `tailscale serve --set-path` strips that
+the printed *tunnel* URL, since `tailscale funnel --set-path` strips that
 prefix before forwarding and the shared process itself always runs with
 no `--prefix` of its own. Omitting it prints a URL that 404s at the
 tunnel, not at wingman — easy to mistake for a broken deployment.
+
+**`funnel`, never plain `serve`, for this mount.** Jason/Bob-style
+tenants aren't on the owner's tailnet — the shared process needs public
+reach, not tailnet-only. This matters beyond correctness: `tailscale
+serve --set-path` for this path would silently drop Funnel for the
+**whole hostname**, demoting every other already-public mount (dhk's,
+trent's, alexandria's) back to tailnet-only as a side effect — funnel is
+a per-hostname toggle, not a per-path one. Hit live; see
+`wingman-provision-shared.sh`'s own comment at this step.
 
 Rotation invalidates the old token and issues a new one in the same
 step — no restart of the shared process, no effect on any other
