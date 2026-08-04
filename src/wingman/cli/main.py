@@ -3418,9 +3418,13 @@ def interview_react(
     subtype supersedes the earlier answer. See 'wingman profile list' to
     review what's been captured so far.
 
-    Values' and Mission alignment's con-then-pro ordering, with ask-#2-first
-    nested inside each block, is this interview module's own protocol —
-    conduct it in that order; it isn't enforced by this command itself.
+    Values' and Mission alignment's protocol (issue #242) — four separate
+    steps, never a combined name-and-why pass: name all three pro
+    nominees (no why yet), name all three con nominees (no why yet), ask
+    why for each con nominee in #2/#1/#3 order, then ask why for each pro
+    nominee in the same #2/#1/#3 order (ends on a high note). This is the
+    interview module's own protocol — conduct it in that order; it isn't
+    enforced by this command itself.
 
     Coaching mode (docs/COACHING-MODE-DESIGN.md): with an active persona
     ('wingman coach-persona set <name>'), this is scoped to them

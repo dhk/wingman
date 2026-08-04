@@ -479,13 +479,24 @@ def interview_react(
       reachable, any order, any number of times — perspectives_start's
       trust-ladder framing is option order, never a locked sequence.
 
-    Protocol for Values and Mission alignment specifically — con nominees
-    before pro nominees (ends the section on a high note); within EACH
-    block, ask why about the SECOND nominee first, then the first, then
-    the third (dodges the rehearsed, front-loaded answer). This tool does
-    not enforce that ordering; it's the calling agent's protocol to
-    follow, same as qa_capture/resolve_requirement elsewhere in this
-    codebase.
+    Protocol for Values and Mission alignment specifically (issue #242) —
+    four separate steps per section, never two combined name-and-why
+    passes:
+      1. Name all three PRO nominees — names only, no 'why' yet.
+      2. Name all three CON nominees — names only, no 'why' yet.
+      3. Ask 'why' for each CON nominee, in #2/#1/#3 order (dodges the
+         rehearsed, front-loaded answer).
+      4. Ask 'why' for each PRO nominee, same #2/#1/#3 order — ends the
+         whole section on a high note.
+    "Name three people... for each, I need the why" collapses steps 1+3
+    (or 2+4) into one pass — don't do that; naming and reasoning are
+    always fully separate turns, not just separate within a single
+    nominee's answer. For Mission alignment, ask primary_purpose right
+    after each name is given (steps 1-2), alongside the naming — it's
+    context about the org, not part of the 'why' reasoning captured in
+    steps 3-4. This tool does not enforce this ordering; it's the calling
+    agent's protocol to follow, same as qa_capture/resolve_requirement
+    elsewhere in this codebase.
 
     Nominee research (issue #214) — for every NOMINATION subtype only
     (Values, Values fallback, Mission alignment, Network admired; not
