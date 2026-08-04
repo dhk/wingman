@@ -15,6 +15,22 @@ Titles render verbatim — no model rewrite (issue #145 scope). The
 user-facing filter below is a deliberately loose, deterministic heuristic:
 only titles that unambiguously read as internal repo/process bookkeeping
 are excluded, per the issue's own "when in doubt, include" instruction.
+
+Issue #202: a generated-and-committed file can silently fall behind if
+nobody reruns the generator before a release — this repo's own history did
+exactly that, 61 PRs deep, while still confidently reporting "0 new."
+Two independent guards close that gap without abandoning the static-file
+approach RFC-038 already established as correct for every install path:
+
+1. `staleness_warning` — the data module now carries the exact commit it
+   was generated from (`GENERATED_AT_COMMIT`); `render_changelog` compares
+   that against the running build's own commit stamp
+   (`src/wingman/version.py`, hatch-vcs) and says so plainly when they
+   provably differ, instead of asserting freshness it hasn't checked.
+2. `tests/unit/test_changelog.py`'s release-gate regression test — run
+   locally (`uv run pytest -q`, already required before opening a PR) in
+   any full checkout, it fails loudly if a merged PR newer than the data's
+   own newest entry was never regenerated in.
 """
 
 from __future__ import annotations
@@ -64,6 +80,16 @@ def load_entries() -> list[ChangelogEntry]:
     return [ChangelogEntry(date=date, pr=pr, title=title) for date, pr, title in CHANGELOG_DATA]
 
 
+def generation_commit() -> str:
+    """The exact commit CHANGELOG_DATA was generated from — stamped by
+    scripts/generate_changelog.py at write time (issue #202). "unknown" is
+    the graceful fallback for a data module built before this field
+    existed; treated the same as "can't verify" by staleness_warning."""
+    import wingman.changelog_data as data_module
+
+    return str(getattr(data_module, "GENERATED_AT_COMMIT", "unknown"))
+
+
 def user_facing_entries() -> list[ChangelogEntry]:
     """Curated entries, newest first."""
     entries = [entry for entry in load_entries() if is_user_facing(entry.title)]
@@ -80,15 +106,93 @@ def counts_today_and_week(entries: list[ChangelogEntry], today: date_cls) -> tup
     return today_count, week_count
 
 
-def render_changelog(today: date_cls) -> str:
-    """Plain-text rendering shared by the MCP tool and the CLI: today/week
-    counts up front, then curated entries newest first, capped at
-    DEFAULT_DISPLAY_LIMIT."""
+# Matches the exact-commit fragment hatch-vcs bakes into a dev build's
+# version string (src/wingman/version.py), e.g. "0.4.1.dev82+g8dc960d46"
+# -> "8dc960d46". Absent on a clean tagged release ("0.4.1") — nothing to
+# compare against there, by design (see staleness_warning).
+_COMMIT_FRAGMENT_RE = re.compile(r"\bg([0-9a-f]{6,40})\b")
+
+
+def _installed_commit_fragment(installed_version: str) -> str | None:
+    match = _COMMIT_FRAGMENT_RE.search(installed_version)
+    return match.group(1) if match else None
+
+
+def staleness_warning(installed_version: str, generated_at_commit: str) -> str | None:
+    """None when the running build's own commit is provably the one this
+    changelog was generated from (or a tagged release, where there's no
+    embedded commit to compare — nothing to prove either way, so this stays
+    silent rather than guessing). Otherwise a concrete, honest warning:
+    issue #202's whole complaint was a confident zero standing in for an
+    unverified answer, so this only ever asserts what the two stamps it has
+    can actually prove.
+
+    A dev-build commit fragment (from hatch-vcs) is always an abbreviation
+    of the exact commit the wheel was built from, so a straightforward
+    `startswith` against the full sha this data was generated from is a
+    correct, not merely approximate, freshness check.
+    """
+    fragment = _installed_commit_fragment(installed_version)
+    if fragment is None:
+        return None
+    if not generated_at_commit or generated_at_commit == "unknown":
+        return (
+            "Changelog data has no recorded generation commit, so its freshness "
+            "relative to this build cannot be verified — treat the list below as "
+            "possibly incomplete."
+        )
+    if generated_at_commit.startswith(fragment):
+        return None
+    return (
+        f"Changelog data was generated at commit {generated_at_commit[:12]}, but this "
+        f"build is running commit g{fragment} — they differ, so PRs merged since the "
+        "changelog was last regenerated may be missing below. Run "
+        "scripts/generate_changelog.py and release again to refresh it."
+    )
+
+
+def render_changelog(today: date_cls, installed_version: str | None = None) -> str:
+    """Plain-text rendering shared by the MCP tool and the CLI: a staleness
+    warning first when we can prove the running build has moved past the
+    commit this data was generated from (issue #202), then today/week
+    counts — with an honest filtered-count appended whenever the
+    user-facing filter is hiding anything, so "0 shown" and "0 shown, 12
+    filtered" are never conflated — then curated entries newest first,
+    capped at DEFAULT_DISPLAY_LIMIT.
+    """
+    if installed_version is None:
+        from wingman.version import wingman_version
+
+        installed_version = wingman_version()
+
+    all_entries = load_entries()
+
+    lines: list[str] = []
+    warning = staleness_warning(installed_version, generation_commit())
+    if warning:
+        lines.append(f"⚠ {warning}")
+        lines.append("")
+
+    if not all_entries:
+        lines.append("No changelog entries.")
+        return "\n".join(lines)
+
     entries = user_facing_entries()
-    if not entries:
-        return "No changelog entries."
     today_count, week_count = counts_today_and_week(entries, today)
-    lines = [f"Changelog — {today_count} new today, {week_count} in the last 7 days.", ""]
+    _all_today_count, all_week_count = counts_today_and_week(all_entries, today)
+    filtered_week_count = all_week_count - week_count
+    # Always shown, even at zero filtered — issue #202 AC5: "0 shown, 12
+    # filtered" must never collapse into a bare "0" a reader could mistake
+    # for "the filter found nothing to hide."
+    header = (
+        f"Changelog — {today_count} new today, {week_count} in the last 7 days "
+        f"({filtered_week_count} filtered)."
+    )
+    lines.append(header)
+    lines.append("")
+    if not entries:
+        lines.append("(Every entry in range was excluded by the user-facing filter.)")
+        return "\n".join(lines)
     lines.extend(
         f"- {entry.date} {entry.title} (#{entry.pr})" for entry in entries[:DEFAULT_DISPLAY_LIMIT]
     )

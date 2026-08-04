@@ -5,11 +5,172 @@ row is (merge date "YYYY-MM-DD", PR number, PR title verbatim), newest
 first, derived from `git log --first-parent` on this checkout at generation
 time. See RFC-038 and src/wingman/domain/changelog.py for why this is a
 committed static file rather than a live git read.
+
+GENERATED_AT_COMMIT/GENERATED_AT_DATE are this checkout's own HEAD at the
+moment this file was written (issue #202). The domain layer compares
+GENERATED_AT_COMMIT against the running build's own commit stamp
+(src/wingman/version.py, hatch-vcs) to prove — not guess — whether this
+data has drifted behind the code it ships with, instead of reporting a
+confident zero it hasn't verified.
 """
 
 from __future__ import annotations
 
+GENERATED_AT_COMMIT = "633ea631ad3cab125b34950bbbdaf97c2c41e21b"
+GENERATED_AT_DATE = "2026-08-04"
+
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    (
+        "2026-08-02",
+        221,
+        "Review pass: fix checkout-path mismatch, close docs/SERVER.md gaps (#124)",
+    ),
+    ("2026-08-02", 220, "Add wingman tenant overnight: close RFC-048's overnight-loop gap"),
+    (
+        "2026-08-02",
+        217,
+        "interview_react: research a nomination's identity before asking why (#214)",
+    ),
+    ("2026-08-02", 219, "ruff format: fix formatting drift blocking CI on main"),
+    (
+        "2026-08-02",
+        218,
+        "Fix crash-looping shared process: pidfile can't live next to the registry",
+    ),
+    ("2026-08-02", 216, "Fix systemctl --user bus connection for wingman-provision-shared.sh"),
+    ("2026-08-02", 213, "Add idempotent provisioning scripts for RFC-048 Phase 2 standup"),
+    (
+        "2026-08-01",
+        211,
+        "Wire --tenant-registry into mcp_server, add tenant URL lookup + rotation (#209, #210)",
+    ),
+    (
+        "2026-08-01",
+        208,
+        "Add tenant registry and ASGI token routing for shared multi-tenant process (RFC-048 Phase 1)",
+    ),
+    (
+        "2026-08-01",
+        207,
+        "Stop cross-tenant key-leak hazard ahead of multi-tenant migration (RFC-048 Phase 0)",
+    ),
+    ("2026-07-31", 206, "Add global-keys ladder tier and operator-name attribution (RFC-047)"),
+    (
+        "2026-07-30",
+        204,
+        "Overnight fixes: honest failure status, per-source feed isolation, action dedup",
+    ),
+    ("2026-07-30", 203, "CLAUDE.md: note wg is aliased on lobster too, not just the Mac"),
+    ("2026-07-30", 197, "wingman-ctl: canonical-file fallback for \\$REPO resolution"),
+    (
+        "2026-07-30",
+        201,
+        "Add Coaching Mode v1 slice 1: personas, active-persona scoping, persona-scoped interview/POV",
+    ),
+    (
+        "2026-07-29",
+        198,
+        "Split canonical host config: wingman.env (settings) / secrets.env (secrets)",
+    ),
+    (
+        "2026-07-29",
+        200,
+        "Add network_admired interview question: admired first-degree LinkedIn connections",
+    ),
+    ("2026-07-29", 199, "docs: coaching mode — design proposal, all open questions resolved"),
+    ("2026-07-29", 196, "Revert git-free upgrade-all; fix root's install for real (private repo)"),
+    ("2026-07-29", 195, "Make wingman-upgrade-all git-free for every account (#125, #167)"),
+    ("2026-07-29", 193, "Cap mcp dependency below v2 — mcp 2.0 removed mcp.server.fastmcp"),
+    (
+        "2026-07-28",
+        192,
+        "Implement UX-0001 Tier 1: BP-01–09 protocol in interview_react/perspectives_start",
+    ),
+    ("2026-07-28", 191, "Interview CLI: design requirement + UX-0001 spec"),
+    ("2026-07-28", 190, "Add 'wingman today': CLI surface for the changelog MCP tool"),
+    (
+        "2026-07-28",
+        189,
+        "Perspectives onboarding entry point; interview submission limits; product brief",
+    ),
+    ("2026-07-28", 188, "Research: interview categorization for profile bootstrap"),
+    (
+        "2026-07-28",
+        187,
+        "Profile bootstrap v1 slice 3: synthesize interview captures into a stance",
+    ),
+    ("2026-07-28", 186, "Profile bootstrap v1 slice 2: Mission alignment nomination capture"),
+    ("2026-07-28", 185, "Profile bootstrap v1 slice 1: Values nomination capture"),
+    (
+        "2026-07-28",
+        184,
+        "Generalize the Mac deployment note: all repo checkouts live under ~/Documents/dev",
+    ),
+    ("2026-07-28", 183, "Profile bootstrap v0: interview reactions as evidence"),
+    (
+        "2026-07-28",
+        181,
+        "docs: profile bootstrap — Values company fallback + all v1 open questions resolved",
+    ),
+    (
+        "2026-07-27",
+        179,
+        "docs: profile bootstrap — pro/con interview structure, mission alignment split from values",
+    ),
+    ("2026-07-27", 178, "docs: profile bootstrap via reaction — design proposal"),
+    ("2026-07-27", 177, "Digest tab cap, dossier new-link accumulation, and report-page nav"),
+    ("2026-07-26", 176, "docs: concrete systemd units for weekly wingman backup (infra follow-up)"),
+    (
+        "2026-07-26",
+        174,
+        "Web UI: real typographic hierarchy for the hero, row titles, and Manage header",
+    ),
+    (
+        "2026-07-24",
+        171,
+        "Fix bugs found reviewing #139-#170: a secret-leak test gap, three crashes, a stale doc claim",
+    ),
+    (
+        "2026-07-24",
+        170,
+        "Admin page: health check hits the wrong local path for stripped-prefix instances",
+    ),
+    ("2026-07-24", 169, "wingman-ctl: add upgrade-all, a thin trigger for the cross-account job"),
+    ("2026-07-24", 168, "wingman-upgrade-all: support local-path-shape installs (#167)"),
+    ("2026-07-24", 166, "Fix cross-account signal safety in wingman mcp stop (#138)"),
+    (
+        "2026-07-24",
+        165,
+        "The heap: capture-first inbox for leads, heat-rated (#113 capture half, RFC-044)",
+    ),
+    ("2026-07-24", 163, "Warm-path lookups via Woven: on-demand MCP bridge (#81, RFC-043)"),
+    ("2026-07-24", 164, "Add wingman-upgrade-all: scheduled upgrade for every shape-B user (#125)"),
+    ("2026-07-24", 162, 'Add OAuth/multi-tenancy consideration: a considered "not yet"'),
+    ("2026-07-24", 161, "Surface stored LinkedIn URL in people list (#80)"),
+    ("2026-07-24", 160, "Add per-instance self-restart, gated by that instance's own token (#133)"),
+    ("2026-07-24", 159, "Relationship review loop (RFC-037 pt 4)"),
+    ("2026-07-24", 158, "Relationship interaction log (RFC-037 pt 3)"),
+    ("2026-07-24", 157, "Add one canonical host key file: ~/.config/keys.env (#122)"),
+    ("2026-07-24", 156, "Relationship tickler: objective-driven digest actions (RFC-037 pt 2)"),
+    (
+        "2026-07-24",
+        153,
+        "Relationship objective doc: goal/thesis/next-move per person (RFC-037 pt 1)",
+    ),
+    ("2026-07-24", 155, "Fix ruff-format drift in test_news.py (CI red on main)"),
+    (
+        "2026-07-24",
+        154,
+        "Add 'wingman doctor --deep': a guided incident-diagnostic ladder (#137, #138)",
+    ),
+    (
+        "2026-07-24",
+        152,
+        "Web UI report listing: drop stylesheet row, dedupe JSON sidecars, honor titles",
+    ),
+    ("2026-07-23", 149, 'Web UI: fourth tab "Changelog" (curated PR history), also via MCP'),
+    ("2026-07-23", 148, "Web UI: remove unnecessary expansion caret on Manage — Keys & Uploads"),
+    ("2026-07-23", 147, "Fix stale news surfacing as current, add wingman keys test (#142, #143)"),
     ("2026-07-23", 140, "Add Claude Desktop walkthroughs: local install and remote (Lobster)"),
     ("2026-07-23", 139, "Remove dormant project-scoped wingman MCP entry from .mcp.json"),
     ("2026-07-22", 132, "Admin page: fix self-check deadlock and off-box launcher links"),
