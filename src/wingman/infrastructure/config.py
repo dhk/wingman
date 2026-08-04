@@ -28,6 +28,7 @@ class Config(BaseModel):
     # tenant instead of relying on process-wide environment state.
     anthropic_api_key: str | None = None
     voyage_api_key: str | None = None
+    openrouter_api_key: str | None = None
     # True only for a per-tenant Config built by a shared multi-tenant
     # process (RFC-048, infrastructure.tenants.Tenant.config()). Tells
     # providers.router to resolve keys from these two fields ALONE — never

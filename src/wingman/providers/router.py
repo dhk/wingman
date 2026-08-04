@@ -14,6 +14,7 @@ from wingman.providers.embeddings import (
     HashedEmbeddingProvider,
     VoyageEmbeddingProvider,
 )
+from wingman.providers.openrouter_provider import OpenRouterProvider
 from wingman.providers.recorded import RecordedProvider
 
 DEFAULT_MODELS_TOML = """\
@@ -44,6 +45,16 @@ model = "claude-sonnet-5"
 [models.embed_semantic]
 provider = "voyage"
 model = "voyage-4"
+
+# Open-web research (#222's person deep-dive) — the only capability class
+# whose provider reaches the open web rather than staying inside
+# approved/named sources (RFC-015) or user-dropped items (the heap,
+# #113). provider = "openrouter" calls OpenRouter's web-search plugin
+# (OPENROUTER_API_KEY required); nothing else in wingman calls this
+# class — only an explicit deep-dive action does.
+[models.research_websearch]
+provider = "openrouter"
+model = "anthropic/claude-sonnet-5"
 """
 
 DEFAULT_EMBEDDING = ("voyage", "voyage-4")
@@ -77,6 +88,14 @@ def get_provider(capability: CapabilityClass, config: Config) -> ModelProvider:
         if api_key is None and not config.strict_provider_keys:
             api_key = resolve_provider_key(KNOWN_KEYS["anthropic"], config.data_dir)
         return AnthropicProvider(model=model, api_key=api_key, strict=config.strict_provider_keys)
+    if provider == "openrouter":
+        model = entry.get("model")
+        if not isinstance(model, str) or not model:
+            raise ModelConfigError(f"[models.{capability.value}] needs a 'model' name in {path}.")
+        api_key = config.openrouter_api_key
+        if api_key is None and not config.strict_provider_keys:
+            api_key = resolve_provider_key(KNOWN_KEYS["openrouter"], config.data_dir)
+        return OpenRouterProvider(model=model, api_key=api_key, strict=config.strict_provider_keys)
     if provider == "recorded":
         raw_path = entry.get("path")
         if not isinstance(raw_path, str) or not raw_path:
@@ -84,7 +103,7 @@ def get_provider(capability: CapabilityClass, config: Config) -> ModelProvider:
         return RecordedProvider.from_file(Path(raw_path))
     raise ModelConfigError(
         f"[models.{capability.value}] in {path} names unknown provider {provider!r}; "
-        "supported providers are 'anthropic' and 'recorded'."
+        "supported providers are 'anthropic', 'openrouter', and 'recorded'."
     )
 
 

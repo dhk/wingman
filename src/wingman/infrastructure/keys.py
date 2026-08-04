@@ -51,6 +51,7 @@ KNOWN_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "voyage": "VOYAGE_API_KEY",
     "github": "GITHUB_API_ISSUES_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
 }
 _ACCOUNT = "wingman"
 
@@ -451,6 +452,30 @@ def _test_github(api_key: str) -> tuple[bool, str]:
     return True, "working"
 
 
+def _test_openrouter(api_key: str) -> tuple[bool, str]:
+    """One cheap authenticated call (GET /api/v1/key) — auth/usage status
+    only, never a completion call, so verification never spends on the
+    websearch plugin this key exists to pay for (#222)."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        "https://openrouter.ai/api/v1/key",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
+            json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            return False, "OpenRouter rejected the key (invalid or revoked)"
+        return False, f"OpenRouter API returned {exc.code}"
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        return False, f"could not reach the OpenRouter API ({exc})"
+    return True, "working"
+
+
 def test_key(short_name: str, runner: Runner | None = None) -> tuple[bool, str]:
     """Actually call the provider to confirm a key works, not just that it's
 
@@ -471,6 +496,8 @@ def test_key(short_name: str, runner: Runner | None = None) -> tuple[bool, str]:
         return _test_voyage(value)
     if key == "github":
         return _test_github(value)
+    if key == "openrouter":
+        return _test_openrouter(value)
     raise AssertionError(f"no live test defined for {key!r}")  # unreachable — _require_name guards
 
 

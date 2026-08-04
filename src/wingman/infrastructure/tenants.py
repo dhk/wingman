@@ -84,6 +84,7 @@ class Tenant:
             data_dir_source=f"tenant registry ({self.slug})",
             anthropic_api_key=workspace_keys.get(KNOWN_KEYS["anthropic"]),
             voyage_api_key=workspace_keys.get(KNOWN_KEYS["voyage"]),
+            openrouter_api_key=workspace_keys.get(KNOWN_KEYS["openrouter"]),
             strict_provider_keys=True,
         )
 
