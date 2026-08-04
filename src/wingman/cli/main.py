@@ -3397,6 +3397,22 @@ def interview_react(
         "organization's primary purpose to be, e.g. 'Pepsi sells cola'. Stored as "
         "context alongside the capture, never as evidence.",
     ),
+    intensity: str = typer.Option(
+        "",
+        "--intensity",
+        help="Required for values_pro/con, values_fallback_pro/con, and "
+        "mission_alignment_pro/con: how strongly you feel about this, on top of "
+        "pro/con — mild, moderate, or strong. Not accepted for "
+        "alignment_of_perspective or network_admired.",
+    ),
+    company_reason: str = typer.Option(
+        "",
+        "--company-reason",
+        help="Required for values_fallback_pro/con and mission_alignment_pro/con "
+        "only: is this about the company itself, its product, or its industry — "
+        "company, product, or industry. Stored as a structured field alongside "
+        "'why', never replacing it. Not asked for people-naming subtypes.",
+    ),
     persona: str = typer.Option(
         "",
         "--persona",
@@ -3426,6 +3442,21 @@ def interview_react(
     interview module's own protocol — conduct it in that order; it isn't
     enforced by this command itself.
 
+    Sentiment intensity and company reason (RFC-049, issue #240 v1): for
+    every Values/Mission-alignment subtype, ask --intensity right after
+    'why' — how strongly they feel, on top of the pro/con the subtype
+    already carries (mild/moderate/strong; a con nominee is never
+    "positive," only how strongly negative). For the company-naming
+    subtypes specifically (values_fallback_pro/con, mission_alignment_pro/
+    con), also ask --company-reason — is this about the company itself,
+    its product, or its industry (company/product/industry) — a
+    structured field alongside 'why', never replacing its free text.
+    Neither is asked for alignment_of_perspective or network_admired.
+    Neither flag is required by this command itself — same
+    protocol-not-code-enforcement status as the con-then-pro ordering
+    above — but a value that IS given must match the enum, or the capture
+    is rejected.
+
     Coaching mode (docs/COACHING-MODE-DESIGN.md): with an active persona
     ('wingman coach-persona set <name>'), this is scoped to them
     automatically — --persona overrides for just this one call.
@@ -3445,6 +3476,8 @@ def interview_react(
                 config,
                 storage,
                 primary_purpose=primary_purpose,
+                intensity=intensity,
+                company_reason=company_reason,
                 persona_id=active_persona.persona_id if active_persona is not None else None,
                 persona_authored=persona_authored,
             )

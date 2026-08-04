@@ -30,6 +30,38 @@ class ItemStatus(StrEnum):
     SUPERSEDED = "superseded"
 
 
+class SentimentIntensity(StrEnum):
+    """How strongly a Values/Mission-alignment nomination is felt
+    (RFC-049, issue #240 v1) — layered ON TOP OF the subtype's own
+    pro/con polarity (`_pro`/`_con`), never a substitute for it. The
+    user's own scale choice, captured verbatim, never inferred — same
+    "never inferred, always the user's own call" spirit as `HeapHeat`.
+    Combined with the subtype (`_pro` already means positive, `_con`
+    already means negative) this produces the full strongly-positive to
+    strongly-negative range without a second, independently-settable
+    polarity field that could silently disagree with the one the subtype
+    already decided.
+    """
+
+    MILD = "mild"
+    MODERATE = "moderate"
+    STRONG = "strong"
+
+
+class CompanyReasonCategory(StrEnum):
+    """Why a company-naming nomination is interesting, against a small
+    fixed taxonomy (RFC-049, issue #240 v1) — captured ALONGSIDE the
+    free-text `why`, never replacing it. Scoped to subtypes that name a
+    company (`values_fallback_pro/con`, `mission_alignment_pro/con`);
+    people-naming subtypes (`values_pro/con`, `network_admired`) have no
+    company to categorize.
+    """
+
+    COMPANY = "company"  # the company itself — leadership, culture, actions
+    PRODUCT = "product"  # what it makes or sells
+    INDUSTRY = "industry"  # the industry/sector it operates in
+
+
 class EvidenceSpan(BaseModel):
     """A verbatim quote from a source record backing a claim."""
 
@@ -57,6 +89,13 @@ class ProfileItem(BaseModel):
     detail: str = ""
     classification: ClaimClassification
     confidence: float = Field(ge=0.0, le=1.0)
+    # Interview-nomination scale fields (RFC-049, issue #240 v1) — None for
+    # every non-nomination kind, and for the interview subtypes outside
+    # this slice's scope (alignment_of_perspective_*, network_admired).
+    # See application/interview.py's subtype sets for exactly which
+    # subtypes populate which field.
+    intensity: SentimentIntensity | None = None
+    company_reason: CompanyReasonCategory | None = None
     evidence: list[EvidenceSpan] = Field(min_length=1)
     status: ItemStatus = ItemStatus.ACTIVE
     conflicts_with: str | None = None

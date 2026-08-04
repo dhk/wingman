@@ -14,7 +14,12 @@ from wingman.application.interview import (
     interview_document_key,
     render_interview_reaction,
 )
-from wingman.domain.profile import ItemStatus, ProfileItemKind
+from wingman.domain.profile import (
+    CompanyReasonCategory,
+    ItemStatus,
+    ProfileItemKind,
+    SentimentIntensity,
+)
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.storage import Storage
 
@@ -771,3 +776,249 @@ def test_renominating_the_same_connection_supersedes(workspace: Config) -> None:
             storage,
         )
         assert "superseded" in updated.outcome
+
+
+# --- Sentiment intensity and company reason (RFC-049, issue #240 v1) ---
+
+
+def test_intensity_is_persisted_on_values_pro_and_con(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        pro = capture_interview_reaction(
+            "values_pro", "Jane Goodall", WHY_PRO, workspace, storage, intensity="strong"
+        )
+        con = capture_interview_reaction(
+            "values_con", "A. Public Figure", WHY_CON, workspace, storage, intensity="mild"
+        )
+        assert pro.intensity is SentimentIntensity.STRONG
+        assert con.intensity is SentimentIntensity.MILD
+        items = {
+            i.subtype: i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE
+        }
+        assert items["values_pro"].intensity is SentimentIntensity.STRONG
+        assert items["values_con"].intensity is SentimentIntensity.MILD
+        # company_reason never applies to a people-naming subtype
+        assert items["values_pro"].company_reason is None
+
+
+def test_intensity_and_company_reason_persisted_on_mission_alignment(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        report = capture_interview_reaction(
+            "mission_alignment_pro",
+            "The Fire Department",
+            WHY_MISSION_PRO,
+            workspace,
+            storage,
+            primary_purpose="Puts out fires",
+            intensity="moderate",
+            company_reason="industry",
+        )
+        assert report.intensity is SentimentIntensity.MODERATE
+        assert report.company_reason is CompanyReasonCategory.INDUSTRY
+        item = storage.list_profile_items()[0]
+        assert item.intensity is SentimentIntensity.MODERATE
+        assert item.company_reason is CompanyReasonCategory.INDUSTRY
+        # both are stored on the ProfileItem itself, not only the inbox note
+        # (unlike primary_purpose, which lives only in the note)
+        record = storage.get_source_record(item.evidence[0].source_record_id)
+        assert record is not None
+        note = workspace.data_dir / record.source_locator
+        assert "moderate" in note.read_text(encoding="utf-8")
+
+
+def test_company_reason_persisted_on_values_fallback(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        con = capture_interview_reaction(
+            "values_fallback_con",
+            "Walmart",
+            WHY_WALMART_CON,
+            workspace,
+            storage,
+            intensity="strong",
+            company_reason="company",
+        )
+        pro = capture_interview_reaction(
+            "values_fallback_pro",
+            "A Local Co-op",
+            WHY_WALMART_PRO,
+            workspace,
+            storage,
+            intensity="mild",
+            company_reason="product",
+        )
+        assert con.company_reason is CompanyReasonCategory.COMPANY
+        assert pro.company_reason is CompanyReasonCategory.PRODUCT
+        items = {
+            i.subtype: i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE
+        }
+        assert items["values_fallback_con"].intensity is SentimentIntensity.STRONG
+        assert items["values_fallback_con"].company_reason is CompanyReasonCategory.COMPANY
+        assert items["values_fallback_pro"].company_reason is CompanyReasonCategory.PRODUCT
+
+
+def test_intensity_and_company_reason_are_optional_not_code_enforced(workspace: Config) -> None:
+    """Unlike primary_purpose (hard-required for mission_alignment),
+    intensity/company_reason follow the con-then-pro-ordering pattern:
+    the calling agent's protocol, not something this function enforces —
+    an omitted value just leaves the ProfileItem field unset rather than
+    blocking the capture. This is what keeps every pre-#240 call site
+    (and test) working unchanged."""
+    with Storage(workspace.db_path) as storage:
+        report = capture_interview_reaction(
+            "values_fallback_con", "Walmart", WHY_WALMART_CON, workspace, storage
+        )
+        assert report.outcome == "saved"
+        assert report.intensity is None and report.company_reason is None
+        item = storage.list_profile_items()[0]
+        assert item.intensity is None and item.company_reason is None
+
+
+def test_intensity_rejects_an_unknown_value(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        with pytest.raises(IngestError, match="unknown intensity"):
+            capture_interview_reaction(
+                "values_pro", "Jane Goodall", WHY_PRO, workspace, storage, intensity="furious"
+            )
+
+
+def test_company_reason_rejects_an_unknown_value(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        with pytest.raises(IngestError, match="unknown company_reason"):
+            capture_interview_reaction(
+                "values_fallback_con",
+                "Walmart",
+                WHY_WALMART_CON,
+                workspace,
+                storage,
+                company_reason="vibes",
+            )
+
+
+def test_intensity_change_alone_registers_as_an_update_not_a_no_op(workspace: Config) -> None:
+    """persist_items' dedupe check now compares intensity/company_reason
+    too — a re-capture with the SAME why but a different intensity is a
+    real change, not 'already captured — nothing changed'."""
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction(
+            "values_pro", "Jane Goodall", WHY_PRO, workspace, storage, intensity="mild"
+        )
+        report = capture_interview_reaction(
+            "values_pro", "Jane Goodall", WHY_PRO, workspace, storage, intensity="strong"
+        )
+        assert "superseded" in report.outcome
+        active = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
+        assert len(active) == 1
+        assert active[0].intensity is SentimentIntensity.STRONG
+
+
+def test_render_interview_reaction_includes_scale_tags() -> None:
+    from wingman.application.interview import InterviewReactionReport
+    from wingman.application.profile_store import ItemCounts
+
+    report = InterviewReactionReport(
+        subtype="values_fallback_con",
+        target="Walmart",
+        title=None,
+        outcome="saved",
+        counts=ItemCounts(accepted=1),
+        intensity=SentimentIntensity.STRONG,
+        company_reason=CompanyReasonCategory.COMPANY,
+    )
+    rendered = render_interview_reaction(report)
+    assert "strong" in rendered and "company" in rendered
+
+
+def test_profile_list_renders_scale_tags(workspace: Config) -> None:
+    from wingman.application.profile_manage import render_profile_listing
+
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction(
+            "values_fallback_con",
+            "Walmart",
+            WHY_WALMART_CON,
+            workspace,
+            storage,
+            intensity="strong",
+            company_reason="company",
+        )
+        listing = render_profile_listing(storage.list_profile_items())
+    assert "strong" in listing and "company" in listing
+
+
+def test_mcp_interview_react_passes_through_intensity_and_company_reason(
+    workspace: Config,
+) -> None:
+    from wingman.mcp_server import interview_react as interview_react_tool
+
+    result = interview_react_tool(
+        "values_fallback_con",
+        "Walmart",
+        WHY_WALMART_CON,
+        intensity="strong",
+        company_reason="company",
+    )
+    assert "strong, company" in result
+    items = storage_items(workspace)
+    assert len(items) == 1
+    assert items[0].intensity is SentimentIntensity.STRONG
+    assert items[0].company_reason is CompanyReasonCategory.COMPANY
+
+
+def test_mcp_interview_react_docstring_covers_new_follow_ups() -> None:
+    from wingman.mcp_server import interview_react as interview_react_tool
+
+    doc = (interview_react_tool.__doc__ or "").lower()
+    assert "intensity" in doc and "company_reason" in doc
+    assert "mild" in doc and "strong" in doc
+    assert "product" in doc and "industry" in doc
+
+
+def test_cli_interview_intensity_and_company_reason_flags(
+    workspace: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+
+    monkeypatch.setenv(ENV_DATA_DIR, str(workspace.data_dir))
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "interview",
+            "mission_alignment_pro",
+            "The Fire Department",
+            WHY_MISSION_PRO,
+            "--primary-purpose",
+            "Puts out fires",
+            "--intensity",
+            "moderate",
+            "--company-reason",
+            "industry",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "moderate, industry" in result.output
+
+    items = storage_items(workspace)
+    assert len(items) == 1
+    assert items[0].intensity is SentimentIntensity.MODERATE
+    assert items[0].company_reason is CompanyReasonCategory.INDUSTRY
+
+
+def test_cli_interview_rejects_unknown_intensity(
+    workspace: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+
+    monkeypatch.setenv(ENV_DATA_DIR, str(workspace.data_dir))
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["interview", "values_pro", "Jane Goodall", WHY_PRO, "--intensity", "furious"],
+    )
+    assert result.exit_code != 0
+    assert "unknown intensity" in result.output
