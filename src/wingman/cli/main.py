@@ -2998,11 +2998,11 @@ def mcp_url(
         )
 
 
-def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path]:
-    """Shared lookup for the 'tenant' commands below: resolves the
+def _load_registry_or_exit(registry: Path | None) -> tuple[list[Tenant], Path]:
+    """Shared registry load for the 'tenant' commands below: resolves the
     registry (explicit --registry, else WINGMAN_TENANT_REGISTRY, else the
-    RFC-047-style default), loads it, and exits(1) with a clear message on
-    any failure — never a bare traceback for an operator-facing command."""
+    RFC-047-style default) and exits(1) with a clear message if it's
+    malformed — never a bare traceback for an operator-facing command."""
     from wingman.infrastructure.tenants import (
         TenantRegistryError,
         load_registry,
@@ -3015,6 +3015,13 @@ def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path
     except TenantRegistryError as exc:
         typer.echo(f"tenant registry {registry_path} is malformed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    return tenants, registry_path
+
+
+def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path]:
+    """A single named tenant, resolved via '_load_registry_or_exit' above,
+    exiting(1) if the slug isn't in the registry."""
+    tenants, registry_path = _load_registry_or_exit(registry)
     tenant = next((t for t in tenants if t.slug == slug), None)
     if tenant is None:
         typer.echo(f"No tenant {slug!r} in the registry ({registry_path}).", err=True)
@@ -3055,32 +3062,105 @@ def tenant_url_cmd(
     Operator-assisted URL recovery: no self-service flow, no new
     credential — just a lookup over the tenant registry and that
     tenant's own token file, for whoever already has access to run this.
+    See also 'wingman tenant urls' (plural) for every tenant at once.
     """
     configure_logging()
-    from wingman.mcp_server import _extra_allowed_hosts, _tunnel_port, render_urls
+    from wingman.mcp_server import _extra_allowed_hosts, _tunnel_port, render_tenant_urls
 
     tenant, registry_path = _load_tenant_or_exit(slug, registry)
-    token = tenant.read_token()
-    if token is None:
-        typer.echo(
-            f"Tenant {slug!r} has no token yet ({tenant.token_path()} is missing or empty).",
-            err=True,
-        )
-        raise typer.Exit(code=1)
     extra_hosts = _extra_allowed_hosts(allowed_host or None)
-    for line in render_urls(
-        token,
+    lines, ok = render_tenant_urls(
+        [tenant],
+        slug,
+        registry_path,
         extra_hosts,
         host=host,
         port=port,
         tunnel_port=_tunnel_port(tunnel_port),
         tunnel_prefix=tunnel_prefix,
-    ):
-        typer.echo(line)
+    )
+    for line in lines:
+        typer.echo(line, err=not ok)
     if not extra_hosts:
         typer.echo(
             "(no tunnel hostname detected — is Tailscale up? or pass --allowed-host explicitly)"
         )
+    if not ok:
+        raise typer.Exit(code=1)
+
+
+@tenant_app.command("urls")
+def tenant_urls_cmd(
+    slug: str | None = typer.Argument(
+        None,
+        help="A single tenant's slug (same as 'tenant url'), or omit to list every tenant.",
+    ),
+    registry: Path | None = typer.Option(
+        None,
+        "--registry",
+        help="Tenant registry path (default: WINGMAN_TENANT_REGISTRY host setting).",
+    ),
+    host: str = typer.Option("127.0.0.1", help="Bind address the shared server was started with."),
+    port: int = typer.Option(8787, help="Port the shared server was started with."),
+    allowed_host: list[str] = typer.Option(  # noqa: B008 — typer's documented pattern
+        [],
+        "--allowed-host",
+        help="Extra --allowed-host flag(s) the shared server was started with.",
+    ),
+    tunnel_port: int | None = typer.Option(
+        None, "--tunnel-port", help="External tunnel port, if not the implicit 443."
+    ),
+    tunnel_prefix: str = typer.Option(
+        "",
+        "--tunnel-prefix",
+        help="Path prefix a STRIPPING tunnel front mounts this process under (e.g. /shared, "
+        "matching WINGMAN_SHARED_TAILSCALE_PATH and wingman-provision-shared.sh's "
+        "'tailscale serve --set-path'). Only changes the printed tunnel URLs -- the shared "
+        "process itself runs with no --prefix, so omitting this when the tunnel needs it "
+        "prints a URL that 404s at the tunnel, not at wingman.",
+    ),
+) -> None:
+    """Print connector URLs for one tenant, or every tenant in the
+    registry at once (#209; the "all people" roster view added for
+    #235's carve-off follow-up).
+
+    A slug behaves exactly like 'wingman tenant url <slug>' (same URLs,
+    same failure and exit code for an unknown slug or a tenant with no
+    token minted yet) -- in fact it delegates to the same underlying
+    lookup/render logic rather than duplicating it. Omitting the slug
+    loads the WHOLE tenant registry and prints every tenant's block,
+    labeled by slug, in turn; a tenant with no token minted yet is listed
+    as "<slug>: not yet connected (no token minted)" rather than erroring
+    or being silently skipped -- the roster view's entire point is a
+    complete picture of who's onboarded, not an all-or-nothing lookup.
+    """
+    configure_logging()
+    from wingman.mcp_server import _extra_allowed_hosts, _tunnel_port, render_tenant_urls
+
+    if slug is not None:
+        tenant, registry_path = _load_tenant_or_exit(slug, registry)
+        tenants = [tenant]
+    else:
+        tenants, registry_path = _load_registry_or_exit(registry)
+    extra_hosts = _extra_allowed_hosts(allowed_host or None)
+    lines, ok = render_tenant_urls(
+        tenants,
+        slug,
+        registry_path,
+        extra_hosts,
+        host=host,
+        port=port,
+        tunnel_port=_tunnel_port(tunnel_port),
+        tunnel_prefix=tunnel_prefix,
+    )
+    for line in lines:
+        typer.echo(line, err=not ok)
+    if not extra_hosts:
+        typer.echo(
+            "(no tunnel hostname detected — is Tailscale up? or pass --allowed-host explicitly)"
+        )
+    if not ok:
+        raise typer.Exit(code=1)
 
 
 @tenant_app.command("rotate-token")

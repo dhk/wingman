@@ -291,6 +291,9 @@ def test_carve_off_persona_end_to_end(coach_workspace: Config, tmp_path: Path) -
     assert report.source_records_written == 1
     summary = render_carveoff_report(report)
     assert "Mike Chen" in summary and "Phase 1" in summary and "Phase 2" in summary
+    # points at the follow-up that gives the target workspace a live URL (#238)
+    assert "wingman-add-tenant.sh" in summary
+    assert "wingman tenant urls" in summary
     assert target_dir.exists()
 
     with Storage(target_dir / "wingman.db") as target_storage:

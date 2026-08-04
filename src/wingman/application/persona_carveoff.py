@@ -242,7 +242,11 @@ def render_carveoff_report(report: CarveOffReport) -> str:
         f"{report.target_data_dir}: {report.counts.accepted} profile item(s) seeded, "
         f"{report.source_records_written} evidence record(s) preserved. "
         "(Phase 1 of #235 — a brand-new workspace only; merging into an existing one is "
-        "a planned Phase 2 follow-up.)"
+        "a planned Phase 2 follow-up.) No live URL yet — this workspace isn't served by "
+        "anything until it's registered as a tenant (root-run: "
+        f"'wingman-add-tenant.sh <slug>' pointed at {report.target_data_dir}); once it is, "
+        "'wingman tenant urls <slug>' (or 'wingman tenant urls' for every tenant) prints its "
+        "connector URLs."
     )
 
 
