@@ -12,6 +12,7 @@ set -euo pipefail
 
 SERVICE_USER="${WINGMAN_SHARED_USER:-wingman-shared}"
 PORT="${WINGMAN_SHARED_PORT:-8789}"
+TAILSCALE_PATH="${WINGMAN_SHARED_TAILSCALE_PATH:-/shared}"
 REGISTRY_PATH="/etc/wingman/tenants.toml"
 SLUG="${1:?usage: $0 <slug>}"
 
@@ -50,4 +51,7 @@ data_dir = "$DATA_DIR"
 EOF
 
 say "issuing first token and reloading the running server"
-sudo -iu "$SERVICE_USER" bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\"; wingman tenant rotate-token $SLUG --port $PORT"
+# --tunnel-prefix matches this same script's tailscale mount (see
+# wingman-provision-shared.sh's '--set-path'): the printed tunnel URL
+# needs it even though the shared process's own local bind never does.
+sudo -iu "$SERVICE_USER" bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\"; wingman tenant rotate-token $SLUG --port $PORT --tunnel-prefix $TAILSCALE_PATH"

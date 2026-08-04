@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from wingman.cli.main import app
@@ -41,6 +42,35 @@ def test_tenant_url_prints_connector_urls(tmp_path: Path) -> None:
     assert "9920" in result.output
 
 
+def test_tenant_url_tunnel_prefix_reaches_the_tunnel_line(tmp_path: Path) -> None:
+    """RFC-048's shared process sits behind a STRIPPING tailscale front
+    ('tailscale serve --set-path /shared') -- the printed tunnel URL
+    needs that prefix even though the loopback URL never does. Found
+    live migrating dhk's own account to the shared process (Phase 3):
+    the un-prefixed URL 404'd at the tunnel, not at wingman."""
+    data_dir = _make_tenant(tmp_path, "jason", "tok-jason")
+    registry = _write_registry(tmp_path, ("jason", data_dir))
+    result = cli.invoke(
+        app,
+        [
+            "tenant",
+            "url",
+            "jason",
+            "--registry",
+            str(registry),
+            "--port",
+            "8789",
+            "--allowed-host",
+            "lobster.tail.ts.net",
+            "--tunnel-prefix",
+            "/shared",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "http://127.0.0.1:8789/mcp/tok-jason" in result.output  # loopback: no prefix
+    assert "https://lobster.tail.ts.net/shared/mcp/tok-jason" in result.output  # tunnel: has it
+
+
 def test_tenant_url_unknown_slug_exits_nonzero(tmp_path: Path) -> None:
     registry = _write_registry(tmp_path)  # empty
     result = cli.invoke(app, ["tenant", "url", "nobody", "--registry", str(registry)])
@@ -73,6 +103,31 @@ def test_tenant_rotate_token_invalidates_old_and_issues_new(tmp_path: Path) -> N
     new_token = (data_dir / "mcp-http-token").read_text(encoding="utf-8").strip()
     assert new_token != "tok-old"
     assert new_token in result.output
+
+
+def test_tenant_rotate_token_tunnel_prefix_reaches_the_tunnel_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # rotate-token has no --allowed-host of its own (unlike 'tenant url') --
+    # it only ever sees a tunnel host via WINGMAN_ALLOWED_HOSTS/Tailscale
+    # auto-detection, so that's how this test supplies one.
+    monkeypatch.setenv("WINGMAN_ALLOWED_HOSTS", "lobster.tail.ts.net")
+    data_dir = _make_tenant(tmp_path, "jason", "tok-old")
+    registry = _write_registry(tmp_path, ("jason", data_dir))
+    result = cli.invoke(
+        app,
+        [
+            "tenant",
+            "rotate-token",
+            "jason",
+            "--registry",
+            str(registry),
+            "--tunnel-prefix",
+            "/shared",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "/shared/mcp/" in result.output
 
 
 def test_tenant_rotate_token_unknown_slug_exits_nonzero(tmp_path: Path) -> None:

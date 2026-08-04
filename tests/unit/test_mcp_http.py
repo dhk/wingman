@@ -111,6 +111,38 @@ def test_render_urls_honors_an_explicit_tunnel_port() -> None:
     )  # tunnel_port=None (default): no port suffix, unchanged behavior
 
 
+def test_render_urls_tunnel_prefix_only_touches_tunnel_lines() -> None:
+    """RFC-048's shared process is mounted behind a STRIPPING tailscale
+    front ('tailscale serve --set-path /shared') and itself always runs
+    with no --prefix -- 'tunnel_prefix' is a separate knob from 'prefix'
+    for exactly that split: it must appear in the tunnel URLs and nowhere
+    else, or a shared-process operator gets a URL that 404s at the
+    tunnel (found live migrating dhk's own account, RFC-048 Phase 3)."""
+    lines = render_urls("TOK", ["lobster.tail.ts.net"], port=8789, tunnel_prefix="/shared")
+    assert lines == [
+        "MCP over HTTP: http://127.0.0.1:8789/mcp/TOK",
+        "Web UI (read + upload): http://127.0.0.1:8789/ui/TOK",
+        "Tunnel MCP connector: https://lobster.tail.ts.net/shared/mcp/TOK",
+        "Tunnel web UI: https://lobster.tail.ts.net/shared/ui/TOK/",
+    ]
+    # normalizes the same way 'prefix' does: leading/trailing slashes optional
+    assert render_urls("TOK", ["h"], tunnel_prefix="shared/")[2] == (
+        "Tunnel MCP connector: https://h/shared/mcp/TOK"
+    )
+    # default '' means unchanged behavior -- no prefix in the tunnel URL either
+    assert render_urls("TOK", ["h"])[2] == "Tunnel MCP connector: https://h/mcp/TOK"
+    # left at its default, the tunnel line falls BACK to 'prefix' -- the
+    # pass-through-front case (nginx/Caddy) this parameter didn't change
+    assert render_urls("TOK", ["h"], prefix="/trent")[2] == (
+        "Tunnel MCP connector: https://h/trent/mcp/TOK"
+    )
+    # given, 'tunnel_prefix' OVERRIDES 'prefix' for the tunnel line only --
+    # the loopback line keeps using 'prefix' unchanged
+    overridden = render_urls("TOK", ["h"], prefix="/trent", tunnel_prefix="/shared")
+    assert overridden[0] == "MCP over HTTP: http://127.0.0.1:8787/trent/mcp/TOK"
+    assert overridden[2] == "Tunnel MCP connector: https://h/shared/mcp/TOK"
+
+
 def test_tunnel_port_cli_flag_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
     from wingman.mcp_server import _tunnel_port
 

@@ -188,15 +188,22 @@ cmd_upgrade_all() {
 cmd_tenant() {
   # Thin wrapper over the real implementation ('wingman tenant ...',
   # RFC-048 #209/#210) — same shape as every other wingman-ctl command
-  # that just delegates to the Python CLI (e.g. cmd_stop).
+  # that just delegates to the Python CLI (e.g. cmd_stop). Forwards every
+  # trailing flag (--port, --tunnel-prefix, --allowed-host, ...) through
+  # unchanged -- these previously got silently dropped by both this
+  # function AND the outer dispatch only ever passing $2/$3 along, so
+  # docs/SERVER.md's own documented 'wg tenant url <slug> --port 8789'
+  # never actually reached the real command.
   local sub="${1:-}" slug="${2:-}"
   case "$sub" in
     url)
-      [ -n "$slug" ] || { say "usage: $0 tenant url <slug>"; return 2; }
-      wingman tenant url "$slug" ;;
+      [ -n "$slug" ] || { say "usage: $0 tenant url <slug> [--port N] [--tunnel-prefix /path] ..."; return 2; }
+      shift 2
+      wingman tenant url "$slug" "$@" ;;
     rotate-token)
       [ -n "$slug" ] || { say "usage: $0 tenant rotate-token <slug>"; return 2; }
-      wingman tenant rotate-token "$slug" ;;
+      shift 2
+      wingman tenant rotate-token "$slug" "$@" ;;
     *)
       say "usage: $0 tenant url <slug> | tenant rotate-token <slug>"
       return 2 ;;
@@ -211,7 +218,7 @@ case "${1:-}" in
   upgrade)     cmd_upgrade ;;
   cycle)       cmd_cycle ;;
   upgrade-all) cmd_upgrade_all ;;
-  tenant)      cmd_tenant "${2:-}" "${3:-}" ;;
+  tenant)      shift; cmd_tenant "$@" ;;
   *)
     say "usage: $0 status|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|tenant ..."
     say "  status       what's running, who owns each process, what's safe to stop"
