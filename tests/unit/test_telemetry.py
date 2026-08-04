@@ -80,6 +80,22 @@ def test_mcp_tool_calls_are_journaled(workspace: Path) -> None:
     assert events[0]["outcome"] == "ok"
 
 
+def test_mcp_telemetry_summary_action(workspace: Path) -> None:
+    from wingman.mcp_server import server
+
+    config = load_config()
+    set_enabled(config, True)
+    record_event(config, "cli", "search", {}, ts="2026-08-01T09:00:00+00:00")
+    record_event(config, "cli", "status", {}, ts="2026-08-01T11:00:00+00:00")
+
+    result = asyncio.run(
+        server.call_tool("telemetry", {"action": "summary", "gap_minutes": 30, "top": 5})
+    )
+    text = str(result)
+    assert "Sessions: 2" in text
+    assert "search" in text
+
+
 def test_harvest_transcript(workspace: Path, tmp_path: Path) -> None:
     config = load_config()
     lines = [

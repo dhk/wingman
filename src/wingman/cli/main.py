@@ -151,6 +151,12 @@ from wingman.application.profile_manage import (
     resolve_item,
 )
 from wingman.application.telemetry_harvest import harvest_transcript
+from wingman.application.telemetry_summary import (
+    DEFAULT_GAP_MINUTES,
+    DEFAULT_TOP_N,
+    render_summary,
+    summarize as summarize_telemetry,
+)
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.providers.base import CapabilityClass, ProviderError
 from wingman.providers.embeddings import EmbeddingError
@@ -2815,6 +2821,33 @@ def telemetry_harvest(
         typer.echo(f"  {kind}: {count}")
     if report.skipped_lines:
         typer.echo(f"  (skipped {report.skipped_lines} unparseable lines)")
+
+
+@telemetry_app.command("summary")
+def telemetry_summary(
+    gap_minutes: float = typer.Option(
+        DEFAULT_GAP_MINUTES,
+        "--gap-minutes",
+        help="Quiet gap, in minutes, that starts a new session.",
+    ),
+    top: int = typer.Option(
+        DEFAULT_TOP_N, "--top", help="How many top commands / dead ends to show."
+    ),
+) -> None:
+    """Sessions, most-frequent commands, and dead ends — from THIS account's own
+    local journal only (issue #223). No cross-account reads: see #215.
+
+    A "dead end" is the last command/tool invoked in a session before a long
+    quiet gap — a reasonable first proxy for where usage trails off.
+    """
+    configure_logging()
+    config = load_config()
+    try:
+        summary = summarize_telemetry(config, gap_minutes=gap_minutes, top_n=top)
+    except ValueError as exc:
+        typer.echo(f"telemetry summary failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_summary(summary))
 
 
 @mcp_app.command("status")
