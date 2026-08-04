@@ -51,7 +51,12 @@ def persist_items(
     for item in items:
         existing = storage.find_active_item(item.kind, item.name_key)
         if existing is not None:
-            if existing.detail == item.detail and existing.classification == item.classification:
+            if (
+                existing.detail == item.detail
+                and existing.classification == item.classification
+                and existing.intensity == item.intensity
+                and existing.company_reason == item.company_reason
+            ):
                 new_spans = [span for span in item.evidence if span not in existing.evidence]
                 if new_spans:
                     storage.update_profile_item(

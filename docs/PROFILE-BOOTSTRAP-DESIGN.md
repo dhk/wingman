@@ -213,6 +213,26 @@ re-nominating the same public figure later doesn't mean re-researching
 from scratch — is deliberately out of scope here; see issue #215 (data
 scope: user/group/all) for that separate, harder question.
 
+### Sentiment intensity and company reason (issue #240 v1, RFC-049)
+
+The values-alignment feedback loop's capture slice. Every Values and
+Mission alignment nomination (`values_pro/con`, `values_fallback_pro/con`,
+`mission_alignment_pro/con`) now also asks a strength question — "how
+strongly do you feel about this?" (mild/moderate/strong) — layered ON TOP
+OF the pro/con the subtype naming already carries, never a second,
+independent polarity. For the subtypes that name a company specifically
+(`values_fallback_pro/con`, `mission_alignment_pro/con`), a second
+question captures *why* against a small fixed taxonomy — is this about
+the company itself, its product, or its industry — alongside the existing
+free-text "why," never replacing it. Both are persisted directly on the
+`ProfileItem` (RFC-049 has the full decision, alternatives considered, and
+persistence details), not just the inbox note, so a future inference pass
+(v2, not built in this slice) has structured fields to read across
+someone's accumulated captures. v2 (deriving a small set of per-person
+value dimensions from this data) and v3 (a radar-chart visualization of
+those dimensions) are separate, later slices of issue #240 — nothing here
+does either.
+
 ## Trust ladder
 
 | Tier | Ask | Commitment |

@@ -103,6 +103,16 @@ def clear_profile(config: Config, storage: Storage) -> int:
     return removed
 
 
+def _scale_tags(item: ProfileItem) -> str:
+    """' [mild, product]'-style suffix for an interview nomination's
+    sentiment intensity and/or company-reason category (RFC-049, issue
+    #240 v1) — empty for every item that doesn't carry either."""
+    tags = [item.intensity.value] if item.intensity is not None else []
+    if item.company_reason is not None:
+        tags.append(item.company_reason.value)
+    return f" [{', '.join(tags)}]" if tags else ""
+
+
 def render_profile_listing(items: list[ProfileItem]) -> str:
     """The 'wingman profile list' body: active by kind, then conflicts."""
     if not items:
@@ -120,13 +130,16 @@ def render_profile_listing(items: list[ProfileItem]) -> str:
         lines.append(f"{kind.value.title()}s:")
         for item in (i for i in active if i.kind is kind):
             detail = f" — {item.detail}" if item.detail else ""
-            lines.append(f"  {item.item_id[:8]}  {item.name}{detail}")
+            lines.append(f"  {item.item_id[:8]}  {item.name}{detail}{_scale_tags(item)}")
     if conflicts:
         lines.append("Conflicts (resolve with 'wingman profile resolve <id>'):")
         for item in conflicts:
             rival = (item.conflicts_with or "?")[:8]
             detail = f" — {item.detail}" if item.detail else ""
-            lines.append(f"  {item.item_id[:8]}  {item.name}{detail}  (conflicts with {rival})")
+            lines.append(
+                f"  {item.item_id[:8]}  {item.name}{detail}{_scale_tags(item)}"
+                f"  (conflicts with {rival})"
+            )
     summary = f"{len(active)} active, {len(conflicts)} in conflict"
     if superseded:
         summary += f", {superseded} superseded by newer document versions (hidden)"

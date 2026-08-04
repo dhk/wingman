@@ -393,6 +393,8 @@ def interview_react(
     target: str,
     why: str,
     primary_purpose: str = "",
+    intensity: str = "",
+    company_reason: str = "",
     persona: str = "",
     persona_authored: bool = False,
 ) -> str:
@@ -450,10 +452,11 @@ def interview_react(
       reaction (where one exists), then 'why' as SEPARATE structured
       questions — never bundle "who, and why" into one turn.
     - BP-03, options for structure, prose for substance: agree/disagree,
-      which-category-next, and continue-or-stop are fine as preset
-      options. 'why' (and a nominee's name) are NEVER preset options —
-      free text only, not even illustrative examples, which anchor the
-      answer.
+      which-category-next, continue-or-stop, and — new in RFC-049 —
+      intensity/company_reason are all fine as preset options, since
+      they're scale/category choices, not evidence. 'why' (and a
+      nominee's name) are NEVER preset options — free text only, not
+      even illustrative examples, which anchor the answer.
     - BP-04, every card has an exit: free text, "nothing comes to mind"
       (see the anchor fallback below), and "I'm done for now" stay
       reachable as options on every question, not things the user has to
@@ -485,6 +488,40 @@ def interview_react(
     not enforce that ordering; it's the calling agent's protocol to
     follow, same as qa_capture/resolve_requirement elsewhere in this
     codebase.
+
+    Sentiment intensity (RFC-049, issue #240 v1) — ask for Values and
+    Mission alignment (values_pro/con, values_fallback_pro/con,
+    mission_alignment_pro/con); NOT asked for alignment_of_perspective or
+    network_admired, which stay exactly as they were. After 'why' is
+    given but BEFORE the BP-06 echo-and-save step, ask ONE extra
+    structured question — a single-select card, options for structure
+    since this is a scale choice, not evidence (BP-03): "How strongly do
+    you feel about this?" with options 'mild' / 'moderate' / 'strong'
+    (intensity). This is a strength dimension LAYERED ON TOP OF the
+    pro/con the subtype naming already carries — never ask it as its own
+    positive/negative axis, and never let it contradict the subtype (a
+    con nominee is never "positive," only how STRONGLY negative). Fold it
+    into the echo: "Saving this as strongly negative: …". Like con-then-pro
+    ordering above, this is the calling agent's PROTOCOL, not something
+    this tool enforces — omitting intensity still saves the capture (with
+    intensity left unset), so always ask it for these subtypes rather than
+    relying on a rejection to catch a skipped question.
+
+    Company reason (RFC-049, issue #240 v1) — ask alongside intensity, but
+    ONLY for the subtypes that name a COMPANY: values_fallback_pro/con and
+    mission_alignment_pro/con. NOT asked for values_pro/con (people, not
+    companies) or network_admired. A second single-select card, asked
+    right after intensity and still before the echo: "Is this mainly
+    about the company itself, its product, or its industry?" with options
+    'company' / 'product' / 'industry' (company_reason). This is
+    STRUCTURED, alongside the free-text 'why' — it never replaces or
+    narrows 'why', which stays exactly as open-ended as ever; it just adds
+    one more angle a later pass can group by. Echo it too, in the same
+    context style as Mission alignment's primary-purpose answer (its own
+    visually distinct line, never folded into the evidence quote). Same
+    protocol-not-code-enforcement status as intensity above — a value that
+    IS supplied but doesn't match the enum is rejected, an omitted one
+    just leaves the field unset.
 
     Nominee research (issue #214) — for every NOMINATION subtype only
     (Values, Values fallback, Mission alignment, Network admired; not
@@ -540,6 +577,8 @@ def interview_react(
                 config,
                 storage,
                 primary_purpose=primary_purpose,
+                intensity=intensity,
+                company_reason=company_reason,
                 persona_id=persona_id,
                 persona_authored=persona_authored,
             )
@@ -547,12 +586,16 @@ def interview_react(
     except IngestError as exc:
         return f"interview capture failed: {exc}"
     title = f" ({report.title})" if report.title else ""
+    tags = [report.intensity.value] if report.intensity is not None else []
+    if report.company_reason is not None:
+        tags.append(report.company_reason.value)
+    tag_str = f" [{', '.join(tags)}]" if tags else ""
     position = (
         f" Position: {count} of {cap} captured for {subtype} so far." if count * 2 >= cap else ""
     )
     return (
         f"{render_acting_as(active_persona)}\n"
-        f"{report.outcome}: [{report.subtype}] {report.target}{title}\n"
+        f"{report.outcome}: [{report.subtype}] {report.target}{title}{tag_str}\n"
         "Review with 'wingman profile list', or 'my_pov'/'wingman pov' to synthesize "
         f"captures (and any corpus writing) into a cited stance.{position}"
     )

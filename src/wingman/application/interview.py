@@ -35,6 +35,18 @@ calling agent to follow, not a stateful wizard here.
 a `domain.interview.InterviewDocument` for `application.pov.build_own_pov`
 to read alongside `ExternalDocument`/`CorpusDocument` — the final v1 slice,
 actually synthesizing these captures into a stance.
+
+Values-alignment feedback loop v1 (RFC-049, issue #240): every Values and
+Mission-alignment nomination also carries `intensity` (a
+`SentimentIntensity` scale — 'mild'/'moderate'/'strong' — layered ON TOP OF
+the pro/con polarity the subtype naming already carries) and, for the
+company-naming subtypes specifically (`values_fallback_*`,
+`mission_alignment_*`), `company_reason` (a fixed
+`CompanyReasonCategory` — 'company'/'product'/'industry' — captured
+ALONGSIDE the free-text 'why', never replacing it). Unlike
+`primary_purpose`, both are persisted directly on the `ProfileItem`
+itself, not just the inbox note, so a later value-dimension inference pass
+(v2, not built here) has structured fields to read.
 """
 
 from __future__ import annotations
@@ -52,7 +64,14 @@ from wingman.application.profile_store import ItemCounts, persist_items
 from wingman.application.research import extract_page, page_title
 from wingman.application.resume_formats import extract_resume_text
 from wingman.domain.interview import InterviewDocument
-from wingman.domain.profile import EvidenceSpan, ItemStatus, ProfileItem, ProfileItemKind
+from wingman.domain.profile import (
+    CompanyReasonCategory,
+    EvidenceSpan,
+    ItemStatus,
+    ProfileItem,
+    ProfileItemKind,
+    SentimentIntensity,
+)
 from wingman.domain.provenance import ClaimClassification
 from wingman.domain.source_record import SourceRecord
 from wingman.infrastructure.config import Config
@@ -98,6 +117,24 @@ NETWORK_ADMIRED_SUBTYPES = {
 }
 NOMINATION_SUBTYPES = VALUES_SUBTYPES | MISSION_ALIGNMENT_SUBTYPES | NETWORK_ADMIRED_SUBTYPES
 VALID_SUBTYPES = REACTION_SUBTYPES | NOMINATION_SUBTYPES
+
+# Sentiment-intensity scale (RFC-049, issue #240 v1): required for every
+# Values and Mission-alignment subtype — a strength dimension layered on
+# top of the pro/con polarity subtype naming already carries. NOT
+# alignment_of_perspective (its own agree/disagree shape) or
+# network_admired (pro-only, no polarity to scale against).
+SENTIMENT_INTENSITY_SUBTYPES = VALUES_SUBTYPES | MISSION_ALIGNMENT_SUBTYPES
+
+# Company reason taxonomy (RFC-049, issue #240 v1): required for every
+# subtype that names a COMPANY — the values fallback and Mission
+# alignment pairs — never the people-naming subtypes (values_pro/con,
+# network_admired), which don't name a company at all.
+COMPANY_REASON_SUBTYPES = {
+    "values_fallback_pro",
+    "values_fallback_con",
+    "mission_alignment_pro",
+    "mission_alignment_con",
+}
 
 # values_con excludes Hitler — too easy a nomination to discriminate
 # anything about the person's actual values. No analogous exclusion for
@@ -154,6 +191,8 @@ class InterviewReactionReport(BaseModel):
     title: str | None
     outcome: str
     counts: ItemCounts
+    intensity: SentimentIntensity | None = None
+    company_reason: CompanyReasonCategory | None = None
 
 
 def _fetch_stimulus(target: str, fetcher: Callable[[str], bytes] | None) -> tuple[str, str | None]:
@@ -242,6 +281,8 @@ def capture_interview_reaction(
     storage: Storage,
     fetcher: Callable[[str], bytes] | None = None,
     primary_purpose: str | None = None,
+    intensity: str | None = None,
+    company_reason: str | None = None,
     persona_id: str | None = None,
     persona_authored: bool = False,
 ) -> InterviewReactionReport:
@@ -257,6 +298,29 @@ def capture_interview_reaction(
     ("Pepsi sells cola"); it is written to the inbox note alongside the
     capture (like qa_capture's own note file) so it stays retrievable, but
     it never becomes the evidence quote itself.
+
+    'intensity' (RFC-049, issue #240 v1) is one of SentimentIntensity's
+    values ('mild', 'moderate', 'strong') — a strength dimension layered
+    ON TOP OF the polarity the subtype's own '_pro'/'_con' suffix already
+    carries. The calling agent's PROTOCOL is to ask for it on every Values
+    and Mission-alignment capture (values_pro/con, values_fallback_pro/con,
+    mission_alignment_pro/con) — see this function's caller's own docstring
+    for the exact follow-up question — but it is not code-enforced here,
+    the same protocol-not-code-enforcement status as con-then-pro ordering
+    below: an omitted intensity leaves the stored item's `intensity` field
+    None rather than blocking the capture, so a client that hasn't caught
+    up to this new question yet never breaks. 'company_reason' is one of
+    CompanyReasonCategory's values ('company', 'product', 'industry') —
+    is this nomination about the company itself, what it makes, or the
+    industry it's in? Same protocol status, scoped to the subtypes that
+    name a COMPANY specifically (values_fallback_pro/con,
+    mission_alignment_pro/con) — never asked for values_pro/con or
+    network_admired, which name people, not companies. Both, when given,
+    are persisted directly on the resulting ProfileItem (unlike
+    primary_purpose, which lives only in the inbox note) so a later
+    inference pass has structured fields to read, not just prose. A
+    non-empty value that doesn't match the enum IS rejected, regardless of
+    subtype — this only tolerates *absence*, never a garbled answer.
 
     persona_id scopes this capture to a Persona (docs/COACHING-MODE-
     DESIGN.md) instead of the coach's own work — None (the default) is
@@ -278,6 +342,26 @@ def capture_interview_reaction(
             "primary_purpose is required for mission_alignment subtypes — what do you "
             "understand this organization's primary purpose to be? Nothing was captured."
         )
+
+    intensity_raw = (intensity or "").strip().lower()
+    intensity_value: SentimentIntensity | None = None
+    if intensity_raw:
+        try:
+            intensity_value = SentimentIntensity(intensity_raw)
+        except ValueError as exc:
+            valid = ", ".join(level.value for level in SentimentIntensity)
+            raise IngestError(f"unknown intensity {intensity_raw!r}; use one of: {valid}.") from exc
+
+    company_reason_raw = (company_reason or "").strip().lower()
+    company_reason_value: CompanyReasonCategory | None = None
+    if company_reason_raw:
+        try:
+            company_reason_value = CompanyReasonCategory(company_reason_raw)
+        except ValueError as exc:
+            valid = ", ".join(reason.value for reason in CompanyReasonCategory)
+            raise IngestError(
+                f"unknown company_reason {company_reason_raw!r}; use one of: {valid}."
+            ) from exc
 
     active_for_subtype = [
         item
@@ -309,6 +393,10 @@ def capture_interview_reaction(
     content = f"# Interview capture\n\nSubtype: {subtype}\n\nTarget: {target}\n\nWhy: {why}\n"
     if primary_purpose is not None:
         content += f"\nUnderstood primary purpose: {primary_purpose}\n"
+    if intensity_value is not None:
+        content += f"\nIntensity: {intensity_value.value}\n"
+    if company_reason_value is not None:
+        content += f"\nCompany reason: {company_reason_value.value}\n"
     if persona_id is not None:
         content += f"\nPersona: {persona_id}\n"
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -368,6 +456,8 @@ def capture_interview_reaction(
         detail=why,
         classification=classification,
         confidence=confidence,
+        intensity=intensity_value,
+        company_reason=company_reason_value,
         evidence=[EvidenceSpan(source_record_id=record.record_id, quote=why)],
         prompt_version=INTERVIEW_PROMPT_VERSION,
         extracted_by=extracted_by,
@@ -386,13 +476,25 @@ def capture_interview_reaction(
         outcome = "saved"
     _logger.info("interview_capture subtype=%s outcome=%s target=%r", subtype, outcome, target)
     return InterviewReactionReport(
-        subtype=subtype, target=target, title=title, outcome=outcome, counts=counts
+        subtype=subtype,
+        target=target,
+        title=title,
+        outcome=outcome,
+        counts=counts,
+        intensity=intensity_value,
+        company_reason=company_reason_value,
     )
 
 
 def render_interview_reaction(report: InterviewReactionReport) -> str:
     title = f" ({report.title})" if report.title else ""
-    return f"{report.subtype}: {report.target}{title} — {report.outcome}"
+    tags = []
+    if report.intensity is not None:
+        tags.append(report.intensity.value)
+    if report.company_reason is not None:
+        tags.append(report.company_reason.value)
+    tag_str = f" [{', '.join(tags)}]" if tags else ""
+    return f"{report.subtype}: {report.target}{title}{tag_str} — {report.outcome}"
 
 
 def list_interview_documents(
