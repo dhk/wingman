@@ -107,9 +107,12 @@ def test_stamp_operator_is_a_noop_when_unset(tmp_path: Path) -> None:
     assert stamp_operator("", home=home) == ""
 
 
-def test_default_runner_translates_github_api_issues_key_to_gh_token(
+def test_default_runner_translates_an_explicit_github_key_to_gh_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """_default_runner no longer resolves anything itself (that's
+    _resolve_github_key's job, tested below) — it's a pure translator:
+    given a key, set GH_TOKEN; given none, leave the environment alone."""
     captured: dict[str, object] = {}
 
     class FakeResult:
@@ -123,17 +126,16 @@ def test_default_runner_translates_github_api_issues_key_to_gh_token(
         return FakeResult()
 
     monkeypatch.setattr("subprocess.run", fake_run)
-    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "ghp-shared-token")
     monkeypatch.delenv("GH_TOKEN", raising=False)
 
-    _default_runner(["gh", "issue", "create"])
+    _default_runner(["gh", "issue", "create"], github_key="ghp-explicit-token")
 
     env = captured["env"]
     assert isinstance(env, dict)
-    assert env["GH_TOKEN"] == "ghp-shared-token"
+    assert env["GH_TOKEN"] == "ghp-explicit-token"
 
 
-def test_default_runner_leaves_gh_token_alone_when_no_shared_key(
+def test_default_runner_leaves_gh_token_alone_when_no_key_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -148,14 +150,89 @@ def test_default_runner_leaves_gh_token_alone_when_no_shared_key(
         return FakeResult()
 
     monkeypatch.setattr("subprocess.run", fake_run)
-    monkeypatch.delenv("GITHUB_API_ISSUES_KEY", raising=False)
     monkeypatch.setenv("GH_TOKEN", "already-authenticated-token")
 
-    _default_runner(["gh", "issue", "create"])
+    _default_runner(["gh", "issue", "create"])  # github_key defaults to None
 
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["GH_TOKEN"] == "already-authenticated-token"  # untouched, not overwritten
+
+
+def test_resolve_github_key_prefers_a_tenant_config_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from wingman.application.feature_request import _resolve_github_key
+    from wingman.infrastructure.config import Config
+
+    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "shared-process-env-value")
+    config = Config(
+        data_dir=Path("/nonexistent"),
+        data_dir_source="test",
+        github_api_issues_key="tenants-own-key",
+        strict_provider_keys=True,
+    )
+    assert _resolve_github_key(config) == "tenants-own-key"
+
+
+def test_resolve_github_key_falls_back_to_env_outside_strict_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from wingman.application.feature_request import _resolve_github_key
+    from wingman.infrastructure.config import Config
+
+    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "shape-b-env-value")
+    config = Config(data_dir=Path("/nonexistent"), data_dir_source="test")
+    assert _resolve_github_key(config) == "shape-b-env-value"
+
+
+def test_resolve_github_key_strict_mode_never_falls_back_to_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RFC-048: a tenant with no key of their own must fail loud (or here,
+    file under no key at all), never silently inherit whatever happens to
+    be set in the shared process's own environment."""
+    from wingman.application.feature_request import _resolve_github_key
+    from wingman.infrastructure.config import Config
+
+    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "shared-process-env-value")
+    config = Config(
+        data_dir=Path("/nonexistent"), data_dir_source="test", strict_provider_keys=True
+    )
+    assert _resolve_github_key(config) is None
+
+
+def test_filing_end_to_end_uses_the_tenants_own_key_not_the_shared_env(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The actual wiring, not just the two pieces in isolation: a tenant
+    Config's own github_api_issues_key reaches GH_TOKEN through
+    file_feature_request's default path, and the shared process's own
+    env value never leaks in alongside or instead of it."""
+    config = load_config()
+    set_feature_repo(config, "dhk/wingman")
+    config.github_api_issues_key = "tenants-own-key"
+    config.strict_provider_keys = True
+
+    captured: dict[str, object] = {}
+
+    class FakeResult:
+        returncode = 0
+        stdout = "https://github.com/dhk/wingman/issues/1\n"
+        stderr = ""
+
+    def fake_run(argv: list[str], **kwargs: object) -> FakeResult:
+        captured["env"] = kwargs.get("env")
+        return FakeResult()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "shared-process-env-value")
+
+    file_feature_request(config, "Add X", "Because Y.")
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["GH_TOKEN"] == "tenants-own-key"
 
 
 def test_mcp_tool_stamps_operator_name_into_the_preview(
@@ -177,7 +254,7 @@ def test_mcp_tool_stamps_operator_name_into_the_preview(
 
     calls: list[list[str]] = []
 
-    def fake_gh(argv: list[str]) -> tuple[int, str, str]:
+    def fake_gh(argv: list[str], github_key: str | None = None) -> tuple[int, str, str]:
         calls.append(argv)
         return 0, "https://github.com/dhk/wingman/issues/99\n", ""
 

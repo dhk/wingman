@@ -29,6 +29,13 @@ class Config(BaseModel):
     anthropic_api_key: str | None = None
     voyage_api_key: str | None = None
     openrouter_api_key: str | None = None
+    # Same shape as the three provider keys above, resolved the same way —
+    # but this one isn't a model provider at all: application.feature_request
+    # reads it directly to authenticate 'gh' (RFC-025). Kept alongside the
+    # provider keys rather than off in feature_request.py's own module so a
+    # tenant's credential isolation (below) covers it too, not just the
+    # three keys that happen to be providers.router's concern.
+    github_api_issues_key: str | None = None
     # True only for a per-tenant Config built by a shared multi-tenant
     # process (RFC-048, infrastructure.tenants.Tenant.config()). Tells
     # providers.router to resolve keys from these two fields ALONE — never

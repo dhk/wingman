@@ -751,3 +751,31 @@ Pulls, reinstalls, restarts, then polls `/health` (unauthenticated,
 version + start time only, RFC-033) until it returns 200 with a NEW
 `started_at` — confirming the restart actually took effect, not just
 that the port answers.
+
+**Migrating an existing shape-B account onto the shared process** (RFC-048
+Phase 3 — dhk/trent's own accounts, once Phase 2 has run clean for a real
+operating period; not the jason/bob-style new-tenant path above). Dry-run
+by default, prints every step; pass `--apply` to actually do it:
+
+```bash
+sudo scripts/wingman-migrate-tenant.sh dhk          # dry-run
+sudo scripts/wingman-migrate-tenant.sh dhk --apply
+```
+
+Backs up the account's live shape-B workspace (`wingman backup`), restores
+it into a new tenant data dir under `wingman-shared` (`wingman restore`),
+carries the account's own Anthropic/Voyage/GitHub-issues keys into that
+tenant's `keys.env` (RFC-048 keeps tenants strict — never the host/global
+secrets tiers), and registers it via `wingman-add-tenant.sh`. Deliberately
+does **not** stop the old shape-B `wingman-mcp.service` or cut traffic over
+— both processes can read the same restored snapshot independently, but
+`wingman restore` is one-time, not an ongoing sync, so don't run both
+against live traffic at once. Writes a durable `.migrated-from-shape-b`
+marker into the new tenant's data dir (slug, timestamp, source archive,
+a `cutover_confirmed` flag) — the printed next-steps walk through
+verifying the new tenant, flipping that flag once confirmed, and only
+then disabling (never deleting) the old unit as a kept rollback. That
+marker exists because a real migration on 2026-08-04 got run and then
+silently interrupted by unrelated live incidents before cutover, leaving
+a registered-but-unverified tenant with no trace of what had happened —
+see the script's own header for the full story.

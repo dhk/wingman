@@ -12,6 +12,13 @@ single fine-grained PAT rather than holding its own GitHub identity — in
 that case GitHub's own "opened by" field can no longer say who actually
 submitted it, so 'stamp_operator' appends a WINGMAN_OPERATOR_NAME line to
 the body instead, before the issue is ever previewed or filed.
+
+GITHUB_API_ISSUES_KEY resolves the same way the three provider keys do
+under a shared multi-tenant process (RFC-048): a tenant's own
+Config.github_api_issues_key first, falling back to process env only
+outside strict_provider_keys mode — see _resolve_github_key. Otherwise
+a tenant with no key of their own would silently file under whichever
+key happens to be set for the account running the shared process.
 """
 
 from __future__ import annotations
@@ -38,15 +45,31 @@ FEATURE_LABEL = "feature-request"
 Runner = Callable[[list[str]], tuple[int, str, str]]
 
 
-def _default_runner(argv: list[str]) -> tuple[int, str, str]:
-    # GITHUB_API_ISSUES_KEY is wingman's own name for this credential (the
-    # resolution ladder in infrastructure/keys.py hydrates it); gh itself
-    # only recognizes GH_TOKEN/GITHUB_TOKEN natively, so translate it here
-    # rather than making every caller know both names. When unset, gh falls
-    # back to whatever it already had configured (e.g. 'gh auth login') —
-    # unchanged from before this existed.
+def _resolve_github_key(config: Config) -> str | None:
+    """The credential _default_runner translates to GH_TOKEN.
+
+    Mirrors providers.router's exact resolution shape for the three
+    provider keys (RFC-048): the tenant's own config value first; under
+    strict_provider_keys (a shared-process tenant), stop there — never
+    fall back to process env, which under a shared process belongs to
+    whichever account runs it, not any particular tenant. Outside strict
+    mode (shape-B/CLI, config.github_api_issues_key normally unset),
+    read os.environ directly, exactly as before this function existed.
+    """
+    if config.github_api_issues_key is not None:
+        return config.github_api_issues_key
+    if config.strict_provider_keys:
+        return None
+    return os.environ.get("GITHUB_API_ISSUES_KEY", "").strip() or None
+
+
+def _default_runner(argv: list[str], github_key: str | None = None) -> tuple[int, str, str]:
+    # GITHUB_API_ISSUES_KEY is wingman's own name for this credential; gh
+    # itself only recognizes GH_TOKEN/GITHUB_TOKEN natively, so translate it
+    # here rather than making every caller know both names. When absent, gh
+    # falls back to whatever it already had configured (e.g. 'gh auth
+    # login') — unchanged from before this existed.
     env = dict(os.environ)
-    github_key = env.get("GITHUB_API_ISSUES_KEY", "").strip()
     if github_key:
         env["GH_TOKEN"] = github_key
     result = subprocess.run(  # noqa: S603 — fixed binary, no shell
@@ -121,7 +144,14 @@ def file_feature_request(
             "no feature-request repo configured. Set it once with "
             "'wingman feature repo <owner/name>'. Nothing was filed."
         )
-    run = runner if runner is not None else _default_runner
+    if runner is not None:
+        run = runner
+    else:
+        github_key = _resolve_github_key(config)
+
+        def run(argv: list[str]) -> tuple[int, str, str]:
+            return _default_runner(argv, github_key=github_key)
+
     argv = [
         "gh",
         "issue",
