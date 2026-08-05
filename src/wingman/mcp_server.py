@@ -72,7 +72,11 @@ from wingman.application.people import (
     seed_from_connections,
 )
 from wingman.application.dossier import build_company_dossier, delete_dossier_reports
-from wingman.application.dossier_research import research_person_dossier, save_person_dossier
+from wingman.application.dossier_research import (
+    dossier_truncation_warning,
+    research_person_dossier,
+    save_person_dossier,
+)
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import (
@@ -1706,8 +1710,10 @@ def people_deep_dive(name: str, confirmed: bool = False) -> str:
         response = research_person_dossier(name, provider)
     except (IngestError, ModelConfigError, ProviderError) as exc:
         return f"people deep-dive failed: {exc}"
+    warning = dossier_truncation_warning(response)
+    prefix = f"{warning}\n\n" if warning else ""
     return (
-        f"{response.text}\n\n"
+        f"{prefix}{response.text}\n\n"
         "Not stored. Show the findings above to the user — call "
         f"people_deep_dive_save({name!r}, content=<the findings text above, "
         "unchanged>) only after they explicitly approve storing them."

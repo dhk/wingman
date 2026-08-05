@@ -55,7 +55,11 @@ from wingman.domain.person import Person
 from wingman.reporting.export import export_career, export_company, export_person
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
 from wingman.application.dossier import build_company_dossier, delete_dossier_reports
-from wingman.application.dossier_research import research_person_dossier, save_person_dossier
+from wingman.application.dossier_research import (
+    dossier_truncation_warning,
+    research_person_dossier,
+    save_person_dossier,
+)
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.domain.outreach import OutreachPurpose
 from wingman.application.pov import (
@@ -1426,6 +1430,10 @@ def people_deep_dive(
     except (IngestError, ModelConfigError, ProviderError) as exc:
         typer.echo(f"deep-dive failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    warning = dossier_truncation_warning(response)
+    if warning:
+        typer.echo(warning, err=True)
+        typer.echo("")
     typer.echo(response.text)
     typer.echo("")
     if not yes and not typer.confirm(f"Store this as {name}'s deep-dive?", default=False):

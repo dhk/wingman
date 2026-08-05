@@ -32,6 +32,12 @@ class ModelResponse(BaseModel):
     model: str
     input_tokens: int | None = None
     output_tokens: int | None = None
+    # The API's own reason generation stopped ("stop", "length",
+    # "content_filter", ...) when the provider reports one — an
+    # authoritative truncation signal (#261), not something callers should
+    # have to infer from output_tokens vs. the request's own max_tokens.
+    # None for providers that don't surface it (e.g. RecordedProvider).
+    finish_reason: str | None = None
     latency_ms: int
 
 

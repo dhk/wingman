@@ -27,11 +27,20 @@ class _FakeResponse:
         return None
 
 
-def _openrouter_body(text: str, annotations: list[dict] | None = None) -> dict:
+def _openrouter_body(
+    text: str, annotations: list[dict] | None = None, finish_reason: str | None = "stop"
+) -> dict:
     return {
         "model": "anthropic/claude-sonnet-5",
         "choices": [
-            {"message": {"role": "assistant", "content": text, "annotations": annotations or []}}
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": text,
+                    "annotations": annotations or [],
+                },
+                "finish_reason": finish_reason,
+            }
         ],
         "usage": {"prompt_tokens": 100, "completion_tokens": 50},
     }
@@ -183,3 +192,25 @@ def test_request_includes_web_plugin_with_bounded_max_results(
     provider.complete(_REQUEST)
     assert seen_payloads[0]["plugins"] == [{"id": "web", "engine": "exa", "max_results": 3}]
     assert "tools" not in seen_payloads[0]  # never the open-ended agentic surface
+
+
+def test_complete_reports_finish_reason_length_when_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#261: 'length' is the authoritative truncation signal — the caller
+    shouldn't have to guess from output_tokens vs. what was requested."""
+    body = _openrouter_body("this got cut off mid-sent", finish_reason="length")
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResponse(body))  # noqa: ARG005
+    provider = OpenRouterProvider(model="m", api_key="sk-or-test")
+    response = provider.complete(_REQUEST)
+    assert response.finish_reason == "length"
+
+
+def test_complete_reports_finish_reason_stop_when_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = _openrouter_body("a complete response.", finish_reason="stop")
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResponse(body))  # noqa: ARG005
+    provider = OpenRouterProvider(model="m", api_key="sk-or-test")
+    response = provider.complete(_REQUEST)
+    assert response.finish_reason == "stop"

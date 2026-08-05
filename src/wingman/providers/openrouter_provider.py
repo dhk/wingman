@@ -145,5 +145,10 @@ class OpenRouterProvider:
             model=str(body.get("model", self._model)),
             input_tokens=usage.get("prompt_tokens"),
             output_tokens=usage.get("completion_tokens"),
+            # "length" means the response was cut off by max_tokens, not
+            # that the model finished — the authoritative truncation signal
+            # (#261), found missing live when a real dossier response
+            # silently truncated mid-generation with nothing to flag it.
+            finish_reason=choice.get("finish_reason"),
             latency_ms=int((perf_counter() - start) * 1000),
         )
