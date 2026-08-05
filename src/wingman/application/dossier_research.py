@@ -65,6 +65,24 @@ def research_person_dossier(name: str, provider: ModelProvider) -> ModelResponse
     )
 
 
+def dossier_truncation_warning(response: ModelResponse) -> str | None:
+    """None when nothing suggests truncation; a warning line when the
+    provider's own finish_reason says the response was cut off (#261) —
+    the authoritative signal, not a guess from output_tokens vs. the
+    request's own max_tokens. A provider that doesn't report
+    finish_reason at all (e.g. RecordedProvider) can't be checked, so
+    this stays silent rather than false-alarming on every call.
+    """
+    if response.finish_reason != "length":
+        return None
+    return (
+        "⚠ This response was cut off by the model's token limit "
+        f"(finish_reason=length, {response.output_tokens} tokens used) — "
+        "the ending is likely truncated mid-sentence, not a clean stop. "
+        "Check the last few lines before treating this as complete."
+    )
+
+
 def save_person_dossier(
     name: str,
     content: str,

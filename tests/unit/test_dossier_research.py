@@ -6,6 +6,7 @@ import pytest
 
 from wingman.application.dossier_research import (
     build_dossier_prompt,
+    dossier_truncation_warning,
     research_person_dossier,
     save_person_dossier,
 )
@@ -66,6 +67,45 @@ def test_research_requests_more_headroom_than_the_provider_default() -> None:
 def test_research_rejects_blank_name() -> None:
     with pytest.raises(IngestError, match="name"):
         research_person_dossier("   ", ScriptedProvider("irrelevant"))
+
+
+def test_truncation_warning_fires_on_finish_reason_length() -> None:
+    """#261: 'length' is the authoritative signal a response was cut off —
+    exactly what silently happened validating #222 before max_tokens (#260)
+    and this warning both existed."""
+    response = ModelResponse(
+        text="cut off mid-sen",
+        provider="openrouter",
+        model="m",
+        output_tokens=16384,
+        finish_reason="length",
+        latency_ms=0,
+    )
+    warning = dossier_truncation_warning(response)
+    assert warning is not None
+    assert "cut off" in warning.lower()
+    assert "16384" in warning
+
+
+def test_truncation_warning_silent_on_a_clean_stop() -> None:
+    response = ModelResponse(
+        text="a complete dossier.",
+        provider="openrouter",
+        model="m",
+        finish_reason="stop",
+        latency_ms=0,
+    )
+    assert dossier_truncation_warning(response) is None
+
+
+def test_truncation_warning_silent_when_provider_reports_nothing() -> None:
+    """A provider that doesn't surface finish_reason at all (e.g.
+    RecordedProvider, used in tests/offline eval) shouldn't false-alarm on
+    every single call just because the field is unset."""
+    response = ModelResponse(
+        text="findings.", provider="recorded", model="m", finish_reason=None, latency_ms=0
+    )
+    assert dossier_truncation_warning(response) is None
 
 
 def test_build_dossier_prompt_asks_for_citations() -> None:
