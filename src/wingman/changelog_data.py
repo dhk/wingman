@@ -10,6 +10,33 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-08-05", 263, "feat: wingman-host-status — every instance on this box, and what's stale"),
+    (
+        "2026-08-05",
+        262,
+        "people deep-dive: surface truncation via finish_reason, not just a bigger cap (#261)",
+    ),
+    ("2026-08-05", 260, "people deep-dive: raise max_tokens, was silently truncating (#222)"),
+    ("2026-08-05", 259, "docs: reconnect a tenant's client after editing keys.env"),
+    ("2026-08-04", 258, "Fix 'wg' alias assumption in tenant-url instructions (3 places)"),
+    (
+        "2026-08-04",
+        257,
+        "Commit wingman-migrate-tenant.sh, close the GITHUB_API_ISSUES_KEY gap (#250)",
+    ),
+    ("2026-08-04", 255, "Web UI: add User Facing / System Features / All filter to Changelog"),
+    ("2026-08-04", 252, "wingman-ctl: discard changelog_data.py's own regen before pulling (#249)"),
+    ("2026-08-04", 244, "wingman-provision-shared.sh: use tailscale funnel, not serve"),
+    ("2026-08-04", 246, "Values-alignment feedback loop v2: value-dimension inference (#240)"),
+    ("2026-08-04", 245, "wingman-redeploy-shared.sh: don't rely on newlines inside bash -c"),
+    (
+        "2026-08-04",
+        241,
+        "Values-alignment feedback loop v1: sentiment intensity + company reason (#240)",
+    ),
+    ("2026-08-04", 243, "interview_react: separate nomination naming from why-asking (#242)"),
+    ("2026-08-04", 238, "Persona carve-off (Phase 1 of #235) + tenant urls roster view"),
+    ("2026-08-04", 239, "Fix changelog silent staleness: 61-PR drift with no signal (#202)"),
     ("2026-08-04", 237, "Add people deep-dive: one-shot open-web research on a person (#222)"),
     ("2026-08-04", 236, "wingman-ctl: offer to start Tailscale on start/upgrade (#94)"),
     (
@@ -444,4 +471,4 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "4932a1edd61354722042f408e0810999591d486e"
+GENERATED_FROM_COMMIT = "825ff0801250ff01761c1820f2c2b6df0c650be4"

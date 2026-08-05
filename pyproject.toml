@@ -17,6 +17,7 @@ dependencies = [
 wingman = "wingman.cli.main:run"
 wingman-mcp = "wingman.mcp_server:main"
 wingman-upgrade-all = "wingman.infrastructure.upgrade_all:main"
+wingman-host-status = "wingman.infrastructure.host_status:main"
 
 [dependency-groups]
 dev = [
