@@ -48,6 +48,21 @@ def test_research_calls_provider_with_name_in_prompt() -> None:
     assert "Current Role" in provider.last_request.system
 
 
+def test_research_requests_more_headroom_than_the_provider_default() -> None:
+    """Found live validating #222 against a real, long-career figure (Carl
+    Sagan): the response silently truncated mid-generation at the shared
+    ModelRequest default, visible as garbled/cut-off text at the tail of
+    long sections — a real correctness bug, not a formatting quirk. Raised,
+    not removed: still a bound, single call, matching the design's own
+    'one bounded call' rationale — just a bigger bound."""
+    from wingman.providers.base import ModelRequest
+
+    provider = ScriptedProvider("Findings.")
+    research_person_dossier("Carl Sagan", provider)
+    assert provider.last_request is not None
+    assert provider.last_request.max_tokens > ModelRequest.model_fields["max_tokens"].default
+
+
 def test_research_rejects_blank_name() -> None:
     with pytest.raises(IngestError, match="name"):
         research_person_dossier("   ", ScriptedProvider("irrelevant"))
