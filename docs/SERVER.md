@@ -658,9 +658,16 @@ exactly the tenant registry + per-tenant token files, nothing added for
 this):
 
 ```bash
-sudo -iu wingman-shared wg tenant url <slug> --port 8789 --tunnel-prefix /shared
-sudo -iu wingman-shared wg tenant rotate-token <slug> --port 8789 --tunnel-prefix /shared
+sudo -iu wingman-shared bash -c 'export PATH="$HOME/.local/bin:$PATH"; wingman tenant url <slug> --port 8789 --tunnel-prefix /shared'
+sudo -iu wingman-shared bash -c 'export PATH="$HOME/.local/bin:$PATH"; wingman tenant rotate-token <slug> --port 8789 --tunnel-prefix /shared'
 ```
+
+Call `wingman` directly, not the `wg` alias (`wg` only exists in an
+interactive shell that's sourced its own `.bashrc`, per §1's setup step
+for a human's own account — `wingman-shared` was never given one, and
+a non-interactive `bash -c` wouldn't source it even if it had been).
+Found live migrating trent's account (RFC-048 Phase 3): the script's own
+printed next-steps had this exact bug, since fixed.
 
 `--tunnel-prefix` must match `WINGMAN_SHARED_TAILSCALE_PATH` (default
 `/shared`, set at `wingman-provision-shared.sh` time) — it only changes
