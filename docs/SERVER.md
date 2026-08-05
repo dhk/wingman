@@ -786,3 +786,15 @@ marker exists because a real migration on 2026-08-04 got run and then
 silently interrupted by unrelated live incidents before cutover, leaving
 a registered-but-unverified tenant with no trace of what had happened —
 see the script's own header for the full story.
+
+**Editing a tenant's `keys.env` after they're already connected?** Have
+them fully disconnect and reconnect their Claude client before retrying
+whatever needed the new key. `TenantRoutingASGIApp` resolves
+`tenant.config()` fresh per HTTP request at the ASGI layer (no server-side
+caching — verified by reading the code), but an already-established
+client session can keep reusing state from before the file changed. Hit
+live migrating dhk's own account: a key added to a running tenant's
+`keys.env` wasn't picked up until the Claude CLI session was restarted,
+even though every server-side check (file contents, ownership, a direct
+`wingman keys test` run as the exact account and data dir the server
+uses) confirmed the key was correct and readable the whole time.
