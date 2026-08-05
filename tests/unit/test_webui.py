@@ -409,9 +409,10 @@ def test_changelog_tab_css_actually_reveals_its_panel(client: tuple[TestClient, 
 def test_changelog_tab_shows_counts_and_curated_titles(
     client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Issue #145: the tab label carries today/7-day counts, titles render
-    verbatim with their PR number, and the internal-only filter excludes
-    what it targets without hiding anything outside that narrow list."""
+    """Issue #145: the tab label carries today/7-day counts (user-facing
+    entries only), and every entry's title renders verbatim with its PR
+    number — including internal-only ones, tagged for the client-side
+    filter rather than excluded server-side (see the next test)."""
     from datetime import UTC, datetime, timedelta
 
     import wingman.changelog_data as data_module
@@ -432,8 +433,45 @@ def test_changelog_tab_shows_counts_and_curated_titles(
     assert "Changelog (1 new today / 2 last 7 days)" in page
     assert "Add a brand new feature" in page and "#200" in page
     assert "Fix a real bug" in page and "#199" in page
-    assert "session snapshot" not in page  # internal-only filter excludes it
+    assert "session snapshot" in page  # present in the DOM, filtered client-side (below)
     assert "Old feature, outside the week" in page  # listed, just outside the counted window
+
+
+def test_changelog_filter_tags_rows_by_user_facing_and_renders_controls(
+    client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """User Facing / System Features / All: each row is tagged with which
+    the CSS filter hides under which selection, and all three controls are
+    present — a client-side filter with no controls, or one that doesn't
+    actually distinguish rows, is silently broken."""
+    from datetime import UTC, datetime, timedelta
+
+    import wingman.changelog_data as data_module
+
+    today = datetime.now(UTC).date()
+    monkeypatch.setattr(
+        data_module,
+        "CHANGELOG_DATA",
+        (
+            (today.isoformat(), 200, "Add a brand new feature"),
+            ((today - timedelta(days=1)).isoformat(), 199, "chore: bump lockfile"),
+        ),
+    )
+    http, token = client
+    page = http.get(f"/ui/{token}/").text
+    # controls: three radios, defaulting to User Facing, plus their labels
+    assert '<input type="radio" name="cl-filter" id="cl-uf" checked>' in page
+    assert '<input type="radio" name="cl-filter" id="cl-sys">' in page
+    assert '<input type="radio" name="cl-filter" id="cl-all">' in page
+    assert '<label for="cl-uf">User Facing</label>' in page
+    assert '<label for="cl-sys">System Features</label>' in page
+    assert '<label for="cl-all">All</label>' in page
+    # the CSS rules that actually do the hiding under each selection
+    assert "#cl-uf:checked ~ .changelog-rows .cl-sys" in page
+    assert "#cl-sys:checked ~ .changelog-rows .cl-uf" in page
+    # rows tagged by category — user-facing gets cl-uf, internal gets cl-sys
+    assert '<div class="changelog-row cl-uf">' in page  # "Add a brand new feature"
+    assert '<div class="changelog-row cl-sys">' in page  # "chore: bump lockfile"
 
 
 def test_connect_tab_shows_loopback_urls_with_no_tunnel_hint(
