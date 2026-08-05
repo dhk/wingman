@@ -22,6 +22,16 @@ from wingman.domain.person import Person, PersonDossier, PersonOrigin
 from wingman.infrastructure.storage import Storage
 from wingman.providers.base import ModelProvider, ModelRequest, ModelResponse
 
+# ModelRequest's own default (8192) is tuned for the other capability
+# classes' typical response sizes, not this one's deliberately comprehensive
+# "mostly-complete one-shot pass." Hit live validating #222 against a real
+# figure (Carl Sagan) with a long career: the response was silently
+# truncated mid-generation, visible as garbled/cut-off text at the tail of
+# the affiliations and sources lists — a real correctness bug, not a
+# formatting quirk. Raised, not removed: still a bound, not an unbounded
+# generation, matching the design's own "one bounded call" rationale.
+_DOSSIER_MAX_TOKENS = 16384
+
 SYSTEM_PROMPT = (
     "You are a careful researcher producing a one-shot professional dossier "
     "on a named person, using web search. State only what you can support; "
@@ -50,7 +60,9 @@ def research_person_dossier(name: str, provider: ModelProvider) -> ModelResponse
     if not name.strip():
         raise IngestError("a person's name is required.")
     prompt = build_dossier_prompt(name)
-    return provider.complete(ModelRequest(system=SYSTEM_PROMPT, prompt=prompt))
+    return provider.complete(
+        ModelRequest(system=SYSTEM_PROMPT, prompt=prompt, max_tokens=_DOSSIER_MAX_TOKENS)
+    )
 
 
 def save_person_dossier(
