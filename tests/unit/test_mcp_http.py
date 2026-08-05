@@ -142,6 +142,30 @@ def test_render_urls_tunnel_prefix_only_touches_tunnel_lines() -> None:
     assert overridden[2] == "Tunnel MCP connector: https://h/shared/mcp/TOK"
 
 
+def test_connector_name_adds_claude_mcp_add_after_each_mcp_url() -> None:
+    """Issue #253: a ready-to-paste 'claude mcp add' line next to every MCP
+    url (loopback and tunnel), never after a web UI url -- 'claude mcp
+    add' has nothing to do with that surface. Left at the default (""),
+    output is unchanged from before this parameter existed."""
+    bare = render_urls("TOK", [], connector_name="")
+    assert bare == [
+        "MCP over HTTP: http://127.0.0.1:8787/mcp/TOK",
+        "Web UI (read + upload): http://127.0.0.1:8787/ui/TOK",
+    ]  # default: byte-identical to before this parameter existed
+
+    named = render_urls("TOK", ["lobster.tail.ts.net"], port=9911, connector_name="wingman-taylor")
+    assert named == [
+        "MCP over HTTP: http://127.0.0.1:9911/mcp/TOK",
+        "Claude Code (paste this): claude mcp add --transport http wingman-taylor "
+        "http://127.0.0.1:9911/mcp/TOK",
+        "Web UI (read + upload): http://127.0.0.1:9911/ui/TOK",
+        "Tunnel MCP connector: https://lobster.tail.ts.net/mcp/TOK",
+        "Claude Code (paste this): claude mcp add --transport http wingman-taylor "
+        "https://lobster.tail.ts.net/mcp/TOK",
+        "Tunnel web UI: https://lobster.tail.ts.net/ui/TOK/",
+    ]
+
+
 def test_tunnel_port_cli_flag_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
     from wingman.mcp_server import _tunnel_port
 
@@ -225,6 +249,35 @@ def test_mcp_url_command_does_not_hint_when_a_front_door_is_known(workspace: Pat
     assert result.exit_code == 0
     assert "no tunnel hostname detected" not in result.output
     assert "Tunnel MCP connector: https://lobster.example.ts.net/mcp/" in result.output
+
+
+def test_mcp_url_command_defaults_to_a_claude_mcp_add_command(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #253: 'wingman mcp url' defaults --connector-name to 'wingman'
+    with no flag needed, so the ready-to-paste command shows up unprompted."""
+    result = cli.invoke(app, ["mcp", "url", "--port", "9917"])
+    assert result.exit_code == 0
+    token = _http_token(load_config())
+    assert (
+        f"claude mcp add --transport http wingman http://127.0.0.1:9917/mcp/{token}"
+        in result.output
+    )
+
+
+def test_mcp_url_command_connector_name_override_and_suppression(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = cli.invoke(app, ["mcp", "url", "--port", "9918", "--connector-name", "my-wingman"])
+    assert result.exit_code == 0
+    token = _http_token(load_config())
+    assert f"claude mcp add --transport http my-wingman http://127.0.0.1:9918/mcp/{token}" in (
+        result.output
+    )
+
+    suppressed = cli.invoke(app, ["mcp", "url", "--port", "9919", "--connector-name", ""])
+    assert suppressed.exit_code == 0
+    assert "claude mcp add" not in suppressed.output
 
 
 def test_prefix_serves_natively_on_the_folder(

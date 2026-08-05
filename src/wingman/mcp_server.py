@@ -2843,6 +2843,7 @@ def connector_urls(
     prefix: str = "",
     tunnel_port: int | None = None,
     tunnel_prefix: str = "",
+    connector_name: str = "",
 ) -> list[tuple[str, str]]:
     """(label, url) pairs: loopback MCP + web UI, plus a tunnel pair per
     accepted hostname. The single source of truth behind both 'render_urls'
@@ -2865,18 +2866,35 @@ def connector_urls(
     sees at all, so only the tunnel-visible path needs it. Mirrors
     'tunnel_port': only changes the printed/displayed tunnel URLs, never
     the local bind or the server's own routing.
+
+    'connector_name', when given (issue #253), adds one extra pair right
+    after EACH MCP url (loopback and every tunnel one) — never after a web
+    UI url, since 'claude mcp add' has nothing to do with that surface —
+    holding the ready-to-paste 'claude mcp add --transport http <name>
+    <url>' command instead of a bare url. Left at its default (""), output
+    is byte-identical to before this parameter existed: purely additive.
     """
     from wingman.webui import normalize_prefix
 
     prefix = normalize_prefix(prefix)
     tunnel_prefix = normalize_prefix(tunnel_prefix) or prefix
+
+    def _mcp_pair(label: str, url: str) -> list[tuple[str, str]]:
+        pair = [(label, url)]
+        if connector_name:
+            command = f"claude mcp add --transport http {connector_name} {url}"
+            pair.append(("Claude Code (paste this)", command))
+        return pair
+
     pairs = [
-        ("MCP over HTTP", f"http://{host}:{port}{prefix}/mcp/{token}"),
+        *_mcp_pair("MCP over HTTP", f"http://{host}:{port}{prefix}/mcp/{token}"),
         ("Web UI (read + upload)", f"http://{host}:{port}{prefix}/ui/{token}"),
     ]
     for tunnel_host in extra_hosts:
         authority = tunnel_host if tunnel_port is None else f"{tunnel_host}:{tunnel_port}"
-        pairs.append(("Tunnel MCP connector", f"https://{authority}{tunnel_prefix}/mcp/{token}"))
+        pairs.extend(
+            _mcp_pair("Tunnel MCP connector", f"https://{authority}{tunnel_prefix}/mcp/{token}")
+        )
         pairs.append(("Tunnel web UI", f"https://{authority}{tunnel_prefix}/ui/{token}/"))
     return pairs
 
@@ -2889,13 +2907,16 @@ def render_urls(
     prefix: str = "",
     tunnel_port: int | None = None,
     tunnel_prefix: str = "",
+    connector_name: str = "",
 ) -> list[str]:
     """The ready-to-paste URL lines, formatted from 'connector_urls' — backs
     both the --http startup banner and 'wingman mcp url', which computes
     those fresh from the token file and Tailscale auto-detection without
     starting a server.
     """
-    pairs = connector_urls(token, extra_hosts, host, port, prefix, tunnel_port, tunnel_prefix)
+    pairs = connector_urls(
+        token, extra_hosts, host, port, prefix, tunnel_port, tunnel_prefix, connector_name
+    )
     return [f"{label}: {url}" for label, url in pairs]
 
 
@@ -2908,6 +2929,7 @@ def render_tenant_urls(
     port: int = 8787,
     tunnel_port: int | None = None,
     tunnel_prefix: str = "",
+    connector_name: str = "",
 ) -> tuple[list[str], bool]:
     """The printable lines for a single named tenant (slug given) or for
     EVERY tenant in the registry at once (slug is None) — one shared
@@ -2924,6 +2946,16 @@ def render_tenant_urls(
     (no token minted)' rather than erroring or being silently skipped —
     the whole point of the roster view is a complete picture, not an
     all-or-nothing lookup.
+
+    'connector_name' (issue #253) is passed straight through to
+    'render_urls' for each MCP url — left at "" (the default), output is
+    unchanged from before this parameter existed. For the all-tenants
+    view specifically, one fixed name can't sensibly apply to every
+    tenant printed, so a non-empty 'connector_name' there is overridden
+    PER TENANT as 'wingman-<slug>' instead of being applied uniformly —
+    callers wanting a default name for the single-slug case supply it
+    themselves (e.g. 'wingman-<slug>'), same as every other 'render_urls'
+    caller.
 
     Returns (lines, ok). 'ok' is False only for a single-slug lookup that
     failed (unknown slug, or that tenant has no token yet) — the signal a
@@ -2948,6 +2980,7 @@ def render_tenant_urls(
                 port=port,
                 tunnel_port=tunnel_port,
                 tunnel_prefix=tunnel_prefix,
+                connector_name=connector_name,
             ),
             True,
         )
@@ -2969,6 +3002,7 @@ def render_tenant_urls(
                 port=port,
                 tunnel_port=tunnel_port,
                 tunnel_prefix=tunnel_prefix,
+                connector_name=f"wingman-{tenant.slug}" if connector_name else "",
             )
         )
     return lines, True
@@ -3046,7 +3080,11 @@ def telemetry(
 
 @server.tool()
 def tenant_url(
-    slug: str, host: str = "127.0.0.1", port: int = 8787, tunnel_prefix: str = ""
+    slug: str,
+    host: str = "127.0.0.1",
+    port: int = 8787,
+    tunnel_prefix: str = "",
+    connector_name: str = "",
 ) -> str:
     """A registered tenant's MCP + web UI connector URLs, by slug (#209,
     RFC-048's operator-assisted URL recovery). 'host'/'port' should match
@@ -3061,6 +3099,10 @@ def tenant_url(
     --set-path'. Only changes the printed tunnel URLs; the shared process
     itself always runs with no --prefix, so leaving this unset when the
     tunnel needs it prints a URL that 404s at the tunnel, not at wingman.
+
+    'connector_name' (issue #253) names the ready-to-paste 'claude mcp
+    add' command printed alongside the MCP url — defaults to
+    'wingman-<slug>' when left blank.
 
     Every tenant Config built by Tenant.config() sets
     strict_provider_keys=True by construction (RFC-048's key-isolation
@@ -3084,14 +3126,25 @@ def tenant_url(
         return f"Could not read the tenant registry ({registry_path}): {exc}"
     extra_hosts = _extra_allowed_hosts(None)
     lines, _ok = render_tenant_urls(
-        tenants, slug, registry_path, extra_hosts, host=host, port=port, tunnel_prefix=tunnel_prefix
+        tenants,
+        slug,
+        registry_path,
+        extra_hosts,
+        host=host,
+        port=port,
+        tunnel_prefix=tunnel_prefix,
+        connector_name=connector_name or f"wingman-{slug}",
     )
     return "\n".join(lines)
 
 
 @server.tool()
 def tenant_urls(
-    slug: str = "", host: str = "127.0.0.1", port: int = 8787, tunnel_prefix: str = ""
+    slug: str = "",
+    host: str = "127.0.0.1",
+    port: int = 8787,
+    tunnel_prefix: str = "",
+    connector_name: str = "",
 ) -> str:
     """Connector URLs for one tenant, or for EVERY tenant in the registry
     at once — the roster-view sibling to 'tenant_url' (#209/#238's
@@ -3110,7 +3163,10 @@ def tenant_urls(
     'host'/'port'/'tunnel_prefix' match 'tenant_url' exactly, applied
     uniformly to every tenant printed — they're all served by the same
     shared process, so the same host/port/tunnel shape applies to all of
-    them.
+    them. 'connector_name' (issue #253) names the ready-to-paste 'claude
+    mcp add' command for a single slug (default 'wingman-<slug>'); for
+    the full roster, each tenant always gets its own auto-derived
+    'wingman-<slug>' regardless of what's passed here.
 
     Operator-only, same gate as 'tenant_url': refuses when called from
     within any tenant's own scoped session (config.strict_provider_keys),
@@ -3132,14 +3188,17 @@ def tenant_urls(
     except TenantRegistryError as exc:
         return f"Could not read the tenant registry ({registry_path}): {exc}"
     extra_hosts = _extra_allowed_hosts(None)
+    slug = slug.strip()
+    effective_name = (connector_name or f"wingman-{slug}") if slug else "wingman"
     lines, _ok = render_tenant_urls(
         tenants,
-        slug.strip() or None,
+        slug or None,
         registry_path,
         extra_hosts,
         host=host,
         port=port,
         tunnel_prefix=tunnel_prefix,
+        connector_name=effective_name,
     )
     return "\n".join(lines)
 

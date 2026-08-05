@@ -73,6 +73,21 @@ def test_tenant_url_tool_works_outside_tenant_context(
     assert "9921" in result
 
 
+def test_tenant_url_tool_defaults_connector_name_to_wingman_slug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #253: the MCP tool auto-derives 'wingman-<slug>' with no
+    argument needed, matching the CLI's own default."""
+    monkeypatch.delenv("WINGMAN_DATA_DIR", raising=False)
+    data_dir = _make_tenant(tmp_path, "jason", "tok-jason")
+    registry = _write_registry(tmp_path, ("jason", data_dir))
+    monkeypatch.setattr(
+        "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
+    )
+    result = tenant_url_tool("jason", port=9921)
+    assert "claude mcp add --transport http wingman-jason " in result
+
+
 def test_tenant_url_tool_reports_unknown_slug(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -147,6 +162,25 @@ def test_tenant_urls_tool_without_slug_lists_every_tenant(
     assert "jason:" in result
     assert "tok-jason" in result
     assert "bob: not yet connected (no token minted)" in result
+
+
+def test_tenant_urls_tool_without_slug_derives_a_name_per_tenant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #253: the roster path can't apply one fixed connector name to
+    every tenant, so each gets its own 'wingman-<slug>' automatically."""
+    from wingman.mcp_server import tenant_urls as tenant_urls_tool
+
+    monkeypatch.delenv("WINGMAN_DATA_DIR", raising=False)
+    jason = _make_tenant(tmp_path, "jason", "tok-jason")
+    bob = _make_tenant(tmp_path, "bob", "tok-bob")
+    registry = _write_registry(tmp_path, ("jason", jason), ("bob", bob))
+    monkeypatch.setattr(
+        "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
+    )
+    result = tenant_urls_tool()
+    assert "claude mcp add --transport http wingman-jason " in result
+    assert "claude mcp add --transport http wingman-bob " in result
 
 
 def test_tenant_urls_tool_without_slug_and_empty_registry(
