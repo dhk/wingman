@@ -336,6 +336,28 @@ signal to revisit the hosted-tier assessment instead.
   same way §4's does. Logs: `journalctl --user -u wingman-backup.service`.
 - **Updates:** `cd ~/src/wingman && git pull && uv tool install --reinstall .`
   then `systemctl --user restart wingman-mcp.service`.
+- **What's actually running on this box:** `wg hosts`
+  (`wingman-host-status`, #263) — one row per wingman instance on the
+  machine: version, uptime, how many commits behind `WINGMAN_REPO`'s HEAD
+  it is, and whether it is running under systemd at all. No sudo needed
+  (`/health` carries no token); as root it also resolves other accounts'
+  unit state instead of printing `?`.
+
+  The row to look for is `UNMANAGED` — listening, healthy, possibly on
+  the newest build, but with no active `wingman-mcp.service`. That
+  instance is invisible to `wingman-upgrade-all`, which reports
+  `'wingman-mcp.service' is not active for this user — build updated,
+  nothing to restart` and moves on: the build advances nightly while the
+  live process never does, so a long-lived client stays on an old
+  instance indefinitely. It is what `wingman-ctl upgrade`'s `nohup` path
+  leaves behind on a systemd-managed account (RFC-042's own finding).
+  Recover with:
+
+  ```bash
+  wingman mcp stop
+  systemctl --user reset-failed wingman-mcp.service
+  systemctl --user start wingman-mcp.service
+  ```
 - **Telemetry:** `wingman telemetry on` once, if you want the usage
   journal; it is per-workspace and local-only (RFC-023).
 - **Sanity:** `wingman doctor` after any change; it reports version, keys

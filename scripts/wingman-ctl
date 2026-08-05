@@ -221,6 +221,22 @@ cmd_upgrade_all() {
   sudo journalctl -u wingman-upgrade-all.service --no-pager -n 10
 }
 
+cmd_hosts() {
+  # Thin wrapper over 'wingman-host-status' (#263) — the whole-box view
+  # 'status' above deliberately isn't: 'status' is YOUR instance and the
+  # clients attached to it, this is every wingman on the machine, its
+  # build drift, and whether anything is running outside systemd's
+  # control. Its own entry point rather than a 'wingman' subcommand for
+  # RFC-042's reason (the 'wingman' CLI is one workspace per invocation).
+  # No sudo: /health needs no token. As root it can additionally resolve
+  # other accounts' systemd state.
+  if ! command -v wingman-host-status >/dev/null 2>&1; then
+    say "wingman-host-status isn't installed — reinstall from this checkout ('$0 upgrade')."
+    return 1
+  fi
+  wingman-host-status "$@"
+}
+
 cmd_tenant() {
   # Thin wrapper over the real implementation ('wingman tenant ...',
   # RFC-048 #209/#210) — same shape as every other wingman-ctl command
@@ -254,10 +270,13 @@ case "${1:-}" in
   upgrade)     cmd_upgrade ;;
   cycle)       cmd_cycle ;;
   upgrade-all) cmd_upgrade_all ;;
+  hosts)       shift; cmd_hosts "$@" ;;
   tenant)      shift; cmd_tenant "$@" ;;
   *)
-    say "usage: $0 status|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|tenant ..."
-    say "  status       what's running, who owns each process, what's safe to stop"
+    say "usage: $0 status|hosts|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|tenant ..."
+    say "  status       what's running, who owns each process, what's safe to stop (YOU only)"
+    say "  hosts        every wingman instance on this box: version, uptime, build drift,"
+    say "               and whether any is running outside systemd's control (#263)"
     say "  start        the HTTP server (wingman-mcp --http), backgrounded + logged;"
     say "               offers to bring Tailscale up if it has no tunnel hostname (#94)"
     say "  stop         the HTTP server only (pidfile-verified; never touches clients)"
