@@ -77,6 +77,14 @@ class Tenant:
         tenant's key to every tenant lacking their own. A tenant with no
         key configured gets 'strict_provider_keys=True' and fails loud
         instead of silently inheriting a shared-process env var.
+
+        github_api_issues_key gets the exact same treatment, not just the
+        three provider keys — application.feature_request's default runner
+        otherwise reads GITHUB_API_ISSUES_KEY straight from os.environ,
+        which under a shared process is whichever account runs it, not any
+        particular tenant's own credential. Same isolation guarantee either
+        way: a tenant with none of their own fails loud rather than filing
+        under a key they never configured.
         """
         workspace_keys = read_workspace_keys(self.data_dir)
         return Config(
@@ -85,6 +93,7 @@ class Tenant:
             anthropic_api_key=workspace_keys.get(KNOWN_KEYS["anthropic"]),
             voyage_api_key=workspace_keys.get(KNOWN_KEYS["voyage"]),
             openrouter_api_key=workspace_keys.get(KNOWN_KEYS["openrouter"]),
+            github_api_issues_key=workspace_keys.get(KNOWN_KEYS["github"]),
             strict_provider_keys=True,
         )
 
