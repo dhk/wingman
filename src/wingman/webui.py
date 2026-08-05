@@ -195,6 +195,29 @@ body { margin: 0; }
 .changelog-row:first-child { border-top: 0; }
 .changelog-row .when { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
 .changelog-row .pr { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+/* Changelog filter (User Facing / System Features / All): same hidden-radio
+   + :checked-sibling technique as the outer tabset above, but its own
+   smaller classes rather than reusing .tabset/.tabbar/.tabpanel -- this is
+   a secondary filter inside one panel, not another layer of primary nav,
+   and shouldn't carry the same visual weight. Degrades the same way too:
+   below 768px filtering needs a wide-enough bar to make sense, so the
+   controls hide and every row shows, same as the outer tabs' mobile stack. */
+.changelog-filter > input { position: absolute; width: 1px; height: 1px; opacity: 0;
+  pointer-events: none; }
+.cl-filterbar { display: none; }
+@media (min-width: 768px) {
+  .cl-filterbar { display: flex; gap: 4px; margin-bottom: 4px; }
+  .cl-filterbar label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--text-dim); padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--border); cursor: pointer; transition: color .15s, border-color .15s; }
+  .cl-filterbar label:hover { color: var(--text); }
+  #cl-uf:checked ~ .cl-filterbar label[for="cl-uf"],
+  #cl-sys:checked ~ .cl-filterbar label[for="cl-sys"],
+  #cl-all:checked ~ .cl-filterbar label[for="cl-all"] {
+    color: var(--text); border-color: var(--accent); }
+  #cl-uf:checked ~ .changelog-rows .cl-sys,
+  #cl-sys:checked ~ .changelog-rows .cl-uf { display: none; }
+}
 """
 
 _UI_CSS = DESIGN_TOKENS_CSS + _UI_RULES_CSS
@@ -411,30 +434,59 @@ def _changelog_tab_label(today_count: int, week_count: int) -> str:
 
 
 def _changelog_panel(now: datetime) -> tuple[str, str]:
-    """(tab label with counts, rendered panel) — issue #145.
+    """(tab label with counts, rendered panel) — issue #145; the User Facing
+    / System Features / All filter added on direct request.
 
     Entries are wingman's own curated merged-PR history (RFC-038), not
     workspace data, so this needs no Config and renders the same for every
-    instance running this build.
+    instance running this build. The tab label's own "N new today / M last
+    7 days" count always reflects user-facing entries only, matching #145's
+    original intent, regardless of which filter the panel itself defaults
+    to or the viewer later picks.
+
+    User Facing / System Features / All is a single combined, newest-first
+    list (both categories interleaved by date, each row tagged) filtered
+    client-side via CSS — not three separately-fetched and separately-capped
+    lists. That keeps "All" in correct chronological order for free, at the
+    cost of a filtered sub-view sometimes showing fewer than
+    DEFAULT_DISPLAY_LIMIT rows if the newest DEFAULT_DISPLAY_LIMIT entries
+    happen to skew toward the other category — acceptable for "what's
+    happened lately", not worth a second display cap to avoid.
     """
     from wingman.domain.changelog import (
         DEFAULT_DISPLAY_LIMIT,
         counts_today_and_week,
+        is_user_facing,
+        load_entries,
         user_facing_entries,
     )
 
-    entries = user_facing_entries()
-    today_count, week_count = counts_today_and_week(entries, now.date())
+    today_count, week_count = counts_today_and_week(user_facing_entries(), now.date())
+    all_entries = sorted(load_entries(), key=lambda entry: entry.date, reverse=True)
     rows = "".join(
-        '<div class="changelog-row">'
+        f'<div class="changelog-row {"cl-uf" if is_user_facing(entry.title) else "cl-sys"}">'
         f'<span class="when">{_e(_changelog_date_label(entry.date, now))}</span>'
         f"<span>{_e(entry.title)}</span>"
         f'<span class="pr">#{entry.pr}</span></div>'
-        for entry in entries[:DEFAULT_DISPLAY_LIMIT]
+        for entry in all_entries[:DEFAULT_DISPLAY_LIMIT]
     )
-    if len(entries) > DEFAULT_DISPLAY_LIMIT:
+    if len(all_entries) > DEFAULT_DISPLAY_LIMIT:
         rows += '<div class="row-older">older…</div>'
-    panel = f'<div class="changelog-rows">{rows}</div>' if rows else ""
+    if not rows:
+        return _changelog_tab_label(today_count, week_count), ""
+    panel = (
+        '<div class="changelog-filter">'
+        '<input type="radio" name="cl-filter" id="cl-uf" checked>'
+        '<input type="radio" name="cl-filter" id="cl-sys">'
+        '<input type="radio" name="cl-filter" id="cl-all">'
+        '<nav class="cl-filterbar">'
+        '<label for="cl-uf">User Facing</label>'
+        '<label for="cl-sys">System Features</label>'
+        '<label for="cl-all">All</label>'
+        "</nav>"
+        f'<div class="changelog-rows">{rows}</div>'
+        "</div>"
+    )
     return _changelog_tab_label(today_count, week_count), panel
 
 
