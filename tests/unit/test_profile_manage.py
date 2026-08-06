@@ -10,8 +10,9 @@ from wingman.application.ingest import IngestError, ingest_resume
 from wingman.application.profile_manage import (
     clear_profile,
     find_item,
-    remove_item,
     rekind_item,
+    remove_item,
+    rename_item,
     render_profile_listing,
     resolve_item,
 )
@@ -442,3 +443,56 @@ def test_the_four_real_kinds_still_parse() -> None:
             )
         )
         assert proposal.items[0].item_kind is ProfileItemKind(kind)
+
+
+def test_rename_keeps_lineage_and_moves_the_dedup_key(workspace: Config, tmp_path: Path) -> None:
+    """qa_capture stores the QUESTION as the name, so a real achievement can
+    be called 'Have you shipped an AI/LLM product?' — right kind, right
+    evidence, prompt where its name should be (#282)."""
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        before = next(
+            item
+            for item in storage.list_profile_items()
+            if item.name == "Search rewrite" and item.status is ItemStatus.ACTIVE
+        )
+
+        renamed, was = rename_item(
+            before.item_id[:8], "  Shipped the search rewrite  ", workspace, storage
+        )
+
+        assert was == "Search rewrite"
+        assert renamed.name == "Shipped the search rewrite"  # trimmed
+        assert renamed.item_id == before.item_id
+        assert renamed.kind is before.kind
+        assert renamed.evidence == before.evidence
+        # The dedup key follows the name, and lives in a column as well as
+        # the payload — the invariant #273 had to establish.
+        assert _kind_column(storage, before.item_id) == before.kind.value
+        row = storage._conn.execute(  # noqa: SLF001
+            "SELECT name_key FROM profile_items WHERE item_id = ?", (before.item_id,)
+        ).fetchone()
+        assert row[0] == "shipped the search rewrite"
+
+
+def test_rename_refuses_a_collision_an_empty_name_and_a_no_op(
+    workspace: Config, tmp_path: Path
+) -> None:
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        target = next(
+            item
+            for item in storage.list_profile_items()
+            if item.name == "Search rewrite" and item.status is ItemStatus.ACTIVE
+        )
+        twin = target.model_copy(update={"item_id": "twin-0002", "name": "Taken already"})
+        storage.add_profile_item(twin)
+
+        with pytest.raises(IngestError, match="conflict to resolve"):
+            rename_item(target.item_id[:8], "Taken already", workspace, storage)
+        with pytest.raises(IngestError, match="empty"):
+            rename_item(target.item_id[:8], "   ", workspace, storage)
+        # Case and spacing alone are not a rename: name_key is unchanged.
+        with pytest.raises(IngestError, match="already named"):
+            rename_item(target.item_id[:8], "search   REWRITE", workspace, storage)
+        assert storage.get_profile_item(target.item_id).name == "Search rewrite"

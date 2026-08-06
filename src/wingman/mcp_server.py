@@ -112,6 +112,7 @@ from wingman.application.profile_manage import (
     clear_profile,
     rekind_item,
     remove_item,
+    rename_item,
     render_profile_listing,
     resolve_item,
 )
@@ -1075,10 +1076,10 @@ def answer_bank(
 
 
 @server.tool()
-def profile_manage(action: str, item_id: str = "", kind: str = "") -> str:
-    """List, remove, resolve, re-kind, or clear career-profile items (RFC-027).
+def profile_manage(action: str, item_id: str = "", kind: str = "", name: str = "") -> str:
+    """List, remove, resolve, re-kind, rename, or clear career-profile items (RFC-027).
 
-    action is 'list', 'rm', 'resolve', 'rekind', or 'clear'. 'list' shows
+    action is 'list', 'rm', 'resolve', 'rekind', 'rename', or 'clear'. 'list' shows
     every item with its id — active by kind, then unresolved conflicts.
     'rm' deletes the one item whose id starts with item_id (any unambiguous
     prefix). 'resolve' settles a duplicate/conflict: the item_id item is
@@ -1115,6 +1116,9 @@ def profile_manage(action: str, item_id: str = "", kind: str = "") -> str:
                     f"Moved {moved.name!r} ({moved.item_id[:8]}) "
                     f"from {was.value} to {moved.kind.value}."
                 )
+            if action == "rename":
+                renamed, previous_name = rename_item(item_id, name, config, storage)
+                return f"Renamed {previous_name!r} to {renamed.name!r} ({renamed.item_id[:8]})."
             if action == "clear":
                 removed = clear_profile(config, storage)
                 return (
@@ -1123,7 +1127,7 @@ def profile_manage(action: str, item_id: str = "", kind: str = "") -> str:
                 )
     except IngestError as exc:
         return f"profile {action} failed: {exc}"
-    return f"unknown action {action!r}; use list, rm, resolve, rekind, or clear."
+    return f"unknown action {action!r}; use list, rm, resolve, rekind, rename, or clear."
 
 
 @server.tool()
