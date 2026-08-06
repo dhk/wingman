@@ -122,6 +122,27 @@ def _ps_identity(pid: int, run: Runner) -> tuple[str | None, str | None]:
     return parts[1], parts[0]
 
 
+def is_port_bound(port: int, run: Runner = _default_runner) -> bool:
+    """Is anything LISTENing here — separately from whether we may see WHO.
+
+    find_port_owner needs a pid, and 'ss -tlnp' only reveals pids for the
+    caller's own sockets: another account's listener shows as an anonymous
+    LISTEN line. So "someone is on this port" and "here is who" are two
+    different questions at two different privilege levels, and conflating
+    them meant an unprivileged caller could not tell a restarting instance
+    from an empty port (#267).
+    """
+    if shutil.which("ss") is not None:
+        code, out = run(["ss", "-H", "-tln", f"sport = :{port}"])
+        if code == 0 and out.strip():
+            return True
+    if shutil.which("lsof") is not None:
+        code, out = run(["lsof", "-n", "-P", f"-iTCP:{port}", "-sTCP:LISTEN"])
+        if code == 0 and out.strip():
+            return True
+    return False
+
+
 def find_port_owner(port: int, run: Runner = _default_runner) -> PortOwner | None:
     """The pid LISTENing on 'port', or None if nothing is.
 
