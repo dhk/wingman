@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 
 from wingman.application.ingest import ingest_resume
+from wingman.application.evidence import locate_quote
+from wingman.application.resume_formats import extract_resume_text
 from wingman.infrastructure.config import ENV_DATA_DIR, load_config
 from wingman.infrastructure.storage import Storage
 from wingman.providers.base import CapabilityClass
@@ -47,11 +49,23 @@ def test_recorded_case(case_dir: Path, tmp_path: Path) -> None:
         assert name not in accepted_names
         assert name not in markdown
 
-    # Citation coverage: every accepted item resolves to a real source record.
+    # Citation coverage: every accepted item resolves to a real source record,
+    # and every quote is verifiable against the text that record covers.
+    #
+    # Against the EXTRACTED text, not the raw file. The raw file is the
+    # archived artifact; the extracted text is what the model read and what
+    # content_hash covers, so it is the thing a citation can be checked
+    # against. Comparing to the raw file only worked while a fixture happened
+    # to quote a hard-wrapped sentence in its wrapped form — the case RFC-026
+    # exists because models do NOT do (they quote the sentence, not the line
+    # breaks), and the case #278's PDFs break outright.
+    extracted = extract_resume_text(case_dir / "resume.md")
     for item in items:
         for span in item.evidence:
             assert span.source_record_id == report.source_record_id
-            assert span.quote in (case_dir / "resume.md").read_text(encoding="utf-8")
+            # Resolvable, not literally-a-substring: a stored quote folds the
+            # whitespace runs that PDF layout extraction pads with (#278).
+            assert locate_quote(span.quote, extracted) is not None
 
 
 @pytest.mark.evaluation_live

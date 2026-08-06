@@ -11,6 +11,8 @@ character, only wrapping and indentation are forgiven.
 import json
 from pathlib import Path
 
+from wingman.application.evidence import locate_quote
+
 import pytest
 
 from wingman.application.evidence import fold_whitespace
@@ -129,3 +131,50 @@ def test_pov_quote_across_wrapped_corpus_body() -> None:
     assert [entry.reason for entry in rejected] == [
         "quote does not appear verbatim in 'Ship Small'"
     ]
+
+
+def test_locate_quote_matches_across_missing_spaces_and_returns_the_source_span() -> None:
+    """The #278 case: a PDF whose fonts carry no space glyphs extracts as
+    'HeadofDataScience2021-2024'. The model reads words and quotes words.
+    Folding whitespace runs cannot insert spaces that were never there."""
+    source = "EXPERIENCE Synctera\nHeadofDataScience2021-2024\nDirector, Data"
+    found = locate_quote("Head of Data Science 2021-2024", source)
+
+    assert found == "HeadofDataScience2021-2024"
+    # The citation quotes the document, not the model's readable rewrite.
+    assert found in source
+
+
+def test_locate_quote_still_bridges_a_hard_line_wrap() -> None:
+    """RFC-026's original case must keep working."""
+    source = "Built a reconciliation analytics workbench that delivered\n6x productivity."
+    assert (
+        locate_quote("workbench that delivered 6x productivity.", source)
+        == "workbench that delivered 6x productivity."
+    )
+
+
+def test_locate_quote_rejects_characters_that_are_not_there() -> None:
+    """Ignoring whitespace costs nothing in strength: every non-space
+    character must still appear, in order. This is the invented-evidence
+    case the whole check exists to catch."""
+    source = "Improved completion from 0.89% to 4.95%."
+    assert locate_quote("Improved completion from 0.89% to 9.95%.", source) is None
+    assert locate_quote("Led a team of forty engineers.", source) is None
+    # Right characters, wrong order.
+    assert locate_quote("4.95% to 0.89%", source) is None
+
+
+def test_locate_quote_rejects_blank_quotes() -> None:
+    assert locate_quote("", "anything") is None
+    assert locate_quote("   \n\t ", "anything") is None
+
+
+def test_locate_quote_folds_the_padding_layout_extraction_leaves_behind() -> None:
+    """pypdf's layout mode pads with columns of spaces to preserve position.
+    A faithful span would cite 'Head  of Data   Science            2021-2024';
+    folding keeps every source character, in order, and reads (#278)."""
+    source = "Head  of Data   Science                    2021-2024"
+    assert locate_quote("Head of Data Science 2021-2024", source) == (
+        "Head of Data Science 2021-2024"
+    )

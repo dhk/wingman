@@ -54,7 +54,22 @@ def pdf_text(data: bytes, name: str) -> str:
 
     try:
         reader = PdfReader(io.BytesIO(data))
-        pages = [page.extract_text() or "" for page in reader.pages]
+        try:
+            # 'layout', not the default 'plain': on PDFs whose fonts emit no
+            # explicit space glyphs — common in designed resume templates —
+            # plain mode returns text with NO inter-word spacing
+            # ('HeadofDataScience2021–2024'). The model then quotes it back as
+            # readable English, and the verbatim evidence check correctly
+            # rejects an honest quote of a real line, silently dropping the
+            # most senior roles in the document (#278). Layout mode preserves
+            # the spacing that was there on the page.
+            pages = [page.extract_text(extraction_mode="layout") or "" for page in reader.pages]
+        except (PyPdfError, TypeError, ValueError, KeyError) as exc:
+            # Layout mode does more work and can fail where plain succeeds; a
+            # PDF only plain mode can read must still ingest.
+            _logger.info("pdf layout extraction failed for %s (%s); using plain", name, exc)
+            reader = PdfReader(io.BytesIO(data))
+            pages = [page.extract_text() or "" for page in reader.pages]
     except (PyPdfError, ValueError, KeyError, OSError) as exc:
         raise IngestError(
             f"could not extract text from {name} ({exc}). Nothing was ingested; "
