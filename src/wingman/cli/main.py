@@ -3308,6 +3308,13 @@ def tenant_form_cmd(
     out: Path = typer.Option(
         Path("."), "--out", help="Directory to write the script and manifest into."
     ),
+    print_script: bool = typer.Option(
+        False,
+        "--print",
+        help="Write the script to stdout instead of a file, to copy straight out "
+        "of the terminal — the artefact is generated on the server and pasted on "
+        "a laptop.",
+    ),
 ) -> None:
     """Emit a Google Form for the interview questions, for one tenant (#287).
 
@@ -3329,6 +3336,11 @@ def tenant_form_cmd(
     if not label:
         typer.echo("tenant form failed: a tenant slug is required.", err=True)
         raise typer.Exit(code=1)
+    if print_script:
+        # Nothing but the script: this is meant to be piped or selected, and a
+        # stray banner line pasted into the editor is a syntax error on line 1.
+        typer.echo(render_apps_script(label))
+        return
     try:
         out.mkdir(parents=True, exist_ok=True)
         script_path = out / f"{label}-interview-form.gs"
@@ -3342,10 +3354,17 @@ def tenant_form_cmd(
     typer.echo(f"Wrote {manifest_path}  (routing table for ingest; not needed by the form)")
     typer.echo("")
     typer.echo(f"{len(form_questions())} questions. Next:")
-    typer.echo("  1. Open https://script.google.com and start a new project")
-    typer.echo(f"  2. Paste {script_path.name}, then Run")
-    typer.echo("  3. Approve the permission prompt (it creates a form in YOUR Drive)")
-    typer.echo("  4. The Execution log prints the published URL — send that to them")
+    typer.echo("  1. Get the script onto the machine you'll paste from:")
+    typer.echo(f"       scp <this-host>:{script_path} ~/Downloads/")
+    typer.echo("     or re-run with --print and copy it out of the terminal.")
+    typer.echo("  2. Open https://script.google.com, New project")
+    typer.echo("  3. In Code.gs: select ALL, paste over it, save")
+    typer.echo("       the myFunction stub must be gone, or it won't save")
+    typer.echo("  4. Choose createWingmanInterviewForm in the dropdown (not myFunction)")
+    typer.echo("  5. Run, approve the permission prompt (a form in YOUR Drive)")
+    typer.echo("  6. Execution log prints the published URL — send that to them")
+    typer.echo("")
+    typer.echo(f"Paste the .gs file, NOT {Path(__file__).name} or any wingman source.")
 
 
 @tenant_app.command("overnight")

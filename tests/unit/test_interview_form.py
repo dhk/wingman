@@ -34,15 +34,31 @@ def test_every_criteria_area_is_asked() -> None:
 
 def test_questions_are_grouped_by_where_their_answers_go() -> None:
     questions = form_questions()
-    destinations = {question.destination for question in questions}
-    assert destinations == {"criteria", "profile", "answers"}
-    # Preferences are criteria, not skills — filed as profile items they score
-    # nothing and masquerade as skills (#283).
-    office = next(q for q in questions if q.key == "pref_office")
-    assert office.destination == "criteria"
-    # A screening question is an employer's question, not a career claim.
-    shipped = next(q for q in questions if q.key == "screen_ai_product")
-    assert shipped.destination == "answers"
+    assert {question.destination for question in questions} == {"criteria", "profile"}
+    assert all(q.destination == "criteria" for q in questions if q.key.startswith("criteria_"))
+    assert all(q.destination == "profile" for q in questions if q.subtype)
+
+
+def test_no_question_is_specific_to_one_person() -> None:
+    """The first version of this form carried screening questions lifted from
+    one person's own workspace — their application answers, which ask everyone
+    else about a stranger. A form is generic or it is nobody's."""
+    questions = form_questions()
+    keys = {question.key for question in questions}
+    assert not {k for k in keys if k.startswith(("screen_", "pref_"))}
+    text = " ".join(f"{q.title} {q.help}" for q in questions).lower()
+    for lifted in ("ai/llm", "years of experience", "field of study", "in-office"):
+        assert lifted not in text
+
+
+def test_the_whole_nomination_set_is_asked() -> None:
+    """People admired and its opposite, the company fallback for anyone who
+    would rather not name people, and organizations with their purpose —
+    every subtype application/interview.py defines for a nomination."""
+    from wingman.application.interview import NOMINATION_SUBTYPES
+
+    asked = {question.subtype for question in form_questions() if question.subtype}
+    assert asked == NOMINATION_SUBTYPES
 
 
 def test_nomination_questions_carry_their_interview_subtype() -> None:
@@ -114,3 +130,52 @@ def test_script_never_claims_wingman_holds_a_google_credential() -> None:
     script = render_apps_script("jason")
     assert "wingman holds no Google credential" in script
     assert "YOUR Drive" in script
+
+
+def test_header_names_the_two_steps_that_actually_break() -> None:
+    """Learned by getting it wrong in a real Apps Script editor.
+
+    'Paste this in, then Run' is not enough: the editor ships a myFunction
+    stub that stays selected in the run dropdown, and a file that does not
+    parse refuses to save — so the first symptom is 'Attempted to execute
+    myFunction, but could not save', which names neither cause.
+    """
+    script = render_apps_script("jason")
+    header = script.split("function createWingmanInterviewForm")[0]
+    assert "SELECT ALL" in header
+    assert "myFunction stub must be gone" in header
+    assert "choose createWingmanInterviewForm" in header
+    assert "defaults to myFunction" in header
+
+
+def test_header_comment_cannot_terminate_itself() -> None:
+    """The header quotes '/**' at the reader. A '*/' anywhere in it would end
+    the comment early and leave prose as executable code."""
+    script = render_apps_script("jason")
+    header = script.split("function createWingmanInterviewForm")[0]
+    assert header.count("*/") == 1
+    assert header.rstrip().endswith("*/")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_print_output_is_the_script_and_nothing_else(tmp_path) -> None:
+    """--print exists so the script can be copied out of a terminal: the
+    artefact is generated on a server and pasted on a laptop. A stray banner
+    line would be a syntax error on line 1 — which is exactly the failure
+    that motivated this flag."""
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+
+    result = CliRunner().invoke(app, ["tenant", "form", "jason", "--print"])
+
+    assert result.exit_code == 0
+    assert result.stdout.lstrip().startswith("/**")
+    assert "Wrote " not in result.stdout
+    assert "questions. Next:" not in result.stdout
+    written = tmp_path / "printed.js"
+    written.write_text(result.stdout, encoding="utf-8")
+    check = subprocess.run(
+        ["node", "--check", str(written)], capture_output=True, text=True, check=False
+    )
+    assert check.returncode == 0, check.stderr

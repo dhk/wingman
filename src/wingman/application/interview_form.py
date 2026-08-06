@@ -17,17 +17,24 @@ Google Forms cannot import questions from a spreadsheet — its own
 "import questions" reads another Form — so a script is the only artefact
 that actually builds a form without the API.
 
-The questions are not invented here. They are the ones that already
-exist and have no offline path: RFC-035's five job-criteria areas
-(job_scoring.INTERVIEW_AREAS), the nomination subtypes from
-application/interview.py, and the screening questions whose answers
-belong in the answer bank (RFC-030).
+The questions are not invented here, and the first version of this file
+broke that rule: it carried a block of screening questions ("Have you
+shipped an AI/LLM product?", years of experience, field of study) lifted
+from one person's own workspace. Those are that person's application
+answers, not an interview — a form built from them asks everyone else
+about a stranger. They are gone.
 
-Every question carries its DESTINATION, because the three kinds of
-answer go to three different places — the distinction #283 had to make
-for qa_capture. The manifest emitted alongside the script is what a
-later ingest reads to route each response; the form itself is just a
-form.
+What remains is what already exists and has no offline path: RFC-035's
+five job-criteria areas (job_scoring.INTERVIEW_AREAS), and the whole
+nomination set from application/interview.py — people admired and its
+opposite, the company fallback for anyone who would rather not name
+people, and organizations with their purpose. Nothing here is specific
+to any one person.
+
+Every question carries its DESTINATION, because the kinds of answer go
+to different places — the distinction #283 had to make for qa_capture.
+The manifest emitted alongside the script is what a later ingest reads
+to route each response; the form itself is just a form.
 """
 
 from __future__ import annotations
@@ -75,100 +82,56 @@ def _criteria_questions() -> list[FormQuestion]:
     ]
 
 
-# Preferences are criteria, not skills. Filed as profile items they score
-# nothing and masquerade as skills, which is exactly what happened on a live
-# workspace (#283) — 'Willing to be in-office 25%+? — Yes' as a skill.
-_PREFERENCES = [
-    FormQuestion(
-        key="pref_location",
-        title="Where are you, and where would you work?",
-        help="City, and whether you want remote, hybrid, or on-site.",
-        widget="short",
-        destination="criteria",
-    ),
-    FormQuestion(
-        key="pref_office",
-        title="Are you willing to be in an office 25% or more of the time?",
-        widget="short",
-        destination="criteria",
-    ),
-    FormQuestion(
-        key="pref_travel",
-        title="Are you willing to travel, or work non-traditional hours?",
-        widget="short",
-        destination="criteria",
-    ),
-    FormQuestion(
-        key="pref_comp",
-        title="Is there a compensation floor below which you would decline?",
-        help="A number, a range, or 'prefer not to say' — this is a hard filter, "
-        "so an unstated floor cannot filter anything.",
-        widget="short",
-        destination="criteria",
-    ),
-]
-
-# Screening questions: things an employer asks on an application form. Not
-# claims about a career — refined answers reused across applications (RFC-030).
-_SCREENING = [
-    FormQuestion(
-        key="screen_ai_product",
-        title="Have you shipped an AI or LLM product?",
-        help="What you shipped, and what it does. Specifics beat adjectives.",
-        destination="answers",
-    ),
-    FormQuestion(
-        key="screen_years",
-        title="How many years of experience do you have, across founding, "
-        "building and technical roles?",
-        widget="short",
-        destination="answers",
-    ),
-    FormQuestion(
-        key="screen_field",
-        title="What did you study, and where?",
-        widget="short",
-        destination="answers",
-    ),
-    FormQuestion(
-        key="screen_demos",
-        title="Have you built and delivered live demos for technical audiences?",
-        destination="answers",
-    ),
-    FormQuestion(
-        key="screen_stage",
-        title="Are you comfortable presenting to a room?",
-        destination="answers",
-    ),
-]
-
-# Nominations, from application/interview.py's subtypes. The wording follows
-# interview_react's own docstring, including its exclusion — values_con
-# rejects Hitler specifically, because it is too easy an answer to
-# discriminate anything.
+# The interview proper, from application/interview.py's subtypes: people
+# admired and its opposite, then organizations. The wording follows
+# interview_react's own docstring — including values_con's exclusion of the
+# too-easy answer, and the fallback pair offered when someone would rather
+# name companies than people.
 _NOMINATIONS = [
     FormQuestion(
         key="values_pro",
-        title="Name three people, living or dead, you would have dinner with.",
-        help="One per line, and a sentence on why for each. Anyone at all — "
-        "they do not have to be famous, or in your field.",
+        title="Name three people, living or dead, you would have dinner with — and why.",
+        help="One per line, with a sentence on why for each. Anyone at all: they "
+        "do not have to be famous, in your field, or still alive.",
         destination="profile",
         subtype="values_pro",
     ),
     FormQuestion(
         key="values_con",
-        title="Name three people you would be horrified to see your name printed alongside.",
-        help="One per line, and why. Not Hitler — too easy an answer to tell us "
+        title="Name three people you would be horrified to see your name printed "
+        "alongside — and why.",
+        help="One per line, with why. Not Hitler — too easy an answer to tell us "
         "anything about you.",
         destination="profile",
         subtype="values_con",
     ),
     FormQuestion(
+        key="network_admired",
+        title="Which people you actually know do you admire, and why?",
+        help="People you have worked with or met, not public figures. Paste their "
+        "LinkedIn URLs if you have them — one per line, with why for each.",
+        destination="profile",
+        subtype="network_admired",
+    ),
+    FormQuestion(
+        key="values_fallback_pro",
+        title="Whose products or services are you proud to buy — and why?",
+        help="Companies, if naming people is hard. One per line, with why.",
+        destination="profile",
+        subtype="values_fallback_pro",
+    ),
+    FormQuestion(
+        key="values_fallback_con",
+        title="Whose products or services would you never buy — and why?",
+        destination="profile",
+        subtype="values_fallback_con",
+    ),
+    FormQuestion(
         key="mission_alignment_pro",
         title="Name an organization you would be proud to be associated with, and "
         "say what you understand its primary purpose to be.",
-        help="A company, a club, any group of people aligned for a purpose. "
-        "The purpose in your own words — 'Pepsi sells cola' is the right level.",
+        help="A company, a club, any group of people aligned for a purpose. The "
+        "purpose in your own words — 'Pepsi sells cola' is the right level.",
         destination="profile",
         subtype="mission_alignment_pro",
     ),
@@ -178,13 +141,6 @@ _NOMINATIONS = [
         "and what you understand its primary purpose to be.",
         destination="profile",
         subtype="mission_alignment_con",
-    ),
-    FormQuestion(
-        key="network_admired",
-        title="Paste the LinkedIn profile URLs of a few first-degree connections you admire.",
-        help="One per line. Admiration, not proximity — who does work you rate.",
-        destination="profile",
-        subtype="network_admired",
     ),
 ]
 
@@ -196,7 +152,7 @@ def form_questions() -> list[FormQuestion]:
     useful, since an unseeded criteria document means every opening arrives
     unscored.
     """
-    return [*_criteria_questions(), *_PREFERENCES, *_SCREENING, *_NOMINATIONS]
+    return [*_criteria_questions(), *_NOMINATIONS]
 
 
 _SECTIONS: list[tuple[str, str, Destination]] = [
@@ -206,15 +162,10 @@ _SECTIONS: list[tuple[str, str, Destination]] = [
         "criteria",
     ),
     (
-        "Questions employers ask",
-        "Answer once here; the answers are reused across applications rather "
-        "than rewritten each time.",
-        "answers",
-    ),
-    (
-        "About you",
-        "These are about what you value, not what you can do. There are no "
-        "wrong answers and nothing here is scored.",
+        "People and organizations",
+        "Who you admire and who you would not want to be associated with — and "
+        "the same for organizations. These are about what you value, not what "
+        "you can do. There are no wrong answers and nothing here is scored.",
         "profile",
     ),
 ]
@@ -246,15 +197,25 @@ def render_apps_script(label: str, questions: list[FormQuestion] | None = None) 
     questions = form_questions() if questions is None else questions
     title = f"Wingman interview — {label}"
     lines = [
+        # Every step here was learned by getting it wrong. "Paste this in, then
+        # Run" is not enough: the editor ships a myFunction stub that stays in
+        # the run dropdown, and a file that doesn't parse refuses to save — so
+        # the first symptom is "Attempted to execute myFunction, but could not
+        # save", which names neither cause.
         "/**",
         f" * Wingman interview form for: {label}",
         " *",
-        " * Paste this into https://script.google.com (New project), then Run.",
-        " * Google will ask for permission the first time — it is creating a form",
-        " * in YOUR Drive; wingman holds no Google credential of any kind.",
-        " *",
-        " * The Execution log prints the two URLs: send the published one to the",
-        " * person, keep the edit one. Running it twice creates a second form.",
+        " * 1. Open https://script.google.com and start a New project.",
+        " * 2. Open the Code.gs file it gives you. SELECT ALL and paste over it —",
+        " *    the myFunction stub must be gone, not left above this.",
+        " * 3. Save (the disk icon). If it will not save, the paste is broken:",
+        " *    this file must start with the /** on line 1 and nothing before it.",
+        " * 4. In the dropdown at the top, choose createWingmanInterviewForm.",
+        " *    It defaults to myFunction, which no longer exists.",
+        " * 5. Run. Google asks for permission the first time — it is creating a",
+        " *    form in YOUR Drive; wingman holds no Google credential of any kind.",
+        " * 6. Open Execution log for the two URLs: send the published one to the",
+        " *    person, keep the edit one. Running it twice creates a second form.",
         " */",
         "function createWingmanInterviewForm() {",
         f"  var form = FormApp.create({_js(title)});",
