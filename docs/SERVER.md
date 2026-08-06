@@ -707,6 +707,26 @@ trent's, alexandria's) back to tailnet-only as a side effect — funnel is
 a per-hostname toggle, not a per-path one. Hit live; see
 `wingman-provision-shared.sh`'s own comment at this step.
 
+**The host service registry.** On a box shared with other services, the
+last provisioning step declares this process to
+`/var/lib/common-services/registry.json` via
+`scripts/wingman-register-service.sh`, so nothing else can claim 8789 or
+its funnel paths. `wingman-redeploy-shared.sh` re-declares on every
+deploy, which is where a funnel change gets noticed.
+
+It reads the paths from the running funnel rather than assuming them —
+the whole point, since the previous arrangement had `dhk/minority-report`
+declaring wingman on its behalf and describing two per-user processes on
+8787/8788 for weeks after wingman became one process on 8789 (#288).
+Nothing detected that, because the only check compared that pack's
+declaration against the registry the same pack had written.
+
+The registry helper is installed by another tool's deployment pack and
+is **not** a wingman dependency: without it, the step says so and exits
+0. No health check is declared, because the registry verifies health by
+matching a `service` field that `/health` does not currently emit —
+declaring one would mark the entry permanently stale.
+
 Rotation invalidates the old token and issues a new one in the same
 step — no restart of the shared process, no effect on any other
 tenant's session (`infrastructure/tenant_process.py`'s SIGHUP reload).

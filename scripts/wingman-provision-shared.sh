@@ -113,7 +113,7 @@ sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
 sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
   systemctl --user enable --now wingman-mcp.service
 
-say "7/7 tailscale mount (stripping proxy — the shared process itself runs with no --prefix)"
+say "7/8 tailscale mount (stripping proxy — the shared process itself runs with no --prefix)"
 # 'funnel', never plain 'serve': funnel is a per-HOSTNAME toggle, not a
 # per-path one — a bare 'tailscale serve --set-path ...' silently drops
 # Funnel for the WHOLE hostname (every other mounted path too, not just
@@ -129,6 +129,12 @@ else
   say "tailscale not found — skipping. Run manually later:"
   say "  tailscale funnel --bg --set-path $TAILSCALE_PATH http://127.0.0.1:$PORT"
 fi
+
+say "8/8 host service registry"
+# Runs AFTER the funnel mount, because it reads the funnel to learn which
+# paths to claim rather than assuming them (#288). Skips itself cleanly when
+# the registry helper isn't on this box.
+"$(dirname "$0")/wingman-register-service.sh"
 
 echo
 say "Done. Add tenants with: sudo ./wingman-add-tenant.sh <slug>"
