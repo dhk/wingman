@@ -20,6 +20,9 @@ file plus an inbox and reports folder on your disk.
 
 ## Start here
 
+- **Someone else is running Wingman for you?** You install nothing —
+  [**docs/WALKTHROUGH-HOSTED.md**](docs/WALKTHROUGH-HOSTED.md) starts from
+  the two links they sent you and never mentions a terminal.
 - **[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md)** — introduction and a
   guided first session: download → install → keys → MCP server → CLI →
   Claude Code → Claude Desktop → your data and people → an evidence-backed
@@ -128,6 +131,8 @@ claude mcp add wingman -- wingman-mcp    # Claude Code, one line
 ## Repository Guide
 
 - [`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md): introduction and guided first session
+- [`docs/WALKTHROUGH-HOSTED.md`](docs/WALKTHROUGH-HOSTED.md): for someone whose Wingman is hosted by
+  somebody else — two links, no install, no terminal
 - [`docs/INSTALL.md`](docs/INSTALL.md): install & operations
 - [`docs/SETUP.md`](docs/SETUP.md): graceful-degradation ladder — what works with what you have
 - [`VISION.md`](VISION.md): why Wingman exists and the Product Invariants

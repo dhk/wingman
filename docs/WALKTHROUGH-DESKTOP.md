@@ -7,6 +7,10 @@ most of it waiting on your LinkedIn export email. Prefer a terminal? See
 [`WALKTHROUGH.md`](WALKTHROUGH.md) for the CLI-first version of the same
 session.
 
+> **Someone else running Wingman for you?** Then Step 1 below is not your
+> setup — you install nothing, and you were given two links instead. Start
+> at [`WALKTHROUGH-HOSTED.md`](WALKTHROUGH-HOSTED.md).
+
 ## What Wingman is, in three paragraphs
 
 Wingman is a local-first career-intelligence system. It optimizes the
