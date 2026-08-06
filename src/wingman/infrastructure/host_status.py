@@ -440,10 +440,18 @@ def render(
     # root" was 'sudo wg hosts', which can never work — 'wg' is a shell alias
     # sudo does not inherit (#265, and docs/SERVER.md §9's same trap). And when
     # already root there is nothing left to suggest.
+    # PYTHONDONTWRITEBYTECODE is not decoration: running the uv-installed entry
+    # point as root compiles .pyc files INTO THE INVOKING USER'S tool store,
+    # owned by root. The next 'uv tool install --reinstall' runs as that user,
+    # cannot delete them, and upgrade-all reports [FAILED] for the account —
+    # a permissions error during an unrelated later deploy, caused by a hint
+    # printed here (#276). 'env' rather than a bare VAR=value because sudo's
+    # default policy can refuse caller-set environment variables, and because
+    # it matches the form upgrade_all.py already uses everywhere.
     if any(row.service == "?" for row in rows) and (os.geteuid() if euid is None else euid) != 0:
         footers.append(
             "Service state is unknown for accounts other than yours — rerun as:\n"
-            f"  sudo {_runnable_path()}"
+            f"  sudo env PYTHONDONTWRITEBYTECODE=1 {_runnable_path()}"
         )
     if any(row.version and is_dirty_build(row.version) for row in rows):
         footers.append("A version ending '.dYYYYMMDD' was built from a dirty working tree.")

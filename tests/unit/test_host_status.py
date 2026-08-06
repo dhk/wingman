@@ -447,8 +447,15 @@ def test_render_puts_the_unmanaged_row_in_a_needs_attention_block() -> None:
     # The hint must name a command that can actually be run. 'sudo wg hosts'
     # cannot — 'wg' is a shell alias sudo never inherits (#265).
     assert "rerun as:" in output
-    assert "sudo /" in output
+    assert "sudo env PYTHONDONTWRITEBYTECODE=1 /" in output
     assert "sudo wg" not in output
+    # Without it, running as root writes root-owned .pyc into the invoking
+    # user's uv tool store, and their next 'uv tool install --reinstall'
+    # fails with EACCES — a hint that breaks the next deploy (#276).
+    assert "PYTHONDONTWRITEBYTECODE=1" in output
+    # 'env', not a bare VAR=value: sudo's default policy can refuse
+    # caller-set environment variables outright.
+    assert "sudo PYTHONDONTWRITEBYTECODE" not in output
 
 
 def test_runnable_path_prefers_the_name_on_your_path(tmp_path: Path) -> None:
