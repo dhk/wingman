@@ -773,13 +773,27 @@ exactly the class of mistake that produced the systemd bus and pidfile
 bugs earlier tonight:
 
 ```bash
-sudo scripts/wingman-redeploy-shared.sh
+wg redeploy-shared
 ```
 
-Pulls, reinstalls, restarts, then polls `/health` (unauthenticated,
-version + start time only, RFC-033) until it returns 200 with a NEW
-`started_at` — confirming the restart actually took effect, not just
-that the port answers.
+Pulls **this** checkout first — the script it then runs lives in it, and
+invoking a stale copy was the failure the old two-step
+(`git pull && sudo scripts/wingman-redeploy-shared.sh`) was papering over.
+If that pull updates `wingman-ctl` itself, it re-execs so the rest of the
+run uses the new copy rather than the one it just replaced; `upgrade` and
+`cycle` do the same (#292). Then it runs the script under sudo:
+
+```bash
+sudo scripts/wingman-redeploy-shared.sh   # what `wg redeploy-shared` invokes
+```
+
+which pulls the *service account's* checkout, reinstalls, restarts, then
+polls `/health` (unauthenticated, version + start time only, RFC-033)
+until it returns 200 with a NEW `started_at` — confirming the restart
+actually took effect, not just that the port answers — and finally
+re-declares the host registry reservation (#288).
+
+Every tenant on the shared process is briefly interrupted by the restart.
 
 **Migrating an existing shape-B account onto the shared process** (RFC-048
 Phase 3 — dhk/trent's own accounts, once Phase 2 has run clean for a real
