@@ -1,4 +1,12 @@
-"""Profile Curator agent: proposes achievements and skills with evidence spans.
+"""Profile Curator agent: proposes roles, achievements and skills with evidence.
+
+v2 (#269) added roles. v1 said "Extract achievements and skills" and offered
+only those two in its output schema, so the Roles section of career.md had a
+renderer, a ProfileItemKind and a manual capture path but no producer —
+résumés with a full employment history extracted every accomplishment and
+none of the positions. PROMPT_VERSION is recorded on every item, so items
+extracted under v1 stay attributable and a re-ingest under v2 supersedes them
+through the ordinary RFC-028 path.
 
 Mission: extract structured career facts from an imported document.
 Allowed tools: the extract_fast capability class only. Prohibited: any external
@@ -15,7 +23,7 @@ from pydantic import ValidationError
 
 from wingman.domain.extraction import ExtractionProposal
 
-PROMPT_VERSION = "profile_extraction_v1"
+PROMPT_VERSION = "profile_extraction_v2"
 
 SYSTEM_PROMPT = (
     "You extract structured career facts from documents for a local-first career "

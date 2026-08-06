@@ -96,6 +96,16 @@ class ProfileItem(BaseModel):
     # subtypes populate which field.
     intensity: SentimentIntensity | None = None
     company_reason: CompanyReasonCategory | None = None
+    # Role structure (#269). Empty for every other kind, and optionally
+    # empty for a role too: a résumé stating a position without dates
+    # yields a role whose dates are visibly absent rather than invented.
+    # 'ended' empty on a ROLE means current — which is why it cannot be
+    # derived from 'started', and why these are stored rather than parsed
+    # back out of 'name' at read time.
+    company: str = ""
+    title: str = ""
+    started: str = ""  # 'YYYY' or 'YYYY-MM'; sorts lexicographically
+    ended: str = ""
     evidence: list[EvidenceSpan] = Field(min_length=1)
     status: ItemStatus = ItemStatus.ACTIVE
     conflicts_with: str | None = None
