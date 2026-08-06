@@ -47,7 +47,7 @@ sudo_user_ctl() {
   sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$WS_UID" systemctl --user "$@"
 }
 
-say "1/4 pulling latest code (~/src/wingman)"
+say "1/5 pulling latest code (~/src/wingman)"
 # One line, ';'-joined — never a multi-line 'bash -c' payload under
 # 'sudo -i'. This is a hard constraint of sudo, not a style preference,
 # and not the flakiness it first looks like: 'sudo -i'/'-s' do not exec
@@ -71,14 +71,14 @@ say "1/4 pulling latest code (~/src/wingman)"
 # quotes are not protecting what they appear to protect.
 sudo -iu "$SERVICE_USER" bash -c 'export PATH="$HOME/.local/bin:$PATH"; cd ~/src/wingman && git pull --ff-only'
 
-say "2/4 reinstalling"
+say "2/5 reinstalling"
 sudo -iu "$SERVICE_USER" bash -c 'export PATH="$HOME/.local/bin:$PATH"; cd ~/src/wingman && uv tool install --reinstall .'
 
-say "3/4 restarting wingman-mcp.service"
+say "3/5 restarting wingman-mcp.service"
 BEFORE_STARTED_AT=$(curl -s "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -o '"started_at":"[^"]*"' || true)
 sudo_user_ctl restart wingman-mcp.service
 
-say "4/4 verifying health"
+say "4/5 verifying health"
 DEADLINE=$((SECONDS + 30))
 STATUS=""
 while [ "$SECONDS" -lt "$DEADLINE" ]; do
@@ -99,6 +99,13 @@ if [ -n "$BEFORE_STARTED_AT" ] && [ "$BEFORE_STARTED_AT" = "$AFTER_STARTED_AT" ]
   echo "ERROR: /health returned 200 but started_at didn't change — the restart may not have taken effect (old process still serving?)." >&2
   exit 1
 fi
+
+say "5/5 re-declaring to the host service registry"
+# Cheap, idempotent, and the one routinely-run script on this box — so it is
+# where a funnel change gets noticed. It reads the live funnel rather than
+# assuming paths, so a route added or moved since provisioning is picked up
+# here instead of drifting silently (#288). Skips cleanly without the helper.
+"$(dirname "$0")/wingman-register-service.sh"
 
 say "Healthy. $AFTER_STARTED_AT"
 say "Every tenant on this process was briefly interrupted by the restart — expected, not a bug."
