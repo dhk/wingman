@@ -42,8 +42,10 @@ import json
 import os
 import pwd
 import re
+import shutil
 import subprocess
 import sys
+import time
 import tomllib
 import urllib.error
 import urllib.request
@@ -53,7 +55,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from wingman.infrastructure.host_config import HostEnvironmentError, read_host_settings
-from wingman.infrastructure.portcheck import find_port_owner
+from wingman.infrastructure.portcheck import find_port_owner, is_port_bound
 
 SYSTEMD_UNIT = "wingman-mcp.service"
 
@@ -65,6 +67,9 @@ DEFAULT_PORT_RANGE = (8787, 8799)
 
 _HEALTH_TIMEOUT_SECONDS = 1.0
 _COMMAND_TIMEOUT_SECONDS = 5.0
+# Only ever waited when a port is bound but silent, so a box with nothing
+# restarting pays nothing for it.
+_RESTART_GRACE_SECONDS = 2.0
 
 # (argv) -> (returncode, stdout). Injectable so tests never shell out.
 Runner = Callable[[list[str]], tuple[int, str]]
@@ -260,13 +265,20 @@ def unit_state(
     return out.strip() or None
 
 
-def service_column(running: bool, state: str | None) -> tuple[str, str]:
+def service_column(running: bool, state: str | None, *, bound: bool = False) -> tuple[str, str]:
     """(service, note). The one row that must never read as fine.
 
     Listening with no active unit is the failure this whole tool is for:
     nothing will restart it, and 'wingman-upgrade-all' says so in its log
     every night while everyone reads the '[ok]' at the front of the line.
+
+    'bound' distinguishes the third state the first version couldn't say:
+    something holds the socket but isn't answering yet. That is a restart
+    in progress, not an absence, and saying so is the difference between
+    "wait three seconds" and "the box has no wingman on it" (#267).
     """
+    if not running and bound:
+        return "starting", ""
     if running and state is None:
         return "?", ""
     if running and state != "active":
@@ -317,6 +329,7 @@ def collect(
     run: Runner = _default_runner,
     host: str = "127.0.0.1",
     euid: int | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> list[InstanceRow]:
     """One row per port that is a wingman instance or a named installation.
 
@@ -329,15 +342,34 @@ def collect(
         payload = health(host, port)
         if payload is not None and not is_wingman_health(payload):
             continue  # somebody else's service on a neighbouring port
-        if payload is None and port not in names:
+        # A failed probe is not the same question as an empty port. Ask the
+        # kernel who holds the socket before concluding anything: a process
+        # that is bound but not yet answering is restarting, and dropping it
+        # from the table made the only live instance on a consolidated box
+        # disappear for the three seconds after every deploy (#267).
+        owner = find_port_owner(port, run)
+        # Ownership needs a pid we may not be allowed to see; boundness does
+        # not. Ask the narrower question too, or an unprivileged caller still
+        # cannot tell a restarting instance from an empty port (#267).
+        bound = owner is not None or is_port_bound(port, run)
+        if payload is None and bound:
+            # Bound but silent: almost always a restart mid-flight. One retry
+            # covers an ordinary systemd restart (measured at ~3s on lobster:
+            # unit restarted 03:39:47, bound and answering 03:39:50) without
+            # making the common path any slower — nothing retries unless
+            # something is actually holding the socket.
+            sleep(_RESTART_GRACE_SECONDS)
+            payload = health(host, port)
+            if payload is not None and not is_wingman_health(payload):
+                continue
+        if payload is None and not bound and port not in names:
             continue
         running = payload is not None
         version = str(payload.get("version", "")) or None if payload else None
         started_at = str(payload.get("started_at", "")) or None if payload else None
-        owner = find_port_owner(port, run) if running else None
         user = owner.user if owner else None
         state = unit_state(user, run=run, euid=euid)
-        service, note = service_column(running, state)
+        service, note = service_column(running, state, bound=bound)
         rows.append(
             InstanceRow(
                 port=port,
@@ -353,6 +385,25 @@ def collect(
     return rows
 
 
+def _runnable_path(
+    argv0: str | None = None, which: Callable[[str], str | None] = shutil.which
+) -> str:
+    """The path a human would type, not the one uv happens to install to.
+
+    sys.argv[0] for an installed entry point resolves into uv's tool store
+    (~/.local/share/uv/tools/wingman/bin/...), which works but is nobody's
+    muscle memory. Prefer the PATH-resolved name when it points at the
+    same program; fall back to the absolute path when it doesn't, since a
+    hint that names the wrong binary is worse than an ugly one (#267).
+    """
+    raw = Path(argv0 if argv0 is not None else sys.argv[0])
+    absolute = raw.resolve()
+    on_path = which(raw.name)
+    if on_path and Path(on_path).resolve() == absolute:
+        return str(Path(on_path))
+    return str(absolute)
+
+
 def render(
     rows: Sequence[InstanceRow], *, now: datetime, repo: Path | None, euid: int | None = None
 ) -> str:
@@ -363,7 +414,8 @@ def render(
         (
             str(row.port),
             row.name,
-            row.version or "stopped",
+            # 'stopped' next to SERVICE: starting is a self-contradicting row.
+            row.version or ("-" if row.service == "starting" else "stopped"),
             _started_column(row, now),
             row.build,
             row.service,
@@ -391,7 +443,7 @@ def render(
     if any(row.service == "?" for row in rows) and (os.geteuid() if euid is None else euid) != 0:
         footers.append(
             "Service state is unknown for accounts other than yours — rerun as:\n"
-            f"  sudo {Path(sys.argv[0]).resolve()}"
+            f"  sudo {_runnable_path()}"
         )
     if any(row.version and is_dirty_build(row.version) for row in rows):
         footers.append("A version ending '.dYYYYMMDD' was built from a dirty working tree.")

@@ -185,6 +185,127 @@ def test_invoking_identity_falls_back_when_sudo_user_is_absent_or_bogus(monkeypa
     assert host_status.invoking_identity({"SUDO_USER": "ghost"})[0] == "someone"
 
 
+def _fake_which(monkeypatch) -> None:
+    """portcheck asks shutil.which('ss') before shelling out.
+
+    Left real, these tests silently depend on iproute2 being installed on
+    whatever runs them — the same class of environmental assumption that
+    made two of this file's tests pass locally and fail in CI (#265).
+    """
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+
+
+def _ss_listening(port: int, pid: int = 9001, user: str = "wingman-shared") -> dict:
+    return {
+        ("ss", "-H", "-tlnp", f"sport = :{port}"): (
+            0,
+            f'LISTEN 0 2048 127.0.0.1:{port} 0.0.0.0:* users:(("wingman-mcp",pid={pid},fd=7))',
+        ),
+        ("ps",): (0, f"{user} /home/{user}/.local/bin/wingman-mcp --http\n"),
+    }
+
+
+def test_a_restarting_instance_is_shown_not_dropped(tmp_path: Path, monkeypatch) -> None:
+    """Bound but silent is a restart, not an absence (#267).
+
+    The first version dropped the row entirely, so the only live instance
+    on a consolidated box vanished for the three seconds after every
+    deploy — and the output supported the most alarming reading, that the
+    box had no wingman on it at all.
+    """
+    _fake_which(monkeypatch)
+    _fake_passwd(monkeypatch, {"wingman-shared": 1002})
+    waited: list[float] = []
+    rows = collect(
+        [8789],
+        {},
+        repo=tmp_path,
+        health=_health({}),  # never answers: mid-restart
+        run=_runner(_ss_listening(8789)),
+        euid=1000,
+        sleep=waited.append,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].service == "starting"
+    assert rows[0].note == ""  # not a finding to act on; it resolves itself
+    assert waited, "a bound-but-silent port must be retried before being judged"
+    # A row saying 'stopped' under VERSION and 'starting' under SERVICE
+    # contradicts itself.
+    assert "stopped" not in render([rows[0]], now=NOW, repo=None, euid=0)
+
+
+def test_a_restarting_instance_is_seen_without_privilege(tmp_path: Path, monkeypatch) -> None:
+    """The reported case was an UNPRIVILEGED run right after a deploy.
+
+    Ownership needs a pid, and 'ss -tlnp' hides pids for other accounts'
+    sockets — so keying "is it restarting" off find_port_owner fixed this
+    only for root, which is not where it was reported. Boundness is the
+    question that needs no privilege (#267).
+    """
+    _fake_which(monkeypatch)
+    rows = collect(
+        [8789],
+        {},
+        repo=tmp_path,
+        health=_health({}),
+        # 'ss -H -tln' answers; the '-tlnp' form yields no pid, as for any
+        # socket owned by another account.
+        run=_runner(
+            {("ss", "-H", "-tln", "sport = :8789"): (0, "LISTEN 0 2048 127.0.0.1:8789 0.0.0.0:*")}
+        ),
+        euid=1000,
+        sleep=lambda _seconds: None,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].service == "starting"
+    assert rows[0].name == "?"  # who it belongs to is genuinely unknowable here
+
+
+def test_a_restarting_instance_that_comes_back_reads_as_running(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The retry is the point: one ordinary restart should not show as down."""
+    _fake_which(monkeypatch)
+    _fake_passwd(monkeypatch, {"wingman-shared": 1002})
+    answers = [None, {"version": "0.4.1+g36b879f0d", "started_at": "2026-08-06T03:39:50+00:00"}]
+
+    def flaky(host: str, port: int) -> dict | None:
+        return answers.pop(0)
+
+    rows = collect(
+        [8789],
+        {},
+        repo=tmp_path,
+        health=flaky,
+        run=_runner({**_ss_listening(8789), ("sudo",): (0, "active\n"), ("git",): (0, "0\n")}),
+        euid=0,
+        sleep=lambda _seconds: None,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].running is True
+    assert rows[0].service == "active"
+    assert rows[0].build == "current"
+
+
+def test_an_empty_port_is_still_omitted(tmp_path: Path) -> None:
+    """The retry must not resurrect ports that genuinely have nothing."""
+    waited: list[float] = []
+    rows = collect(
+        [8790],
+        {},
+        repo=tmp_path,
+        health=_health({}),
+        run=_runner({}),  # ss finds no listener
+        euid=1000,
+        sleep=waited.append,
+    )
+    assert rows == []
+    assert waited == [], "nothing bound: nothing to wait for"
+
+
 def test_listening_without_an_active_unit_is_called_unmanaged() -> None:
     service, note = service_column(True, "failed")
     assert service == "UNMANAGED"
@@ -230,6 +351,7 @@ def test_collect_flags_the_unmanaged_instance_and_leaves_the_others_alone(
     this resolves 'dhk' against the real host database, which passes on the
     box it was written on and fails in CI where no such account exists.
     """
+    _fake_which(monkeypatch)
     _fake_passwd(monkeypatch, {"dhk": 1000})
     payloads = {
         8787: {"version": "0.4.1.dev116+gc5fcdc275", "started_at": "2026-08-05T19:28:11+00:00"},
@@ -327,6 +449,33 @@ def test_render_puts_the_unmanaged_row_in_a_needs_attention_block() -> None:
     assert "rerun as:" in output
     assert "sudo /" in output
     assert "sudo wg" not in output
+
+
+def test_runnable_path_prefers_the_name_on_your_path(tmp_path: Path) -> None:
+    """uv installs entry points into its tool store and symlinks them onto
+    PATH. sys.argv[0] resolves to the store, which works but is nobody's
+    muscle memory — prefer the name a human would actually type (#267)."""
+    real = tmp_path / "store" / "wingman-host-status"
+    real.parent.mkdir()
+    real.touch()
+    link = tmp_path / "bin" / "wingman-host-status"
+    link.parent.mkdir()
+    link.symlink_to(real)
+
+    assert host_status._runnable_path(str(real), which=lambda _n: str(link)) == str(link)
+
+
+def test_runnable_path_falls_back_when_path_names_a_different_program(tmp_path: Path) -> None:
+    """A hint that names the WRONG binary is worse than an ugly one."""
+    real = tmp_path / "store" / "wingman-host-status"
+    real.parent.mkdir()
+    real.touch()
+    impostor = tmp_path / "elsewhere" / "wingman-host-status"
+    impostor.parent.mkdir()
+    impostor.touch()
+
+    assert host_status._runnable_path(str(real), which=lambda _n: str(impostor)) == str(real)
+    assert host_status._runnable_path(str(real), which=lambda _n: None) == str(real)
 
 
 def test_render_drops_the_root_hint_when_already_root() -> None:
