@@ -48,4 +48,19 @@ def test_prompt_embeds_resume_text() -> None:
     prompt = build_prompt("UNIQUE-RESUME-MARKER")
     assert "UNIQUE-RESUME-MARKER" in prompt
     assert "verbatim" in prompt
-    assert PROMPT_VERSION == "profile_extraction_v1"
+    # Pinned deliberately: PROMPT_VERSION is stamped on every extracted item,
+    # so a bump is a real event that should have to be written down here too.
+    assert PROMPT_VERSION == "profile_extraction_v2"
+
+
+def test_prompt_asks_for_roles_and_their_structure() -> None:
+    """v1 said 'Extract achievements and skills' and offered only those two
+    in its schema, which is the whole reason Roles had no producer (#269).
+    Asserting the version alone would not have caught that."""
+    prompt = build_prompt("x")
+    assert "roles" in prompt.lower()
+    for field in ("company", "title", "started", "ended"):
+        assert field in prompt
+    assert '"role"' in prompt
+    # The instruction that stops a current role acquiring an invented end date.
+    assert "current" in prompt.lower()

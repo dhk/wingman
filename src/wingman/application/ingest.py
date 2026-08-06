@@ -121,9 +121,13 @@ def _validate_evidence(
                 reason=f"evidence quote not found verbatim in source: {quote[:80]!r}",
             )
     return ProfileItem(
-        kind=proposed.kind,
+        kind=proposed.item_kind,
         name=proposed.name,
         detail=proposed.detail,
+        company=proposed.company,
+        title=proposed.title,
+        started=proposed.started,
+        ended=proposed.ended,
         classification=proposed.classification,
         confidence=proposed.confidence,
         evidence=[

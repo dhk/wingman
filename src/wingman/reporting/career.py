@@ -20,10 +20,39 @@ def _cite(item: ProfileItem, footnotes: dict[str, int]) -> str:
     return "".join(marks)
 
 
+def _tenure(item: ProfileItem) -> str:
+    """' (2022-01 – present)' for a dated role; '' when the resume didn't say.
+
+    An absent date is left absent. A reader can tell 'the resume gave no
+    dates' from 'this is current' only if the renderer refuses to fill
+    either one in (#269).
+    """
+    if not item.started and not item.ended:
+        return ""
+    if item.started and not item.ended:
+        return f" ({item.started} – present)"
+    if not item.started:
+        return f" (until {item.ended})"
+    return f" ({item.started} – {item.ended})"
+
+
 def _item_line(item: ProfileItem, footnotes: dict[str, int]) -> str:
     detail = f" — {item.detail}" if item.detail else ""
     meta = f" ({item.classification.value}, confidence {item.confidence:.2f})"
-    return f"- **{item.name}**{detail}{meta}{_cite(item, footnotes)}"
+    return f"- **{item.name}**{_tenure(item)}{detail}{meta}{_cite(item, footnotes)}"
+
+
+def _reverse_chronological(items: list[ProfileItem]) -> list[ProfileItem]:
+    """Newest first, undated last.
+
+    'started' is 'YYYY' or 'YYYY-MM', so it sorts lexicographically without
+    parsing — and '2022' sorting before '2022-01' is the right answer for a
+    resume that gave only the year. Undated roles go last rather than being
+    treated as year zero, which would bury them under everything.
+    """
+    # reverse=True puts dated (True) ahead of undated (False), and orders the
+    # dated ones newest-first in the same pass.
+    return sorted(items, key=lambda i: (i.started != "", i.started), reverse=True)
 
 
 def render_career(storage: Storage, config: Config, run_meta: dict[str, str]) -> tuple[Path, Path]:
@@ -33,7 +62,10 @@ def render_career(storage: Storage, config: Config, run_meta: dict[str, str]) ->
 
     payload = {
         "metadata": run_meta,
-        "roles": [i.model_dump(mode="json") for i in active if i.kind is ProfileItemKind.ROLE],
+        "roles": [
+            i.model_dump(mode="json")
+            for i in _reverse_chronological([i for i in active if i.kind is ProfileItemKind.ROLE])
+        ],
         "achievements": [
             i.model_dump(mode="json") for i in active if i.kind is ProfileItemKind.ACHIEVEMENT
         ],
@@ -55,6 +87,8 @@ def render_career(storage: Storage, config: Config, run_meta: dict[str, str]) ->
         ("## Testimonials", ProfileItemKind.TESTIMONIAL),
     ):
         section = [i for i in active if i.kind is kind]
+        if kind is ProfileItemKind.ROLE:
+            section = _reverse_chronological(section)
         lines.extend([heading, ""])
         if section:
             lines.extend(_item_line(i, footnotes) for i in section)

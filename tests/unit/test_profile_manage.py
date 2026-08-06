@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from wingman.agents.profile_curator import ProposalParseError, parse_proposal
 from wingman.application.ingest import IngestError, ingest_resume
 from wingman.application.profile_manage import (
     clear_profile,
@@ -266,3 +267,178 @@ def test_rekind_rejects_unknown_kinds_interview_and_no_ops(
             rekind_item(target.item_id[:8], "interview", workspace, storage)
         with pytest.raises(IngestError, match="already a achievement"):
             rekind_item(target.item_id[:8], "achievement", workspace, storage)
+
+
+ROLES_RESUME = (
+    "# Jo\n\n"
+    "## Experience\n\n"
+    "Staff Data Engineer, Synctera — Jan 2022 to Jun 2024\n"
+    "Led a team of six.\n\n"
+    "Analytics Lead, Afresh — 2019 to Jan 2022\n\n"
+    "Principal Engineer, Northwind — Mar 2024 to Present\n"
+)
+
+
+def _roles_response() -> str:
+    return json.dumps(
+        {
+            "items": [
+                {
+                    "kind": "role",
+                    "name": "Staff Data Engineer, Synctera",
+                    "detail": "Led a team of six.",
+                    "company": "Synctera",
+                    "title": "Staff Data Engineer",
+                    "started": "2022-01",
+                    "ended": "2024-06",
+                    "classification": "fact",
+                    "confidence": 1.0,
+                    "quotes": ["Staff Data Engineer, Synctera — Jan 2022 to Jun 2024"],
+                },
+                {
+                    "kind": "role",
+                    "name": "Principal Engineer, Northwind",
+                    "company": "Northwind",
+                    "title": "Principal Engineer",
+                    "started": "2024-03",
+                    "ended": "",
+                    "classification": "fact",
+                    "confidence": 1.0,
+                    "quotes": ["Principal Engineer, Northwind — Mar 2024 to Present"],
+                },
+                {
+                    "kind": "role",
+                    "name": "Analytics Lead, Afresh",
+                    "company": "Afresh",
+                    "title": "Analytics Lead",
+                    "started": "2019",
+                    "ended": "2022-01",
+                    "classification": "fact",
+                    "confidence": 1.0,
+                    "quotes": ["Analytics Lead, Afresh — 2019 to Jan 2022"],
+                },
+            ]
+        }
+    )
+
+
+def test_curator_extracts_roles_with_structure(workspace: Config, tmp_path: Path) -> None:
+    """The gap #269 named: v1 said 'extract achievements and skills', so a
+    resume with a full employment history produced no roles at all."""
+    resume = tmp_path / "resume.md"
+    resume.write_text(ROLES_RESUME, encoding="utf-8")
+    with Storage(workspace.db_path) as storage:
+        ingest_resume(resume, workspace, storage, RecordedProvider(_roles_response()))
+        roles = [i for i in storage.list_profile_items() if i.kind is ProfileItemKind.ROLE]
+
+    assert len(roles) == 3
+    synctera = next(r for r in roles if r.company == "Synctera")
+    assert synctera.title == "Staff Data Engineer"
+    assert synctera.started == "2022-01"
+    assert synctera.ended == "2024-06"
+    assert synctera.evidence[0].quote.startswith("Staff Data Engineer, Synctera")
+
+
+def test_roles_render_reverse_chronologically_with_tenure(
+    workspace: Config, tmp_path: Path
+) -> None:
+    resume = tmp_path / "resume.md"
+    resume.write_text(ROLES_RESUME, encoding="utf-8")
+    with Storage(workspace.db_path) as storage:
+        ingest_resume(resume, workspace, storage, RecordedProvider(_roles_response()))
+    career_md = (workspace.reports_dir / "career.md").read_text(encoding="utf-8")
+
+    order = [
+        career_md.index("Principal Engineer, Northwind"),
+        career_md.index("Staff Data Engineer, Synctera"),
+        career_md.index("Analytics Lead, Afresh"),
+    ]
+    assert order == sorted(order), "roles must render newest first"
+    # A current role says so; it does not invent an end date.
+    assert "(2024-03 – present)" in career_md
+    assert "(2022-01 – 2024-06)" in career_md
+    # A year-only date stays a year rather than being padded to a month.
+    assert "(2019 – 2022-01)" in career_md
+
+
+def test_an_undated_role_is_kept_and_sorted_last(workspace: Config, tmp_path: Path) -> None:
+    """A position with no dates is still a fact about the career. It must
+    survive, print without invented dates, and not sort as year zero."""
+    resume = tmp_path / "resume.md"
+    resume.write_text("Consultant, Tungsten\nStaff Engineer, Northwind — 2024\n", encoding="utf-8")
+    response = json.dumps(
+        {
+            "items": [
+                {
+                    "kind": "role",
+                    "name": "Consultant, Tungsten",
+                    "company": "Tungsten",
+                    "title": "Consultant",
+                    "classification": "fact",
+                    "confidence": 1.0,
+                    "quotes": ["Consultant, Tungsten"],
+                },
+                {
+                    "kind": "role",
+                    "name": "Staff Engineer, Northwind",
+                    "company": "Northwind",
+                    "title": "Staff Engineer",
+                    "started": "2024",
+                    "classification": "fact",
+                    "confidence": 1.0,
+                    "quotes": ["Staff Engineer, Northwind — 2024"],
+                },
+            ]
+        }
+    )
+    with Storage(workspace.db_path) as storage:
+        ingest_resume(resume, workspace, storage, RecordedProvider(response))
+    career_md = (workspace.reports_dir / "career.md").read_text(encoding="utf-8")
+
+    assert career_md.index("Staff Engineer, Northwind") < career_md.index("Consultant, Tungsten")
+    consultant_line = next(
+        line for line in career_md.splitlines() if "Consultant, Tungsten" in line
+    )
+    assert "–" not in consultant_line and "present" not in consultant_line
+
+
+def test_interview_is_not_an_extractable_kind() -> None:
+    """INTERVIEW items carry a subtype and persona scope an extraction has
+    no way to supply, so a model emitting one used to validate and persist
+    an item every interview code path would then find malformed (#269)."""
+    with pytest.raises(ProposalParseError):
+        parse_proposal(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "kind": "interview",
+                            "name": "Something",
+                            "classification": "fact",
+                            "confidence": 1.0,
+                            "quotes": ["Something"],
+                        }
+                    ]
+                }
+            )
+        )
+
+
+def test_the_four_real_kinds_still_parse() -> None:
+    for kind in ("achievement", "skill", "role", "testimonial"):
+        proposal = parse_proposal(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "kind": kind,
+                            "name": "Something",
+                            "classification": "fact",
+                            "confidence": 1.0,
+                            "quotes": ["Something"],
+                        }
+                    ]
+                }
+            )
+        )
+        assert proposal.items[0].item_kind is ProfileItemKind(kind)
