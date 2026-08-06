@@ -151,6 +151,7 @@ from wingman.application.company_feeds import (
 )
 from wingman.application.profile_manage import (
     clear_profile,
+    rekind_item,
     remove_item,
     render_profile_listing,
     resolve_item,
@@ -4033,6 +4034,33 @@ def profile_resolve(
         typer.echo(f"  dropped {rival.item_id[:8]} — {rival.detail or rival.name}")
     if not rivals:
         typer.echo("  (nothing conflicted with it)")
+
+
+@profile_app.command("rekind")
+def profile_rekind(
+    item_id: str = typer.Argument(..., help="Item id (any unambiguous prefix) to move."),
+    kind: str = typer.Argument(..., help="achievement, skill, role, or testimonial."),
+) -> None:
+    """Move an item to a different kind, keeping its id, evidence and source.
+
+    For something captured under the wrong heading — a screening answer
+    filed as a skill, an employment history filed as an achievement. The
+    claim and its evidence are fine; only the label is wrong, and
+    delete-and-recapture would throw away the lineage that makes the item
+    citable in the first place.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "re-kinded")
+    try:
+        with Storage(config.db_path) as storage:
+            moved, was = rekind_item(item_id, kind, config, storage)
+    except IngestError as exc:
+        typer.echo(f"profile rekind failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"Moved {moved.name!r} ({moved.item_id[:8]}) from {was.value} to {moved.kind.value}."
+    )
 
 
 @profile_app.command("clear")

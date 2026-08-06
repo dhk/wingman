@@ -334,9 +334,24 @@ class Storage:
         return ProfileItem.model_validate_json(row[0]) if row else None
 
     def update_profile_item(self, item: ProfileItem) -> None:
+        # 'kind' and 'name_key' are columns AND live in the payload, and the
+        # two are read by different callers: list_profile_items decodes the
+        # payload, while dedup/supersede queries WHERE kind = ? AND name_key = ?
+        # against the columns. Writing only the payload leaves an item that
+        # looks changed everywhere a human checks while the dedup machinery
+        # still matches the old values — a silent half-apply with no symptom
+        # until a later ingest collides with a row that no longer presents as
+        # that kind (#273). Write all four together.
         cursor = self._conn.execute(
-            "UPDATE profile_items SET status = ?, payload = ? WHERE item_id = ?",
-            (item.status.value, item.model_dump_json(), item.item_id),
+            "UPDATE profile_items SET kind = ?, name_key = ?, status = ?, payload = ? "
+            "WHERE item_id = ?",
+            (
+                item.kind.value,
+                item.name_key,
+                item.status.value,
+                item.model_dump_json(),
+                item.item_id,
+            ),
         )
         if cursor.rowcount == 0:
             raise KeyError(f"profile item {item.item_id} does not exist")

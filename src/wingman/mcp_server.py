@@ -110,6 +110,7 @@ from wingman.application.company_feeds import (
 )
 from wingman.application.profile_manage import (
     clear_profile,
+    rekind_item,
     remove_item,
     render_profile_listing,
     resolve_item,
@@ -1074,14 +1075,18 @@ def answer_bank(
 
 
 @server.tool()
-def profile_manage(action: str, item_id: str = "") -> str:
-    """List, remove, resolve, or clear career-profile items (RFC-027).
+def profile_manage(action: str, item_id: str = "", kind: str = "") -> str:
+    """List, remove, resolve, re-kind, or clear career-profile items (RFC-027).
 
-    action is 'list', 'rm', 'resolve', or 'clear'. 'list' shows every item
-    with its id — active by kind, then unresolved conflicts. 'rm' deletes
-    the one item whose id starts with item_id (any unambiguous prefix).
-    'resolve' settles a duplicate/conflict: the item_id item is kept and
-    promoted to active, every rival with the same kind and name is dropped.
+    action is 'list', 'rm', 'resolve', 'rekind', or 'clear'. 'list' shows
+    every item with its id — active by kind, then unresolved conflicts.
+    'rm' deletes the one item whose id starts with item_id (any unambiguous
+    prefix). 'resolve' settles a duplicate/conflict: the item_id item is
+    kept and promoted to active, every rival with the same kind and name is
+    dropped. 'rekind' moves item_id to the `kind` given (achievement,
+    skill, role, or testimonial), keeping its id, evidence and source
+    record — the fix for something captured under the wrong heading, where
+    delete-and-recapture would throw away the very lineage worth keeping.
     'clear' deletes EVERY profile item for a clean re-ingest — not
     reversible except via 'wingman restore', so suggest a backup first.
     Mutations re-render career.md/career.json; stored job assessments cite
@@ -1104,6 +1109,12 @@ def profile_manage(action: str, item_id: str = "") -> str:
                     f"Kept {winner.kind.value} {winner.name!r} ({winner.item_id[:8]}); "
                     f"dropped: {dropped}."
                 )
+            if action == "rekind":
+                moved, was = rekind_item(item_id, kind, config, storage)
+                return (
+                    f"Moved {moved.name!r} ({moved.item_id[:8]}) "
+                    f"from {was.value} to {moved.kind.value}."
+                )
             if action == "clear":
                 removed = clear_profile(config, storage)
                 return (
@@ -1112,7 +1123,7 @@ def profile_manage(action: str, item_id: str = "") -> str:
                 )
     except IngestError as exc:
         return f"profile {action} failed: {exc}"
-    return f"unknown action {action!r}; use list, rm, resolve, or clear."
+    return f"unknown action {action!r}; use list, rm, resolve, rekind, or clear."
 
 
 @server.tool()
