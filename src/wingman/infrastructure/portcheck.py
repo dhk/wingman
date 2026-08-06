@@ -105,7 +105,14 @@ def _ps_identity(pid: int, run: Runner) -> tuple[str | None, str | None]:
     processes, which is exactly the case this whole module exists to
     surface rather than silently misreport.
     """
-    code, out = run(["ps", "-o", "user=,command=", "-p", str(pid)])
+    # 'user:32=', never a bare 'user=': ps pads that field to 8 characters and
+    # renders anything longer with a trailing '+', so 'wingman-shared' arrives
+    # as 'wingman+'. Harmless while callers only printed the name — but
+    # host_status feeds it to pwd.getpwnam() to reach that account's systemd
+    # session, and a truncated name raises KeyError, so the service state of
+    # every account with a name longer than 8 characters silently read as
+    # "unknown" (#265).
+    code, out = run(["ps", "-o", "user:32=,command=", "-p", str(pid)])
     if code != 0 or not out.strip():
         return None, None
     line = out.strip().splitlines()[0]

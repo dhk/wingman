@@ -85,9 +85,29 @@ def test_build_state_without_a_repo_is_a_question_mark() -> None:
     assert build_state("0.4.1+gc5fcdc275", None, _runner({})) == "?"
 
 
-def test_unit_state_reads_your_own_account_directly() -> None:
+def _fake_passwd(monkeypatch, accounts: dict[str, int]) -> None:
+    """Stand in for the host's passwd database.
+
+    These tests used to pass real names and real uids, which only worked
+    because dhk happens to be 1000 on the box they were written on — the
+    same host-dependence that made two of minority-report's tests
+    unrunnable anywhere else.
+    """
+    import pwd as pwd_module
+
+    def getpwnam(name: str) -> object:
+        if name not in accounts:
+            raise KeyError(f"getpwnam(): name not found: {name}")
+        uid = accounts[name]
+        return pwd_module.struct_passwd((name, "x", uid, uid, "", f"/home/{name}", "/bin/bash"))
+
+    monkeypatch.setattr(host_status.pwd, "getpwnam", getpwnam)
+
+
+def test_unit_state_asks_directly_when_running_as_that_account(monkeypatch) -> None:
+    _fake_passwd(monkeypatch, {"dhk": 1000})
     run = _runner({("systemctl",): (3, "failed\n")})
-    assert unit_state("dhk", self_user="dhk", run=run, euid=1000) == "failed"
+    assert unit_state("dhk", run=run, euid=1000) == "failed"
     assert run.calls[0] == [  # type: ignore[attr-defined]
         "systemctl",
         "--user",
@@ -96,26 +116,19 @@ def test_unit_state_reads_your_own_account_directly() -> None:
     ]
 
 
-def test_unit_state_for_another_account_is_unknown_without_root() -> None:
+def test_unit_state_for_another_account_is_unknown_without_root(monkeypatch) -> None:
+    _fake_passwd(monkeypatch, {"dhk": 1000, "trent": 1001})
     run = _runner({("systemctl",): (0, "active\n")})
-    assert unit_state("trent", self_user="dhk", run=run, euid=1000) is None
+    assert unit_state("trent", run=run, euid=1000) is None
     assert run.calls == []  # type: ignore[attr-defined]
 
 
 def test_unit_state_for_another_account_carries_xdg_runtime_dir_as_root(monkeypatch) -> None:
     """Without XDG_RUNTIME_DIR the call cannot reach that account's session
     bus at all — the gotcha upgrade_all.py carries on every sudo call."""
-    import pwd as pwd_module
-
-    monkeypatch.setattr(
-        host_status.pwd,
-        "getpwnam",
-        lambda name: pwd_module.struct_passwd(
-            (name, "x", 1001, 1001, "", "/home/" + name, "/bin/bash")
-        ),
-    )
+    _fake_passwd(monkeypatch, {"trent": 1001})
     run = _runner({("sudo",): (0, "active\n")})
-    assert unit_state("trent", self_user="dhk", run=run, euid=0) == "active"
+    assert unit_state("trent", run=run, euid=0) == "active"
     assert run.calls[0][:5] == [  # type: ignore[attr-defined]
         "sudo",
         "-u",
@@ -123,6 +136,53 @@ def test_unit_state_for_another_account_carries_xdg_runtime_dir_as_root(monkeypa
         "env",
         "XDG_RUNTIME_DIR=/run/user/1001",
     ]
+
+
+def test_unit_state_uses_sudo_for_your_own_account_when_running_as_root(monkeypatch) -> None:
+    """Root is not dhk, even when asking about dhk's unit.
+
+    Deciding by NAME took the 'that's me, ask directly' branch here and
+    queried root's own session bus, reporting the wrong account's state.
+    Deciding by uid cannot (#265).
+    """
+    _fake_passwd(monkeypatch, {"dhk": 1000})
+    run = _runner({("sudo",): (0, "inactive\n")})
+    assert unit_state("dhk", run=run, euid=0) == "inactive"
+    assert run.calls[0][0] == "sudo"  # type: ignore[attr-defined]
+
+
+def test_unit_state_gives_up_on_an_unresolvable_account(monkeypatch) -> None:
+    """A truncated name ('wingman+') resolves to nothing, and must not be
+    reported as a state — the exact failure that made SERVICE read '?' for
+    wingman-shared even as root (#265)."""
+    _fake_passwd(monkeypatch, {"wingman-shared": 1002})
+    run = _runner({("sudo",): (0, "active\n")})
+    assert unit_state("wingman+", run=run, euid=0) is None
+    assert run.calls == []  # type: ignore[attr-defined]
+    # The untruncated name, same call, does resolve.
+    assert unit_state("wingman-shared", run=run, euid=0) == "active"
+
+
+def test_invoking_identity_prefers_the_sudo_caller(monkeypatch) -> None:
+    """Under sudo, config must come from the human, not from root."""
+    _fake_passwd(monkeypatch, {"dhk": 1000})
+    name, home = host_status.invoking_identity({"SUDO_USER": "dhk"})
+    assert name == "dhk"
+    assert home == Path("/home/dhk")
+
+
+def test_invoking_identity_falls_back_when_sudo_user_is_absent_or_bogus(monkeypatch) -> None:
+    _fake_passwd(monkeypatch, {})
+    monkeypatch.setattr(host_status.os, "geteuid", lambda: 4242)
+    monkeypatch.setattr(
+        host_status.pwd,
+        "getpwuid",
+        lambda uid: __import__("pwd").struct_passwd(
+            ("someone", "x", uid, uid, "", "/home/someone", "/bin/bash")
+        ),
+    )
+    assert host_status.invoking_identity({})[0] == "someone"
+    assert host_status.invoking_identity({"SUDO_USER": "ghost"})[0] == "someone"
 
 
 def test_listening_without_an_active_unit_is_called_unmanaged() -> None:
@@ -160,9 +220,17 @@ def test_unparseable_installations_file_does_not_break_status(tmp_path: Path) ->
     assert read_installation_names(tmp_path / "absent.toml") == {}
 
 
-def test_collect_flags_the_unmanaged_instance_and_leaves_the_others_alone(tmp_path: Path) -> None:
+def test_collect_flags_the_unmanaged_instance_and_leaves_the_others_alone(
+    tmp_path: Path, monkeypatch
+) -> None:
     """The whole point, end to end: 8787 listening but its unit failed,
-    8788 healthy under systemd, 8789 healthy but a build behind."""
+    8788 healthy under systemd, 8789 healthy but a build behind.
+
+    The injected passwd lookup is load-bearing, not decoration: without it
+    this resolves 'dhk' against the real host database, which passes on the
+    box it was written on and fails in CI where no such account exists.
+    """
+    _fake_passwd(monkeypatch, {"dhk": 1000})
     payloads = {
         8787: {"version": "0.4.1.dev116+gc5fcdc275", "started_at": "2026-08-05T19:28:11+00:00"},
         8788: {"version": "0.4.1.dev116+gc5fcdc275", "started_at": "2026-08-05T19:44:38+00:00"},
@@ -183,7 +251,6 @@ def test_collect_flags_the_unmanaged_instance_and_leaves_the_others_alone(tmp_pa
     rows = collect(
         [8787, 8788, 8789],
         {8787: "dhk", 8788: "trent", 8789: "wingman-shared"},
-        self_user="dhk",
         repo=tmp_path,
         health=_health(payloads),
         run=run,
@@ -201,9 +268,7 @@ def test_collect_flags_the_unmanaged_instance_and_leaves_the_others_alone(tmp_pa
 
 def test_collect_skips_a_neighbours_service_on_a_scanned_port(tmp_path: Path) -> None:
     payloads = {8797: {"service": "alexandria", "version": "0.1.0", "started_at": "x"}}
-    rows = collect(
-        [8797], {}, self_user="dhk", repo=tmp_path, health=_health(payloads), run=_runner({})
-    )
+    rows = collect([8797], {}, repo=tmp_path, health=_health(payloads), run=_runner({}))
     assert rows == []
 
 
@@ -212,7 +277,6 @@ def test_collect_keeps_a_configured_instance_that_answers_nothing(tmp_path: Path
     rows = collect(
         [8788],
         {8788: "trent"},
-        self_user="dhk",
         repo=tmp_path,
         health=_health({}),
         run=_runner({}),
@@ -224,7 +288,7 @@ def test_collect_keeps_a_configured_instance_that_answers_nothing(tmp_path: Path
 
 
 def test_collect_ignores_an_unconfigured_port_that_answers_nothing(tmp_path: Path) -> None:
-    rows = collect([8790], {}, self_user="dhk", repo=tmp_path, health=_health({}), run=_runner({}))
+    rows = collect([8790], {}, repo=tmp_path, health=_health({}), run=_runner({}))
     assert rows == []
 
 
@@ -251,14 +315,35 @@ def test_render_puts_the_unmanaged_row_in_a_needs_attention_block() -> None:
             note="",
         ),
     ]
-    output = render(rows, now=NOW, repo=Path("/home/dhk/src/wingman"))
+    output = render(rows, now=NOW, repo=Path("/home/dhk/src/wingman"), euid=1000)
 
     assert "PORT" in output.splitlines()[0]
     assert "19:28 (1h ago)" in output
     assert "Needs attention:" in output
     assert "8787: unit is 'failed'" in output
-    assert "rerun as root" in output
     assert "dirty working tree" in output
+    # The hint must name a command that can actually be run. 'sudo wg hosts'
+    # cannot — 'wg' is a shell alias sudo never inherits (#265).
+    assert "rerun as:" in output
+    assert "sudo /" in output
+    assert "sudo wg" not in output
+
+
+def test_render_drops_the_root_hint_when_already_root() -> None:
+    """Telling root to rerun as root is noise that reads as a real finding."""
+    rows = [
+        InstanceRow(
+            port=8789,
+            name="wingman-shared",
+            running=True,
+            version="0.4.1.dev117+g16072b689",
+            started_at="2026-08-06T03:10:00+00:00",
+            build="current",
+            service="?",
+            note="",
+        )
+    ]
+    assert "rerun as" not in render(rows, now=NOW, repo=None, euid=0)
 
 
 def test_render_says_so_when_there_is_nothing_to_report() -> None:
