@@ -19,6 +19,40 @@ import re
 
 _WHITESPACE = re.compile(r"\s+")
 
+# Typographic characters a document carries and a model does not write back.
+# A PDF says 'Uber’s' (U+2019); the model quotes 'Uber's' (U+0027), because
+# that is how the text reads — and one character sank an entire achievement
+# (#280). Strictly 1:1, so locate_quote's offset map into the original source
+# stays valid and the span it returns keeps the document's real typography.
+_CONFUSABLES = str.maketrans(
+    {
+        "‘": "'",  # left single quotation mark
+        "’": "'",  # right single quotation mark / typographic apostrophe
+        "‚": "'",  # single low-9
+        "‛": "'",  # single high-reversed-9
+        "“": '"',  # left double quotation mark
+        "”": '"',  # right double quotation mark
+        "„": '"',  # double low-9
+        "‟": '"',  # double high-reversed-9
+        "‐": "-",  # hyphen
+        "‑": "-",  # non-breaking hyphen
+        "‒": "-",  # figure dash
+        "–": "-",  # en dash
+        "—": "-",  # em dash
+        "―": "-",  # horizontal bar
+        "−": "-",  # minus sign
+    }
+)
+
+
+def canonical_punctuation(text: str) -> str:
+    """Fold confusable quotes and dashes to their ASCII forms, 1:1.
+
+    Used for matching only, never for storage: a citation should keep the
+    document's own typography.
+    """
+    return text.translate(_CONFUSABLES)
+
 
 def fold_whitespace(text: str) -> str:
     """Collapse every whitespace run to a single space and trim the ends."""
@@ -51,8 +85,11 @@ def locate_quote(quote: str, source: str) -> str | None:
     if not quote.strip():
         return None
     offsets = [index for index, character in enumerate(source) if not character.isspace()]
-    haystack = "".join(source[index] for index in offsets)
-    needle = "".join(quote.split())
+    # Canonicalized for the search, so a model's ASCII apostrophe finds the
+    # document's typographic one (#280); the offsets still point into the
+    # ORIGINAL source, so the span returned keeps the real punctuation.
+    haystack = canonical_punctuation("".join(source[index] for index in offsets))
+    needle = canonical_punctuation("".join(quote.split()))
     position = haystack.find(needle)
     if position < 0:
         return None
