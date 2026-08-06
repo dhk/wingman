@@ -240,3 +240,45 @@ def test_docx_with_entity_declarations_is_refused() -> None:
         archive.writestr("word/document.xml", evil)
     with pytest.raises(IngestError, match="entity declarations"):
         docx_text(out.getvalue(), "evil.docx")
+
+
+def test_pdf_extraction_asks_for_layout_mode(monkeypatch) -> None:
+    """Plain mode returns no inter-word spacing on PDFs whose fonts carry no
+    space glyphs — 'HeadofDataScience2021-2024' — and the resulting quotes
+    then fail the verbatim evidence check, silently dropping the most senior
+    roles in the document (#278)."""
+    import pypdf
+
+    seen: list[dict] = []
+
+    class FakePage:
+        def extract_text(self, **kwargs):
+            seen.append(kwargs)
+            return "Head of Data Science"
+
+    class FakeReader:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.pages = [FakePage()]
+
+    monkeypatch.setattr(pypdf, "PdfReader", FakeReader)
+    assert "Head of Data Science" in pdf_text(b"%PDF-1.4", "cv.pdf")
+    assert seen == [{"extraction_mode": "layout"}]
+
+
+def test_pdf_extraction_falls_back_to_plain_when_layout_fails(monkeypatch) -> None:
+    """Layout mode does more work and can fail where plain succeeds. A PDF
+    only plain mode can read must still ingest rather than erroring."""
+    import pypdf
+
+    class FakePage:
+        def extract_text(self, **kwargs):
+            if kwargs.get("extraction_mode") == "layout":
+                raise ValueError("layout unavailable for this page")
+            return "Director, Data"
+
+    class FakeReader:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.pages = [FakePage()]
+
+    monkeypatch.setattr(pypdf, "PdfReader", FakeReader)
+    assert "Director, Data" in pdf_text(b"%PDF-1.4", "cv.pdf")

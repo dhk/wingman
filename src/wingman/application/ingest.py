@@ -21,7 +21,7 @@ from wingman.agents.profile_curator import (
     build_prompt,
     parse_proposal,
 )
-from wingman.application.evidence import fold_whitespace
+from wingman.application.evidence import locate_quote
 from wingman.application.profile_store import persist_items
 from wingman.domain import SourceRecord
 from wingman.domain.source_record import derive_document_key
@@ -106,20 +106,32 @@ def _persist_source(
 def _validate_evidence(
     proposed: ProposedItem, source_text: str, record: SourceRecord
 ) -> ProfileItem | RejectedItem:
-    """Deterministic check: every quote must be non-blank and appear verbatim in the source.
+    """Deterministic check: every quote must be non-blank and appear in the source.
 
-    Verbatim modulo whitespace (RFC-026): line wrapping is presentation,
-    not content, so a quote spanning a hard-wrapped line still resolves.
+    Verbatim modulo whitespace (RFC-026): presentation is forgiven, content
+    is not. Line wrapping was the original case; PDF extraction that emits
+    no inter-word spaces at all is the case that forced whitespace to be
+    ignored outright rather than merely folded (#278). Every non-space
+    character must still appear, in order.
+
+    The accepted item cites the SOURCE's span, not the proposed text, so a
+    citation always quotes the document.
     """
-    folded_source = fold_whitespace(source_text)
+    resolved: list[str] = []
     for quote in proposed.quotes:
         if not quote.strip():
             return RejectedItem(name=proposed.name, reason="empty evidence quote")
-        if fold_whitespace(quote) not in folded_source:
+        # The source's own span, matched ignoring whitespace — so a quote of a
+        # PDF that extracted without inter-word spaces still resolves, and the
+        # stored citation quotes the document rather than the model's readable
+        # reconstruction of it (#278).
+        found = locate_quote(quote, source_text)
+        if found is None:
             return RejectedItem(
                 name=proposed.name,
                 reason=f"evidence quote not found verbatim in source: {quote[:80]!r}",
             )
+        resolved.append(found)
     return ProfileItem(
         kind=proposed.item_kind,
         name=proposed.name,
@@ -131,8 +143,7 @@ def _validate_evidence(
         classification=proposed.classification,
         confidence=proposed.confidence,
         evidence=[
-            EvidenceSpan(source_record_id=record.record_id, quote=quote)
-            for quote in proposed.quotes
+            EvidenceSpan(source_record_id=record.record_id, quote=quote) for quote in resolved
         ],
         prompt_version=PROMPT_VERSION,
         extracted_by="",
