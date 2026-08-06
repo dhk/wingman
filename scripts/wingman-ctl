@@ -46,6 +46,44 @@ esac
 
 say() { printf '%s\n' "$*"; }
 
+# The arguments this run was invoked with, kept so a re-exec below can
+# reproduce it exactly.
+WINGMAN_CTL_ARGV=("$@")
+
+_self_fingerprint() {
+  # 'cksum', not sha256sum/shasum: the former is POSIX and present on both
+  # macOS and Linux, and this only needs "did the file change", not a
+  # cryptographic guarantee.
+  local self
+  self="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")" || return 1
+  [ -f "$self" ] || return 1
+  cksum "$self" 2>/dev/null | awk '{print $1, $2}'
+}
+
+reexec_if_self_changed() {
+  # A 'git pull' can update THIS script. Without this, every step after the
+  # pull keeps running the PRE-pull copy: the new logic is on disk and the old
+  # logic is what executes. Invisible except in exactly the case where the new
+  # behaviour was the point of pulling (#292).
+  #
+  # Re-running from the top is safe: the pull that triggered this is a no-op
+  # the second time, so the fingerprint matches and this returns immediately.
+  local before="$1" after
+  after="$(_self_fingerprint)" || return 0
+  if [ -z "$before" ] || [ "$before" = "$after" ]; then
+    return 0
+  fi
+  if [ -n "${WINGMAN_CTL_REEXECED:-}" ]; then
+    # Already restarted once and it changed again — a concurrent pull, or a
+    # checkout being written while this runs. Do not loop; say so and go on.
+    say "  (wingman-ctl changed again after restarting once — continuing with this copy)"
+    return 0
+  fi
+  say "→ that pull updated wingman-ctl itself — restarting so the rest of this run uses it"
+  export WINGMAN_CTL_REEXECED=1
+  exec "$0" ${WINGMAN_CTL_ARGV[@]+"${WINGMAN_CTL_ARGV[@]}"}
+}
+
 http_running() { wingman mcp status 2>/dev/null | grep -q 'is running'; }
 
 print_urls() {
@@ -168,7 +206,9 @@ cmd_upgrade() {
   # refuse to fast-forward the moment a new upstream commit also touches
   # that file — every future pull after any merge, not a one-off (#249).
   ( cd "$REPO" && git checkout -- src/wingman/changelog_data.py 2>/dev/null || true )
+  _fingerprint_before_pull="$(_self_fingerprint || true)"
   ( cd "$REPO" && git pull --ff-only ) || { say "pull failed — nothing was touched"; return 1; }
+  reexec_if_self_changed "$_fingerprint_before_pull"
   # Keeps the changelog from drifting silently (#202): regenerated fresh from
   # THIS pull's history right before the wheel that ships it gets built.
   # Best-effort — a checkout with a broken/absent git history (rare, but
@@ -199,6 +239,33 @@ cmd_cycle() {
     say "→ starting the HTTP server (it was not running before the upgrade)…"
     cmd_start
   fi
+}
+
+cmd_redeploy_shared() {
+  # The RFC-048 shared multi-tenant process, which is NOT this account's
+  # instance: it runs as its own service account from its own checkout, so
+  # 'upgrade' above never touches it (#292).
+  #
+  # Two things happen here because they always had to happen together, and
+  # doing them by hand meant remembering to pull first or silently running a
+  # stale copy of the redeploy script:
+  #   1. refresh THIS checkout, since that is where the script being invoked
+  #      lives (and re-exec if the pull changed wingman-ctl itself);
+  #   2. run that script under sudo — it pulls the service account's own
+  #      checkout, reinstalls, restarts, health-checks, and re-declares the
+  #      host registry reservation (#288).
+  local script="$REPO/scripts/wingman-redeploy-shared.sh"
+  say "→ refreshing $REPO from github…"
+  _fingerprint_before_pull="$(_self_fingerprint || true)"
+  ( cd "$REPO" && git pull --ff-only ) || { say "pull failed — nothing was touched"; return 1; }
+  reexec_if_self_changed "$_fingerprint_before_pull"
+  if [ ! -x "$script" ]; then
+    say "$script is missing or not executable — is $REPO a current checkout?"
+    return 1
+  fi
+  say "→ redeploying the shared multi-tenant process (every tenant on it is"
+  say "  briefly interrupted by the restart — expected, not a bug)…"
+  sudo "$script"
 }
 
 cmd_upgrade_all() {
@@ -270,10 +337,11 @@ case "${1:-}" in
   upgrade)     cmd_upgrade ;;
   cycle)       cmd_cycle ;;
   upgrade-all) cmd_upgrade_all ;;
+  redeploy-shared) cmd_redeploy_shared ;;
   hosts)       shift; cmd_hosts "$@" ;;
   tenant)      shift; cmd_tenant "$@" ;;
   *)
-    say "usage: $0 status|hosts|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|tenant ..."
+    say "usage: $0 status|hosts|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|redeploy-shared|tenant ..."
     say "  status       what's running, who owns each process, what's safe to stop (YOU only)"
     say "  hosts        every wingman instance on this box: version, uptime, build drift,"
     say "               and whether any is running outside systemd's control (#263)"
@@ -286,6 +354,8 @@ case "${1:-}" in
     say "  upgrade-all  trigger the cross-account scheduled upgrade (you + every other"
     say "               configured user, e.g. Trent) — needs sudo, needs the systemd"
     say "               unit installed (docs/SERVER.md §7)"
+    say "  redeploy-shared  pull, then redeploy the RFC-048 shared multi-tenant process"
+    say "               (needs sudo; briefly interrupts every tenant on it)"
     say "  tenant url <slug>           print a tenant's connector URLs (RFC-048, #209)"
     say "  tenant rotate-token <slug>  invalidate + reissue a tenant's token in one step,"
     say "                              no restart, no drain (RFC-048, #210)"
