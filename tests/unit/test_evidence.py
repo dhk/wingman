@@ -178,3 +178,35 @@ def test_locate_quote_folds_the_padding_layout_extraction_leaves_behind() -> Non
     assert locate_quote("Head of Data Science 2021-2024", source) == (
         "Head of Data Science 2021-2024"
     )
+
+
+def test_locate_quote_matches_across_typographic_punctuation() -> None:
+    """A PDF says 'Uber’s' (U+2019); a model quotes 'Uber's' (U+0027),
+    because that is how the text reads. One character sank an entire
+    achievement before this (#280)."""
+    source = "Improved Design Efficiency by >10x by inventing a precursor to Uber’s H3."
+    found = locate_quote("inventing a precursor to Uber's H3.", source)
+
+    assert found == "inventing a precursor to Uber’s H3."
+    # The citation keeps the document's real typography, not the ASCII rewrite.
+    assert "’" in found
+
+
+def test_locate_quote_matches_across_dash_variants() -> None:
+    source = "Head of Data Science 2021–2024"  # en dash
+    assert locate_quote("Head of Data Science 2021-2024", source) == source
+    # …and the other direction, since either side may be the typographic one.
+    assert locate_quote("2021—2024", "worked 2021-2024 there") == "2021-2024"
+
+
+def test_locate_quote_matches_across_curly_double_quotes() -> None:
+    source = "wrote the “why-to” book on the tool"
+    assert locate_quote('wrote the "why-to" book', source) == "wrote the “why-to” book"
+
+
+def test_punctuation_folding_does_not_forgive_content() -> None:
+    """Only presentation is forgiven. Letters and digits still must match."""
+    source = "Uber’s H3, improved 10x"
+    assert locate_quote("Lyft's H3", source) is None
+    assert locate_quote("Uber's H4", source) is None
+    assert locate_quote("Uber's H3, improved 20x", source) is None
