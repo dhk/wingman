@@ -360,15 +360,29 @@ def job_criteria(action: str = "show", text: str = "") -> str:
 
 
 @server.tool()
-def qa_capture(question: str, answer: str, kind: str = "achievement") -> str:
-    """Save a clarifying Q&A as durable, citable profile evidence (#96, RFC-036).
+def qa_capture(
+    question: str, answer: str, kind: str = "achievement", destination: str = "profile"
+) -> str:
+    """Save a Q&A — as citable profile evidence (#96, RFC-036), or to the answer bank.
 
-    The pair lands in the inbox as a source file and becomes one profile
-    item — name: the question, detail and evidence quote: the answer
-    VERBATIM — so future assessments cite it like any other evidence.
-    Re-answering the same question supersedes the earlier answer (RFC-028
-    lineage); it never piles up conflicts. kind is achievement, skill,
-    role, or testimonial.
+    destination 'profile' (default): the pair lands in the inbox as a
+    source file and becomes one profile item — name: the question, detail
+    and evidence quote: the answer VERBATIM — so future assessments cite
+    it like any other evidence. Re-answering the same question supersedes
+    the earlier answer (RFC-028 lineage); it never piles up conflicts.
+    kind is achievement, skill, role, or testimonial.
+
+    destination 'answers': a SCREENING question an employer asked ("Have
+    you shipped an AI/LLM product?") goes to the application answer bank
+    (RFC-030) instead, where refined answers are reused across
+    applications. It is not a claim about the person's career, and storing
+    it in the profile makes a question the NAME of an achievement.
+
+    PREFERENCES — in-office, travel, location, compensation — belong in
+    NEITHER. They go in the job-criteria document (RFC-035), whose hard
+    filters and weighted wants drive opening scoring; as profile items
+    they score nothing and masquerade as skills. Use job_criteria with
+    action='review' and save only once the user confirms the wording.
 
     Protocol: when the user answers a clarifying question during
     assess/pack work, OFFER to save it — show the exact question and
@@ -383,9 +397,17 @@ def qa_capture(question: str, answer: str, kind: str = "achievement") -> str:
         return _NOT_INITIALIZED
     try:
         with Storage(config.db_path) as storage:
-            report = capture_qa(question, answer, config, storage, kind=kind)
+            report = capture_qa(
+                question, answer, config, storage, kind=kind, destination=destination
+            )
     except IngestError as exc:
         return f"qa capture failed: {exc}"
+    if report.kind == "answer":
+        return (
+            f"{report.outcome}: [answer bank] {report.question}\n"
+            f"{report.source_path}\n"
+            "Reusable across applications; 'answer_bank find' surfaces it next time."
+        )
     return (
         f"{report.outcome}: [{report.kind}] {report.question}\n"
         f"Evidence file: {report.source_path}\n"

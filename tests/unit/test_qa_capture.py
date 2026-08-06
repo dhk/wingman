@@ -90,3 +90,57 @@ def test_mcp_qa_capture_and_resolve_requirement(workspace: Config) -> None:
     assert "raw bullets" in (resolve_requirement.__doc__ or "")
     assert "Never capture silently" in (qa_capture_tool.__doc__ or "")
     assert "failed" in qa_capture_tool("", "")
+
+
+SCREENING = "Have you shipped an AI/LLM product?"
+SHIPPED = "Shipping Praxis, Wingman, Skill-Map and Tricorder."
+
+
+def test_screening_question_goes_to_the_answer_bank_not_the_profile(workspace: Config) -> None:
+    """A question an employer asked is not a claim about a career. Stored in
+    the profile it makes a QUESTION the name of an achievement (#283)."""
+    from wingman.application.answers import find_similar
+
+    with Storage(workspace.db_path) as storage:
+        report = capture_qa(SCREENING, SHIPPED, workspace, storage, destination="answers")
+
+        assert report.kind == "answer"
+        assert report.outcome == "saved"
+        assert "answer bank" in report.source_path
+        # Nothing entered the profile.
+        assert storage.list_profile_items() == []
+        # And it is findable where it belongs.
+        assert find_similar(SCREENING, storage)
+
+
+def test_resaving_a_screening_answer_revises_the_bank_entry(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        capture_qa(SCREENING, SHIPPED, workspace, storage, destination="answers")
+        again = capture_qa(
+            SCREENING, SHIPPED + " Also Alexandria.", workspace, storage, destination="answers"
+        )
+        assert again.kind == "answer"
+        assert storage.list_profile_items() == []
+
+
+def test_profile_remains_the_default_destination(workspace: Config) -> None:
+    """Today's behavior is unchanged for anyone who does not ask."""
+    with Storage(workspace.db_path) as storage:
+        report = capture_qa(QUESTION, ANSWER, workspace, storage)
+        assert report.kind == ProfileItemKind.ACHIEVEMENT.value
+        assert len(storage.list_profile_items()) == 1
+
+
+def test_unknown_destination_is_refused_and_names_where_preferences_go(
+    workspace: Config,
+) -> None:
+    """Preferences are deliberately not a destination: RFC-035 says criteria
+    are the user's own words and are never written unilaterally."""
+    with Storage(workspace.db_path) as storage:
+        with pytest.raises(IngestError) as excinfo:
+            capture_qa(QUESTION, ANSWER, workspace, storage, destination="criteria")
+        message = str(excinfo.value)
+        assert "profile, answers" in message
+        assert "job-criteria" in message
+        assert "score nothing here" in message
+        assert storage.list_profile_items() == []
