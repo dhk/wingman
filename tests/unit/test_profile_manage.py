@@ -10,10 +10,11 @@ from wingman.application.profile_manage import (
     clear_profile,
     find_item,
     remove_item,
+    rekind_item,
     render_profile_listing,
     resolve_item,
 )
-from wingman.domain.profile import ItemStatus
+from wingman.domain.profile import ItemStatus, ProfileItemKind
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.storage import Storage
 from wingman.providers.recorded import RecordedProvider
@@ -164,3 +165,104 @@ def test_mcp_profile_manage_roundtrip(workspace: Config, tmp_path: Path) -> None
     assert "Removed 2 profile items" in profile_manage("clear")
     assert "unknown action" in profile_manage("nope")
     assert "failed" in profile_manage("rm", "zzzzzzzz")
+
+
+def _kind_column(storage: Storage, item_id: str) -> str:
+    """The 'kind' COLUMN, not the payload — the two can disagree (#273)."""
+    row = storage._conn.execute(  # noqa: SLF001 - asserting storage's own invariant
+        "SELECT kind FROM profile_items WHERE item_id = ?", (item_id,)
+    ).fetchone()
+    return str(row[0])
+
+
+def test_rekind_moves_the_item_and_keeps_its_lineage(workspace: Config, tmp_path: Path) -> None:
+    """A misfiled item is a labelling mistake — the claim and its evidence
+    are fine. Re-kinding must keep the id, the evidence and the source
+    record, which is exactly what delete-and-recapture destroys."""
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        before = next(
+            item
+            for item in storage.list_profile_items()
+            if item.name == "Search rewrite" and item.status is ItemStatus.ACTIVE
+        )
+
+        moved, was = rekind_item(before.item_id[:8], "role", workspace, storage)
+
+        assert was is ProfileItemKind.ACHIEVEMENT
+        assert moved.kind is ProfileItemKind.ROLE
+        assert moved.item_id == before.item_id
+        assert moved.evidence == before.evidence
+        # The source record travels with the evidence span, which is where
+        # the citation actually lives.
+        assert moved.evidence[0].source_record_id == before.evidence[0].source_record_id
+        assert moved.evidence[0].quote == before.evidence[0].quote
+    career_md = (workspace.reports_dir / "career.md").read_text(encoding="utf-8")
+    assert "## Roles" in career_md
+
+
+def test_rekind_writes_the_kind_column_not_just_the_payload(
+    workspace: Config, tmp_path: Path
+) -> None:
+    """The half-apply this feature had to avoid.
+
+    list_profile_items decodes the payload, while dedup/supersede queries
+    'WHERE kind = ? AND name_key = ?' against the COLUMN. Writing only the
+    payload leaves an item that looks re-kinded everywhere a human checks
+    while dedup still matches it under its old kind — invisible until a
+    later ingest collides with it (#273).
+    """
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        target = next(
+            item
+            for item in storage.list_profile_items()
+            if item.name == "Search rewrite" and item.status is ItemStatus.ACTIVE
+        )
+        assert _kind_column(storage, target.item_id) == "achievement"
+
+        rekind_item(target.item_id[:8], "role", workspace, storage)
+
+        assert _kind_column(storage, target.item_id) == "role"
+
+
+def test_rekind_refuses_a_name_already_taken_in_the_target_kind(
+    workspace: Config, tmp_path: Path
+) -> None:
+    """Two rows sharing (kind, name_key) is how the dedup index stops
+    meaning anything — that is a conflict to resolve, not a move to make."""
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        achievement = next(
+            item
+            for item in storage.list_profile_items()
+            if item.name == "Search rewrite" and item.status is ItemStatus.ACTIVE
+        )
+        twin = achievement.model_copy(
+            update={"item_id": "twin-0001", "kind": ProfileItemKind.SKILL}
+        )
+        storage.add_profile_item(twin)
+
+        with pytest.raises(IngestError, match="already exists"):
+            rekind_item(achievement.item_id[:8], "skill", workspace, storage)
+        # untouched
+        assert storage.get_profile_item(achievement.item_id).kind is ProfileItemKind.ACHIEVEMENT
+
+
+def test_rekind_rejects_unknown_kinds_interview_and_no_ops(
+    workspace: Config, tmp_path: Path
+) -> None:
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        target = next(
+            item
+            for item in storage.list_profile_items()
+            if item.name == "Search rewrite" and item.status is ItemStatus.ACTIVE
+        )
+        with pytest.raises(IngestError, match="unknown kind"):
+            rekind_item(target.item_id[:8], "banana", workspace, storage)
+        # INTERVIEW items carry a subtype and persona scope a re-kind can't invent
+        with pytest.raises(IngestError, match="unknown kind"):
+            rekind_item(target.item_id[:8], "interview", workspace, storage)
+        with pytest.raises(IngestError, match="already a achievement"):
+            rekind_item(target.item_id[:8], "achievement", workspace, storage)

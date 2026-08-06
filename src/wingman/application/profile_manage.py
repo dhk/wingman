@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from wingman.application.ingest import IngestError
-from wingman.domain.profile import ItemStatus, ProfileItem
+from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -88,6 +88,63 @@ def resolve_item(
         "profile resolve winner=%s rivals=%d name=%s", winner.item_id, len(rivals), winner.name
     )
     return winner, rivals
+
+
+def rekind_item(
+    item_id_prefix: str, new_kind: str, config: Config, storage: Storage
+) -> tuple[ProfileItem, ProfileItemKind]:
+    """Move one item to a different kind, keeping everything else.
+
+    The correction that previously required delete-and-recapture, which
+    destroyed exactly what makes an item worth keeping: its item_id, its
+    evidence spans, and its source record. A misfiled item is a *labelling*
+    mistake — 'Field of study?' captured as a skill is still true, still
+    cited, still the user's own words. Only the heading is wrong.
+
+    Refuses rather than guesses in the three cases where a move would
+    quietly damage something: an unknown kind, INTERVIEW as a target (its
+    items carry a subtype and persona scope a re-kind cannot synthesise),
+    and a name already taken in the destination kind — that last one is a
+    real RFC-028 conflict, and silently creating a second row with the
+    same (kind, name_key) is how the dedup index stops meaning anything.
+
+    Returns the moved item and the kind it came from.
+    """
+    item = find_item(item_id_prefix, storage)
+    wanted = new_kind.strip().lower()
+    valid = [k.value for k in ProfileItemKind if k is not ProfileItemKind.INTERVIEW]
+    if wanted not in valid:
+        raise IngestError(f"unknown kind {new_kind!r}; expected one of: {', '.join(valid)}.")
+    kind = ProfileItemKind(wanted)
+    if kind is item.kind:
+        raise IngestError(f"{item.item_id[:8]} is already a {kind.value}; nothing to do.")
+    rival = next(
+        (
+            other
+            for other in storage.list_profile_items()
+            if other.item_id != item.item_id
+            and other.kind is kind
+            and other.name_key == item.name_key
+        ),
+        None,
+    )
+    if rival is not None:
+        raise IngestError(
+            f"a {kind.value} named {item.name!r} already exists ({rival.item_id[:8]}); "
+            "resolve or remove one of them first."
+        )
+    was = item.kind
+    moved = item.model_copy(update={"kind": kind})
+    storage.update_profile_item(moved)
+    _rerender(config, storage)
+    _logger.info(
+        "profile rekind id=%s from=%s to=%s name=%s",
+        moved.item_id,
+        was.value,
+        kind.value,
+        moved.name,
+    )
+    return moved, was
 
 
 def clear_profile(config: Config, storage: Storage) -> int:
