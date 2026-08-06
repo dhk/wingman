@@ -3302,6 +3302,52 @@ def tenant_rotate_token_cmd(
         typer.echo(line)
 
 
+@tenant_app.command("form")
+def tenant_form_cmd(
+    slug: str = typer.Argument(..., help="Tenant slug the form is for, e.g. 'jason'."),
+    out: Path = typer.Option(
+        Path("."), "--out", help="Directory to write the script and manifest into."
+    ),
+) -> None:
+    """Emit a Google Form for the interview questions, for one tenant (#287).
+
+    wingman does NOT create the form: it writes an Apps Script you paste
+    into script.google.com and run once, so the form is built by YOUR
+    Google session and wingman never holds a Google credential.
+
+    Then: send the published URL to the person, and ingest their responses
+    when they say they're done.
+    """
+    from wingman.application.interview_form import (
+        form_questions,
+        render_apps_script,
+        render_manifest,
+    )
+
+    configure_logging()
+    label = slug.strip()
+    if not label:
+        typer.echo("tenant form failed: a tenant slug is required.", err=True)
+        raise typer.Exit(code=1)
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        script_path = out / f"{label}-interview-form.gs"
+        manifest_path = out / f"{label}-interview-form.json"
+        script_path.write_text(render_apps_script(label), encoding="utf-8")
+        manifest_path.write_text(render_manifest(label), encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"tenant form failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Wrote {script_path}")
+    typer.echo(f"Wrote {manifest_path}  (routing table for ingest; not needed by the form)")
+    typer.echo("")
+    typer.echo(f"{len(form_questions())} questions. Next:")
+    typer.echo("  1. Open https://script.google.com and start a new project")
+    typer.echo(f"  2. Paste {script_path.name}, then Run")
+    typer.echo("  3. Approve the permission prompt (it creates a form in YOUR Drive)")
+    typer.echo("  4. The Execution log prints the published URL — send that to them")
+
+
 @tenant_app.command("overnight")
 def tenant_overnight_cmd(
     registry: Path | None = typer.Option(
