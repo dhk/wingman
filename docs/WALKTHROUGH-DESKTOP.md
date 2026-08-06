@@ -190,6 +190,48 @@ Everything below is a sentence to Claude, not a command to remember:
   an application pack" (`pack`).
 - **Company intelligence** — "give me Acme's dossier / point of view /
   latest research."
+- **Triage today's digest** — "show me today's digest, then help me triage
+  it" walks the action list Keep / Mute forever / Snooze (`digest`,
+  `action_triage`), so the same noise doesn't roll over into tomorrow's.
+- **Set your job criteria** — "let's set up my job criteria" (or "review my
+  job criteria") walks a short interview and saves the document overnight
+  runs score every new posting against (`job_criteria`) — do this before
+  following companies, or their job links won't score meaningfully.
+- **Give a relationship an objective** — "what's my goal with Jane Author?"
+  sets a goal/thesis/next-move for a watched person (`relationship_objective`);
+  "log that I had coffee with Jane, we discussed X" records what actually
+  happened (`relationship_log`) — both become citable evidence for future
+  briefs.
+- **Find a warm intro** — "who do I know who could introduce me to Jane /
+  at Acme?" (`woven_warm_path`) — a live, uncached call to your network
+  graph, cited as its own source.
+- **Your own values card** — "what do I actually value?" (`my_values`) —
+  inferred from your Values/Mission-alignment interview answers, each axis
+  backed by the specific items that informed it.
+- **Build an answer bank** — working through an application's questions?
+  "save this answer for reuse" (`answer_bank`) keeps refined Q+A+context so
+  you're not rewriting the same answer for every company.
+- **Drop leads in the heap** — a burst of postings/profiles/links with no
+  time to sort them? "add these to the heap" (`heap`) captures them
+  instantly, hottest first — nothing fetched or spent until you sort later.
+- **Deep-dive a person** — "do a deep dive on Jane Author" (`people_deep_dive`)
+  is the one lookup that reaches the open web and costs real API spend; it
+  always asks you to confirm before spending, and only saves to
+  `people_dossier` after you approve the findings.
+- **No writing to start from?** — "help me build my profile" walks the
+  Perspectives interview — react to a few things you've read, name people
+  or organizations you value — and turns your own answers into cited
+  profile evidence (`perspectives_start`, `interview_react`), no resume
+  required.
+- **See what's new** — "what's changed in wingman lately?" (`changelog`) —
+  answers even with no workspace set up yet.
+- **Coach someone else** — "act as coach for Trent" scopes every
+  interview/POV call to a named persona inside your own workspace, no
+  separate login for them (`coach_persona`); once it's worth splitting
+  off, "carve off Trent's persona into his own workspace" seeds a
+  brand-new workspace from everything captured (`carve_off_persona`).
+  Lighter than a fully separate instance per person — for that, see
+  [`WALKTHROUGH-SECOND-USER.md`](WALKTHROUGH-SECOND-USER.md).
 - **Keep it alive** — `wingman sync` daily and `wingman backup` weekly are
   still worth a terminal or a schedule, but Claude can run either
   conversationally too ("sync my workspace", "back it up").
