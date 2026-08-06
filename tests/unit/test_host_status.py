@@ -220,9 +220,17 @@ def test_unparseable_installations_file_does_not_break_status(tmp_path: Path) ->
     assert read_installation_names(tmp_path / "absent.toml") == {}
 
 
-def test_collect_flags_the_unmanaged_instance_and_leaves_the_others_alone(tmp_path: Path) -> None:
+def test_collect_flags_the_unmanaged_instance_and_leaves_the_others_alone(
+    tmp_path: Path, monkeypatch
+) -> None:
     """The whole point, end to end: 8787 listening but its unit failed,
-    8788 healthy under systemd, 8789 healthy but a build behind."""
+    8788 healthy under systemd, 8789 healthy but a build behind.
+
+    The injected passwd lookup is load-bearing, not decoration: without it
+    this resolves 'dhk' against the real host database, which passes on the
+    box it was written on and fails in CI where no such account exists.
+    """
+    _fake_passwd(monkeypatch, {"dhk": 1000})
     payloads = {
         8787: {"version": "0.4.1.dev116+gc5fcdc275", "started_at": "2026-08-05T19:28:11+00:00"},
         8788: {"version": "0.4.1.dev116+gc5fcdc275", "started_at": "2026-08-05T19:44:38+00:00"},
