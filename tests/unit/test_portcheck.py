@@ -4,12 +4,16 @@ from wingman.infrastructure.portcheck import PortOwner, find_port_owner
 
 
 def _runner(responses: dict[tuple[str, ...], tuple[int, str]]):
+    calls: list[list[str]] = []
+
     def run(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
         for prefix, result in responses.items():
             if tuple(argv[: len(prefix)]) == prefix:
                 return result
         return 1, ""
 
+    run.calls = calls  # type: ignore[attr-defined]
     return run
 
 
@@ -28,6 +32,39 @@ def test_ss_listener_found_and_identity_resolved(monkeypatch) -> None:
     assert owner == PortOwner(pid=4242, command="wingman-mcp --http --port 8787", user="dave")
     assert owner.readable_identity
     assert "4242" in owner.describe()
+
+
+def test_long_account_name_survives_the_ps_round_trip(monkeypatch) -> None:
+    """A >8-character account name must arrive whole, and 'ps' must be asked
+    for a width that cannot truncate it.
+
+    'ps -o user=' pads to 8 characters and renders anything longer with a
+    trailing '+', so 'wingman-shared' came back as 'wingman+'. That was
+    invisible while callers only printed the name; host_status resolves it
+    with pwd.getpwnam() to reach that account's systemd session, where a
+    truncated name raises KeyError and the account's service state silently
+    read as unknown (#265). Every fixture in this file used a short name,
+    which is exactly why the suite agreed with the bug.
+    """
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+    run = _runner(
+        {
+            ("ss",): (
+                0,
+                'LISTEN 0 2048 127.0.0.1:8789 0.0.0.0:* users:(("wingman-mcp",pid=9001,fd=7))\n',
+            ),
+            ("ps",): (0, "wingman-shared /home/wingman-shared/.local/bin/wingman-mcp --http\n"),
+        }
+    )
+    owner = find_port_owner(8789, run=run)
+
+    assert owner is not None
+    assert owner.user == "wingman-shared"
+    assert not owner.user.endswith("+")
+    # The width request itself is the fix; asserting the output alone would
+    # pass against a fixture that simply never truncated.
+    ps_argv = next(argv for argv in run.calls if argv[0] == "ps")
+    assert "user:32=,command=" in ps_argv
 
 
 def test_nothing_listening_returns_none(monkeypatch) -> None:

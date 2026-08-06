@@ -154,6 +154,27 @@ def is_dirty_build(version: str) -> bool:
     return re.search(r"\.d\d{8}$", version) is not None
 
 
+def invoking_identity(env: dict[str, str] | None = None) -> tuple[str, Path]:
+    """(name, home) of the human who ran this, not the euid it runs under.
+
+    Under sudo the effective user is root, whose home holds no wingman
+    workspace and no WINGMAN_REPO — so resolving config from the effective
+    user made `sudo wingman-host-status` show strictly LESS than the
+    unprivileged run: the registry vanished, every name with it, and build
+    drift regressed to '?' (#265). Privilege should only ever add.
+    """
+    environment = os.environ if env is None else env
+    name = environment.get("SUDO_USER", "").strip()
+    if name:
+        try:
+            entry = pwd.getpwnam(name)
+            return entry.pw_name, Path(entry.pw_dir)
+        except KeyError:
+            pass
+    entry = pwd.getpwuid(os.geteuid())
+    return entry.pw_name, Path(entry.pw_dir)
+
+
 def repo_path(env: dict[str, str] | None = None, home: Path | None = None) -> Path | None:
     """WINGMAN_REPO from the process env, else the canonical host file.
 
@@ -194,12 +215,17 @@ def build_state(version: str | None, repo: Path | None, run: Runner = _default_r
 def unit_state(
     user: str | None,
     *,
-    self_user: str,
     run: Runner = _default_runner,
     euid: int | None = None,
 ) -> str | None:
     """'active'/'failed'/'inactive' for that account's unit, or None if
     this process has no way to find out.
+
+    Decided by **uid, not by name** (#265). Comparing names got this wrong
+    twice over: a truncated name never matched, and under sudo the
+    "that's me, ask directly" branch would fire for the invoking user's
+    account while actually running as root — querying root's session bus
+    and reporting the wrong account's state.
 
     'systemctl --user' driven from root needs XDG_RUNTIME_DIR pointed at
     the target account's own runtime directory or it cannot reach that
@@ -208,14 +234,15 @@ def unit_state(
     """
     if user is None:
         return None
-    if user == self_user:
-        _, out = run(["systemctl", "--user", "is-active", SYSTEMD_UNIT])
-        return out.strip() or None
-    if (os.geteuid() if euid is None else euid) != 0:
-        return None
     try:
         uid = pwd.getpwnam(user).pw_uid
     except KeyError:
+        return None
+    effective = os.geteuid() if euid is None else euid
+    if effective == uid:  # we are that account: its bus is already ours
+        _, out = run(["systemctl", "--user", "is-active", SYSTEMD_UNIT])
+        return out.strip() or None
+    if effective != 0:  # someone else's account, and we are not root
         return None
     _, out = run(
         [
@@ -285,7 +312,6 @@ def collect(
     ports: Sequence[int],
     names: dict[int, str],
     *,
-    self_user: str,
     repo: Path | None,
     health: HealthFetcher = _default_health,
     run: Runner = _default_runner,
@@ -310,7 +336,7 @@ def collect(
         started_at = str(payload.get("started_at", "")) or None if payload else None
         owner = find_port_owner(port, run) if running else None
         user = owner.user if owner else None
-        state = unit_state(user, self_user=self_user, run=run, euid=euid)
+        state = unit_state(user, run=run, euid=euid)
         service, note = service_column(running, state)
         rows.append(
             InstanceRow(
@@ -327,7 +353,9 @@ def collect(
     return rows
 
 
-def render(rows: Sequence[InstanceRow], *, now: datetime, repo: Path | None) -> str:
+def render(
+    rows: Sequence[InstanceRow], *, now: datetime, repo: Path | None, euid: int | None = None
+) -> str:
     if not rows:
         return "No wingman instances found on this box."
     header = ("PORT", "NAME", "VERSION", "STARTED", "BUILD", "SERVICE")
@@ -356,9 +384,14 @@ def render(rows: Sequence[InstanceRow], *, now: datetime, repo: Path | None) -> 
         lines.append("Needs attention:")
         lines.extend(notes)
     footers = []
-    if any(row.service == "?" for row in rows):
+    # Name the command, don't gesture at it. The obvious reading of "rerun as
+    # root" was 'sudo wg hosts', which can never work — 'wg' is a shell alias
+    # sudo does not inherit (#265, and docs/SERVER.md §9's same trap). And when
+    # already root there is nothing left to suggest.
+    if any(row.service == "?" for row in rows) and (os.geteuid() if euid is None else euid) != 0:
         footers.append(
-            "Service state is unknown for accounts other than yours — rerun as root to resolve it."
+            "Service state is unknown for accounts other than yours — rerun as:\n"
+            f"  sudo {Path(sys.argv[0]).resolve()}"
         )
     if any(row.version and is_dirty_build(row.version) for row in rows):
         footers.append("A version ending '.dYYYYMMDD' was built from a dirty working tree.")
@@ -401,20 +434,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: could not parse --ports {args.ports!r}", file=sys.stderr)
         return 2
 
-    from wingman.infrastructure.config import load_config
-
-    try:
-        names = read_installation_names(load_config().installations_config_path)
-    except Exception:  # noqa: BLE001 - a status view must survive a broken workspace
-        names = {}
-    repo = repo_path()
-    rows = collect(
-        ports,
-        names,
-        self_user=pwd.getpwuid(os.geteuid()).pw_name,
-        repo=repo,
-        host=args.host,
-    )
+    # Everything user-scoped is resolved from the INVOKING account, never the
+    # effective one — see invoking_identity(). Reading it from the platform
+    # default under that home rather than via load_config() also keeps a root
+    # run from creating a stray workspace under /root as a side effect of
+    # asking a read-only question.
+    _, home = invoking_identity()
+    names = read_installation_names(home / ".local" / "share" / "wingman" / "installations.toml")
+    repo = repo_path(home=home)
+    rows = collect(ports, names, repo=repo, host=args.host)
     print(render(rows, now=datetime.now(UTC), repo=repo))
     return 1 if any(row.note for row in rows) else 0
 
