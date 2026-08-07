@@ -3303,6 +3303,71 @@ def tenant_rotate_token_cmd(
         typer.echo(line)
 
 
+@tenant_app.command("form")
+def tenant_form_cmd(
+    slug: str = typer.Argument(..., help="Tenant slug the form is for, e.g. 'jason'."),
+    out: Path = typer.Option(
+        Path("."), "--out", help="Directory to write the script and manifest into."
+    ),
+    print_script: bool = typer.Option(
+        False,
+        "--print",
+        help="Write the script to stdout instead of a file, to copy straight out "
+        "of the terminal — the artefact is generated on the server and pasted on "
+        "a laptop.",
+    ),
+) -> None:
+    """Emit a Google Form for the interview questions, for one tenant (#287).
+
+    wingman does NOT create the form: it writes an Apps Script you paste
+    into script.google.com and run once, so the form is built by YOUR
+    Google session and wingman never holds a Google credential.
+
+    Then: send the published URL to the person, and ingest their responses
+    when they say they're done.
+    """
+    from wingman.application.interview_form import (
+        form_questions,
+        render_apps_script,
+        render_manifest,
+    )
+
+    configure_logging()
+    label = slug.strip()
+    if not label:
+        typer.echo("tenant form failed: a tenant slug is required.", err=True)
+        raise typer.Exit(code=1)
+    if print_script:
+        # Nothing but the script: this is meant to be piped or selected, and a
+        # stray banner line pasted into the editor is a syntax error on line 1.
+        typer.echo(render_apps_script(label))
+        return
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        script_path = out / f"{label}-interview-form.gs"
+        manifest_path = out / f"{label}-interview-form.json"
+        script_path.write_text(render_apps_script(label), encoding="utf-8")
+        manifest_path.write_text(render_manifest(label), encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"tenant form failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Wrote {script_path}")
+    typer.echo(f"Wrote {manifest_path}  (routing table for ingest; not needed by the form)")
+    typer.echo("")
+    typer.echo(f"{len(form_questions())} questions. Next:")
+    typer.echo("  1. Get the script onto the machine you'll paste from:")
+    typer.echo(f"       scp <this-host>:{script_path} ~/Downloads/")
+    typer.echo("     or re-run with --print and copy it out of the terminal.")
+    typer.echo("  2. Open https://script.google.com, New project")
+    typer.echo("  3. In Code.gs: select ALL, paste over it, save")
+    typer.echo("       the myFunction stub must be gone, or it won't save")
+    typer.echo("  4. Choose createWingmanInterviewForm in the dropdown (not myFunction)")
+    typer.echo("  5. Run, approve the permission prompt (a form in YOUR Drive)")
+    typer.echo("  6. Execution log prints the published URL — send that to them")
+    typer.echo("")
+    typer.echo(f"Paste the .gs file, NOT {Path(__file__).name} or any wingman source.")
+
+
 @tenant_app.command("overnight")
 def tenant_overnight_cmd(
     registry: Path | None = typer.Option(
