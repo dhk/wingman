@@ -83,7 +83,7 @@ say "5/7 clone + install wingman (SSH URL — this box's git identity is deploy-
 if [ ! -d "/home/$SERVICE_USER/src/wingman/.git" ]; then
   sudo -iu "$SERVICE_USER" bash -c "mkdir -p ~/src && git clone $REPO_URL ~/src/wingman"
 fi
-sudo -iu "$SERVICE_USER" bash -c "cd ~/src/wingman && uv tool install --reinstall ."
+sudo -iu "$SERVICE_USER" bash -c "~/src/wingman/scripts/wingman-tool-install.sh ~/src/wingman"
 
 say "6/7 systemd unit"
 UNIT_DIR="/home/$SERVICE_USER/.config/systemd/user"
