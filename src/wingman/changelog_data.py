@@ -10,7 +10,38 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
-    ("2026-08-05", 263, "feat: wingman-host-status — every instance on this box, and what's stale"),
+    ("2026-08-06", 291, "feat: generate a per-tenant interview form as an Apps Script (#287)"),
+    ("2026-08-06", 286, "fix: qa_capture can route a screening answer to the answer bank (#283)"),
+    ("2026-08-06", 285, "feat: profile rename, for the other half of a mis-capture (#282)"),
+    ("2026-08-06", 297, "Add the Wingman website"),
+    ("2026-08-06", 281, "fix: evidence matching forgives typographic punctuation (#280)"),
+    ("2026-08-06", 289, "fix: declare wingman to the host service registry itself (#288)"),
+    ("2026-08-06", 294, "docs: a walkthrough for people whose Wingman is hosted by someone else"),
+    (
+        "2026-08-06",
+        293,
+        "feat: wg redeploy-shared, and stop running the copy of wingman-ctl a pull replaced (#292)",
+    ),
+    (
+        "2026-08-06",
+        279,
+        "fix: PDFs that extract without spaces no longer lose their best evidence (#278)",
+    ),
+    ("2026-08-06", 277, "fix: the root hint no longer poisons the uv tool store (#276)"),
+    ("2026-08-06", 275, "feat: the curator extracts roles, with structure (#269)"),
+    ("2026-08-06", 268, "fix: a restarting instance is 'starting', not absent (#267)"),
+    (
+        "2026-08-06",
+        274,
+        "feat: profile rekind — move an item between kinds without losing its lineage (#273)",
+    ),
+    ("2026-08-06", 272, 'docs: expand "Where to go next" in the Desktop/Remote walkthroughs'),
+    ("2026-08-05", 266, "fix: make privilege add information to host-status, not remove it (#265)"),
+    (
+        "2026-08-05",
+        264,
+        "feat: wingman-host-status — every instance on this box, and what's stale (#263)",
+    ),
     (
         "2026-08-05",
         262,
@@ -471,4 +502,4 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "825ff0801250ff01761c1820f2c2b6df0c650be4"
+GENERATED_FROM_COMMIT = "4d6852325a5e9a96309f4224e91d0347ce54ad34"
