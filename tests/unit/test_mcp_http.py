@@ -201,12 +201,31 @@ def test_mcp_url_command_honors_explicit_allowed_host(
     assert f"Tunnel web UI: https://lobster.example.ts.net/ui/{token}/" in result.output
 
 
-def test_mcp_url_command_hints_when_no_tunnel_detected(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mcp_url_command_hints_when_no_tunnel_detected(workspace: Path) -> None:
+    # The "no tunnel" precondition is built by the autouse _no_ambient_tunnel
+    # fixture, which shadows the tailscale binary. Previously this asserted an
+    # absence it never constructed, so it passed only on hosts that happened
+    # to have no tailnet (#290).
     result = cli.invoke(app, ["mcp", "url", "--port", "9916"])
+
     assert result.exit_code == 0
     assert "no tunnel hostname detected" in result.output
+    assert "Tunnel MCP connector" not in result.output
+
+
+def test_mcp_url_command_does_not_hint_when_a_front_door_is_known(workspace: Path) -> None:
+    """The other half: the hint must disappear when there IS a tunnel.
+
+    Without this, the test above passes just as well against a command that
+    prints the hint unconditionally.
+    """
+    result = cli.invoke(
+        app, ["mcp", "url", "--port", "9916", "--allowed-host", "lobster.example.ts.net"]
+    )
+
+    assert result.exit_code == 0
+    assert "no tunnel hostname detected" not in result.output
+    assert "Tunnel MCP connector: https://lobster.example.ts.net/mcp/" in result.output
 
 
 def test_prefix_serves_natively_on_the_folder(
