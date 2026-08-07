@@ -18,7 +18,9 @@
 # Usage: sudo ./wingman-provision-shared.sh
 # Env overrides: WINGMAN_SHARED_USER (default wingman-shared),
 #                WINGMAN_SHARED_PORT (default 8789),
-#                WINGMAN_SHARED_TAILSCALE_PATH (default /shared)
+#                WINGMAN_SHARED_TAILSCALE_PATHS (default "/shared"; space- or
+#                  comma-separated for a service fronting more than one path),
+#                WINGMAN_SHARED_TAILSCALE_PATH (deprecated single-path alias)
 #
 # What this does NOT do: create per-tenant workspaces or tokens — run
 # 'wingman-add-tenant.sh <slug>' once per tenant afterward. Nor does it
@@ -31,7 +33,12 @@ set -euo pipefail
 
 SERVICE_USER="${WINGMAN_SHARED_USER:-wingman-shared}"
 PORT="${WINGMAN_SHARED_PORT:-8789}"
-TAILSCALE_PATH="${WINGMAN_SHARED_TAILSCALE_PATH:-/shared}"
+# A shared instance may front more than one path — lobster serves both '/' and
+# '/shared' from this port. Until now this script mounted exactly one, so a box
+# rebuilt from it would silently not serve the others (#288).
+TAILSCALE_PATHS="${WINGMAN_SHARED_TAILSCALE_PATHS:-${WINGMAN_SHARED_TAILSCALE_PATH:-/shared}}"
+read -r -a TAILSCALE_PATH_LIST <<<"${TAILSCALE_PATHS//,/ }"
+TAILSCALE_PATH="${TAILSCALE_PATH_LIST[0]}"   # the prefix tenant URLs are printed with
 REPO_URL="git@github.com:dhk/wingman.git"
 REGISTRY_PATH="/etc/wingman/tenants.toml"
 
@@ -124,10 +131,15 @@ say "7/8 tailscale mount (stripping proxy — the shared process itself runs wit
 # (idempotent) provisioning script replayed the same mistake against
 # production.
 if command -v tailscale >/dev/null 2>&1; then
-  tailscale funnel --bg --set-path "$TAILSCALE_PATH" "http://127.0.0.1:$PORT"
+  for mount_path in "${TAILSCALE_PATH_LIST[@]}"; do
+    say "  mounting $mount_path"
+    tailscale funnel --bg --set-path "$mount_path" "http://127.0.0.1:$PORT"
+  done
 else
   say "tailscale not found — skipping. Run manually later:"
-  say "  tailscale funnel --bg --set-path $TAILSCALE_PATH http://127.0.0.1:$PORT"
+  for mount_path in "${TAILSCALE_PATH_LIST[@]}"; do
+    say "  tailscale funnel --bg --set-path $mount_path http://127.0.0.1:$PORT"
+  done
 fi
 
 say "8/8 host service registry"
