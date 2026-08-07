@@ -159,6 +159,12 @@ from wingman.infrastructure.telemetry import (
     list_events as telemetry_list,
 )
 from wingman.infrastructure.telemetry import record_event
+from wingman.application.telemetry_summary import (
+    DEFAULT_GAP_MINUTES,
+    DEFAULT_TOP_N,
+    render_summary,
+    summarize as summarize_telemetry,
+)
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.infrastructure.tenants import Tenant
 from wingman.providers.base import CapabilityClass, ProviderError
@@ -2869,13 +2875,25 @@ def build_transport_security(extra_hosts: Sequence[str]) -> TransportSecuritySet
 
 
 @server.tool()
-def telemetry(action: str = "status", limit: int = 20) -> str:
-    """The opt-in local usage journal (RFC-023): action is 'status' or 'show'.
+def telemetry(
+    action: str = "status",
+    limit: int = 20,
+    gap_minutes: float = DEFAULT_GAP_MINUTES,
+    top: int = DEFAULT_TOP_N,
+) -> str:
+    """The opt-in local usage journal (RFC-023): action is 'status', 'show', or
+    'summary'.
 
     'show' returns recent events — CLI invocations, MCP tool calls with
-    their arguments and results, harvested transcript messages. The journal
-    is local-only and default-off; turning it on/off is deliberately
-    CLI-only ('wingman telemetry on|off'), like key management.
+    their arguments and results, harvested transcript messages. 'summary'
+    (issue #223) aggregates THIS account's own local journal only — no
+    cross-account reads (#215 is separate and deferred) — into session
+    counts (via the 'gap_minutes' quiescence boundary), the 'top' most
+    frequent commands/tools, and "dead ends": the last command/tool
+    invoked in a session before a long quiet gap, a first proxy for where
+    usage trails off. The journal is local-only and default-off; turning
+    it on/off is deliberately CLI-only ('wingman telemetry on|off'), like
+    key management.
     """
     config = _ready_config()
     if config is None:
@@ -2895,7 +2913,13 @@ def telemetry(action: str = "status", limit: int = 20) -> str:
                 f"   {payload[:300]}{'…' if len(payload) > 300 else ''}"
             )
         return "\n".join(lines)
-    return f"unknown action {action!r}; use status or show."
+    if action == "summary":
+        try:
+            summary = summarize_telemetry(config, gap_minutes=gap_minutes, top_n=max(1, top))
+        except ValueError as exc:
+            return f"telemetry summary failed: {exc}"
+        return render_summary(summary)
+    return f"unknown action {action!r}; use status, show, or summary."
 
 
 @server.tool()
