@@ -664,9 +664,19 @@ here so the reasoning survives, not as a checklist to retype:
 # once per box
 sudo scripts/wingman-provision-shared.sh
 # once per tenant
-sudo scripts/wingman-add-tenant.sh jason
-sudo scripts/wingman-add-tenant.sh bob
+sudo scripts/wingman-add-tenant.sh jason --telemetry
+sudo scripts/wingman-add-tenant.sh bob --no-telemetry
 ```
+
+`--telemetry` / `--no-telemetry` decide RFC-023's local usage journal for
+that tenant. **With neither flag it asks**, and with neither flag and no
+terminal it fails rather than guessing (#299). Default-off is right for
+someone installing on their own machine — their machine, their choice —
+but it is the wrong thing to inherit *silently* when you are provisioning
+on somebody else's behalf, because then nobody chose at all: four tenants
+sat on this box recording nothing until a question came up that the
+journal would have answered. Changeable later with
+`wingman telemetry on|off`; `wingman telemetry summary` (#227) renders it.
 
 Both are idempotent — safe to re-run after a partial failure, or against
 a box that's already partway through by hand; each step checks its own
