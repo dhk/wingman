@@ -217,7 +217,10 @@ cmd_upgrade() {
   ( cd "$REPO" && uv run python3 scripts/generate_changelog.py ) \
     || say "  (changelog regeneration skipped — non-fatal, continuing)"
   say "→ reinstalling…"
-  ( cd "$REPO" && uv tool install --reinstall . ) || { say "reinstall failed — nothing was killed"; return 1; }
+  # Pinned to $REPO's own uv.lock: an unconstrained 'uv tool install'
+  # resolves fresh and silently deploys versions nothing tested (#302).
+  ( "$REPO/scripts/wingman-tool-install.sh" "$REPO" ) \
+    || { say "reinstall failed — nothing was killed"; return 1; }
   say "→ stopping everything on the old build…"
   cmd_stop_all -y
   if [ "$was_running" = 1 ]; then

@@ -72,7 +72,9 @@ say "1/5 pulling latest code (~/src/wingman)"
 sudo -iu "$SERVICE_USER" bash -c 'export PATH="$HOME/.local/bin:$PATH"; cd ~/src/wingman && git pull --ff-only'
 
 say "2/5 reinstalling"
-sudo -iu "$SERVICE_USER" bash -c 'export PATH="$HOME/.local/bin:$PATH"; cd ~/src/wingman && uv tool install --reinstall .'
+# Pinned to the service account's own uv.lock (#302) — still one line under
+# 'sudo -i', for the reason spelled out at length above.
+sudo -iu "$SERVICE_USER" bash -c 'export PATH="$HOME/.local/bin:$PATH"; ~/src/wingman/scripts/wingman-tool-install.sh ~/src/wingman'
 
 say "3/5 restarting wingman-mcp.service"
 BEFORE_STARTED_AT=$(curl -s "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -o '"started_at":"[^"]*"' || true)
