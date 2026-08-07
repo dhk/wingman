@@ -1,5 +1,8 @@
 # Wingman Engineering RFC
 
+Browse the generated [RFC index](RFC-INDEX.md) for a compact searchable table.
+The ledger remains in this file so existing RFC links and anchors stay stable.
+
 This document records engineering decisions and the reasoning behind them. It answers "why is the codebase built this way," while [`DESIGN.md`](DESIGN.md) answers "what is the system" and [`../ROADMAP.md`](../ROADMAP.md) answers "in what order."
 
 An RFC entry explains the current engineering position and its trade-offs. Entries with durable architectural consequences carry a **Durable decision** marker — a decision point we do not expect to revisit casually.

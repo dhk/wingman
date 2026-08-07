@@ -147,6 +147,18 @@ All of these are sentences you type to Claude, not commands to remember.
 
 ## Because someone else is hosting this
 
+The operator—not the end user—controls the machine and workspace. Application
+tenant boundaries prevent ordinary cross-tenant access, but the host
+administrator can access workspace files, service logs, backups, and configured
+provider credentials. The operator also controls the tunnel and revokes access
+by rotating the connector and UI capability URLs.
+
+Before adding sensitive material, ask who administers the host and backups, what
+is logged and retained, which model/embedding/search/tunnel providers receive
+data, who holds and rotates credentials, and how your data and access links are
+deleted or revoked. The complete boundary is in [Trust boundaries and data
+egress](TRUST.md#hosted-operatoruser-boundary).
+
 Worth being clear about, since it's different from running it yourself:
 
 - **Your data lives on their machine**, not yours. Whoever runs the server

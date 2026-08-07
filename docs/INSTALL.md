@@ -23,7 +23,7 @@ a service, claude.ai over Tailscale) has its own guide:
 
 ## 2. Download and install
 
-From a release / the repository directly:
+Install the current code directly from Git source:
 
 ```bash
 uv tool install git+https://github.com/dhk/wingman
@@ -39,6 +39,12 @@ uv tool install .
 
 Both install two commands: **`wingman`** (the CLI) and **`wingman-mcp`**
 (the MCP server). Then create the workspace and check the environment:
+
+Wingman is not currently published to a package index. Tagged releases exist
+through `v0.4.0`, but there is no promised compatibility window while the tool is
+actively developed. The project intentionally does not provide its own
+`curl | sh` installer: the Git source remains inspectable and `uv` owns Python
+environment and executable installation.
 
 ```bash
 wingman init      # creates the workspace + models.toml (idempotent)

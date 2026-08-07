@@ -1,162 +1,121 @@
 # Wingman
 
-Wingman is a local-first, AI-assisted career intelligence system.
+Wingman is a local-first, AI-assisted career intelligence system. It turns your
+own evidence and selected public sources into cited opportunity assessments,
+company and people intelligence, application material, and a prioritized daily
+brief.
 
-It helps a human:
+It is **not** an autonomous applicant, a mass-outreach tool, or a system that
+invents familiarity or evidence. Models propose; deterministic code checks
+claims against stored evidence; Wingman never sends a message, submits an
+application, or performs another external write for you ([RFC-006](docs/RFC.md#rfc-006-human-approval-gates-for-all-external-actions)).
 
-- build a canonical, evidence-backed professional profile;
-- assess opportunities against real experience;
-- research companies and hiring signals;
-- identify credible warm introduction paths;
-- prepare differentiated outreach and interviews;
-- decide which actions deserve attention next.
+```mermaid
+flowchart LR
+    E["Your evidence"] --> W["Wingman: retrieve, reason, validate"]
+    P["Sources you choose"] --> W
+    W --> O["Cited decisions and preparation"]
+    O --> H["You choose and take the action"]
+```
 
-Wingman is **not** an autonomous job application bot. It is a
-human-in-the-loop decision-support system: models propose, deterministic
-code validates every claim against verbatim evidence, and nothing —
-no message, application, or external write — ever leaves the machine
-without you doing the sending (RFC-006). The whole workspace is one SQLite
-file plus an inbox and reports folder on your disk.
+## Local-first is not local-only
 
-## Start here
+The workspace—SQLite, inbox, reports, backups, and opt-in telemetry—is stored
+locally by default. Some features deliberately send selected text or queries to
+configured model, embedding, search, or website providers. Nothing is sent on
+your behalf, but read and reasoning features can still create network egress.
 
-- **Someone else is running Wingman for you?** You install nothing —
-  [**docs/WALKTHROUGH-HOSTED.md**](docs/WALKTHROUGH-HOSTED.md) starts from
-  the two links they sent you and never mentions a terminal.
-- **[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md)** — introduction and a
-  guided first session: download → install → keys → MCP server → CLI →
-  Claude Code → Claude Desktop → your data and people → an evidence-backed
-  POV document.
-- **[docs/INSTALL.md](docs/INSTALL.md)** — install & operations:
-  requirements, Keychain-backed keys, MCP from Claude Code / Desktop /
-  claude.ai, scheduling overnight runs, backups, troubleshooting.
+```mermaid
+flowchart TB
+    U["You / your operator"] -->|"explicit command or enrolled refresh"| W["Wingman workspace\nlocal SQLite + files"]
+    W -->|"selected prompts and text"| M["Configured model provider"]
+    W -->|"text or query; optional"| E["Remote embedding provider"]
+    W -->|"named URLs and queries"| N["Web, feeds, and search providers"]
+    W -.->|"hashed embeddings"| L["Local-only alternative"]
+    W -->|"stdio or protected loopback tunnel"| C["Your MCP client"]
+```
 
-Impatient version:
+See [Trust boundaries and data egress](docs/TRUST.md) for the feature-by-feature
+matrix, local alternatives, credentials, hosted responsibilities, and
+authoritative references.
+
+## Try or install
+
+The no-credential demo fetches public feed data into an isolated workspace:
 
 ```bash
 uv tool install git+https://github.com/dhk/wingman
 wingman init && wingman doctor
-wingman demo        # guided tour on real public data, isolated workspace, no keys
+wingman demo
 ```
 
-## What it does
+This is an **install from Git source**, not a package-index release. The current
+release history is tagged through `v0.4.0`; Wingman does not currently promise a
+stable compatibility window. It is a working, actively developed personal tool,
+with some roadmap phases partial or not started. There is no project-provided
+`curl | sh` installer: installation stays inspectable and delegates Python/tool
+management to `uv`.
 
-**Profile & corpus.** Resumes (Markdown, text, PDF, DOCX, LaTeX, Google
-Docs URLs) become a cited canonical profile; every accepted claim carries a
-verbatim quote, every unsupported one is rejected visibly. LinkedIn exports
-add positions, skills, recommendations — and seed the watchlist from your
-connections (names and roles only, never emails). Your own writing becomes
-a searchable evidence corpus (`wingman evidence "kafka migration"`).
+- [Hosted walkthrough](docs/WALKTHROUGH-HOSTED.md) — someone else operates it;
+  no install or terminal
+- [Guided walkthrough](docs/WALKTHROUGH.md) — install through a first real
+  deliverable
+- [Install and operations](docs/INSTALL.md) — source checkout, credentials,
+  MCP, scheduling, backup, and troubleshooting
+- [Graceful-degradation ladder](docs/SETUP.md) — what works with no keys, one
+  provider, or the full setup
 
-**Opportunity assessment.** `wingman assess job.md` — or `wingman assess
---url <posting>` straight from a careers page — extracts requirements with
-verbatim quotes and judges each met / partial / gap / unknown, citing only
-real profile items; unsupported verdicts are downgraded by deterministic
-validation. `wingman pack "staff mle"` then composes the application pack
-for an assessed role: the cited fit summary, cover-letter fodder quoting
-your own evidence verbatim (you write the letter, in your voice), and the
-company intelligence the workspace already holds (RFC-024).
+## Representative workflows
 
-**People intelligence.** Watch the people you read: Substack, any RSS/Atom
-feed, or feed-less blogs via their index page with honest org attribution
-(RFC-011); fetches happen only when you ask (RFC-009). POV cards distill
-what a person believes into stances — values / attitude / technical /
-strategy — each kept only if its quote appears verbatim in their stored
-writing. Embedding similarity finds who thinks like you (`people similar`,
-`people like`); a deterministic warmth score names your actual signals;
-news snapshots pull recent mentions (query disclosed: name + company go to
-the provider, RFC-014).
+```bash
+wingman ingest resume.pdf                 # cited canonical profile
+wingman assess --url https://…            # evidence-backed fit and gaps
+wingman evidence "kafka migration"        # search your own corpus
+wingman company follow "Acme" --url https://acme.example
+wingman overnight                         # consented refresh → action digest
+wingman people brief "Jane" --purpose job # cited outreach raw material
+```
 
-**Company intelligence.** Companies are seen through the writing of their
-people and blogs: similarity, deterministic dossiers with
-`[fact]`/`[inference]` labels, model-synthesized themes validated
-quote-by-quote (RFC-016), and approved-source research — you name the
-careers page or newsroom, `wingman company research` diffs it, and new
-links are the hiring signal (RFC-015).
-
-**Outreach support.** `wingman people brief` builds purpose-shaped talking
-points (introduction / reconnection / job / advice) that must cite a POV
-stance exactly *and* quote your corpus verbatim, plus intro bullets you
-compose into your own voice. Wingman drafts raw material; it never writes
-your message and never sends anything.
-
-**Orchestration.** `wingman make-it-so "Jane"` (alias `miso`) runs
-everything for one target, honestly reporting each step. Watchlists cycle
-groups. `wingman company follow "Acme" --url https://acme.com` assembles a
-standing focus in one act, and `wingman overnight` deep-refreshes
-everything followed into a dated digest ending in an action list
-(what / why / who / evidence) — schedule it and wake up to marching
-orders (RFC-018). `wingman digest` shows the newest one (`--open` pops
-it in your viewer), `latest.md` is a stable pointer for scripts and
-editor tabs, `--out ~/Desktop` lands it where you look, and digests are
-searchable (`wingman search`).
-
-**Search.** `wingman search "semantic layers"` answers "what does the
-workspace know about X" in one call — corpus, people's writing, POV
-stances, news, research links, and briefs in a single ranked list, every
-hit attributed, dated, and sourced. Keyword matching plus a semantic pass
-that finds documents matching by meaning (`[semantic]` hits carry their
-similarity score). The semantic pass embeds the query — with voyage
-configured that text goes to the provider, the same egress as `embed`;
-with the local `hashed` provider nothing leaves the machine (RFC-022).
-
-**Delivery.** Print-ready US-Letter exports styled by the site design
-system: career one-pager, company dossier, and a landscape 2×2 person
-briefing dock (brief | POV | background | news) with clickable sources;
-`--html` adds a tabbed on-screen page that still prints as the 2×2. Render
-with `npx md-to-pdf` — every export prints its exact render command.
-
-**Plumbing.** `wingman keys` stores API keys in the macOS Keychain, and
-every entrypoint hydrates them at startup — no secrets in config files
-(RFC-019). `wingman backup` / `restore` move the workspace as dated,
-retention-pruned tarballs safe to put in a synced folder. `wingman sync`
-is the light daily fetch-and-embed. `wingman telemetry on` starts an
-opt-in, local-only usage journal (CLI invocations, MCP tool traffic,
-harvested Claude transcripts — RFC-023); `telemetry show/export` read it
-back. Default off; nothing is ever transmitted.
+Wingman also supports LinkedIn imports, people and company feeds, POV cards,
+semantic similarity, approved-source research, application packs, answer recall,
+print-ready exports, MCP parity, backups, and local telemetry. The preserved
+feature catalogue and command detail live in [Capabilities](docs/CAPABILITIES.md).
 
 ## Use from Claude (MCP)
 
-`wingman-mcp` exposes the workspace as 40 MCP tools running the same
-deterministic validation as the CLI (RFC-008) — stdio for Claude Code and
-Claude Desktop on your machine, and an opt-in loopback HTTP transport with
-a rotatable capability path for claude.ai web/mobile through a tunnel you
-run yourself (RFC-017). Setup for all three:
-[docs/INSTALL.md](docs/INSTALL.md) §4.
+`wingman-mcp` exposes the same workspace and deterministic validation through
+stdio for local clients, or through an opt-in loopback HTTP server and a tunnel
+you operate. Treat a remote capability URL like a password and rotate it to
+revoke access. Setup: [Install §4](docs/INSTALL.md#4-start-the-mcp-server).
 
 ```bash
-claude mcp add wingman -- wingman-mcp    # Claude Code, one line
+claude mcp add wingman -- wingman-mcp
 ```
 
-## Repository Guide
+## Documentation and authority
 
-- [`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md): introduction and guided first session
-- [`docs/WALKTHROUGH-HOSTED.md`](docs/WALKTHROUGH-HOSTED.md): for someone whose Wingman is hosted by
-  somebody else — two links, no install, no terminal
-- [`docs/INSTALL.md`](docs/INSTALL.md): install & operations
-- [`docs/SETUP.md`](docs/SETUP.md): graceful-degradation ladder — what works with what you have
-- [`VISION.md`](VISION.md): why Wingman exists and the Product Invariants
-- [`ROADMAP.md`](ROADMAP.md): phased delivery plan and current status
-- [`AGENTS.md`](AGENTS.md): engineering and agent instructions
-- [`docs/DESIGN.md`](docs/DESIGN.md): architecture — what the system is
-- [`docs/RFC.md`](docs/RFC.md): the decision ledger (RFC-001…025) — why it is this way
-- [`docs/EVALUATION.md`](docs/EVALUATION.md): how we measure that it's getting better
-- [`docs/RESEARCH-BRIEFING.md`](docs/RESEARCH-BRIEFING.md): competitive-landscape research brief
+| Subject | Authoritative document |
+|---|---|
+| Product purpose and invariants | [VISION.md](VISION.md) |
+| Architecture | [docs/DESIGN.md](docs/DESIGN.md) |
+| Durable decisions | [docs/RFC.md](docs/RFC.md); searchable [RFC index](docs/RFC-INDEX.md) |
+| Delivery and maturity | [ROADMAP.md](ROADMAP.md), [docs/RELEASES.md](docs/RELEASES.md) |
+| Evaluation | [docs/EVALUATION.md](docs/EVALUATION.md) |
+| Install and operation | [docs/INSTALL.md](docs/INSTALL.md), [docs/SERVER.md](docs/SERVER.md) |
+| Capabilities | [docs/CAPABILITIES.md](docs/CAPABILITIES.md) |
+| Data egress and operator trust | [docs/TRUST.md](docs/TRUST.md) |
+| Contributor and agent rules | [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md) |
+| Vulnerability reporting | [SECURITY.md](SECURITY.md) |
 
-## Quick Start (development checkout)
+Development checkout:
 
 ```bash
 uv sync
-export WINGMAN_DATA_DIR=./data   # keep workspace data inside the repo checkout
+export WINGMAN_DATA_DIR=./data
 uv run wingman --help
 uv run pytest && uv run ruff check . && uv run ruff format --check . && uv run mypy src
 ```
 
-## Design Principles
-
-The binding list is the Product Invariants in
-[`VISION.md`](VISION.md#product-invariants).
-
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT — see [LICENSE](LICENSE).
