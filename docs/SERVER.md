@@ -717,6 +717,27 @@ trent's, alexandria's) back to tailnet-only as a side effect — funnel is
 a per-hostname toggle, not a per-path one. Hit live; see
 `wingman-provision-shared.sh`'s own comment at this step.
 
+**Which paths this box actually fronts.** `WINGMAN_SHARED_TAILSCALE_PATHS`
+takes a space- or comma-separated list, so a shared instance fronting more
+than one path is reproducible from the script. Lobster serves **both `/` and
+`/shared`** from 8789, so rebuilding it means:
+
+```bash
+sudo WINGMAN_SHARED_TAILSCALE_PATHS="/ /shared" ./wingman-provision-shared.sh
+```
+
+The default stays `/shared` alone: mounting the bare hostname root is a
+decision about what a box exposes publicly, not something provisioning should
+assume. Until #288 this script mounted exactly one path, so a box rebuilt from
+it would silently not serve `/` — the bare-hostname connector URL would simply
+not exist, and nothing would say so.
+
+The first path in the list is the one tenant URLs are printed with.
+
+Whether `/` *should* be served at all is still open — it survives from the
+pre-multi-user layout and predates the tenant prefix convention. This makes it
+reproducible; it does not argue it is right.
+
 **The host service registry.** On a box shared with other services, the
 last provisioning step declares this process to
 `/var/lib/common-services/registry.json` via
