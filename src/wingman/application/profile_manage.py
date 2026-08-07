@@ -147,6 +147,53 @@ def rekind_item(
     return moved, was
 
 
+def rename_item(
+    item_id_prefix: str, new_name: str, config: Config, storage: Storage
+) -> tuple[ProfileItem, str]:
+    """Give one item a different name, keeping everything else.
+
+    The sibling of rekind_item (#273), for the other half of a mis-capture.
+    qa_capture stores the QUESTION as the item's name (RFC-036), so a
+    perfectly good achievement can end up called 'Have you shipped an
+    AI/LLM product?' — right kind, right evidence, right claim, and a
+    prompt where its name should be. Anything reading achievement names
+    then reads the interviewer rather than the person (#282).
+
+    name_key is derived from the name, so this changes the dedup key:
+    update_profile_item writes the column as well as the payload, which is
+    the invariant #273 had to establish for exactly this reason.
+
+    Returns the renamed item and the name it had before.
+    """
+    item = find_item(item_id_prefix, storage)
+    name = new_name.strip()
+    if not name:
+        raise IngestError("the new name is empty; a profile item must be named.")
+    renamed = item.model_copy(update={"name": name})
+    if renamed.name_key == item.name_key:
+        raise IngestError(f"{item.item_id[:8]} is already named {item.name!r}; nothing to do.")
+    rival = next(
+        (
+            other
+            for other in storage.list_profile_items()
+            if other.item_id != item.item_id
+            and other.kind is item.kind
+            and other.name_key == renamed.name_key
+        ),
+        None,
+    )
+    if rival is not None:
+        raise IngestError(
+            f"a {item.kind.value} named {name!r} already exists ({rival.item_id[:8]}); "
+            "that is a conflict to resolve, not a rename."
+        )
+    was = item.name
+    storage.update_profile_item(renamed)
+    _rerender(config, storage)
+    _logger.info("profile rename id=%s from=%r to=%r", renamed.item_id, was, name)
+    return renamed, was
+
+
 def clear_profile(config: Config, storage: Storage) -> int:
     """Delete every profile item and re-render the (now empty) career artifacts.
 

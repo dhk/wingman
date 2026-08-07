@@ -153,6 +153,7 @@ from wingman.application.profile_manage import (
     clear_profile,
     rekind_item,
     remove_item,
+    rename_item,
     render_profile_listing,
     resolve_item,
 )
@@ -4061,6 +4062,30 @@ def profile_rekind(
     typer.echo(
         f"Moved {moved.name!r} ({moved.item_id[:8]}) from {was.value} to {moved.kind.value}."
     )
+
+
+@profile_app.command("rename")
+def profile_rename(
+    item_id: str = typer.Argument(..., help="Item id (any unambiguous prefix) to rename."),
+    name: str = typer.Argument(..., help="The new name."),
+) -> None:
+    """Rename an item, keeping its id, kind, evidence and source record.
+
+    For a claim captured under the wrong name — qa_capture stores the
+    question, so a real achievement can be called 'Have you shipped an
+    AI/LLM product?'. The claim and its evidence are fine; only the label
+    is wrong, and delete-and-recapture would throw away the lineage.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "renamed")
+    try:
+        with Storage(config.db_path) as storage:
+            renamed, was = rename_item(item_id, name, config, storage)
+    except IngestError as exc:
+        typer.echo(f"profile rename failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Renamed {was!r} to {renamed.name!r} ({renamed.item_id[:8]}).")
 
 
 @profile_app.command("clear")
