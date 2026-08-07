@@ -50,6 +50,24 @@ class QaCaptureReport(BaseModel):
     counts: ItemCounts
 
 
+DESTINATIONS = ("profile", "answers")
+
+# Preferences are NOT a destination here, deliberately. In-office, travel,
+# location and comp belong in the job-criteria document (RFC-035), whose hard
+# filters and weighted wants drive opening scoring — and that RFC is explicit
+# that criteria are the user's own words and are never written unilaterally.
+# Filed as profile items they score nothing and pretend to be skills, which is
+# how 'Willing to be in-office 25%+? — Yes' became a skill on a live
+# workspace (#283). This module refuses instead of automating a document that
+# must be confirmed.
+_PREFERENCE_HINT = (
+    "preferences (in-office, travel, location, compensation) belong in the "
+    "job-criteria document, not the profile — they drive opening scoring "
+    "there and score nothing here. Run 'job_criteria' with action='review' "
+    "and save the document once the wording is confirmed."
+)
+
+
 def capture_qa(
     question: str,
     answer: str,
@@ -57,12 +75,40 @@ def capture_qa(
     storage: Storage,
     kind: str = "achievement",
     classification: str = "fact",
+    destination: str = "profile",
 ) -> QaCaptureReport:
-    """Persist one clarifying Q&A pair as citable profile evidence."""
+    """Persist one Q&A pair — as citable profile evidence, or in the answer bank.
+
+    'profile' (default) is the original behavior: a clarifying answer about
+    a claim becomes a ProfileItem with the answer as its evidence.
+
+    'answers' routes to the application answer bank (RFC-030) instead. A
+    screening question — 'Have you shipped an AI/LLM product?' — is not a
+    claim about the person's career; it is a question an employer asked,
+    whose refined answer gets reused across applications. Storing it in the
+    profile made a question the *name* of an achievement (#283).
+    """
     question = " ".join(question.split())
     answer = answer.strip()
     if not question or not answer:
         raise IngestError("both a question and an answer are required — nothing was saved.")
+    target = destination.strip().lower() or "profile"
+    if target not in DESTINATIONS:
+        raise IngestError(
+            f"unknown destination {destination!r}; use one of: {', '.join(DESTINATIONS)}. "
+            f"Note that {_PREFERENCE_HINT}"
+        )
+    if target == "answers":
+        from wingman.application.answers import save_answer
+
+        entry, created = save_answer(question, answer, storage)
+        return QaCaptureReport(
+            question=question,
+            kind="answer",
+            outcome="saved" if created else "revised",
+            source_path=f"answer bank {entry.answer_id[:8]}",
+            counts=ItemCounts(),
+        )
     try:
         item_kind = ProfileItemKind(kind.strip().lower())
     except ValueError as exc:
