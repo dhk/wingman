@@ -33,6 +33,7 @@ from wingman.infrastructure.logs import get_logger
 from wingman.reporting.design_tokens import DESIGN_TOKENS_CSS
 
 if TYPE_CHECKING:
+    from wingman.domain.profile import ProfileItem
     from mcp.server.fastmcp import FastMCP
     from wingman.infrastructure.tenants import TenantIndex
 
@@ -101,6 +102,23 @@ body { margin: 0; }
 .hero .sub { color: var(--text-muted); font-size: 14px; margin: 0; }
 .hero .arrow { color: var(--accent); font-size: 20px; }
 .group { display: flex; flex-direction: column; gap: 8px; }
+/* Profile page (#284): a claim, what backs it, and why to look harder. */
+.claim { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.claim-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.claim .name { font-weight: 600; }
+.claim .detail { margin: 4px 0 6px; }
+.claim .id { font-family: var(--font-mono); font-size: 10px; opacity: .45; margin-left: auto; }
+.claim .flag { font-family: var(--font-mono); font-size: 10px; letter-spacing: .06em;
+  text-transform: uppercase; padding: 1px 6px; border: 1px solid var(--border);
+  border-radius: 3px; opacity: .8; }
+.quote { display: flex; gap: 8px; margin: 3px 0 0 12px; font-size: 13px; opacity: .75;
+  border-left: 2px solid var(--border); padding-left: 10px; }
+.quote .src { font-family: var(--font-mono); font-size: 10px; opacity: .6; flex: none; }
+.pair { border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
+.pair .claim:last-child { border-bottom: none; }
+.versus { font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em;
+  text-transform: uppercase; opacity: .55; margin: 2px 0; }
+.divider .count { font-family: var(--font-mono); font-size: 10px; opacity: .5; }
 .divider { display: flex; align-items: center; gap: 12px; }
 .divider span { font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em;
   text-transform: uppercase; color: var(--text-dim); white-space: nowrap; }
@@ -1069,6 +1087,137 @@ async def ui_health(request: Request) -> Response:
     return JSONResponse({"version": wingman_version(), "started_at": _STARTED_AT})
 
 
+# --- profile page (#284) ----------------------------------------------
+#
+# career.md is reachable here as a rendered file, but it is flat: it
+# cannot show which claims are contested, which are inference rather than
+# fact, or what an ingest just did. One re-ingest reported "Retired: 23"
+# and the only way to learn WHICH was to ask. RFC-028 records that
+# lineage; nothing surfaced it.
+#
+# Read-only by design. Actions (resolve/rm/rekind/rename) mirror
+# profile_manage and want their own slice, partly because write endpoints
+# under the shared multi-tenant process need the gating RFC-041
+# established when it removed the restart button.
+
+
+def _claim_flags(item: "ProfileItem") -> list[str]:
+    """Why a reader should look harder at this claim."""
+    flags: list[str] = []
+    if item.classification.value != "fact":
+        flags.append(item.classification.value)
+    if item.confidence < 0.9:
+        flags.append(f"confidence {item.confidence:.2f}")
+    if len(item.evidence) == 1:
+        flags.append("one quote")
+    return flags
+
+
+def _evidence_html(item: "ProfileItem") -> str:
+    rows = []
+    for span in item.evidence:
+        rows.append(
+            f'<div class="quote"><span class="src">{_e(span.source_record_id[:8])}</span>'
+            f"<span>{_e(span.quote)}</span></div>"
+        )
+    return "".join(rows)
+
+
+def _profile_item_html(item: "ProfileItem", tenure: str = "") -> str:
+    detail = f'<div class="detail">{_e(item.detail)}</div>' if item.detail else ""
+    flags = "".join(f'<span class="flag">{_e(f)}</span>' for f in _claim_flags(item))
+    return (
+        f'<div class="claim"><div class="claim-head"><span class="name">{_e(item.name)}</span>'
+        f'<span class="dim">{_e(tenure)}</span>{flags}'
+        f'<span class="id">{_e(item.item_id[:8])}</span></div>'
+        f"{detail}{_evidence_html(item)}</div>"
+    )
+
+
+async def ui_profile(request: Request) -> Response:
+    """Every claim, its evidence, and what the last ingest changed."""
+    from wingman.domain.profile import ItemStatus, ProfileItemKind
+    from wingman.infrastructure.storage import Storage
+    from wingman.reporting.career import _reverse_chronological, _tenure
+
+    config = _authorized(request)
+    if config is None:
+        return _not_found()
+    if not config.db_path.exists():
+        return _page("Wingman — profile", _header(config) + "<h1>No workspace yet</h1>")
+
+    with Storage(config.db_path) as storage:
+        items = storage.list_profile_items()
+
+    active = [i for i in items if i.status is ItemStatus.ACTIVE]
+    conflicts = [i for i in items if i.status is ItemStatus.CONFLICT]
+    superseded = [i for i in items if i.status is ItemStatus.SUPERSEDED]
+    by_id = {i.item_id: i for i in items}
+
+    body: list[str] = [_header(config), "<h1>Profile</h1>"]
+    body.append(
+        f'<p class="dim">{len(active)} active · {len(conflicts)} contested · '
+        f"{len(superseded)} superseded by newer versions of their source document</p>"
+    )
+
+    # Needs attention first: a page that buries the contested claims among
+    # the settled ones is the flat document this replaces.
+    attention = conflicts + [i for i in active if _claim_flags(i)]
+    if attention:
+        body.append('<div class="group"><div class="divider"><span>Needs attention</span></div>')
+        for item in conflicts:
+            rival = by_id.get(item.conflicts_with or "")
+            body.append('<div class="pair">')
+            body.append(_profile_item_html(item))
+            if rival is not None:
+                body.append('<div class="versus">conflicts with</div>')
+                body.append(_profile_item_html(rival))
+            body.append("</div>")
+        for item in active:
+            if _claim_flags(item):
+                body.append(_profile_item_html(item))
+        body.append("</div>")
+
+    for heading, kind in (
+        ("Roles", ProfileItemKind.ROLE),
+        ("Achievements", ProfileItemKind.ACHIEVEMENT),
+        ("Skills", ProfileItemKind.SKILL),
+        ("Testimonials", ProfileItemKind.TESTIMONIAL),
+    ):
+        section = [i for i in active if i.kind is kind]
+        if kind is ProfileItemKind.ROLE:
+            section = _reverse_chronological(section)
+        body.append(
+            f'<div class="group"><div class="divider"><span>{_e(heading)}</span>'
+            f'<span class="count">{len(section)}</span></div>'
+        )
+        if section:
+            for item in section:
+                tenure = _tenure(item) if kind is ProfileItemKind.ROLE else ""
+                body.append(_profile_item_html(item, tenure))
+        else:
+            body.append('<p class="dim">Nothing yet.</p>')
+        body.append("</div>")
+
+    if superseded:
+        # The lineage RFC-028 keeps and nothing ever showed. "Retired: 23"
+        # is a number; these are the names behind it.
+        body.append(
+            '<div class="group"><div class="divider"><span>Superseded</span>'
+            f'<span class="count">{len(superseded)}</span></div>'
+            '<p class="dim">Replaced by newer versions of the same source document. '
+            "Kept so older assessments that cite them still resolve.</p>"
+        )
+        for item in superseded:
+            body.append(
+                f'<div class="claim dim"><span class="name">{_e(item.name)}</span> '
+                f'<span class="id">{_e(item.item_id[:8])}</span></div>'
+            )
+        body.append("</div>")
+
+    return _page("Wingman — profile", "\n".join(body))
+
+
 def normalize_prefix(prefix: str) -> str:
     """'' stays root; 'trent', '/trent', '/trent/' all become '/trent'."""
     cleaned = prefix.strip().strip("/")
@@ -1091,6 +1240,7 @@ def register_ui(server: "FastMCP", prefix: str = "") -> None:
     _registered_prefixes.add(mount)
     server.custom_route(f"{mount}/ui/{{token}}", methods=["GET"])(ui_home_redirect)
     server.custom_route(f"{mount}/ui/{{token}}/", methods=["GET"])(ui_home)
+    server.custom_route(f"{mount}/ui/{{token}}/profile", methods=["GET"])(ui_profile)
     server.custom_route(f"{mount}/ui/{{token}}/file/{{path:path}}", methods=["GET"])(ui_file)
     server.custom_route(f"{mount}/ui/{{token}}/upload", methods=["POST"])(ui_upload)
     server.custom_route(f"{mount}/ui/{{token}}/keys", methods=["POST"])(ui_keys)

@@ -720,3 +720,117 @@ def test_design_tokens_are_one_shared_constant(client: tuple[TestClient, str]) -
     http, token = client
     page = http.get(f"/ui/{token}/").text
     assert page.count("--accent: #2b50e8") == 1  # emitted once, from one source
+
+
+# --- profile page (#284) ----------------------------------------------
+
+
+def _add_item(config, **kwargs) -> None:
+    from wingman.domain.profile import EvidenceSpan, ProfileItem
+
+    defaults = {
+        "classification": "fact",
+        "confidence": 1.0,
+        "evidence": [EvidenceSpan(source_record_id="rec-12345678", quote="cutting latency")],
+        "prompt_version": "v2",
+        "extracted_by": "test",
+    }
+    with Storage(config.db_path) as storage:
+        storage.add_profile_item(ProfileItem(**{**defaults, **kwargs}))
+
+
+def test_profile_page_shows_each_claim_with_its_evidence(
+    client: tuple[TestClient, str], tmp_path: Path
+) -> None:
+    """career.md is reachable here already, but flat: it cannot show what
+    backs a claim without leaving the page (#284)."""
+    from wingman.domain.profile import ProfileItemKind
+
+    http, token = client
+    _add_item(
+        load_config(),
+        kind=ProfileItemKind.ACHIEVEMENT,
+        name="Shipped the search rewrite",
+        detail="Cut latency 24h to 20m.",
+    )
+
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert "Shipped the search rewrite" in page
+    assert "Cut latency 24h to 20m." in page
+    assert "cutting latency" in page, "the evidence quote belongs on the page"
+    assert "rec-1234" in page, "and the record it came from"
+
+
+def test_profile_page_flags_claims_worth_a_second_look(
+    client: tuple[TestClient, str],
+) -> None:
+    """An inference and a fact look identical in career.md."""
+    from wingman.domain.profile import ProfileItemKind
+
+    http, token = client
+    _add_item(
+        load_config(),
+        kind=ProfileItemKind.SKILL,
+        name="Kubernetes",
+        classification="inference",
+        confidence=0.6,
+    )
+
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert "Needs attention" in page
+    assert "inference" in page
+    assert "confidence 0.60" in page
+    assert "one quote" in page
+
+
+def test_profile_page_names_superseded_items(client: tuple[TestClient, str]) -> None:
+    """An ingest reported 'Retired: 23' and the only way to learn which was
+    to ask. RFC-028 keeps the lineage; nothing surfaced it."""
+    from wingman.domain.profile import ItemStatus, ProfileItemKind
+
+    http, token = client
+    _add_item(
+        load_config(),
+        kind=ProfileItemKind.SKILL,
+        name="An older claim",
+        status=ItemStatus.SUPERSEDED,
+    )
+
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert "Superseded" in page
+    assert "An older claim" in page
+
+
+def test_profile_page_puts_both_sides_of_a_conflict_together(
+    client: tuple[TestClient, str],
+) -> None:
+    """Resolving a conflict means comparing two claims; career.md lists one
+    of them under its kind and the other in a footnote-shaped block."""
+    from wingman.domain.profile import ItemStatus, ProfileItemKind
+
+    config = load_config()
+    _add_item(config, kind=ProfileItemKind.SKILL, name="BigQuery", detail="the incumbent")
+    with Storage(config.db_path) as storage:
+        incumbent = storage.list_profile_items()[0]
+    _add_item(
+        config,
+        kind=ProfileItemKind.SKILL,
+        name="BigQuery",
+        detail="the challenger",
+        status=ItemStatus.CONFLICT,
+        conflicts_with=incumbent.item_id,
+    )
+
+    http, token = client
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert "conflicts with" in page
+    assert "the incumbent" in page and "the challenger" in page
+
+
+def test_profile_page_needs_the_capability_path(client: tuple[TestClient, str]) -> None:
+    http, _token = client
+    assert http.get("/ui/not-the-token/profile").status_code == 404
