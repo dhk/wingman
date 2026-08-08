@@ -10,6 +10,11 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-08-07", 303, "fix: install the versions uv.lock records, on every install path (#302)"),
+    ("2026-08-07", 300, "feat: decide telemetry when a tenant is provisioned (#299)"),
+    ("2026-08-07", 227, "telemetry: add 'wingman telemetry summary' (CLI + MCP) — issue #223"),
+    ("2026-08-06", 296, "fix: let the tunnel-absence test construct its own absence (#290)"),
+    ("2026-08-06", 298, "chore: regenerate changelog_data.py"),
     ("2026-08-06", 291, "feat: generate a per-tenant interview form as an Apps Script (#287)"),
     ("2026-08-06", 286, "fix: qa_capture can route a screening answer to the answer bank (#283)"),
     ("2026-08-06", 285, "feat: profile rename, for the other half of a mis-capture (#282)"),
@@ -502,4 +507,4 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "4d6852325a5e9a96309f4224e91d0347ce54ad34"
+GENERATED_FROM_COMMIT = "46046901889a2f7e936aa7bcdb3843be9f4515f9"
