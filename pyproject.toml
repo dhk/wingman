@@ -23,7 +23,11 @@ wingman-host-status = "wingman.infrastructure.host_status:main"
 dev = [
   "mypy>=1.11",
   "pytest>=8.3",
-  "ruff>=0.6",
+  # Held below 0.16 deliberately: that release adds and changes rules
+  # (B008, SIM117, UP037, ISC004, RUF100...) which flag ~151 pre-existing
+  # findings across this codebase. Adopting a new linter is a code change,
+  # not a dependency refresh, and mixing the two makes both unreviewable.
+  "ruff>=0.6,<0.16",
 ]
 
 [build-system]
