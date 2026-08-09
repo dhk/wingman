@@ -841,3 +841,72 @@ def test_profile_page_puts_both_sides_of_a_conflict_together(
 def test_profile_page_needs_the_capability_path(client: tuple[TestClient, str]) -> None:
     http, _token = client
     assert http.get("/ui/not-the-token/profile").status_code == 404
+
+
+def test_profile_page_says_what_is_missing_and_what_it_costs(
+    client: tuple[TestClient, str],
+) -> None:
+    """'Roles: 0' is a number. The reason to care is that nothing then
+    shows tenure or seniority — which is what blocked two role framings on
+    a real profile for a day."""
+    from wingman.domain.profile import ProfileItemKind
+
+    http, token = client
+    _add_item(load_config(), kind=ProfileItemKind.SKILL, name="Python")
+
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert "No roles" in page and "tenure" in page
+    assert "No testimonials" in page
+    assert "No job criteria" in page and "unscored" in page
+    assert "1 skills" in page
+
+
+def test_completeness_band_goes_quiet_once_a_section_is_filled(
+    client: tuple[TestClient, str], tmp_path: Path
+) -> None:
+    """A checklist that keeps nagging about solved problems stops being read."""
+    from wingman.application.job_scoring import criteria_path
+    from wingman.domain.profile import ProfileItemKind
+
+    config = load_config()
+    _add_item(config, kind=ProfileItemKind.ROLE, name="Head of Data, Acme")
+    criteria_path(config).write_text("# criteria\n\nRemote only.\n", encoding="utf-8")
+
+    http, token = client
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert "No roles" not in page
+    assert "1 roles" in page
+    assert "Job criteria set" in page
+    assert "unscored" not in page
+
+
+def test_render_profile_html_is_a_standalone_document(
+    client: tuple[TestClient, str],
+) -> None:
+    """The export path for a locally-running client: Claude runs on the
+    user's machine and talks to Wingman remotely, so the session holds both
+    halves — this returns the markup, the local side saves it."""
+    from wingman.domain.profile import ProfileItemKind
+    from wingman.webui import render_profile_html
+
+    _add_item(load_config(), kind=ProfileItemKind.ACHIEVEMENT, name="Shipped the rewrite")
+
+    html = render_profile_html(load_config())
+
+    assert html.lstrip().startswith("<!doctype html>"), "must open in a browser on its own"
+    assert "<style" in html, "self-contained: no stylesheet to fetch from the server"
+    assert "Shipped the rewrite" in html
+    assert "cutting latency" in html, "evidence travels with the claim"
+
+
+def test_the_exported_page_carries_no_capability_token(
+    client: tuple[TestClient, str],
+) -> None:
+    """This file gets saved to a laptop and sometimes forwarded. The
+    token that reaches the page must not be inside it."""
+    from wingman.webui import render_profile_html
+
+    _http, token = client
+    assert token not in render_profile_html(load_config())

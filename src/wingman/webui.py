@@ -120,6 +120,13 @@ body { margin: 0; }
 .versus { font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em;
   text-transform: uppercase; opacity: .55; margin: 2px 0; }
 .divider .count { font-family: var(--font-mono); font-size: 10px; opacity: .5; }
+.band { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 4px 16px; margin: 12px 0 20px; }
+.check { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.check .mark { font-family: var(--font-mono); flex: none; }
+.check.yes { opacity: .6; }
+.check.no .mark { opacity: .9; }
+.check.no { font-weight: 600; }
 .divider { display: flex; align-items: center; gap: 12px; }
 .divider span { font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em;
   text-transform: uppercase; color: var(--text-dim); white-space: nowrap; }
@@ -1139,17 +1146,91 @@ def _profile_item_html(item: ProfileItem, tenure: str = "") -> str:
     )
 
 
-async def ui_profile(request: Request) -> Response:
-    """Every claim, its evidence, and what the last ingest changed."""
+def _completeness_band(config: Config, items: list["ProfileItem"]) -> str:
+    """What is filled in, and what the gap costs — profile-scoped.
+
+    Deliberately narrow: this answers "is this profile usable yet", not
+    "how complete is the workspace". #313 is building the wider view over
+    people, companies and criteria; when it lands this band should read
+    from its report rather than compute a second, drifting answer.
+
+    Each gap names its consequence. 'Roles: 0' is a number; "no roles, so
+    nothing shows tenure or seniority" is the reason to care.
+    """
+    from wingman.application.job_scoring import load_criteria
+    from wingman.domain.profile import ItemStatus, ProfileItemKind
+
+    active = [i for i in items if i.status is ItemStatus.ACTIVE]
+    counts = {kind: sum(1 for i in active if i.kind is kind) for kind in ProfileItemKind}
+    contested = sum(1 for i in items if i.status is ItemStatus.CONFLICT)
+    thin = sum(1 for i in active if len(i.evidence) == 1)
+
+    rows: list[tuple[bool, str]] = [
+        (
+            counts[ProfileItemKind.ROLE] > 0,
+            f"{counts[ProfileItemKind.ROLE]} roles"
+            if counts[ProfileItemKind.ROLE]
+            else "No roles — nothing here shows tenure, title or seniority",
+        ),
+        (
+            counts[ProfileItemKind.ACHIEVEMENT] > 0,
+            f"{counts[ProfileItemKind.ACHIEVEMENT]} achievements",
+        ),
+        (counts[ProfileItemKind.SKILL] > 0, f"{counts[ProfileItemKind.SKILL]} skills"),
+        (
+            counts[ProfileItemKind.TESTIMONIAL] > 0,
+            f"{counts[ProfileItemKind.TESTIMONIAL]} testimonials"
+            if counts[ProfileItemKind.TESTIMONIAL]
+            else "No testimonials — nobody else's words are in here",
+        ),
+        (
+            load_criteria(config) is not None,
+            "Job criteria set"
+            if load_criteria(config) is not None
+            else "No job criteria — every opening arrives unscored",
+        ),
+        (
+            contested == 0,
+            "No contested claims"
+            if contested == 0
+            else f"{contested} contested claims awaiting a decision",
+        ),
+        (
+            thin == 0,
+            "Every claim has corroboration"
+            if thin == 0
+            else f"{thin} claims rest on a single quote",
+        ),
+    ]
+    cells = "".join(
+        f'<div class="check {"yes" if ok else "no"}">'
+        f'<span class="mark">{"\u2713" if ok else "\u2022"}</span>{_e(text)}</div>'
+        for ok, text in rows
+    )
+    return f'<div class="band">{cells}</div>'
+
+
+def render_profile_html(config: Config) -> str:
+    """The profile page as a standalone document.
+
+    Split out of the route so an MCP client can ask for the page and write
+    it to the user's OWN machine (#284 follow-up). Claude runs locally and
+    talks to wingman remotely, so the assistant holds both halves: this
+    returns the markup, the local session saves it and opens it. No file
+    ever has to travel, and nothing needs a capability URL pasted into a
+    chat to be viewable.
+    """
+    return bytes(_page("Wingman — profile", _profile_body(config)).body).decode("utf-8")
+
+
+def _profile_body(config: Config) -> str:
+    """The profile page's body — shared by the route and the export tool."""
     from wingman.domain.profile import ItemStatus, ProfileItemKind
     from wingman.infrastructure.storage import Storage
     from wingman.reporting.career import _reverse_chronological, _tenure
 
-    config = _authorized(request)
-    if config is None:
-        return _not_found()
     if not config.db_path.exists():
-        return _page("Wingman — profile", _header(config) + "<h1>No workspace yet</h1>")
+        return _header(config) + "<h1>No workspace yet</h1>"
 
     with Storage(config.db_path) as storage:
         items = storage.list_profile_items()
@@ -1164,6 +1245,7 @@ async def ui_profile(request: Request) -> Response:
         f'<p class="dim">{len(active)} active · {len(conflicts)} contested · '
         f"{len(superseded)} superseded by newer versions of their source document</p>"
     )
+    body.append(_completeness_band(config, items))
 
     # Needs attention first: a page that buries the contested claims among
     # the settled ones is the flat document this replaces.
@@ -1220,7 +1302,15 @@ async def ui_profile(request: Request) -> Response:
             )
         body.append("</div>")
 
-    return _page("Wingman — profile", "\n".join(body))
+    return "\n".join(body)
+
+
+async def ui_profile(request: Request) -> Response:
+    """Every claim, its evidence, and what the last ingest changed."""
+    config = _authorized(request)
+    if config is None:
+        return _not_found()
+    return _page("Wingman — profile", _profile_body(config))
 
 
 def normalize_prefix(prefix: str) -> str:

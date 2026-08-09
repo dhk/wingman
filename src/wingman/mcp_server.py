@@ -1193,6 +1193,35 @@ def answer_bank(
 
 
 @server.tool()
+def profile_html() -> str:
+    """The whole career profile as a standalone HTML page, for saving locally.
+
+    Returns the same page the web UI serves at /ui/<token>/profile — every
+    claim with its evidence quote and source record, roles
+    reverse-chronological with tenure, contested claims and thin evidence
+    surfaced first, and a band naming what is still missing.
+
+    Claude runs on the user's own machine and talks to Wingman remotely,
+    so the two halves are already in one session: this returns the markup,
+    and the local session writes it wherever the user wants and tells them
+    to open it. Nothing has to travel, and no capability URL has to be
+    pasted into a chat to make the profile viewable.
+
+    Protocol: WRITE IT TO A FILE, do not paste it into the conversation —
+    it is a full HTML document, tens of kilobytes, and unreadable as
+    prose. Save it (e.g. ~/Downloads/wingman-profile.html) and give the
+    user the path to open. If the client cannot write files, render it as
+    an artifact instead; only fall back to describing it.
+    """
+    from wingman.webui import render_profile_html
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    return render_profile_html(config)
+
+
+@server.tool()
 def profile_manage(action: str, item_id: str = "", kind: str = "", name: str = "") -> str:
     """List, remove, resolve, re-kind, rename, or clear career-profile items (RFC-027).
 
