@@ -115,6 +115,18 @@ def test_companies_derived_from_watched_people(workspace: Path) -> None:
     assert company.missing_pov_cards == 2
 
 
+def test_companies_dedup_by_key_not_raw_string(workspace: Path) -> None:
+    """'Acme' and 'ACME' normalize to the same company_key and must land in
+    one row, not two duplicate, double-counted ones (review comment on #313)."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_person("Alice", storage, company="Acme")
+        add_person("Bob", storage, company="ACME")
+        report = compute_completeness(storage, config)
+    assert len(report.companies) == 1
+    assert report.companies[0].people_watched == 2
+
+
 def test_write_completeness_writes_json_and_markdown(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:

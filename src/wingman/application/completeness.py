@@ -98,14 +98,23 @@ def _people_completeness(storage: Storage) -> list[PersonCompleteness]:
 def _companies_completeness(storage: Storage) -> list[CompanyCompleteness]:
     all_people = storage.list_people()
     watched = [person for person in all_people if not is_company_anchor(person)]
-    companies = sorted({person.company for person in watched if person.company})
+
+    # Keyed by company_key(), not the raw string: two people whose company
+    # fields are spelled or cased differently ("Acme" vs "ACME") share a key
+    # and must land in one row, not two duplicate, double-counted ones — the
+    # same normalization every other company-keyed code path (dossier.py,
+    # pack.py's company inference) already relies on.
+    display_by_key: dict[str, str] = {}
+    for person in sorted(watched, key=lambda p: p.name):
+        if person.company and (key := company_key(person.company)):
+            display_by_key.setdefault(key, person.company)
 
     all_documents = storage.list_external_documents()
     people_by_id = {person.person_id: person for person in all_people}
+    pov_person_ids = {card.person_id for card in storage.list_pov_cards()}
 
     results: list[CompanyCompleteness] = []
-    for name in companies:
-        key = company_key(name)
+    for key, name in sorted(display_by_key.items(), key=lambda kv: kv[1]):
         people = [person for person in watched if company_key(person.company or "") == key]
         documents = [
             document
@@ -116,7 +125,7 @@ def _companies_completeness(storage: Storage) -> list[CompanyCompleteness]:
             )
             or company_key(document.organization or "") == key
         ]
-        cards = sum(1 for person in people if storage.get_pov_card(person.person_id) is not None)
+        cards = sum(1 for person in people if person.person_id in pov_person_ids)
         results.append(
             CompanyCompleteness(
                 name=name,
