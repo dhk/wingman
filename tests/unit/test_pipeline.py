@@ -76,9 +76,14 @@ def test_pipeline_without_sources_and_ambiguity(
         assert status["fetch"] == "skipped"
         with pytest.raises(IngestError, match="matches several"):
             make_it_so("mark", config, storage)
-        # unknown name falls through to the company pipeline and fails visibly
-        with pytest.raises(IngestError, match="neither a watched person nor"):
-            make_it_so("NoSuchTarget", config, storage)
+        # unknown name falls through to the company pipeline, which now degrades
+        # gracefully (issue #310) rather than raising: a Gaps-only dossier still
+        # exports.
+        report = make_it_so("NoSuchTarget", config, storage)
+        assert report.kind == "company"
+        status = {step.name: step.status for step in report.steps}
+        assert status["dossier"] == "ok"
+        assert report.export_path is not None and Path(report.export_path).exists()
 
 
 def test_company_kind_runs_dossier_export(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
