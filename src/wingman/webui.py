@@ -410,11 +410,15 @@ def _group_name(section: str) -> str:
     return _GROUP_NAMES.get(section, section.replace("-", " ").replace("_", " ").title())
 
 
-def _header(config: Config) -> str:
+def _header(config: Config, show_path: bool = True) -> str:
+    # show_path=False for anything that leaves the server. The workspace
+    # path names the host account ('/home/trent/.local/share/wingman'),
+    # which is a disclosure in a file that gets saved to a laptop and
+    # sometimes forwarded — the same argument the token check already makes.
+    meta = f'<div class="meta">{_e(str(config.data_dir))}</div>' if show_path else ""
     return (
         '<div class="hdr"><span class="dot"></span>'
-        '<span class="wordmark">Wingman</span>'
-        f'<div class="meta">{_e(str(config.data_dir))}</div></div>'
+        f'<span class="wordmark">Wingman</span>{meta}</div>'
     )
 
 
@@ -1146,6 +1150,12 @@ def _profile_item_html(item: ProfileItem, tenure: str = "") -> str:
     )
 
 
+def _plural(count: int, noun: str) -> str:
+    """'1 role', '2 roles' — six user-visible strings sat on the most
+    common first-ingest state (one role, one skill) before this."""
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
 def _completeness_band(config: Config, items: list["ProfileItem"]) -> str:
     """What is filled in, and what the gap costs — profile-scoped.
 
@@ -1160,46 +1170,66 @@ def _completeness_band(config: Config, items: list["ProfileItem"]) -> str:
     from wingman.application.job_scoring import load_criteria
     from wingman.domain.profile import ItemStatus, ProfileItemKind
 
+    reported = (
+        ProfileItemKind.ROLE,
+        ProfileItemKind.ACHIEVEMENT,
+        ProfileItemKind.SKILL,
+        ProfileItemKind.TESTIMONIAL,
+    )
     active = [i for i in items if i.status is ItemStatus.ACTIVE]
-    counts = {kind: sum(1 for i in active if i.kind is kind) for kind in ProfileItemKind}
+    counts = {kind: sum(1 for i in active if i.kind is kind) for kind in reported}
     contested = sum(1 for i in items if i.status is ItemStatus.CONFLICT)
-    thin = sum(1 for i in active if len(i.evidence) == 1)
+    # Only the kinds this band actually reports. INTERVIEW nominations are
+    # built with exactly one evidence span by construction
+    # (application/interview.py) and nothing ever adds a second, so counting
+    # them meant "N claims rest on a single quote" could never go green for
+    # anyone who used the interview — and the number named items that appear
+    # in none of the page's sections, so it could not be reconciled.
+    thin = sum(1 for i in active if i.kind in reported and len(i.evidence) == 1)
+    criteria_set = load_criteria(config) is not None
 
     rows: list[tuple[bool, str]] = [
         (
             counts[ProfileItemKind.ROLE] > 0,
-            f"{counts[ProfileItemKind.ROLE]} roles"
+            _plural(counts[ProfileItemKind.ROLE], "role")
             if counts[ProfileItemKind.ROLE]
             else "No roles — nothing here shows tenure, title or seniority",
         ),
         (
             counts[ProfileItemKind.ACHIEVEMENT] > 0,
-            f"{counts[ProfileItemKind.ACHIEVEMENT]} achievements",
+            _plural(counts[ProfileItemKind.ACHIEVEMENT], "achievement")
+            if counts[ProfileItemKind.ACHIEVEMENT]
+            else "No achievements — nothing here says what you actually did",
         ),
-        (counts[ProfileItemKind.SKILL] > 0, f"{counts[ProfileItemKind.SKILL]} skills"),
+        (
+            counts[ProfileItemKind.SKILL] > 0,
+            _plural(counts[ProfileItemKind.SKILL], "skill")
+            if counts[ProfileItemKind.SKILL]
+            else "No skills — nothing to match against a posting's requirements",
+        ),
         (
             counts[ProfileItemKind.TESTIMONIAL] > 0,
-            f"{counts[ProfileItemKind.TESTIMONIAL]} testimonials"
+            _plural(counts[ProfileItemKind.TESTIMONIAL], "testimonial")
             if counts[ProfileItemKind.TESTIMONIAL]
             else "No testimonials — nobody else's words are in here",
         ),
         (
-            load_criteria(config) is not None,
+            criteria_set,
             "Job criteria set"
-            if load_criteria(config) is not None
+            if criteria_set
             else "No job criteria — every opening arrives unscored",
         ),
         (
             contested == 0,
             "No contested claims"
             if contested == 0
-            else f"{contested} contested claims awaiting a decision",
+            else f"{_plural(contested, 'contested claim')} awaiting a decision",
         ),
         (
             thin == 0,
             "Every claim has corroboration"
             if thin == 0
-            else f"{thin} claims rest on a single quote",
+            else f"{_plural(thin, 'claim')} resting on a single quote",
         ),
     ]
     cells = "".join(
@@ -1220,17 +1250,20 @@ def render_profile_html(config: Config) -> str:
     ever has to travel, and nothing needs a capability URL pasted into a
     chat to be viewable.
     """
-    return bytes(_page("Wingman — profile", _profile_body(config)).body).decode("utf-8")
+    # show_path=False: this document leaves the server.
+    return bytes(_page("Wingman — profile", _profile_body(config, show_path=False)).body).decode(
+        "utf-8"
+    )
 
 
-def _profile_body(config: Config) -> str:
+def _profile_body(config: Config, show_path: bool = True) -> str:
     """The profile page's body — shared by the route and the export tool."""
     from wingman.domain.profile import ItemStatus, ProfileItemKind
     from wingman.infrastructure.storage import Storage
     from wingman.reporting.career import _reverse_chronological, _tenure
 
     if not config.db_path.exists():
-        return _header(config) + "<h1>No workspace yet</h1>"
+        return _header(config, show_path) + "<h1>No workspace yet</h1>"
 
     with Storage(config.db_path) as storage:
         items = storage.list_profile_items()
@@ -1240,7 +1273,7 @@ def _profile_body(config: Config) -> str:
     superseded = [i for i in items if i.status is ItemStatus.SUPERSEDED]
     by_id = {i.item_id: i for i in items}
 
-    body: list[str] = [_header(config), "<h1>Profile</h1>"]
+    body: list[str] = [_header(config, show_path), "<h1>Profile</h1>"]
     body.append(
         f'<p class="dim">{len(active)} active · {len(conflicts)} contested · '
         f"{len(superseded)} superseded by newer versions of their source document</p>"

@@ -1192,6 +1192,11 @@ def answer_bank(
     return f"unknown action {action!r}; use find, save, list, show, or remove."
 
 
+# Big enough for a real profile, small enough that a tool result cannot
+# quietly consume a context window.
+_PROFILE_HTML_MAX_BYTES = 250_000
+
+
 @server.tool()
 def profile_html() -> str:
     """The whole career profile as a standalone HTML page, for saving locally.
@@ -1218,7 +1223,18 @@ def profile_html() -> str:
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
-    return render_profile_html(config)
+    page = render_profile_html(config)
+    # The result lands in the transcript whatever the docstring asks for,
+    # and a mature workspace renders hundreds of KB. Refuse rather than
+    # truncate: half an HTML document is not a document, and silently
+    # sending 300KB into a context is worse than saying no.
+    if len(page) > _PROFILE_HTML_MAX_BYTES:
+        return (
+            f"The profile page is {len(page) // 1024}KB, too large to return through a tool "
+            f"result (limit {_PROFILE_HTML_MAX_BYTES // 1024}KB). Open it in a browser "
+            "instead: it is served at /ui/<token>/profile on this workspace's own URL."
+        )
+    return page
 
 
 @server.tool()

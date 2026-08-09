@@ -859,7 +859,7 @@ def test_profile_page_says_what_is_missing_and_what_it_costs(
     assert "No roles" in page and "tenure" in page
     assert "No testimonials" in page
     assert "No job criteria" in page and "unscored" in page
-    assert "1 skills" in page
+    assert "1 skill" in page and "1 skills" not in page
 
 
 def test_completeness_band_goes_quiet_once_a_section_is_filled(
@@ -877,7 +877,7 @@ def test_completeness_band_goes_quiet_once_a_section_is_filled(
     page = http.get(f"/ui/{token}/profile").text
 
     assert "No roles" not in page
-    assert "1 roles" in page
+    assert "1 role" in page and "1 roles" not in page
     assert "Job criteria set" in page
     assert "unscored" not in page
 
@@ -910,3 +910,60 @@ def test_the_exported_page_carries_no_capability_token(
 
     _http, token = client
     assert token not in render_profile_html(load_config())
+
+
+def test_interview_answers_are_not_counted_as_thin_evidence(
+    client: tuple[TestClient, str],
+) -> None:
+    """Interview nominations carry exactly one evidence span by
+    construction and nothing ever adds a second. Counting them meant
+    'N claims rest on a single quote' could never go green for anyone who
+    used the interview — the nagging-forever failure the band exists to
+    avoid — and named items that appear in none of the page's sections."""
+    from wingman.domain.profile import ProfileItemKind
+
+    config = load_config()
+    _add_item(config, kind=ProfileItemKind.ROLE, name="Head of Data, Acme")
+    _add_item(config, kind=ProfileItemKind.ACHIEVEMENT, name="Shipped it")
+    _add_item(config, kind=ProfileItemKind.SKILL, name="Python")
+    _add_item(config, kind=ProfileItemKind.TESTIMONIAL, name="She said so")
+    for n in range(5):
+        _add_item(config, kind=ProfileItemKind.INTERVIEW, name=f"nomination {n}")
+
+    http, token = client
+    page = http.get(f"/ui/{token}/profile").text
+
+    # Four reported claims each rest on one quote; the five interview items
+    # must not be added to that number.
+    assert "4 claims resting on a single quote" in page
+    assert "9 claims" not in page
+
+
+def test_every_empty_section_names_its_consequence(client: tuple[TestClient, str]) -> None:
+    """The band's own docstring says a bare count is useless. Two rows
+    printed '0 achievements' and '0 skills' while the rest explained
+    themselves."""
+    http, token = client
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert "No achievements — nothing here says what you actually did" in page
+    assert "No skills — nothing to match against" in page
+    assert "0 achievements" not in page and "0 skills" not in page
+
+
+def test_the_export_does_not_disclose_the_host_workspace_path(
+    client: tuple[TestClient, str],
+) -> None:
+    """The served page shows the workspace path in its header; the export
+    is a file that gets saved to a laptop and forwarded, and the path
+    names the host account."""
+    from wingman.webui import render_profile_html
+
+    config = load_config()
+    http, token = client
+
+    served = http.get(f"/ui/{token}/profile").text
+    exported = render_profile_html(config)
+
+    assert str(config.data_dir) in served, "the served page keeps it — it never leaves the host"
+    assert str(config.data_dir) not in exported
