@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from wingman.application.ingest import IngestError
 from wingman.application.pov import company_card_id
-from wingman.application.similarity import company_key
+from wingman.application.similarity import company_key, infer_company_from_title
 from wingman.domain.opportunity import FitVerdict, Opportunity
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
@@ -62,23 +62,6 @@ def _find_opportunity(query: str, storage: Storage) -> Opportunity:
     return max(matches, key=lambda entry: entry.created_at)
 
 
-def _infer_company(title: str, storage: Storage) -> str | None:
-    """The known company whose name appears in the role title, if any."""
-    lowered = " ".join(title.lower().split())
-    candidates: dict[str, str] = {}
-    for person in storage.list_people():
-        if person.company:
-            candidates.setdefault(company_key(person.company), person.company)
-    for card in storage.list_pov_cards():
-        if card.person_id.startswith("__company__"):
-            candidates.setdefault(card.person_id.removeprefix("__company__"), card.person_name)
-    best = None
-    for key, display in candidates.items():
-        if key and key in lowered and (best is None or len(key) > len(company_key(best))):
-            best = display
-    return best.removesuffix(" (company)") if best else None
-
-
 def build_application_pack(
     query: str,
     config: Config,
@@ -88,7 +71,7 @@ def build_application_pack(
 ) -> PackReport:
     """Compose and write the pack for one assessed role. Local data only."""
     opportunity = _find_opportunity(query, storage)
-    company_name = company or _infer_company(opportunity.title, storage)
+    company_name = company or infer_company_from_title(opportunity.title, storage)
     items = {item.item_id: item for item in storage.list_profile_items()}
     requirements = {req.requirement_id: req for req in opportunity.requirements}
     now = datetime.now(UTC)

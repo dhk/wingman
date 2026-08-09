@@ -40,6 +40,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job as assess_job_use_case
 from wingman.application.assess import fetch_job_posting
+from wingman.application.opportunities import list_opportunity_summaries, render_opportunity_listing
 from wingman.application.pack import build_application_pack
 from wingman.application.backup import create_backup
 from wingman.application.corpus import find_evidence
@@ -2126,6 +2127,31 @@ def assess_job_url(url: str) -> str:
     except (IngestError, ModelConfigError, ProviderError, ProposalParseError) as exc:
         return f"assess failed: {exc}"
     return Path(report.brief_md_path).read_text(encoding="utf-8")
+
+
+@server.tool()
+def opportunities_list() -> str:
+    """List every assessed opportunity, one line each, oldest first (#312).
+
+    Ordering matches storage.list_opportunities' created_at order exactly
+    (no reorder, no dedup, no dropped entries) and ends with a total count
+    line, mirroring people_list's shape.
+
+    Two fields per line are best-effort approximations, not derived facts
+    (AGENTS.md invariant 9, "partial truth over polished fiction") —
+    do not present them as exact: pack_composed is a filesystem glob
+    against reports/packs/ for a file named from the opportunity's title
+    slug, so a custom --out-dir or a renamed title can read as "no pack"
+    even when one exists; answers_matched is a free-text company/role_title
+    guess against the answer bank — there is no opportunity_id foreign key
+    on answers, so this is not a real join and can over- or under-count.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        summaries = list_opportunity_summaries(storage, config)
+    return render_opportunity_listing(summaries)
 
 
 @server.tool()

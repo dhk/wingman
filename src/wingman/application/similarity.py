@@ -193,6 +193,28 @@ def company_key(name: str) -> str:
     return " ".join(name.lower().split())
 
 
+def infer_company_from_title(title: str, storage: Storage) -> str | None:
+    """The known company whose name appears in a role title, if any.
+
+    Shared by application.pack (composing a pack) and application.opportunities
+    (#312, listing assessed opportunities) so both infer company the same
+    way instead of carrying two implementations.
+    """
+    lowered = " ".join(title.lower().split())
+    candidates: dict[str, str] = {}
+    for person in storage.list_people():
+        if person.company:
+            candidates.setdefault(company_key(person.company), person.company)
+    for card in storage.list_pov_cards():
+        if card.person_id.startswith("__company__"):
+            candidates.setdefault(card.person_id.removeprefix("__company__"), card.person_name)
+    best = None
+    for key, display in candidates.items():
+        if key and key in lowered and (best is None or len(key) > len(company_key(best))):
+            best = display
+    return best.removesuffix(" (company)") if best else None
+
+
 def _company_vectors(storage: Storage) -> dict[str, _CompanySignal]:
     """company key -> aggregated writing signal, from two sources (slice i):
 
