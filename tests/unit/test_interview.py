@@ -1122,6 +1122,21 @@ def test_render_interview_status_is_complete_and_grouped(workspace: Config) -> N
     assert "network_admired: 0/6 (not yet)" in rendered
 
 
+def test_status_categories_covers_every_valid_subtype_exactly_once() -> None:
+    """render_interview_status's docstring claims completeness is
+    guaranteed because _STATUS_CATEGORIES is asserted against
+    VALID_SUBTYPES in tests — this is that assertion. Without it, a new
+    VALID_SUBTYPES entry added without a matching _STATUS_CATEGORIES
+    update would silently vanish from the rendered status (subtype_status
+    would compute it, but render_interview_status would never reach it),
+    and no other test here would fail."""
+    from wingman.application.interview import _STATUS_CATEGORIES, VALID_SUBTYPES
+
+    grouped = [subtype for _category, subtypes in _STATUS_CATEGORIES for subtype in subtypes]
+    assert set(grouped) == VALID_SUBTYPES
+    assert len(grouped) == len(set(grouped)), "a subtype appears in more than one category"
+
+
 def test_mcp_interview_status_reports_all_nine_subtypes(workspace: Config) -> None:
     from wingman.mcp_server import interview_status
 
@@ -1141,9 +1156,14 @@ def test_mcp_interview_status_is_persona_scoped(workspace: Config) -> None:
     assert mike_result.startswith("Acting as: coach for Mike Chen.")
     assert "values_pro: 1/6 (captured)" in mike_result
 
-    coach_result = interview_status(persona="__coach_own_work_probe__")
-    # an override name that has never captured anything is its own empty scope
-    assert "values_pro: 0/6 (not yet)" in coach_result
+    # An override name nobody has coached before must NOT be created just to
+    # check status — interview_status is read-only, unlike interview_react
+    # (which legitimately finds-or-creates, since it's about to write
+    # evidence for them).
+    unknown_result = interview_status(persona="Never Coached Before")
+    assert "No persona named" in unknown_result
+    with Storage(workspace.db_path) as storage:
+        assert storage.find_persona_by_name("Never Coached Before") is None
 
     coach_persona("clear")
     own_result = interview_status()

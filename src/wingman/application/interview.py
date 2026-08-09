@@ -532,17 +532,26 @@ def list_interview_documents(
     ]
 
 
+def _is_active_capture(item: ProfileItem, subtype: str, persona_id: str | None) -> bool:
+    """The one predicate for 'does this item count as an active capture of
+    this subtype[, persona]' — both _active_capture_count (one subtype,
+    fetches its own list) and subtype_status (every subtype, one shared
+    list) apply it, so the two can never drift on what counts as
+    'captured'."""
+    return (
+        item.kind is ProfileItemKind.INTERVIEW
+        and item.subtype == subtype
+        and item.status is ItemStatus.ACTIVE
+        and item.persona_id == persona_id
+    )
+
+
 def _active_capture_count(storage: Storage, subtype: str, persona_id: str | None = None) -> int:
     """Active capture count for one subtype[, persona] — the counting
     logic subtype_progress and subtype_status both need, kept in exactly
     one place."""
     return sum(
-        1
-        for item in storage.list_profile_items()
-        if item.kind is ProfileItemKind.INTERVIEW
-        and item.subtype == subtype
-        and item.status is ItemStatus.ACTIVE
-        and item.persona_id == persona_id
+        1 for item in storage.list_profile_items() if _is_active_capture(item, subtype, persona_id)
     )
 
 
@@ -574,12 +583,21 @@ def subtype_status(storage: Storage, persona_id: str | None = None) -> dict[str,
     persona_id (None = the coach's own work) — the complete picture
     capture_progress_summary's three-bucket summary doesn't give (it
     omits network_admired, and reports category totals rather than
-    per-subtype standing). Reuses _active_capture_count, the same
-    per-subtype counting subtype_progress uses, so the two never drift
+    per-subtype standing).
+
+    One storage.list_profile_items() call, not nine: subtype_progress
+    (and _active_capture_count under it) is built for checking a single
+    subtype and re-fetches every time, which is the right cost for that
+    one-subtype call site (interview_react's own response) but would be
+    9 full table scans here. subtype_status instead fetches the list once
+    and applies _is_active_capture per subtype in memory — the same
+    predicate _active_capture_count uses, so the two still never drift
     apart on what counts as 'captured'."""
+    items = storage.list_profile_items()
+    cap = _max_submissions_per_subtype()
     result: dict[str, SubtypeStatus] = {}
     for subtype in VALID_SUBTYPES:
-        count, cap = subtype_progress(storage, subtype, persona_id=persona_id)
+        count = sum(1 for item in items if _is_active_capture(item, subtype, persona_id))
         result[subtype] = SubtypeStatus(subtype=subtype, captured=count > 0, count=count, cap=cap)
     return result
 

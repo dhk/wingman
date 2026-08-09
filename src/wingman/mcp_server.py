@@ -658,7 +658,12 @@ def interview_status(persona: str = "") -> str:
     not per-subtype standing).
 
     No model call, no mutation — same read-only posture as
-    job_criteria(action='show') and people_dossier.
+    job_criteria(action='show') and people_dossier. Unlike interview_react
+    (which resolves a persona name by finding-or-creating it, since it's
+    about to write evidence for them), a persona override here that
+    doesn't already exist resolves to "not found" rather than silently
+    creating a persona record — a status check should never have that
+    side effect.
 
     Coaching mode (docs/COACHING-MODE-DESIGN.md): scoped to whatever
     persona is active, exactly like interview_react — leave persona=""
@@ -668,14 +673,23 @@ def interview_status(persona: str = "") -> str:
     of view never mix": this never blends the coach's own captures with
     a persona's, or one persona's with another's.
     """
-    from wingman.application.coaching import render_acting_as, resolve_persona
+    from wingman.application.coaching import get_active_persona, render_acting_as
     from wingman.application.interview import render_interview_status, subtype_status
 
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
     with Storage(config.db_path) as storage:
-        active_persona = resolve_persona(persona, storage, config)
+        if persona.strip():
+            active_persona = storage.find_persona_by_name(persona.strip())
+            if active_persona is None:
+                return (
+                    f"No persona named {persona!r} — nothing to show. "
+                    "(interview_status never creates one; interview_react does, "
+                    "on first capture.)"
+                )
+        else:
+            active_persona = get_active_persona(storage, config)
         persona_id = active_persona.persona_id if active_persona is not None else None
         status = subtype_status(storage, persona_id=persona_id)
     return f"{render_acting_as(active_persona)}\n{render_interview_status(status)}"
