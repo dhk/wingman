@@ -37,6 +37,7 @@ def test_all_tools_are_registered() -> None:
         "status",
         "evidence",
         "career_profile",
+        "completeness",
         "profile_manage",
         "company_feed",
         "answer_bank",

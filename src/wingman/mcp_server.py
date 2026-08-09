@@ -41,6 +41,8 @@ from wingman.agents.profile_curator import ProposalParseError
 from wingman.application.assess import assess_job as assess_job_use_case
 from wingman.application.assess import fetch_job_posting
 from wingman.application.pack import build_application_pack
+from wingman.reporting.completeness import render_completeness_markdown, write_completeness
+from wingman.reporting.completeness_html import render_completeness_html
 from wingman.application.backup import create_backup
 from wingman.application.corpus import find_evidence
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
@@ -271,6 +273,37 @@ def career_profile() -> str:
             "('wingman ingest') or a LinkedIn export ('wingman ingest-linkedin') first."
         )
     return career_md.read_text(encoding="utf-8")
+
+
+@server.tool()
+def completeness(as_html: bool = False) -> str:
+    """How filled-in each section of the workspace is: Career Profile
+    (roles/achievements/skills/testimonials), Job Criteria (does
+    job-criteria.md exist), People (linked to LinkedIn/a feed? any
+    relationship_log entries?), and Companies (people watched, documents,
+    POV cards built vs. missing) — recomputed fresh on every call, no
+    caching, no model call.
+
+    Interview Bootstrap and Applications are NOT included: there is no
+    tool yet that reads back interview_react captures (#311) or lists
+    Opportunity records by name (#312) as of this writing, so this tool
+    reports them as blocked rather than inventing a number for either.
+
+    Set as_html=True to also write a styled HTML twin (completeness.html,
+    same design tokens as every other Wingman export) alongside the
+    Markdown and JSON — useful for a browser-viewable snapshot rather than
+    reading the tool's text response.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        report, _json_path, md_path = write_completeness(storage, config)
+    if as_html:
+        html_path = config.reports_dir / "completeness.html"
+        html_path.write_text(render_completeness_html(report), encoding="utf-8")
+        return f"{render_completeness_markdown(report)}\n(HTML written to {html_path})"
+    return f"{render_completeness_markdown(report)}\n(written to {md_path})"
 
 
 @server.tool()
