@@ -41,6 +41,7 @@ def test_target_for_known_user_is_checkout_shape_by_default() -> None:
     assert target == UpgradeTarget(
         user="trent",
         install_source="/home/trent/src/wingman",
+        home="/home/trent",
         own_checkout="/home/trent/src/wingman",
     )
 
@@ -54,7 +55,10 @@ def test_target_for_with_install_source_is_local_path_shape() -> None:
         install_source="/home/dhk/src/wingman",
     )
     assert target == UpgradeTarget(
-        user="trent", install_source="/home/dhk/src/wingman", own_checkout=None
+        user="trent",
+        install_source="/home/dhk/src/wingman",
+        home="/home/trent",
+        own_checkout=None,
     )
 
 
@@ -312,3 +316,112 @@ def test_main_reads_per_user_source_override_from_env(monkeypatch, capsys) -> No
     out = capsys.readouterr().out
     assert "[ok] trent:" in out
     assert "reinstalled" in out
+
+
+# --- diagnosis (#301) -------------------------------------------------
+#
+# Both cases below are failures that actually happened on lobster, where
+# the operator got the underlying tool's error and never the cause — and
+# on the nightly timer would have got nothing at all, because the next
+# line says [ok] for somebody else.
+
+
+def test_a_checkout_with_no_upstream_is_named_not_passed_through() -> None:
+    """git says 'There is no tracking information for the current branch',
+    which never mentions that the checkout is parked on a feature branch."""
+    target = UpgradeTarget(
+        user="dhk",
+        install_source="/home/dhk/src/wingman",
+        home="/home/dhk",
+        own_checkout="/home/dhk/src/wingman",
+    )
+
+    def scripted(argv: list[str]) -> tuple[int, str]:
+        if "rev-parse" in argv and "HEAD" in argv:
+            return 0, "feat/tenant-telemetry-flag\n"
+        if "status" in argv:
+            return 0, ""
+        if "@{u}" in argv:
+            return 128, "fatal: no upstream configured"
+        if "pull" in argv:
+            return 1, "There is no tracking information for the current branch."
+        return 1, f"unscripted: {argv}"
+
+    result = upgrade_one(target, run=scripted, resolve_uid=lambda _u: 1000)
+
+    assert result.ok is False
+    step = result.steps[-1]
+    assert "feat/tenant-telemetry-flag" in step, "the branch it is parked on must be named"
+    assert "tracks no remote" in step
+    assert "git -C /home/dhk/src/wingman checkout main" in step, "and the way out"
+
+
+def test_root_owned_bytecode_is_named_not_passed_through() -> None:
+    """uv says 'Permission denied' on a __pycache__ path, which never
+    mentions that something ran the entry point under sudo (#276)."""
+    target = UpgradeTarget(
+        user="dhk",
+        install_source="/home/dhk/src/wingman",
+        home="/home/dhk",
+        own_checkout=None,
+    )
+
+    def scripted(argv: list[str]) -> tuple[int, str]:
+        if "uv" in argv:
+            return 1, (
+                "error: failed to remove directory `/home/dhk/.local/share/uv/tools/"
+                "wingman/lib/python3.12/site-packages/wingman/__pycache__`: "
+                "Permission denied (os error 13)"
+            )
+        return 1, f"unscripted: {argv}"
+
+    result = upgrade_one(target, run=scripted, resolve_uid=lambda _u: 1000)
+
+    assert result.ok is False
+    step = result.steps[-1]
+    assert "root-owned bytecode" in step
+    assert "chown -R dhk:dhk /home/dhk/.local/share/uv/tools/wingman" in step
+
+
+def test_an_account_tracking_a_non_default_branch_is_flagged_even_when_it_works() -> None:
+    """The quiet case: the pull SUCCEEDS, and the account silently receives
+    that branch's code every night."""
+    target = UpgradeTarget(
+        user="dhk",
+        install_source="/home/dhk/src/wingman",
+        home="/home/dhk",
+        own_checkout="/home/dhk/src/wingman",
+    )
+
+    def scripted(argv: list[str]) -> tuple[int, str]:
+        if "rev-parse" in argv and "HEAD" in argv:
+            return 0, "experiment\n"
+        if "pull" in argv or "uv" in argv:
+            return 0, ""
+        if "is-active" in argv:
+            return 0, "inactive"
+        return 1, f"unscripted: {argv}"
+
+    result = upgrade_one(target, run=scripted, resolve_uid=lambda _u: 1000)
+
+    assert result.ok is True
+    assert any("not main" in step and "experiment" in step for step in result.steps)
+
+
+def test_the_happy_path_costs_one_extra_call_not_four() -> None:
+    """Diagnosis is lazy: three probes only when the pull fails. A nightly
+    run across every account should not pay for them."""
+    target = UpgradeTarget(
+        user="dhk",
+        install_source="/home/dhk/src/wingman",
+        home="/home/dhk",
+        own_checkout="/home/dhk/src/wingman",
+    )
+    run = _scripted_runner(
+        {
+            ("sudo",): (0, "main\n"),
+        }
+    )
+    upgrade_one(target, run=run, resolve_uid=lambda _u: 1000)
+    probes = [c for c in run.calls if "status" in c or "@{u}" in c]  # type: ignore[attr-defined]
+    assert probes == [], "the failure-only probes must not run on a successful pull"

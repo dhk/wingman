@@ -57,7 +57,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 SYSTEMD_UNIT = "wingman-mcp.service"
-REPO_SUBPATH = "src/wingman"  # CLAUDE.md's documented code-location convention
+REPO_SUBPATH = "src/wingman"
+# What an account should be tracking. A checkout parked anywhere else
+# receives that branch's code on every nightly run (#301).
+DEFAULT_BRANCH = "main"  # CLAUDE.md's documented code-location convention
 
 # (argv) -> (returncode, combined output). Injectable for tests: real use
 # never runs a subprocess during a test.
@@ -98,7 +101,8 @@ UidResolver = Callable[[str], int | None]
 class UpgradeTarget:
     user: str
     install_source: str  # passed to `uv tool install --reinstall <this>`
-    own_checkout: str | None  # `git pull --ff-only` here first when set; None = local-path
+    home: str | None = None  # for naming paths in diagnostics
+    own_checkout: str | None = None  # `git pull --ff-only` here first when set; None = local-path
     # shape (#167) — installs from another user's (already-updated) checkout, nothing of
     # their own to pull.
 
@@ -129,8 +133,75 @@ def target_for(
         return None
     own_checkout = f"{home.rstrip('/')}/{REPO_SUBPATH}"
     if install_source is not None:
-        return UpgradeTarget(user=username, install_source=install_source, own_checkout=None)
-    return UpgradeTarget(user=username, install_source=own_checkout, own_checkout=own_checkout)
+        return UpgradeTarget(
+            user=username, install_source=install_source, home=home, own_checkout=None
+        )
+    return UpgradeTarget(
+        user=username, install_source=own_checkout, home=home, own_checkout=own_checkout
+    )
+
+
+def current_branch(
+    checkout: str, run: Runner, sudo: Callable[[list[str]], list[str]]
+) -> str | None:
+    """The checked-out branch name, or None if it can't be determined."""
+    code, out = run(sudo(["git", "-C", checkout, "rev-parse", "--abbrev-ref", "HEAD"]))
+    return out.strip() if code == 0 and out.strip() else None
+
+
+def diagnose_checkout(
+    checkout: str, branch: str | None, run: Runner, sudo: Callable[[list[str]], list[str]]
+) -> str | None:
+    """Why this checkout cannot be pulled, in the operator's terms — or None.
+
+    git's own errors describe a situation the operator did not know they
+    were in. 'There is no tracking information for the current branch'
+    never says *the checkout is parked on a feature branch*, and on the
+    nightly timer nobody reads it anyway: the account silently stops
+    receiving updates while the next line says [ok] for somebody else
+    (#301). Every string returned here names the cause and the one
+    command that fixes it.
+    """
+    if branch is None:
+        # The branch probe itself failed, so nothing here is established.
+        # Returning a confident guess would replace git's real error with
+        # a derived one — say nothing and let git speak.
+        return None
+
+    code, out = run(sudo(["git", "-C", checkout, "status", "--porcelain", "--untracked-files=no"]))
+    dirty = [line[3:] for line in out.splitlines() if line.strip()]
+
+    code, _ = run(
+        sudo(["git", "-C", checkout, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    )
+    if code != 0:
+        fix = f"git -C {checkout} checkout {DEFAULT_BRANCH}"
+        if dirty:
+            return (
+                f"checkout is on '{branch}', which tracks no remote, AND has uncommitted "
+                f"changes to {', '.join(dirty[:3])} — commit or discard them, then: {fix}"
+            )
+        return (
+            f"checkout is on '{branch}', which tracks no remote, so there is nothing to "
+            f"pull from. To get current: {fix}"
+        )
+    if dirty:
+        return (
+            f"checkout has uncommitted changes to {', '.join(dirty[:3])}, which a "
+            f"fast-forward pull will refuse. Commit or discard them first."
+        )
+    return None
+
+
+def diagnose_reinstall(failure: str, user: str, home: str | None) -> str | None:
+    """The known reinstall failures, named rather than passed through."""
+    if "Permission denied" in failure and "__pycache__" in failure:
+        store = f"{(home or '~').rstrip('/')}/.local/share/uv/tools/wingman"
+        return (
+            "root-owned bytecode in the uv tool store — something ran the installed "
+            f"entry point under sudo (#276). To fix: chown -R {user}:{user} {store}"
+        )
+    return None
 
 
 def _sudo_as(user: str, argv: list[str], resolve_uid: UidResolver) -> list[str]:
@@ -155,15 +226,29 @@ def upgrade_one(
         return _sudo_as(target.user, argv, resolve_uid)
 
     if target.own_checkout is not None:
+        # One cheap call on the happy path: an account quietly parked on a
+        # feature branch pulls THAT branch's code every night and nothing
+        # says so (#301). The fuller diagnosis costs three more calls and
+        # only runs when the pull actually fails.
+        branch = current_branch(target.own_checkout, run, sudo)
+        if branch is not None and branch != DEFAULT_BRANCH:
+            steps.append(
+                f"on '{branch}', not {DEFAULT_BRANCH} — this account tracks that branch "
+                f"until: git -C {target.own_checkout} checkout {DEFAULT_BRANCH}"
+            )
         code, out = run(sudo(["git", "-C", target.own_checkout, "pull", "--ff-only"]))
         if code != 0:
-            steps.append(f"pull failed, nothing was touched: {out}")
+            # git's own text describes a state, not a cause. Prefer the
+            # diagnosis; fall back to git only when nothing is recognised.
+            why = diagnose_checkout(target.own_checkout, branch, run, sudo) or out
+            steps.append(f"pull failed, nothing was touched: {why}")
             return UpgradeResult(target.user, ok=False, steps=steps)
         steps.append("pulled latest")
 
     code, out = run(sudo(["uv", "tool", "install", "--reinstall", target.install_source]))
     if code != 0:
-        steps.append(f"reinstall failed, nothing was restarted: {out}")
+        named = diagnose_reinstall(out, target.user, target.home)
+        steps.append(f"reinstall failed, nothing was restarted: {named or out}")
         return UpgradeResult(target.user, ok=False, steps=steps)
     steps.append("reinstalled")
 
