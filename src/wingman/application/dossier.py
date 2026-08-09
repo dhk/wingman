@@ -77,11 +77,6 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
         via_org = company_key(document.organization or "") == key
         if via_person or via_org:
             documents.append(document)
-    if not people and not documents:
-        raise IngestError(
-            f"nothing in the workspace is attributable to {name!r}. Companies come from "
-            "watched people's company field and org-attributed feeds."
-        )
     display = next(
         (person.company for person in people if person.company),
         next((document.organization for document in documents if document.organization), name),
@@ -227,6 +222,12 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
         lines.append(f"- Companies writing about similar things: {neighbours}")
 
     gaps: list[str] = []
+    if not people and not documents:
+        gaps.append(
+            "no watched people or attributed feeds for this company — attach one with "
+            f'\'wingman people add "<name>" --company "{display}"\' or '
+            f"'wingman company add-source \"{display}\" <https-url>'"
+        )
     if missing_cards:
         pretty = ", ".join(missing_cards)
         gaps.append(f"POV cards missing for: {pretty} — build with 'wingman people pov <name>'")

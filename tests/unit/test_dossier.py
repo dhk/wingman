@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from wingman.application.corpus import add_to_corpus
-from wingman.application.dossier import build_company_dossier
+from wingman.application.dossier import DossierReport, build_company_dossier
 from wingman.application.ingest import IngestError
 from wingman.application.people import add_person, attach_feed, fetch_person_feed
 from wingman.application.pov import build_pov_card
@@ -150,11 +150,20 @@ def test_dossier_from_org_attributed_docs_only(workspace: Path) -> None:
         assert "undated" in text  # index-page docs carry no publication date
 
 
-def test_dossier_fails_visibly_for_unknown_company(workspace: Path) -> None:
+def test_dossier_is_gaps_only_for_unknown_company(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
-        with pytest.raises(IngestError, match="attributable"):
-            build_company_dossier("NoSuchCo", config, storage)
+        report = build_company_dossier("NoSuchCo", config, storage)
+        assert isinstance(report, DossierReport)
+        assert report.company == "NoSuchCo"
+        text = report.markdown
+        assert "# Company dossier: NoSuchCo" in text
+        assert "## Gaps" in text
+        assert (
+            "no watched people or attributed feeds for this company — attach one with "
+            '\'wingman people add "<name>" --company "NoSuchCo"\' or '
+            "'wingman company add-source \"NoSuchCo\" <https-url>'"
+        ) in text
 
 
 def test_dossier_filename_is_safe_and_blank_names_are_rejected(workspace: Path) -> None:
