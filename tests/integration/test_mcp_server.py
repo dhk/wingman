@@ -45,6 +45,7 @@ def test_all_tools_are_registered() -> None:
         "job_criteria",
         "qa_capture",
         "interview_react",
+        "interview_status",
         "perspectives_start",
         "relationship_objective",
         "relationship_log",

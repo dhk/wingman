@@ -681,6 +681,54 @@ def interview_react(
 
 
 @server.tool()
+def interview_status(persona: str = "") -> str:
+    """Read-only status of every interview subtype (issue #311): whether
+    each of the nine VALID_SUBTYPES has anything captured yet, and its
+    count against the per-subtype cap — grouped by category (Reaction /
+    Values / Mission alignment / Network admired), the complete picture
+    perspectives_start's one-line 'pick up where I left off' summary
+    doesn't give (it omits network_admired and reports category totals,
+    not per-subtype standing).
+
+    No model call, no mutation — same read-only posture as
+    job_criteria(action='show') and people_dossier. Unlike interview_react
+    (which resolves a persona name by finding-or-creating it, since it's
+    about to write evidence for them), a persona override here that
+    doesn't already exist resolves to "not found" rather than silently
+    creating a persona record — a status check should never have that
+    side effect.
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): scoped to whatever
+    persona is active, exactly like interview_react — leave persona=""
+    to use whatever's active (or the coach's own work if none is), or
+    pass a name to check status for someone else for just this one call
+    without switching the active pointer. "My evidence and their point
+    of view never mix": this never blends the coach's own captures with
+    a persona's, or one persona's with another's.
+    """
+    from wingman.application.coaching import get_active_persona, render_acting_as
+    from wingman.application.interview import render_interview_status, subtype_status
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        if persona.strip():
+            active_persona = storage.find_persona_by_name(persona.strip())
+            if active_persona is None:
+                return (
+                    f"No persona named {persona!r} — nothing to show. "
+                    "(interview_status never creates one; interview_react does, "
+                    "on first capture.)"
+                )
+        else:
+            active_persona = get_active_persona(storage, config)
+        persona_id = active_persona.persona_id if active_persona is not None else None
+        status = subtype_status(storage, persona_id=persona_id)
+    return f"{render_acting_as(active_persona)}\n{render_interview_status(status)}"
+
+
+@server.tool()
 def perspectives_start() -> str:
     """Perspectives: the onboarding entry point for a new profile
     (docs/PROFILE-BOOTSTRAP-DESIGN.md, docs/UX-0001-interview-flow.md) —
