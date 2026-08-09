@@ -532,13 +532,11 @@ def list_interview_documents(
     ]
 
 
-def subtype_progress(
-    storage: Storage, subtype: str, persona_id: str | None = None
-) -> tuple[int, int]:
-    """(active capture count for this subtype[, persona], the per-subtype
-    cap) — lets a caller surface UX-0001's BP-05 position ("N of M
-    captured") without reaching into the cap check's own internals."""
-    count = sum(
+def _active_capture_count(storage: Storage, subtype: str, persona_id: str | None = None) -> int:
+    """Active capture count for one subtype[, persona] — the counting
+    logic subtype_progress and subtype_status both need, kept in exactly
+    one place."""
+    return sum(
         1
         for item in storage.list_profile_items()
         if item.kind is ProfileItemKind.INTERVIEW
@@ -546,7 +544,44 @@ def subtype_progress(
         and item.status is ItemStatus.ACTIVE
         and item.persona_id == persona_id
     )
-    return count, _max_submissions_per_subtype()
+
+
+def subtype_progress(
+    storage: Storage, subtype: str, persona_id: str | None = None
+) -> tuple[int, int]:
+    """(active capture count for this subtype[, persona], the per-subtype
+    cap) — lets a caller surface UX-0001's BP-05 position ("N of M
+    captured") without reaching into the cap check's own internals."""
+    return _active_capture_count(storage, subtype, persona_id=persona_id), (
+        _max_submissions_per_subtype()
+    )
+
+
+class SubtypeStatus(BaseModel):
+    """One VALID_SUBTYPES entry's status: whether anything is captured
+    for it yet, and its count against the per-subtype cap — the same
+    (count, cap) pair subtype_progress reports for one subtype at a time,
+    here for every subtype at once (issue #311)."""
+
+    subtype: str
+    captured: bool
+    count: int
+    cap: int
+
+
+def subtype_status(storage: Storage, persona_id: str | None = None) -> dict[str, SubtypeStatus]:
+    """Every VALID_SUBTYPES entry's status in one call, scoped to
+    persona_id (None = the coach's own work) — the complete picture
+    capture_progress_summary's three-bucket summary doesn't give (it
+    omits network_admired, and reports category totals rather than
+    per-subtype standing). Reuses _active_capture_count, the same
+    per-subtype counting subtype_progress uses, so the two never drift
+    apart on what counts as 'captured'."""
+    result: dict[str, SubtypeStatus] = {}
+    for subtype in VALID_SUBTYPES:
+        count, cap = subtype_progress(storage, subtype, persona_id=persona_id)
+        result[subtype] = SubtypeStatus(subtype=subtype, captured=count > 0, count=count, cap=cap)
+    return result
 
 
 def capture_progress_summary(storage: Storage, persona_id: str | None = None) -> str | None:
@@ -575,3 +610,37 @@ def capture_progress_summary(storage: Storage, persona_id: str | None = None) ->
     if orgs:
         parts.append(f"{orgs} Mission alignment nomination{'s' if orgs != 1 else ''}")
     return ", ".join(parts)
+
+
+# Category grouping for render_interview_status, in UX-0001's own
+# category order (Reaction, Values, Mission alignment, Network admired) —
+# an explicit ordered list rather than iterating the *_SUBTYPES sets
+# directly, since set iteration order isn't guaranteed and this render
+# needs a stable, readable one. Every VALID_SUBTYPES member appears in
+# exactly one group here — unlike capture_progress_summary, which omits
+# network_admired entirely (issue #311).
+_STATUS_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Reaction", ("alignment_of_perspective_agree", "alignment_of_perspective_disagree")),
+    ("Values", ("values_pro", "values_con", "values_fallback_pro", "values_fallback_con")),
+    ("Mission alignment", ("mission_alignment_pro", "mission_alignment_con")),
+    ("Network admired", ("network_admired",)),
+)
+
+
+def render_interview_status(status: dict[str, SubtypeStatus]) -> str:
+    """The complete per-subtype capture picture, one line per
+    VALID_SUBTYPES entry grouped by category (Reaction / Values / Mission
+    alignment / Network admired) — mirrors render_profile_listing's
+    "Category:" + indented-lines style. Complete by construction: every
+    _STATUS_CATEGORIES entry is asserted against VALID_SUBTYPES in tests,
+    so a new subtype added to one but not the other would break loudly
+    rather than silently going missing here the way capture_progress_summary
+    currently omits network_admired."""
+    lines: list[str] = []
+    for category, subtypes in _STATUS_CATEGORIES:
+        lines.append(f"{category}:")
+        for subtype in subtypes:
+            entry = status[subtype]
+            marker = "captured" if entry.captured else "not yet"
+            lines.append(f"  {subtype}: {entry.count}/{entry.cap} ({marker})")
+    return "\n".join(lines)

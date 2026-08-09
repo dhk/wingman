@@ -1022,3 +1022,130 @@ def test_cli_interview_rejects_unknown_intensity(
     )
     assert result.exit_code != 0
     assert "unknown intensity" in result.output
+
+
+def test_subtype_status_all_nine_subtypes_start_at_zero(workspace: Config) -> None:
+    """issue #311: subtype_status covers every VALID_SUBTYPES entry, not
+    just the three capture_progress_summary buckets — nothing captured
+    yet reads as 0/cap, not-captured, for all nine."""
+    from wingman.application.interview import VALID_SUBTYPES, subtype_status
+
+    with Storage(workspace.db_path) as storage:
+        status = subtype_status(storage)
+
+    assert set(status.keys()) == VALID_SUBTYPES
+    assert len(status) == 9
+    for entry in status.values():
+        assert entry.captured is False
+        assert entry.count == 0
+        assert entry.cap == 6
+
+
+def test_subtype_status_reflects_partial_captures(workspace: Config) -> None:
+    from wingman.application.interview import subtype_status
+
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, workspace, storage)
+        capture_interview_reaction("values_pro", "A. Nother Name", WHY_PRO, workspace, storage)
+        capture_interview_reaction(
+            "network_admired", "https://linkedin.com/in/someone", WHY_PRO, workspace, storage
+        )
+        status = subtype_status(storage)
+
+    assert status["values_pro"].captured is True
+    assert status["values_pro"].count == 2
+    assert status["values_pro"].cap == 6
+    assert status["network_admired"].captured is True
+    assert status["network_admired"].count == 1
+    # everything else is untouched
+    assert status["values_con"].captured is False
+    assert status["values_con"].count == 0
+    assert status["mission_alignment_pro"].captured is False
+    assert status["alignment_of_perspective_agree"].captured is False
+
+
+def test_subtype_status_is_persona_scoped(workspace: Config) -> None:
+    """A persona's captures never appear when checking persona="" (the
+    coach's own work) and vice versa — docs/COACHING-MODE-DESIGN.md's
+    'my evidence and their point of view never mix,' extended here."""
+    from wingman.application.interview import subtype_status
+
+    with Storage(workspace.db_path) as storage:
+        mike = find_or_create_persona("Mike Chen", storage)
+        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, workspace, storage)
+        capture_interview_reaction(
+            "values_con",
+            "A. Public Figure",
+            WHY_CON,
+            workspace,
+            storage,
+            persona_id=mike.persona_id,
+        )
+
+        coach_status = subtype_status(storage)
+        mike_status = subtype_status(storage, persona_id=mike.persona_id)
+
+    # the coach's own scope sees only their capture, not Mike's
+    assert coach_status["values_pro"].count == 1
+    assert coach_status["values_con"].count == 0
+
+    # Mike's scope sees only his capture, not the coach's
+    assert mike_status["values_pro"].count == 0
+    assert mike_status["values_con"].count == 1
+
+
+def test_render_interview_status_is_complete_and_grouped(workspace: Config) -> None:
+    """Unlike capture_progress_summary (three buckets, network_admired
+    omitted), the render covers all nine subtypes across all four
+    categories, one line each."""
+    from wingman.application.interview import render_interview_status, subtype_status
+
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction("values_pro", "Jane Goodall", WHY_PRO, workspace, storage)
+        rendered = render_interview_status(subtype_status(storage))
+
+    for category in ("Reaction:", "Values:", "Mission alignment:", "Network admired:"):
+        assert category in rendered
+    for subtype in (
+        "alignment_of_perspective_agree",
+        "alignment_of_perspective_disagree",
+        "values_pro",
+        "values_con",
+        "values_fallback_pro",
+        "values_fallback_con",
+        "mission_alignment_pro",
+        "mission_alignment_con",
+        "network_admired",
+    ):
+        assert subtype in rendered
+    assert "values_pro: 1/6 (captured)" in rendered
+    assert "network_admired: 0/6 (not yet)" in rendered
+
+
+def test_mcp_interview_status_reports_all_nine_subtypes(workspace: Config) -> None:
+    from wingman.mcp_server import interview_status
+
+    result = interview_status()
+    assert result.startswith("Acting as: yourself.")
+    assert "network_admired" in result  # the gap capture_progress_summary has
+    assert "0/6 (not yet)" in result
+
+
+def test_mcp_interview_status_is_persona_scoped(workspace: Config) -> None:
+    from wingman.mcp_server import coach_persona, interview_react, interview_status
+
+    coach_persona("set", "Mike Chen")
+    interview_react("values_pro", "Jane Goodall", WHY_PRO)
+
+    mike_result = interview_status()
+    assert mike_result.startswith("Acting as: coach for Mike Chen.")
+    assert "values_pro: 1/6 (captured)" in mike_result
+
+    coach_result = interview_status(persona="__coach_own_work_probe__")
+    # an override name that has never captured anything is its own empty scope
+    assert "values_pro: 0/6 (not yet)" in coach_result
+
+    coach_persona("clear")
+    own_result = interview_status()
+    assert own_result.startswith("Acting as: yourself.")
+    assert "values_pro: 0/6 (not yet)" in own_result  # Mike's capture doesn't leak here

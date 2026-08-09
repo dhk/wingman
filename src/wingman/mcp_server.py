@@ -648,6 +648,40 @@ def interview_react(
 
 
 @server.tool()
+def interview_status(persona: str = "") -> str:
+    """Read-only status of every interview subtype (issue #311): whether
+    each of the nine VALID_SUBTYPES has anything captured yet, and its
+    count against the per-subtype cap — grouped by category (Reaction /
+    Values / Mission alignment / Network admired), the complete picture
+    perspectives_start's one-line 'pick up where I left off' summary
+    doesn't give (it omits network_admired and reports category totals,
+    not per-subtype standing).
+
+    No model call, no mutation — same read-only posture as
+    job_criteria(action='show') and people_dossier.
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): scoped to whatever
+    persona is active, exactly like interview_react — leave persona=""
+    to use whatever's active (or the coach's own work if none is), or
+    pass a name to check status for someone else for just this one call
+    without switching the active pointer. "My evidence and their point
+    of view never mix": this never blends the coach's own captures with
+    a persona's, or one persona's with another's.
+    """
+    from wingman.application.coaching import render_acting_as, resolve_persona
+    from wingman.application.interview import render_interview_status, subtype_status
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        active_persona = resolve_persona(persona, storage, config)
+        persona_id = active_persona.persona_id if active_persona is not None else None
+        status = subtype_status(storage, persona_id=persona_id)
+    return f"{render_acting_as(active_persona)}\n{render_interview_status(status)}"
+
+
+@server.tool()
 def perspectives_start() -> str:
     """Perspectives: the onboarding entry point for a new profile
     (docs/PROFILE-BOOTSTRAP-DESIGN.md, docs/UX-0001-interview-flow.md) —
