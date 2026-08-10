@@ -1,6 +1,8 @@
-"""Persona carve-off, Phase 1 of #235 (docs/RFC.md RFC-049):
-export a coached persona's captured interview data and seed it as a
-brand-new Wingman workspace's own first-person profile."""
+"""Persona carve-off, #235 (docs/RFC.md RFC-049, RFC-054): export a coached
+persona's captured interview data and write it into a target Wingman
+workspace's own first-person profile — brand-new (Phase 1, #238) or
+already-populated (Phase 2, RFC-054, via RFC-028's supersede/conflict
+rule)."""
 
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from wingman.application.persona_carveoff import (
 )
 from wingman.domain.profile import ItemStatus
 from wingman.domain.provenance import ClaimClassification
+from wingman.domain.source_record import SourceRecord
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.storage import Storage
 from wingman.reporting.career import render_career
@@ -179,9 +182,13 @@ def test_seed_new_workspace_writes_items_and_placeholder_records(
         assert "Mike Chen" in record.source_locator
 
 
-def test_seed_new_workspace_refuses_non_empty_target(
+def test_seed_new_workspace_merges_cleanly_into_populated_target(
     coach_workspace: Config, tmp_path: Path
 ) -> None:
+    """Phase 2 (RFC-054): a non-empty target is no longer refused — a
+    carved-off item that doesn't collide with anything already there is
+    simply added alongside it, via the same persist_items every other
+    ingestion path uses."""
     with Storage(coach_workspace.db_path) as storage:
         mike = find_or_create_persona("Mike Chen", storage)
         capture_interview_reaction(
@@ -211,10 +218,43 @@ def test_seed_new_workspace_refuses_non_empty_target(
         )
         target_storage.add_profile_item(pre_existing)
 
-        with pytest.raises(IngestError, match="Phase 2"):
-            seed_new_workspace(export, target_storage)
+        counts = seed_new_workspace(export, target_storage)
+        assert counts.accepted == 1
+        assert counts.conflicts == 0
 
-        # refusal is a fail-loud no-op: nothing new was written
+        items = target_storage.list_profile_items()
+        assert len(items) == 2
+        names = {item.name for item in items}
+        assert "Python" in names  # pre-existing item untouched
+        assert "values_pro: Jane Goodall" in names  # carved-off item added
+
+
+def test_seed_new_workspace_reruns_idempotently(coach_workspace: Config, tmp_path: Path) -> None:
+    """Carving the same persona off into the same already-populated target a
+    second time (e.g. re-run after coaching more of them) dedupes rather
+    than duplicating or erroring on the reused placeholder record id."""
+    with Storage(coach_workspace.db_path) as storage:
+        mike = find_or_create_persona("Mike Chen", storage)
+        capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            WHY_PRO,
+            coach_workspace,
+            storage,
+            persona_id=mike.persona_id,
+        )
+        export = export_persona("Mike Chen", storage)
+
+    target_dir = tmp_path / "reused-target"
+    target_dir.mkdir(parents=True)
+    target_config = Config(data_dir=target_dir, data_dir_source="test")
+    with Storage(target_config.db_path) as target_storage:
+        first = seed_new_workspace(export, target_storage)
+        assert first.accepted == 1
+
+        second = seed_new_workspace(export, target_storage)
+        assert second.accepted == 0
+        assert second.skipped_duplicates == 1
         assert target_storage.count_profile_items() == 1
 
 
@@ -267,6 +307,97 @@ def test_carveoff_evidence_is_citable_via_career_render(
         assert target_storage.get_source_record(record_id) is not None
 
 
+# --- conflict surfacing (Phase 2, RFC-054) ----------------------------------
+
+
+def test_seed_new_workspace_surfaces_conflict_not_overwrite(
+    coach_workspace: Config, tmp_path: Path
+) -> None:
+    """The acceptance criterion straight from #235: a genuine contradiction
+    between carved-off data and the target's own existing profile is never
+    silently overwritten — it lands as a side-by-side ItemStatus.CONFLICT,
+    visible via 'wingman profile list' and resolvable via
+    'wingman profile resolve' (RFC-027/028), end to end."""
+    from wingman.application.profile_manage import render_profile_listing, resolve_item
+    from wingman.domain.profile import EvidenceSpan, ProfileItem, ProfileItemKind
+
+    with Storage(coach_workspace.db_path) as storage:
+        mike = find_or_create_persona("Mike Chen", storage)
+        capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            WHY_PRO,
+            coach_workspace,
+            storage,
+            persona_id=mike.persona_id,
+        )
+        export = export_persona("Mike Chen", storage)
+    carved_item = export.items[0]
+    assert carved_item.name == "values_pro: Jane Goodall"
+
+    target_dir = tmp_path / "already-mikes-workspace"
+    target_dir.mkdir(parents=True)
+    target_config = Config(data_dir=target_dir, data_dir_source="test")
+    target_config.reports_dir.mkdir(parents=True)
+    contradicting_why = "Actually I've never trusted her methods or her public claims."
+    with Storage(target_config.db_path) as target_storage:
+        target_storage.add_source_record(
+            SourceRecord(
+                record_id="mikes-own-record",
+                source_type="manual",
+                source_locator="Mike's own earlier note",
+                content_hash="own-hash",
+                document_key="",
+            )
+        )
+        pre_existing = ProfileItem(
+            kind=ProfileItemKind.INTERVIEW,
+            subtype="values_pro",
+            name=carved_item.name,  # same name_key — the collision point
+            detail=contradicting_why,  # a genuinely different stance/evidence
+            classification=ClaimClassification.FACT,
+            confidence=1.0,
+            evidence=[EvidenceSpan(source_record_id="mikes-own-record", quote=contradicting_why)],
+            prompt_version="v0",
+            extracted_by="user",
+        )
+        target_storage.add_profile_item(pre_existing)
+
+        counts = seed_new_workspace(export, target_storage)
+        assert counts.conflicts == 1
+        assert counts.accepted == 0
+
+        items = target_storage.list_profile_items()
+        assert len(items) == 2
+        active = [i for i in items if i.status is ItemStatus.ACTIVE]
+        conflicts = [i for i in items if i.status is ItemStatus.CONFLICT]
+        # never silently overwritten: the pre-existing item is still active, unchanged
+        assert len(active) == 1
+        assert active[0].item_id == pre_existing.item_id
+        assert active[0].detail == contradicting_why
+        # the carved-off item is the one that landed as the conflict row
+        assert len(conflicts) == 1
+        assert conflicts[0].detail == WHY_PRO
+        assert conflicts[0].conflicts_with == pre_existing.item_id
+
+        # surfaced via 'wingman profile list'
+        listing = render_profile_listing(items)
+        assert "Conflicts (resolve with 'wingman profile resolve <id>')" in listing
+        assert conflicts[0].item_id[:8] in listing
+        assert "1 in conflict" in listing
+
+        # resolvable via 'wingman profile resolve <id>' — person picks a winner
+        winner, rivals = resolve_item(conflicts[0].item_id, target_config, target_storage)
+        assert winner.item_id == conflicts[0].item_id
+        assert winner.status is ItemStatus.ACTIVE
+        assert winner.conflicts_with is None
+        assert [rival.item_id for rival in rivals] == [pre_existing.item_id]
+
+        final_items = target_storage.list_profile_items()
+        assert len(final_items) == 1
+        assert final_items[0].detail == WHY_PRO
+
+
 # --- carve_off_persona (end-to-end orchestration) --------------------------
 
 
@@ -288,9 +419,11 @@ def test_carve_off_persona_end_to_end(coach_workspace: Config, tmp_path: Path) -
 
     assert report.persona_name == "Mike Chen"
     assert report.counts.accepted == 1
-    assert report.source_records_written == 1
+    assert report.source_records_preserved == 1
     summary = render_carveoff_report(report)
-    assert "Mike Chen" in summary and "Phase 1" in summary and "Phase 2" in summary
+    assert "Mike Chen" in summary
+    assert "1 new profile item(s) added" in summary
+    assert "CONFLICT" not in summary  # nothing to resolve — brand-new target
     # points at the follow-up that gives the target workspace a live URL (#238)
     assert "wingman-add-tenant.sh" in summary
     assert "wingman tenant urls" in summary
@@ -309,9 +442,12 @@ def test_carve_off_persona_refuses_same_workspace_as_target(coach_workspace: Con
             carve_off_persona("Mike Chen", coach_workspace, storage, coach_workspace.data_dir)
 
 
-def test_carve_off_persona_refuses_populated_target(
+def test_carve_off_persona_merges_into_populated_target(
     coach_workspace: Config, tmp_path: Path
 ) -> None:
+    """Phase 2 (RFC-054): the same command that seeds a brand-new target
+    also merges cleanly into one that already has its own profile items —
+    no separate flag or confirmation step, no refusal."""
     _seed_persona_capture(coach_workspace)
     target_dir = tmp_path / "already-used"
     target_dir.mkdir(parents=True)
@@ -332,8 +468,13 @@ def test_carve_off_persona_refuses_populated_target(
         )
 
     with Storage(coach_workspace.db_path) as storage:
-        with pytest.raises(IngestError, match="Phase 2"):
-            carve_off_persona("Mike Chen", coach_workspace, storage, target_dir)
+        report = carve_off_persona("Mike Chen", coach_workspace, storage, target_dir)
+
+    assert report.counts.accepted == 1
+    assert report.counts.conflicts == 0
+    with Storage(target_config.db_path) as target_storage:
+        names = {item.name for item in target_storage.list_profile_items()}
+        assert names == {"Something", "values_pro: Jane Goodall"}
 
 
 def test_carve_off_persona_creates_missing_target_directory(
@@ -363,10 +504,81 @@ def test_cli_carve_off_persona_end_to_end(
     result = runner.invoke(app, ["carve-off-persona", "Mike Chen", str(target_dir)])
     assert result.exit_code == 0, result.output
     assert "Carved off 'Mike Chen'" in result.stdout
-    assert "Phase 2" in result.stdout
+    assert "1 new profile item(s) added" in result.stdout
 
     with Storage(target_dir / "wingman.db") as storage:
         assert len(storage.list_profile_items()) == 1
+
+
+def test_cli_carve_off_persona_merge_surfaces_conflict_end_to_end(
+    coach_workspace: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Full CLI surface for Phase 2 (RFC-054): carve off into a target that
+    already has a contradicting item — the conflict is surfaced in the
+    carve-off command's own output, then visible via 'wingman profile
+    list' and resolvable via 'wingman profile resolve', run against the
+    target workspace."""
+    from wingman.cli.main import app
+    from wingman.domain.profile import EvidenceSpan, ProfileItem, ProfileItemKind
+
+    monkeypatch.setenv(ENV_DATA_DIR, str(coach_workspace.data_dir))
+    _seed_persona_capture(coach_workspace)
+
+    target_dir = tmp_path / "mikes-existing-workspace"
+    target_dir.mkdir(parents=True)
+    target_config = Config(data_dir=target_dir, data_dir_source="test")
+    contradicting_why = "I've actually never trusted her methods."
+    with Storage(target_config.db_path) as target_storage:
+        target_storage.add_source_record(
+            SourceRecord(
+                record_id="mikes-own-record",
+                source_type="manual",
+                source_locator="Mike's own earlier note",
+                content_hash="own-hash-cli",
+                document_key="",
+            )
+        )
+        target_storage.add_profile_item(
+            ProfileItem(
+                kind=ProfileItemKind.INTERVIEW,
+                subtype="values_pro",
+                name="values_pro: Jane Goodall",
+                detail=contradicting_why,
+                classification=ClaimClassification.FACT,
+                confidence=1.0,
+                evidence=[
+                    EvidenceSpan(source_record_id="mikes-own-record", quote=contradicting_why)
+                ],
+                prompt_version="v0",
+                extracted_by="user",
+            )
+        )
+
+    result = runner.invoke(app, ["carve-off-persona", "Mike Chen", str(target_dir)])
+    assert result.exit_code == 0, result.output
+    assert "1 in CONFLICT with existing data" in result.stdout
+    assert "wingman profile list" in result.stdout
+    assert "wingman profile resolve" in result.stdout
+
+    # surfaced via 'wingman profile list', run against the target workspace
+    monkeypatch.setenv(ENV_DATA_DIR, str(target_dir))
+    list_result = runner.invoke(app, ["profile", "list"])
+    assert list_result.exit_code == 0, list_result.output
+    assert "Conflicts" in list_result.stdout
+    with Storage(target_config.db_path) as target_storage:
+        conflict_item = next(
+            i for i in target_storage.list_profile_items() if i.status is ItemStatus.CONFLICT
+        )
+    assert conflict_item.item_id[:8] in list_result.stdout
+
+    # resolvable via 'wingman profile resolve <id>' — keep the carved-off version
+    resolve_result = runner.invoke(app, ["profile", "resolve", conflict_item.item_id])
+    assert resolve_result.exit_code == 0, resolve_result.output
+    with Storage(target_config.db_path) as target_storage:
+        items = target_storage.list_profile_items()
+        assert len(items) == 1
+        assert items[0].detail == WHY_PRO
+        assert items[0].status is ItemStatus.ACTIVE
 
 
 def test_cli_carve_off_persona_reports_failure(
@@ -405,10 +617,78 @@ def test_mcp_carve_off_persona_end_to_end(
     target_dir = tmp_path / "mike-mcp"
     result = mcp_carve_off_persona("Mike Chen", str(target_dir))
     assert "Carved off 'Mike Chen'" in result
-    assert "Phase 2" in result
+    assert "1 new profile item(s) added" in result
 
     with Storage(target_dir / "wingman.db") as storage:
         assert len(storage.list_profile_items()) == 1
+
+
+def test_mcp_carve_off_persona_merge_surfaces_conflict_end_to_end(
+    coach_workspace: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Full MCP surface for Phase 2 (RFC-054): carve off into a target that
+    already has a contradicting item — the conflict is surfaced in the
+    tool's own return value, then visible via profile_manage(action='list')
+    and resolvable via profile_manage(action='resolve'), run against the
+    target workspace."""
+    from wingman.domain.profile import EvidenceSpan, ProfileItem, ProfileItemKind
+    from wingman.mcp_server import carve_off_persona as mcp_carve_off_persona
+    from wingman.mcp_server import profile_manage as mcp_profile_manage
+
+    monkeypatch.setenv(ENV_DATA_DIR, str(coach_workspace.data_dir))
+    _seed_persona_capture(coach_workspace)
+
+    target_dir = tmp_path / "mikes-existing-mcp-workspace"
+    target_dir.mkdir(parents=True)
+    target_config = Config(data_dir=target_dir, data_dir_source="test")
+    contradicting_why = "I've actually never trusted her methods."
+    with Storage(target_config.db_path) as target_storage:
+        target_storage.add_source_record(
+            SourceRecord(
+                record_id="mikes-own-record",
+                source_type="manual",
+                source_locator="Mike's own earlier note",
+                content_hash="own-hash-mcp",
+                document_key="",
+            )
+        )
+        target_storage.add_profile_item(
+            ProfileItem(
+                kind=ProfileItemKind.INTERVIEW,
+                subtype="values_pro",
+                name="values_pro: Jane Goodall",
+                detail=contradicting_why,
+                classification=ClaimClassification.FACT,
+                confidence=1.0,
+                evidence=[
+                    EvidenceSpan(source_record_id="mikes-own-record", quote=contradicting_why)
+                ],
+                prompt_version="v0",
+                extracted_by="user",
+            )
+        )
+
+    result = mcp_carve_off_persona("Mike Chen", str(target_dir))
+    assert "1 in CONFLICT with existing data" in result
+    assert "wingman profile list" in result
+    assert "wingman profile resolve" in result
+
+    monkeypatch.setenv(ENV_DATA_DIR, str(target_dir))
+    listing = mcp_profile_manage("list")
+    assert "Conflicts" in listing
+    with Storage(target_config.db_path) as target_storage:
+        conflict_item = next(
+            i for i in target_storage.list_profile_items() if i.status is ItemStatus.CONFLICT
+        )
+    assert conflict_item.item_id[:8] in listing
+
+    resolved = mcp_profile_manage("resolve", conflict_item.item_id)
+    assert "Kept" in resolved
+    with Storage(target_config.db_path) as target_storage:
+        items = target_storage.list_profile_items()
+        assert len(items) == 1
+        assert items[0].detail == WHY_PRO
+        assert items[0].status is ItemStatus.ACTIVE
 
 
 def test_mcp_carve_off_persona_reports_failure(
@@ -429,3 +709,103 @@ def test_mcp_carve_off_persona_not_initialized(
     monkeypatch.setenv(ENV_DATA_DIR, str(tmp_path / "uninitialized"))
     result = mcp_carve_off_persona("Mike Chen", str(tmp_path / "target"))
     assert "not initialized" in result
+
+
+def test_a_second_carve_off_with_the_conflict_still_unresolved_does_not_crash(
+    coach_workspace: Config, tmp_path: Path
+) -> None:
+    """Carving the same persona off twice is the documented re-run — 'after
+    coaching more of them'. If the first run left a CONFLICT row, the second
+    used to die on a DuplicateRecordError.
+
+    The mechanism: the exported item keeps its original item_id, the first run
+    stores it as CONFLICT, and find_active_item only ever searches the ACTIVE
+    rival — so the second run marks the export as a conflict all over again and
+    tries to INSERT an item_id that is already there. The person is left unable
+    to re-run until they resolve a conflict they may not have looked at yet.
+    """
+    from wingman.domain.profile import EvidenceSpan, ProfileItem, ProfileItemKind
+
+    with Storage(coach_workspace.db_path) as storage:
+        mike = find_or_create_persona("Mike Chen", storage)
+        capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            WHY_PRO,
+            coach_workspace,
+            storage,
+            persona_id=mike.persona_id,
+        )
+        export = export_persona("Mike Chen", storage)
+    carved_item = export.items[0]
+
+    target_dir = tmp_path / "mikes-workspace"
+    target_dir.mkdir(parents=True)
+    target_config = Config(data_dir=target_dir, data_dir_source="test")
+    target_config.reports_dir.mkdir(parents=True)
+    contradicting_why = "Actually I've never trusted her methods or her public claims."
+    with Storage(target_config.db_path) as target_storage:
+        target_storage.add_source_record(
+            SourceRecord(
+                record_id="mikes-own-record",
+                source_type="manual",
+                source_locator="Mike's own earlier note",
+                content_hash="own-hash",
+                document_key="",
+            )
+        )
+        target_storage.add_profile_item(
+            ProfileItem(
+                kind=ProfileItemKind.INTERVIEW,
+                subtype="values_pro",
+                name=carved_item.name,
+                detail=contradicting_why,
+                classification=ClaimClassification.FACT,
+                confidence=1.0,
+                evidence=[
+                    EvidenceSpan(source_record_id="mikes-own-record", quote=contradicting_why)
+                ],
+                prompt_version="v0",
+                extracted_by="user",
+            )
+        )
+        first = seed_new_workspace(export, target_storage)
+        assert first.conflicts == 1
+
+        # The conflict is deliberately left unresolved, which is the whole point.
+        second = seed_new_workspace(export, target_storage)
+
+        assert second.conflicts == 0
+        assert second.accepted == 0
+        assert second.skipped_duplicates == 1
+        # Still exactly one conflict row — not a second copy of the same claim.
+        conflicts = [
+            item
+            for item in target_storage.list_profile_items()
+            if item.status is ItemStatus.CONFLICT
+        ]
+        assert len(conflicts) == 1
+
+
+def test_the_conflict_advice_does_not_send_anyone_to_the_wrong_workspace(
+    coach_workspace: Config, tmp_path: Path
+) -> None:
+    """The report used to offer 'or from within that workspace' as a way to
+    reach the conflicts. Standing in a directory selects nothing — load_config
+    reads the tenant binding or WINGMAN_DATA_DIR and deliberately never the
+    invoking directory — so that advice quietly listed and resolved items in
+    the reader's OWN workspace instead."""
+    from wingman.application.persona_carveoff import CarveOffReport
+    from wingman.application.profile_store import ItemCounts
+
+    report = CarveOffReport(
+        persona_name="Mike Chen",
+        target_data_dir=str(tmp_path / "mikes-workspace"),
+        counts=ItemCounts(conflicts=1),
+        source_records_preserved=1,
+    )
+
+    text = render_carveoff_report(report)
+
+    assert "WINGMAN_DATA_DIR" in text
+    assert "from within that workspace" not in text

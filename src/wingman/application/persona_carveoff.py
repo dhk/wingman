@@ -1,18 +1,23 @@
-"""Carve off a coached persona's captured interview data into its own,
-brand-new Wingman workspace — Phase 1 of #235 (docs/COACHING-MODE-DESIGN.md).
+"""Carve off a coached persona's captured interview data into its own
+Wingman workspace, brand-new OR already-populated — #235
+(docs/COACHING-MODE-DESIGN.md).
 
 Coaching Mode lets a coach run persona-scoped interview capture ABOUT
 someone else (`application/interview.py`, `ProfileItem.persona_id`), inside
 the coach's own workspace. Today that data has no path out: if the persona
 (a real person) wants to start using Wingman themselves, they start from an
-empty profile and everything already captured is stranded. This module is
-the first of two planned phases (#235): export a persona's captured items
-and seed a BRAND-NEW workspace with them as that workspace's own
-first-person profile. Phase 2 — merging into an ALREADY-POPULATED target
-workspace, via RFC-028's supersede/conflict rule so contradictions become a
-CONFLICT the person resolves themselves — is a planned, separate follow-up,
-not built here; `seed_new_workspace` refuses outright rather than silently
-guessing at a merge.
+empty profile and everything already captured is stranded. This module
+exports a persona's captured items and writes them into a target
+workspace's own first-person profile — Phase 1 (#238) covered a
+brand-new/empty target; Phase 2 (RFC-054) lifts that restriction:
+`seed_new_workspace` now writes into an ALREADY-POPULATED target too, via
+the exact same `profile_store.persist_items` call (RFC-028's
+dedup/supersede/conflict machinery) every other ingestion path in this
+codebase already uses for "a new item that might collide with something
+already there." A contradiction between carved-off data and an existing
+item is never silently overwritten — it lands as a `CONFLICT` row the
+person resolves themselves (`wingman profile list`/`resolve`), the same as
+any other conflicting ingest.
 
 **Evidence resolvability (RFC-049).** `ProfileItem.evidence` is
 `list[EvidenceSpan]`, `min_length=1`, never optional — every item carries a
@@ -67,9 +72,9 @@ class CarveOffExport(BaseModel):
     """A persona's exportable profile: their own ACTIVE items, rehomed as
     first-person items (persona_id cleared), plus one placeholder
     SourceRecord per evidence span they cite (RFC-049). Read-only —
-    nothing is written to any workspace by producing this; Phase 2 (#235)
-    is expected to reuse this same export for the merge-into-an-existing-
-    workspace path."""
+    nothing is written to any workspace by producing this; reused
+    unmodified by `seed_new_workspace` for both a brand-new and an
+    already-populated target (RFC-054)."""
 
     persona_name: str
     items: list[ProfileItem]
@@ -80,7 +85,12 @@ class CarveOffReport(BaseModel):
     persona_name: str
     target_data_dir: str
     counts: ItemCounts
-    source_records_written: int
+    # Named for what it counts: every evidence record the carve-off brought
+    # across and the target now has. A re-run writes none of them a second
+    # time (they are already there, skipped by record_id), and reporting
+    # "0 evidence records preserved" then would be false in the other
+    # direction — the evidence IS preserved, it just did not need writing.
+    source_records_preserved: int
 
 
 def _resolve_persona(name_or_id: str, storage: Storage) -> Persona:
@@ -180,35 +190,62 @@ def export_persona(name_or_id: str, storage: Storage) -> CarveOffExport:
 
 def seed_new_workspace(export: CarveOffExport, target_storage: Storage) -> ItemCounts:
     """Write a persona's carved-off export into a TARGET workspace as ITS
-    OWN first-person profile (Phase 1 of #235 — see module docstring).
+    OWN first-person profile — whether that workspace is brand-new/empty
+    (Phase 1, #238) or already has its own profile items (Phase 2,
+    RFC-054). Both go through the same `profile_store.persist_items` call
+    every other ingestion path in this codebase already uses for "a new
+    item that might dedupe, supersede, or conflict with something already
+    there": an item matching nothing existing is added; one matching an
+    existing item's value merges evidence or is skipped as a duplicate;
+    one that genuinely disagrees with an existing item lands as a
+    side-by-side `CONFLICT` row for the person to resolve themselves
+    (`wingman profile list`/`resolve`) — never silently overwritten.
 
-    Refuses outright if the target workspace already has any profile
-    items: merging carved-off data into an ALREADY-POPULATED workspace is
-    Phase 2 of #235 (a planned, separate follow-up using RFC-028's
-    supersede/conflict rule), not yet built. This only ever seeds a
-    brand-new/empty target — fail loud, never a silent no-op or a guess
-    at merging.
+    Placeholder source records (RFC-049) reuse the SAME `record_id` every
+    time the same persona is exported, so carving the same persona off
+    into the same already-populated target a second time (e.g. a re-run
+    after coaching more of them) would otherwise hit a source-record-id
+    collision even though the content is identical; already-present
+    placeholder ids are skipped rather than re-inserted.
+
+    Carried-over ITEMS need the same treatment, for a reason that only
+    shows up once a re-run meets an unresolved conflict. A rehomed item
+    keeps its original `item_id`, and `persist_items` looks for a rival
+    among ACTIVE items only — so a conflict row written by the first run
+    is invisible to the second, which dutifully marks the same export as
+    a conflict again and tries to insert an `item_id` that is already
+    there. The person could not re-run at all until they had resolved a
+    conflict they may not have looked at yet.
+
+    Skipping is the honest answer rather than overwriting: the row is
+    already in that workspace awaiting their decision, re-importing
+    identical content cannot improve it, and replacing a row they may
+    have already started acting on would be worse than leaving it. A
+    genuinely CHANGED claim arrives as a new item with a new id, and
+    conflicts through the ordinary machinery like anything else.
     """
-    if target_storage.count_profile_items() > 0:
-        raise IngestError(
-            "the target workspace already has profile items — carrying a persona's data "
-            "into an ALREADY-POPULATED workspace is Phase 2 of #235 (merge, using "
-            "RFC-028's conflict rule), not yet built. Nothing was written; point the "
-            "target at a brand-new, empty workspace instead."
-        )
     for record in export.source_records:
-        target_storage.add_source_record(record)
-    counts = persist_items(export.items, target_storage)
+        if target_storage.get_source_record(record.record_id) is None:
+            target_storage.add_source_record(record)
+    fresh, already_there = [], 0
+    for item in export.items:
+        if target_storage.get_profile_item(item.item_id) is None:
+            fresh.append(item)
+        else:
+            already_there += 1
+    counts = persist_items(fresh, target_storage)
+    counts.skipped_duplicates += already_there
     return counts
 
 
 def carve_off_persona(
     name_or_id: str, source_config: Config, source_storage: Storage, target_data_dir: Path
 ) -> CarveOffReport:
-    """The end-to-end Phase-1 operation the CLI/MCP surface drives: export
-    the persona from the caller's own workspace, then seed `target_data_dir`
-    (created if needed) as a brand-new workspace with it. See
-    `seed_new_workspace` for the non-empty-target refusal.
+    """The end-to-end operation the CLI/MCP surface drives: export the
+    persona from the caller's own workspace, then write it into
+    `target_data_dir` (created if needed) — a brand-new/empty workspace or
+    one that already has its own profile, either way, via
+    `seed_new_workspace`.
     """
     target_dir = target_data_dir.expanduser().resolve()
     if target_dir == source_config.data_dir.resolve():
@@ -220,6 +257,12 @@ def carve_off_persona(
     export = export_persona(name_or_id, source_storage)
     target_dir.mkdir(parents=True, exist_ok=True)
     target_config = Config(data_dir=target_dir, data_dir_source="persona carve-off target")
+    # Same directories 'wingman init' creates (cli.main._workspace_dirs):
+    # a conflict landing here needs 'wingman profile resolve' to work right
+    # away, and that re-renders career.md/json into reports_dir — which a
+    # target this command created from scratch would not otherwise have.
+    target_config.inbox_dir.mkdir(parents=True, exist_ok=True)
+    target_config.reports_dir.mkdir(parents=True, exist_ok=True)
     with Storage(target_config.db_path) as target_storage:
         counts = seed_new_workspace(export, target_storage)
     _logger.info(
@@ -232,22 +275,51 @@ def carve_off_persona(
         persona_name=export.persona_name,
         target_data_dir=str(target_dir),
         counts=counts,
-        source_records_written=len(export.source_records),
+        source_records_preserved=len(export.source_records),
     )
 
 
 def render_carveoff_report(report: CarveOffReport) -> str:
-    return (
-        f"Carved off {report.persona_name!r} into a new workspace at "
-        f"{report.target_data_dir}: {report.counts.accepted} profile item(s) seeded, "
-        f"{report.source_records_written} evidence record(s) preserved. "
-        "(Phase 1 of #235 — a brand-new workspace only; merging into an existing one is "
-        "a planned Phase 2 follow-up.) No live URL yet — this workspace isn't served by "
-        "anything until it's registered as a tenant (root-run: "
-        f"'wingman-add-tenant.sh <slug>' pointed at {report.target_data_dir}); once it is, "
-        "'wingman tenant urls <slug>' (or 'wingman tenant urls' for every tenant) prints its "
+    """The carve-off command's own output — including, if the target
+    already had its own data, how the merge actually went: how many items
+    landed cleanly vs. how many surfaced as a conflict needing
+    `wingman profile list`/`resolve`, never a report that's silent about a
+    partial or contentious outcome (RFC-054)."""
+    counts = report.counts
+    pieces = [f"{counts.accepted} new profile item(s) added"]
+    if counts.evidence_merged:
+        pieces.append(f"{counts.evidence_merged} merged into matching existing item(s)")
+    if counts.skipped_duplicates:
+        pieces.append(f"{counts.skipped_duplicates} already present (skipped)")
+    if counts.updated:
+        pieces.append(f"{counts.updated} superseded an earlier version")
+    if counts.conflicts:
+        pieces.append(f"{counts.conflicts} in CONFLICT with existing data")
+    summary = ", ".join(pieces)
+    lines = [
+        (
+            f"Carved off {report.persona_name!r} into {report.target_data_dir}: {summary}. "
+            f"{report.source_records_preserved} evidence record(s) preserved."
+        )
+    ]
+    if counts.conflicts:
+        lines.append(
+            f"{counts.conflicts} item(s) contradicted data already in that workspace and were "
+            "NOT overwritten — they're surfaced as conflicts for the person to resolve "
+            "themselves: run 'wingman profile list' with WINGMAN_DATA_DIR pointed at "
+            f"{report.target_data_dir}, then 'wingman profile resolve <id>' to settle each "
+            "one. (The directory you happen to be standing in is never how a workspace "
+            "gets chosen — an installed CLI must not scatter data wherever it is run, so "
+            "load_config reads the tenant binding or WINGMAN_DATA_DIR and nothing else.)"
+        )
+    lines.append(
+        "If this target workspace isn't already registered as a tenant, it has no live URL "
+        "yet — nothing serves it until it is (root-run: 'wingman-add-tenant.sh <slug>' "
+        f"pointed at {report.target_data_dir}); once it is (or if it already was), 'wingman "
+        "tenant urls <slug>' (or 'wingman tenant urls' for every tenant) prints its "
         "connector URLs."
     )
+    return "\n".join(lines)
 
 
 __all__ = [
