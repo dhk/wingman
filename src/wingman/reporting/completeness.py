@@ -31,6 +31,25 @@ BLOCKED_SECTIONS = (
 )
 
 
+def _todo_markdown(report: CompletenessReport) -> list[str]:
+    from wingman.application.completeness import next_actions
+
+    actions = next_actions(report)
+    if not actions:
+        return [
+            "## Things to do",
+            "",
+            "Nothing outstanding — every section has something in it.",
+            "",
+        ]
+    lines = ["## Things to do", ""]
+    for number, action in enumerate(actions, start=1):
+        lines.append(f"{number}. **{action.title}** — {action.why}")
+        lines.append(f"   → {action.how}")
+    lines.append("")
+    return lines
+
+
 def render_completeness_markdown(report: CompletenessReport) -> str:
     lines = [
         "# Completeness",
@@ -40,6 +59,7 @@ def render_completeness_markdown(report: CompletenessReport) -> str:
             "(local data only — no fetch, no model call)"
         ),
         "",
+        *_todo_markdown(report),
         "## Career Profile",
         "",
         f"- Roles: {report.career.roles}",

@@ -58,12 +58,155 @@ class CompanyCompleteness(BaseModel):
     missing_pov_cards: int
 
 
+class ValuesCompleteness(BaseModel):
+    """Progress toward a value profile, against the REAL thresholds.
+
+    application.values refuses to infer below MIN_ITEMS captures across
+    MIN_SUBTYPES kinds, so 'N of 6' here is the actual contract rather than
+    an invented denominator — the distinction AGENTS.md invariant 9 draws.
+    """
+
+    captures: int
+    subtypes: int
+    min_items: int
+    min_subtypes: int
+    profile_built: bool
+
+    @property
+    def ready(self) -> bool:
+        return self.captures >= self.min_items and self.subtypes >= self.min_subtypes
+
+
+class NextAction(BaseModel):
+    """One thing worth doing next, and why it is worth doing.
+
+    'Testimonials: 0' is a number. "Nothing here is in anyone else's words"
+    is the reason to care, and 'how' is the sentence to actually say. The
+    band on the profile page already works this way; this is the same idea
+    across the whole workspace.
+    """
+
+    title: str
+    why: str
+    how: str
+
+
 class CompletenessReport(BaseModel):
     generated_at: datetime
     career: CareerProfileCompleteness
     job_criteria: JobCriteriaCompleteness
     people: list[PersonCompleteness]
     companies: list[CompanyCompleteness]
+    values: ValuesCompleteness
+
+
+def _values_completeness(storage: Storage) -> ValuesCompleteness:
+    from wingman.application.pov import CORPUS_PERSON_ID
+    from wingman.application.values import MIN_ITEMS, MIN_SUBTYPES, _eligible_items
+
+    items = _eligible_items(storage, persona_id=None)
+    return ValuesCompleteness(
+        captures=len(items),
+        subtypes=len({item.subtype for item in items if item.subtype}),
+        min_items=MIN_ITEMS,
+        min_subtypes=MIN_SUBTYPES,
+        profile_built=storage.get_value_profile(CORPUS_PERSON_ID) is not None,
+    )
+
+
+def next_actions(report: CompletenessReport) -> list[NextAction]:
+    """What to do next, hardest-working first — the answer to "what's my
+    status" and "what should I do next".
+
+    Ordered by what unblocks the most downstream, not by what is emptiest.
+    Job criteria leads because every scored opening, every digest brief and
+    the whole overnight judgement depend on a document that takes ten
+    minutes to write; a workspace can be full of everything else and still
+    tell you nothing about which job to look at.
+
+    Deterministic and derived from the report — no model, no guessing, and
+    nothing here that the numbers above do not already say.
+    """
+    actions: list[NextAction] = []
+    if not report.job_criteria.exists:
+        actions.append(
+            NextAction(
+                title="Set your job criteria",
+                why=(
+                    "Until this exists every opening arrives unscored — wingman can find "
+                    "postings but cannot tell you which ones are worth your attention."
+                ),
+                how="say: let's set up my job criteria",
+            )
+        )
+    if report.career.roles == 0:
+        actions.append(
+            NextAction(
+                title="Add your CV or resume",
+                why="With no roles, nothing here shows tenure, title or seniority.",
+                how="upload it on this page, or say: here's my resume",
+            )
+        )
+    values = report.values
+    if not values.profile_built:
+        if values.ready:
+            actions.append(
+                NextAction(
+                    title="Build your values profile",
+                    why=(
+                        f"You have {values.captures} captures across {values.subtypes} kinds — "
+                        "enough to infer what you actually value, and to draw the chart."
+                    ),
+                    how="say: what do I actually value?",
+                )
+            )
+        else:
+            actions.append(
+                NextAction(
+                    title="Say who you admire, and who you would rather not be",
+                    why=(
+                        f"{values.captures} of {values.min_items} captures across "
+                        f"{values.subtypes} of {values.min_subtypes} kinds. Below that there is "
+                        "not enough contrast to infer a value profile, so nothing is inferred "
+                        "rather than something thin being made up — and the radar chart has "
+                        "nothing to draw."
+                    ),
+                    how="say: help me build my profile",
+                )
+            )
+    if report.career.testimonials == 0:
+        actions.append(
+            NextAction(
+                title="Capture a testimonial",
+                why="Nothing in this profile is yet in anyone else's words.",
+                how="paste a recommendation, or import your LinkedIn export",
+            )
+        )
+    missing_pov = sum(company.missing_pov_cards for company in report.companies)
+    if missing_pov:
+        actions.append(
+            NextAction(
+                title=f"Build POV cards for {missing_pov} watched people",
+                why=(
+                    "A point of view is what you can actually walk into a conversation with; "
+                    "a watched person without one is a name on a list."
+                ),
+                how="say: build <name>'s point-of-view card",
+            )
+        )
+    silent = sum(1 for person in report.people if person.log_entries == 0)
+    if silent:
+        actions.append(
+            NextAction(
+                title=f"Log what happened with {silent} people",
+                why=(
+                    "An interaction wingman never hears about cannot become evidence for the "
+                    "next conversation, and the tickler stays silent on it."
+                ),
+                how="say: log that I had coffee with <name>, we talked about X",
+            )
+        )
+    return actions
 
 
 def _career_completeness(storage: Storage) -> CareerProfileCompleteness:
@@ -146,4 +289,5 @@ def compute_completeness(storage: Storage, config: Config) -> CompletenessReport
         job_criteria=_job_criteria_completeness(config),
         people=_people_completeness(storage),
         companies=_companies_completeness(storage),
+        values=_values_completeness(storage),
     )

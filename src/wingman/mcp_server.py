@@ -305,7 +305,20 @@ def completeness(as_html: bool = False) -> str:
     Set as_html=True to also write a styled HTML twin (completeness.html,
     same design tokens as every other Wingman export) alongside the
     Markdown and JSON — useful for a browser-viewable snapshot rather than
-    reading the tool's text response.
+    reading the tool's text response. The same report is a page on the web
+    UI, linked from the home page as 'Progress'.
+
+    CALL THIS when the user asks anything shaped like "what's my status",
+    "how am I doing", "how far along am I", "what should I do next" or
+    "what's my next thing to do". The report leads with 'Things to do': an
+    ordered list, hardest-working first, each naming what the gap costs and
+    the exact sentence that closes it. Answer from that list rather than
+    reciting the counts — and never invent a next step that is not in it,
+    since the ordering is deliberate (job criteria first because every
+    scored opening depends on it).
+
+    'wingman status' answers a different question — what is in the
+    workspace right now — and does not say what to do about it.
     """
     config = _ready_config()
     if config is None:
