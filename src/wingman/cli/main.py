@@ -3467,7 +3467,10 @@ def tenant_rotate_token_cmd(
     configure_logging()
     import secrets as secrets_module
 
-    from wingman.infrastructure.tenant_process import signal_reload
+    from wingman.infrastructure.tenant_process import (
+        TenantProcessSignalError,
+        signal_reload,
+    )
     from wingman.mcp_server import _extra_allowed_hosts, _tunnel_port, render_urls
 
     tenant, registry_path = _load_tenant_or_exit(slug, registry)
@@ -3477,7 +3480,14 @@ def tenant_rotate_token_cmd(
     token_path.write_text(new_token + "\n", encoding="utf-8")
     token_path.chmod(0o600)
 
-    signaled_pid = signal_reload(registry_path)
+    try:
+        signaled_pid = signal_reload(registry_path)
+    except TenantProcessSignalError as exc:
+        # The token is already on disk, so this is a partial success and has
+        # to read as one — not as a traceback over a command that did most of
+        # its job (#329).
+        typer.echo(str(exc), err=True)
+        signaled_pid = None
     if signaled_pid is not None:
         typer.echo(f"Signaled the running shared process (pid {signaled_pid}) to reload.")
     else:

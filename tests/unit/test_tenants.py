@@ -161,3 +161,63 @@ def test_tenant_index_reload_picks_up_a_newly_added_tenant(tmp_path: Path) -> No
     index.reload(registry)
     assert len(index) == 2
     assert index.resolve("tok-bob").slug == "bob"  # type: ignore[union-attr]
+
+
+def _tenant_with_token(tmp_path: Path, slug: str, token: str) -> Tenant:
+    data_dir = tmp_path / slug
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "mcp-http-token").write_text(token + "\n", encoding="utf-8")
+    return Tenant(slug=slug, data_dir=data_dir)
+
+
+def test_a_token_shared_by_two_tenants_resolves_to_neither(tmp_path: Path) -> None:
+    """#327 — the isolation bug. The lookup was last-writer-wins, so a
+    duplicated token silently handed one tenant the other's workspace, and
+    which one depended on registry order.
+
+    Fail closed: a token that identifies two people identifies nobody. Both
+    lose it; each can be issued a fresh one.
+    """
+    shared = "same-token-in-two-places"
+    first = _tenant_with_token(tmp_path, "jason", shared)
+    second = _tenant_with_token(tmp_path, "taylor", shared)
+
+    index = TenantIndex([first, second])
+
+    assert index.resolve(shared) is None
+    # ...and neither tenant has been dropped from the registry itself.
+    assert {t.slug for t in index.tenants} == {"jason", "taylor"}
+
+
+def test_a_third_tenant_cannot_reinstate_an_already_ambiguous_token(
+    tmp_path: Path,
+) -> None:
+    """The obvious fix — pop the first claim when a second appears — lets a
+    THIRD tenant carrying the same token write itself back in, because by
+    then the entry is gone and looks unclaimed."""
+    shared = "token-in-three-places"
+    tenants = [
+        _tenant_with_token(tmp_path, "jason", shared),
+        _tenant_with_token(tmp_path, "taylor", shared),
+        _tenant_with_token(tmp_path, "morgan", shared),
+    ]
+
+    assert TenantIndex(tenants).resolve(shared) is None
+
+
+def test_one_duplicated_token_does_not_disable_everybody_else(tmp_path: Path) -> None:
+    """Refusing the whole registry would take every other tenant offline over
+    one duplicated file — a worse outcome than the bug."""
+    shared = "duplicated"
+    tenants = [
+        _tenant_with_token(tmp_path, "jason", shared),
+        _tenant_with_token(tmp_path, "taylor", shared),
+        _tenant_with_token(tmp_path, "morgan", "morgans-own-token"),
+    ]
+
+    index = TenantIndex(tenants)
+
+    assert index.resolve(shared) is None
+    resolved = index.resolve("morgans-own-token")
+    assert resolved is not None
+    assert resolved.slug == "morgan"
