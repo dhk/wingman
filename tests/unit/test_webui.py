@@ -1015,3 +1015,42 @@ def test_the_band_and_the_completeness_tool_cannot_disagree(
     assert f"{report.career.roles} roles" in page
     assert report.career.roles == 3
     assert "1 skill" in page and report.career.skills == 1
+
+
+def test_the_home_page_links_to_the_profile_page(client: tuple[TestClient, str]) -> None:
+    """The profile page shipped as a route nothing linked to, so the only way
+    to reach it was to know the URL and type it. Spotted on a real tenant's
+    home page, which offered Digest / Files / Changelog / Connect / Manage and
+    no way at all to see the profile."""
+    http, token = client
+
+    page = http.get(f"/ui/{token}/").text
+
+    assert 'href="profile"' in page
+    assert "Profile" in page
+
+
+def test_the_profile_link_survives_a_mount_prefix(client: tuple[TestClient, str]) -> None:
+    """It is relative for the same reason every other link here is: the tunnel
+    fronting this serves it under /shared, which the process itself never sees.
+    An absolute /ui/... href would 404 at the tunnel."""
+    http, token = client
+
+    page = http.get(f"/ui/{token}/").text
+
+    assert 'href="/ui/' not in page
+
+
+def test_the_profile_page_is_reachable_from_the_link_the_home_page_gives(
+    client: tuple[TestClient, str],
+) -> None:
+    """Relative hrefs resolve against the home page's own URL, so this only
+    works because home is served with its trailing slash."""
+    http, token = client
+
+    home = http.get(f"/ui/{token}/")
+    assert home.status_code == 200
+
+    followed = http.get(f"/ui/{token}/profile")
+    assert followed.status_code == 200
+    assert "Profile" in followed.text
