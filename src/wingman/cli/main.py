@@ -2477,8 +2477,11 @@ def overnight(
     under reports/digests/ — what changed, what failed, what to consider
     following next. Schedule it yourself (launchd/cron — see README);
     wingman runs no daemon. The digest itself pushes to Drive once you've
-    run 'wingman drive auth' (RFC-053, #205) — nothing else here leaves the
-    machine (RFC-006).
+    run 'wingman drive auth' (RFC-053, #205) — that adds one upload of a
+    file that is already written, and changes nothing about the provider
+    traffic listed above. Wingman still never sends anything ON YOUR
+    BEHALF: no message, no application, no external write except this
+    upload of your own artifact (RFC-006).
     """
     configure_logging()
     config = load_config()

@@ -366,6 +366,11 @@ def test_access_token_raises_when_refresh_fails(tmp_path: Path) -> None:
 def test_resolve_client_id_env_wins_over_host_file_and_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Cleared first: this asserts the DEFAULT branch, and the variable is set
+    # for real on any host actually configured for Drive — so the test failed
+    # precisely where the feature works. monkeypatch restores it afterwards.
+    monkeypatch.delenv("WINGMAN_GDRIVE_CLIENT_ID", raising=False)
+
     home = tmp_path / "home"
     assert resolve_client_id(home) == DEFAULT_CLIENT_ID
 
@@ -381,6 +386,11 @@ def test_resolve_client_id_env_wins_over_host_file_and_default(
 def test_resolve_client_secret_env_wins_over_host_file_and_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Cleared first: this asserts the DEFAULT branch, and the variable is set
+    # for real on any host actually configured for Drive — so the test failed
+    # precisely where the feature works. monkeypatch restores it afterwards.
+    monkeypatch.delenv("WINGMAN_GDRIVE_CLIENT_SECRET", raising=False)
+
     home = tmp_path / "home"
     assert resolve_client_secret(home) == DEFAULT_CLIENT_SECRET
 
@@ -408,3 +418,32 @@ def test_default_poster_wraps_a_connection_failure(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(GDriveAuthError, match="simulated network failure"):
         gdrive_auth_module._default_poster("https://oauth2.googleapis.com/device/code", {})
+
+
+def test_slow_down_actually_slows_the_next_poll_down(tmp_path: Path) -> None:
+    """Google says slow_down; the interval was bumped and stored, and then
+    nothing ever read it before posting again — so every subsequent call
+    polled just as fast, which is what earned the slow_down (#231 review)."""
+    home = tmp_path / "home"
+    drive_auth(
+        home=home,
+        client_id="cid",
+        client_secret="secret",
+        poster=ScriptedPoster([DEVICE_START_RESPONSE]),
+    )
+    told_off = drive_auth(
+        home=home,
+        client_id="cid",
+        client_secret="secret",
+        poster=ScriptedPoster([(400, {"error": "slow_down"})]),
+    )
+    assert told_off.status == "pending"
+
+    # The next call must answer locally rather than posting again. An empty
+    # script would raise if it tried.
+    backed_off = drive_auth(
+        home=home, client_id="cid", client_secret="secret", poster=ScriptedPoster([])
+    )
+
+    assert backed_off.status == "pending"
+    assert "poll less often" in backed_off.detail

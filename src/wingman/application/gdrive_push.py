@@ -64,7 +64,12 @@ def _push(
             parent_id = gdrive.ensure_folder(token, part, parent_id=parent_id)
         assert parent_id is not None  # folder_parts is always non-empty
         file_id = gdrive.upload_file(token, local_path, parent_id, local_path.name, mime_type)
-    except (gdrive_auth.GDriveAuthError, gdrive.GDriveApiError) as exc:
+    except Exception as exc:  # noqa: BLE001 — the whole contract is "never raises"
+        # Not just the two Drive error classes. upload_file() calls stat() and
+        # read_bytes() (OSError), and any unexpected adapter failure would
+        # otherwise escape into backup/overnight and fail a command whose real
+        # work — the backup, the digest — had already completed successfully.
+        # Graceful degradation is the established pattern for this whole path.
         _logger.warning("drive push failed path=%s error=%s", local_path, exc)
         return DrivePushResult(
             status="failed",

@@ -236,6 +236,13 @@ def _start(client_id: str, poster: Poster, home: Path | None) -> DeviceAuthResul
             "user_code": str(user_code),
             "verification_url": str(verification_url),
             "interval": interval,
+            # Deliberately NOT setting poll_not_before here. The device-flow
+            # interval governs an automated polling loop; each poll here is a
+            # separate command a person ran, and the wait that matters is
+            # them approving in a browser. Gating the first one would tell
+            # somebody who approved quickly to come back in five seconds.
+            # An explicit slow_down from Google is different, and is honoured
+            # in _finish.
             "requested_at": now,
             "expires_at": now + expires_in,
         },
@@ -263,6 +270,18 @@ def _finish(
         return DeviceAuthResult(
             status="expired",
             detail="the code expired before it was approved. Call drive_auth to start again.",
+        )
+    # Honour the provider's own slow_down, and the interval it set at the
+    # start. Returning locally is the point: another immediate request is
+    # what earned the slow_down in the first place.
+    not_before = float(pending.get("poll_not_before", 0))
+    if time.time() < not_before:
+        wait = max(1, int(not_before - time.time()))
+        return DeviceAuthResult(
+            status="pending",
+            detail=f"Still waiting — Google asked us to poll less often. Try again in {wait}s.",
+            user_code=str(pending.get("user_code", "")),
+            verification_url=str(pending.get("verification_url", "")),
         )
     status, body = poster(
         TOKEN_ENDPOINT,
@@ -294,7 +313,14 @@ def _finish(
         )
     if error == "slow_down":
         pending = dict(pending)
-        pending["interval"] = int(pending.get("interval", _DEFAULT_INTERVAL)) + _DEFAULT_INTERVAL
+        interval = int(pending.get("interval", _DEFAULT_INTERVAL)) + _DEFAULT_INTERVAL
+        pending["interval"] = interval
+        # A stored interval nothing reads is not a backoff. The next allowed
+        # poll is a timestamp because that is the form the check at the top
+        # of _finish can act on — the caller is a person re-running a
+        # command, not a loop we control, so "wait n seconds" has to survive
+        # until the next process.
+        pending["poll_not_before"] = time.time() + interval
         _write_pending(pending, home)
         return DeviceAuthResult(
             status="pending",

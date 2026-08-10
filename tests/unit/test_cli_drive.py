@@ -118,3 +118,66 @@ def test_backup_no_drive_skips_the_push_call_entirely(
     assert result.exit_code == 0
     assert calls == []
     assert "Drive:" not in result.output
+
+
+def test_overnight_pushes_the_digest_when_drive_is_on(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI overnight branch had no coverage at all — only backup did — so
+    the digest path handed to push_digest could regress unnoticed (#231 review)."""
+    from wingman.application.focus import OvernightReport
+
+    digest = workspace / "digest-2026-08-10.md"
+    digest.write_text("# digest", encoding="utf-8")
+    pushed: list[Path] = []
+
+    monkeypatch.setattr(
+        cli_main,
+        "overnight_run",
+        lambda config, storage, out_dir=None: OvernightReport(
+            targets=[], processed=0, failed=0, actions=[], digest_path=str(digest)
+        ),
+    )
+    monkeypatch.setattr(
+        cli_main,
+        "push_digest",
+        lambda path: (
+            pushed.append(path),
+            DrivePushResult(status="pushed", detail="Drive: pushed to Wingman/digests/x.md"),
+        )[1],
+    )
+
+    result = runner.invoke(app, ["overnight"])
+
+    assert result.exit_code == 0, result.output
+    assert pushed == [digest]
+    assert "Drive: pushed to" in result.output
+
+
+def test_overnight_leaves_drive_alone_when_asked(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.application.focus import OvernightReport
+
+    digest = workspace / "digest-2026-08-10.md"
+    digest.write_text("# digest", encoding="utf-8")
+    pushed: list[Path] = []
+
+    monkeypatch.setattr(
+        cli_main,
+        "overnight_run",
+        lambda config, storage, out_dir=None: OvernightReport(
+            targets=[], processed=0, failed=0, actions=[], digest_path=str(digest)
+        ),
+    )
+    monkeypatch.setattr(
+        cli_main,
+        "push_digest",
+        lambda path: pushed.append(path),  # must never be called
+    )
+
+    result = runner.invoke(app, ["overnight", "--no-drive"])
+
+    assert result.exit_code == 0, result.output
+    assert pushed == []
+    assert "Drive" not in result.output

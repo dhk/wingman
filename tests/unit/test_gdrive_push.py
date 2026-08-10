@@ -209,3 +209,30 @@ def test_push_never_raises_even_on_unexpected_folder_error(
     # Must not raise.
     result = push_backup(archive, home=home)
     assert result.status == "failed"
+
+
+def test_an_unexpected_failure_still_never_breaks_the_local_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The contract is 'never raises', and it was catching only the two Drive
+    error classes — while upload_file() calls stat() and read_bytes(), which
+    raise OSError. A backup that completed fine would have failed at the very
+    last step, over a file that was already safely written (#231 review)."""
+    from wingman.application import gdrive_push
+    from wingman.infrastructure import gdrive, gdrive_auth
+
+    archive = tmp_path / "backup.tar.gz"
+    archive.write_bytes(b"x")
+    monkeypatch.setattr(gdrive_auth, "is_authorized", lambda home=None: True)
+    monkeypatch.setattr(gdrive_auth, "access_token", lambda home=None: "tok")
+    monkeypatch.setattr(gdrive, "ensure_folder", lambda *a, **k: "folder")
+
+    def explode(*args: object, **kwargs: object) -> str:
+        raise PermissionError("the artifact vanished between writing and uploading")
+
+    monkeypatch.setattr(gdrive, "upload_file", explode)
+
+    result = gdrive_push.push_backup(archive, home=tmp_path / "home")
+
+    assert result.status == "failed"
+    assert "the local file is unaffected" in result.detail

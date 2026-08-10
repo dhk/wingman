@@ -143,12 +143,18 @@ def upload_file(
     API failure — callers must catch this, never let it break the local
     file it describes (see module docstring)."""
     http = http if http is not None else _default_http
-    data = local_path.read_bytes()
-    if len(data) > MAX_UPLOAD_BYTES:
+    # stat() before read_bytes(). The cap exists to bound what this does to
+    # the machine, and reading the file in order to discover it is too big
+    # spends exactly the resource the cap is protecting — a multi-gigabyte
+    # workspace backup would be pulled entirely into memory just to be
+    # rejected on the next line.
+    size = local_path.stat().st_size
+    if size > MAX_UPLOAD_BYTES:
         raise GDriveApiError(
-            f"{local_path.name} is {len(data)} bytes, over the {MAX_UPLOAD_BYTES}-byte "
+            f"{local_path.name} is {size} bytes, over the {MAX_UPLOAD_BYTES}-byte "
             "simple-upload limit (resumable upload for larger files is follow-up scope, #205)"
         )
+    data = local_path.read_bytes()
     boundary = uuid.uuid4().hex
     metadata = json.dumps({"name": filename, "parents": [folder_id]}).encode("utf-8")
     body = (

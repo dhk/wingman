@@ -146,3 +146,25 @@ def test_default_http_wraps_connection_failure(monkeypatch: pytest.MonkeyPatch) 
         gdrive_module._default_http(
             urllib.request.Request("https://www.googleapis.com/drive/v3/files")
         )
+
+
+def test_the_size_cap_is_checked_before_the_file_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cap exists to bound what an upload does to this machine. Reading
+    the file in order to discover it is too big spends exactly the resource
+    the cap protects — a multi-gigabyte backup was pulled entirely into
+    memory just to be rejected on the next line (#231 review)."""
+    from wingman.infrastructure import gdrive
+
+    oversized = tmp_path / "huge.tar.gz"
+    oversized.write_bytes(b"x" * 64)
+
+    def must_not_be_called(self: Path) -> bytes:
+        raise AssertionError("read_bytes() ran before the size check")
+
+    monkeypatch.setattr(gdrive, "MAX_UPLOAD_BYTES", 16)
+    monkeypatch.setattr(Path, "read_bytes", must_not_be_called)
+
+    with pytest.raises(gdrive.GDriveApiError, match="over the"):
+        gdrive.upload_file("tok", oversized, "folder", "huge.tar.gz", "application/gzip")
