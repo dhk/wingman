@@ -3068,6 +3068,24 @@ def mcp_stop(
         raise typer.Exit(code=1)
 
 
+def _checked_connector_name(value: str | None) -> str | None:
+    """Typer callback for every --connector-name flag.
+
+    The name is rendered into a 'claude mcp add' line whose whole purpose
+    is to be pasted into a shell, so a metacharacter in it is a second
+    command waiting to run. Rejecting at the flag turns that into an
+    ordinary usage error instead of a traceback.
+    """
+    from wingman.mcp_server import ConnectorNameError, validate_connector_name
+
+    if value is None or value == "":  # '' is the documented "suppress it" value
+        return value
+    try:
+        return validate_connector_name(value)
+    except ConnectorNameError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
 @mcp_app.command("url")
 def mcp_url(
     host: str = typer.Option("127.0.0.1", help="Bind address the server was started with."),
@@ -3086,6 +3104,7 @@ def mcp_url(
     connector_name: str = typer.Option(
         "wingman",
         "--connector-name",
+        callback=_checked_connector_name,
         help="Name for the ready-to-paste 'claude mcp add' command printed alongside each MCP "
         "url (issue #253). Pass '' to suppress it and print bare urls only, as before.",
     ),
@@ -3181,6 +3200,7 @@ def tenant_url_cmd(
     connector_name: str | None = typer.Option(
         None,
         "--connector-name",
+        callback=_checked_connector_name,
         help="Name for the ready-to-paste 'claude mcp add' command printed alongside the MCP "
         "url (issue #253). Default: 'wingman-<slug>'. Pass '' to suppress it and print bare "
         "urls only, as before.",
@@ -3252,6 +3272,7 @@ def tenant_urls_cmd(
     connector_name: str | None = typer.Option(
         None,
         "--connector-name",
+        callback=_checked_connector_name,
         help="Name for the ready-to-paste 'claude mcp add' command printed alongside each MCP "
         "url (issue #253). Default: 'wingman-<slug>' for one tenant, auto-derived per tenant "
         "for the full roster. Pass '' to suppress it and print bare urls only, as before.",
@@ -3327,6 +3348,7 @@ def tenant_rotate_token_cmd(
     connector_name: str | None = typer.Option(
         None,
         "--connector-name",
+        callback=_checked_connector_name,
         help="Name for the ready-to-paste 'claude mcp add' command printed alongside the MCP "
         "url (issue #253). Default: 'wingman-<slug>'. Pass '' to suppress it and print bare "
         "urls only, as before.",

