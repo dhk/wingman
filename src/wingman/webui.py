@@ -646,7 +646,8 @@ def _key_field(short: str, env_var: str, source: str) -> str:
             f'<div class="field"><label>{_e(label)}</label>'
             '<input type="password" value="********" readonly>'
             f'<span class="status warn"><span class="sdot"></span>'
-            f"shadowed \u2014 {_e(env_var)} in the service environment wins</span></div>"
+            f"set in the service environment \u2014 your own key would take precedence"
+            "</span></div>"
         )
     if source == "workspace file":
         status = (
@@ -715,8 +716,8 @@ def _keys_panel(config: Config, step: str = "") -> str:
     return (
         f'<div class="panel">{lead}'
         "<p>Each key is <b>verified against its provider</b> before it is stored "
-        "(workspace file, owner-only). A key set in the service environment always "
-        "wins (RFC-019).</p>"
+        "(workspace file, owner-only). Your own key is the one that gets used \u2014 "
+        "anything set in the service environment is only a fallback.</p>"
         f'<form method="post" action="keys" class="field">{fields}'
         '<button class="btn">Verify &amp; store</button></form></div>'
     )
@@ -1014,7 +1015,7 @@ async def ui_keys(request: Request) -> Response:
         state = (
             "verified and live now"
             if live
-            else "verified and stored — the service environment variable wins until it changes"
+            else "verified and stored — it takes effect on the next call"
         )
         lines.append(f"{short}: {state}.")
         _logger.info("webui key stored short=%s live=%s", short, live)  # never the value

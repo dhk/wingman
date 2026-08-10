@@ -245,6 +245,46 @@ Two deferrals, on the demonstrated-need rule:
 
 **Revisit if.** Users want per-target depth control (research-only vs full model refresh — a per-member flag on the enrollment record), or digests need trend memory across runs (digest diffing becomes its own store), or the suggestion surface should reach beyond the workspace (that is a new egress decision, not an extension of this one).
 
+## RFC-019a / RFC-034a: bring-your-own-key wins over the environment
+
+**Decision (amends RFC-019 and RFC-034).** The resolution ladder becomes
+**workspace key file > environment > Keychain > host file > global file**. The
+key someone provided for their own workspace is the key their calls use;
+everything below it is somebody else's default. RFC-019's original
+"an exported environment variable always wins", reaffirmed by RFC-034's
+"the env-wins invariant survives untouched", no longer holds.
+
+**Rationale.** Env-wins was right when one person ran one workspace on their own
+machine: an export was that person's own deliberate act, and the ladder simply
+preferred the most recent one. It stopped being right the moment a shared
+process served several people (RFC-048). Then the environment belongs to the
+*operator* and the workspace key belongs to the *tenant*, and env-wins means an
+operator's stale export silently spends on a tenant's behalf — an attribution
+and billing problem, not merely the misleading UI copy it also produced. RFC-048
+had already carved out the exception for tenants (`strict_provider_keys` skips
+the environment entirely); this generalises that rather than maintaining two
+competing truths in one codebase. A form that stores a key it will not use is a
+trap, which is the same objection RFC-034 raised against storing unverified
+keys.
+
+**Cost, accepted.** An operator can no longer override a stale or revoked
+*stored* key by exporting the variable; a bad workspace key must be fixed where
+it lives (`wingman keys set`, the web form, or deleting `keys.env`). The support
+shape this creates — "I exported the right key and it still fails" — is the
+price of the guarantee that a provided key is an honoured one. `wingman doctor`
+names the winning source and every shadowed copy (#122), so the diagnosis is one
+command.
+
+**Unchanged.** The environment remains a full source, so CI, containers and a
+fresh workspace behave exactly as before. Hydration still never overwrites a set
+variable. No key is ever logged, and there is still no MCP tool for setting one
+(RFC-019's parity exception).
+
+**Revisit if.** A deployment needs central key rotation that must override every
+workspace at once — that is a real need this ordering makes harder, and it would
+argue for an explicit "managed key" source above the workspace rather than for
+restoring env-wins.
+
 ## RFC-019: API keys in the macOS Keychain, hydrated at startup
 
 **Decision.** `wingman keys set anthropic|voyage` stores an API key in the macOS Keychain via the system `security` CLI (service = the environment variable name, account = `wingman`, so items are recognizable in Keychain Access); `keys list` shows each key's current *source* — environment, keychain, or not set — never its value; `keys unset` removes one. At startup, both entrypoints (the CLI's root callback and `wingman-mcp`'s main) hydrate any known key that is absent from the environment. **Precedence: an exported environment variable always wins; the Keychain only fills gaps** — existing shell exports, launchd `EnvironmentVariables`, and CI secrets behave exactly as before. On systems without `security` (Linux, CI, containers) hydration is a silent no-op and `keys set` fails with a plain explanation. The payoff: `claude_desktop_config.json` needs no `env` block, launchd plists need no embedded secrets, and no wrapper scripts exist to get wrong.

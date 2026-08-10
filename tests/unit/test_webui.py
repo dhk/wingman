@@ -286,17 +286,25 @@ def test_key_form_validates_before_storing(
     assert http.post("/ui/nope/keys", data={"anthropic": "x"}).status_code == 404
 
 
-def test_env_always_shadows_workspace_key(
+def test_a_submitted_key_takes_precedence_over_the_environment(
     client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """BYOK. The form previously stored the key and told the user the
+    service environment would win anyway — a form that stores a key it
+    will not use is a trap."""
+    from wingman.infrastructure.keys import resolve_provider_key
+
     http, token = client
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
     monkeypatch.setitem(webui_module.VALIDATORS, "anthropic", lambda value: None)
+
     response = http.post(f"/ui/{token}/keys", data={"anthropic": "sk-ant-newer"})
-    assert "environment variable wins" in response.text
+
+    assert "environment variable wins" not in response.text
     import os
 
-    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-from-env"  # untouched
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-from-env"  # env untouched
+    assert resolve_provider_key("ANTHROPIC_API_KEY", load_config().data_dir) == "sk-ant-newer"
 
 
 def test_restart_route_rejects_a_wrong_token(client: tuple[TestClient, str]) -> None:
