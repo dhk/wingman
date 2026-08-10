@@ -25,8 +25,10 @@ def minimal_pdf(text: str) -> bytes:
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R"
-        b" /Resources << /Font << /F1 5 0 R >> >> >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R"
+            b" /Resources << /Font << /F1 5 0 R >> >> >>"
+        ),
         None,  # content stream, built below
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     ]
@@ -210,7 +212,7 @@ def test_fetch_resume_bytes_sniffs_and_rejects_permission_walls() -> None:
 
     def doc_fetcher(url: str) -> bytes:
         fetched.append(url)
-        return "Jo Doe\nStaff Engineer".encode()
+        return b"Jo Doe\nStaff Engineer"
 
     name, data = fetch_resume_bytes(
         "https://docs.google.com/document/d/ABC123/edit", fetcher=doc_fetcher

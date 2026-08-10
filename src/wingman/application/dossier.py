@@ -21,8 +21,8 @@ from wingman.application.ingest import IngestError
 from wingman.application.pov import COMPANY_POV_PREFIX, company_card_id
 from wingman.application.research import RESEARCH_STALE_AFTER_DAYS
 from wingman.application.similarity import (
-    company_key,
     company_alignment,
+    company_key,
     similar_companies,
 )
 from wingman.domain.person import ExternalDocument, FeedAttribution
@@ -174,8 +174,10 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
         lines.extend(
             [
                 "",
-                f"## Company themes (synthesized {company_card.generated_at.date().isoformat()},"
-                f" {company_card.provider}/{company_card.model})",
+                (
+                    f"## Company themes (synthesized {company_card.generated_at.date().isoformat()},"
+                    f" {company_card.provider}/{company_card.model})"
+                ),
                 "",
             ]
         )

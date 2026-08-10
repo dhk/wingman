@@ -17,17 +17,30 @@ if TYPE_CHECKING:
     from wingman.infrastructure.tenants import Tenant
 
 from wingman.agents.profile_curator import ProposalParseError
+from wingman.application.answers import (
+    find_answer,
+    find_similar,
+    remove_answer,
+    render_answer,
+    render_answer_listing,
+    save_answer,
+)
 from wingman.application.assess import assess_job, fetch_job_posting
 from wingman.application.backup import create_backup, restore_backup
+from wingman.application.company_feeds import (
+    attach_company_feed,
+    fetch_company_feeds,
+    is_company_anchor,
+    list_company_feeds,
+    remove_company_feed,
+)
 from wingman.application.corpus import add_to_corpus, find_evidence
-from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
-from wingman.application.linkedin import import_linkedin
-from wingman.application.news import STALE_AFTER_DAYS, fetch_person_news
-from wingman.application.focus import (
-    follow_company,
-    latest_digest,
-    overnight_run,
-    render_follow_report,
+from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
+from wingman.application.dossier import build_company_dossier, delete_dossier_reports
+from wingman.application.dossier_research import (
+    dossier_truncation_warning,
+    research_person_dossier,
+    save_person_dossier,
 )
 from wingman.application.feature_request import (
     file_feature_request,
@@ -36,8 +49,17 @@ from wingman.application.feature_request import (
     set_feature_repo,
     stamp_operator,
 )
+from wingman.application.focus import (
+    follow_company,
+    latest_digest,
+    overnight_run,
+    render_follow_report,
+)
+from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
+from wingman.application.linkedin import import_linkedin
+from wingman.application.news import STALE_AFTER_DAYS, fetch_person_news
+from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pack import build_application_pack
-from wingman.application.pipeline import MisoReport, make_it_so
 from wingman.application.people import (
     add_person,
     attach_feed,
@@ -51,22 +73,7 @@ from wingman.application.people import (
     rename_person,
     seed_from_connections,
 )
-from wingman.domain.person import Person
-from wingman.reporting.export import (
-    export_career,
-    export_company,
-    export_person,
-    materialize_person_export,
-)
-from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
-from wingman.application.dossier import build_company_dossier, delete_dossier_reports
-from wingman.application.dossier_research import (
-    dossier_truncation_warning,
-    research_person_dossier,
-    save_person_dossier,
-)
-from wingman.application.outreach import build_outreach_brief, render_outreach_brief
-from wingman.domain.outreach import OutreachPurpose
+from wingman.application.pipeline import MisoReport, make_it_so
 from wingman.application.pov import (
     CORPUS_PERSON_ID,
     build_company_pov,
@@ -75,7 +82,14 @@ from wingman.application.pov import (
     company_card_id,
     render_pov_card,
 )
-from wingman.application.search import render_search_report, search_workspace
+from wingman.application.profile_manage import (
+    clear_profile,
+    rekind_item,
+    remove_item,
+    rename_item,
+    render_profile_listing,
+    resolve_item,
+)
 from wingman.application.research import (
     add_company_source,
     delete_company,
@@ -85,6 +99,7 @@ from wingman.application.research import (
     render_research_report,
     research_company,
 )
+from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import (
     companies_like,
     company_key,
@@ -93,9 +108,30 @@ from wingman.application.similarity import (
     similar_companies,
     similar_people,
 )
-from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
+from wingman.application.telemetry_harvest import harvest_transcript
+from wingman.application.telemetry_summary import (
+    DEFAULT_GAP_MINUTES,
+    DEFAULT_TOP_N,
+    render_summary,
+)
+from wingman.application.telemetry_summary import (
+    summarize as summarize_telemetry,
+)
+from wingman.application.triage import (
+    mute_action,
+    render_verdicts,
+    snooze_action,
+    unmute_action,
+)
+from wingman.domain.outreach import OutreachPurpose
+from wingman.domain.person import Person
 from wingman.infrastructure import doctor_deep
-from wingman.version import wingman_version
+from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
+from wingman.infrastructure.host_config import (
+    legacy_host_keys_path,
+    migrate_legacy_host_file,
+    wingman_env_path,
+)
 from wingman.infrastructure.keys import (
     KNOWN_KEYS,
     KeyStoreError,
@@ -107,12 +143,9 @@ from wingman.infrastructure.keys import (
     test_keys,
     unset_key,
 )
-from wingman.infrastructure.host_config import (
-    legacy_host_keys_path,
-    migrate_legacy_host_file,
-    wingman_env_path,
-)
 from wingman.infrastructure.logs import configure_logging
+from wingman.infrastructure.mcp_process import server_status, stop_server
+from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.infrastructure.telemetry import (
     count_events as telemetry_count,
 )
@@ -132,44 +165,6 @@ from wingman.infrastructure.telemetry import (
 from wingman.infrastructure.telemetry import (
     set_enabled as telemetry_set_enabled,
 )
-from wingman.infrastructure.mcp_process import server_status, stop_server
-from wingman.application.triage import (
-    mute_action,
-    render_verdicts,
-    snooze_action,
-    unmute_action,
-)
-from wingman.application.answers import (
-    find_answer,
-    find_similar,
-    remove_answer,
-    render_answer,
-    render_answer_listing,
-    save_answer,
-)
-from wingman.application.company_feeds import (
-    attach_company_feed,
-    fetch_company_feeds,
-    is_company_anchor,
-    list_company_feeds,
-    remove_company_feed,
-)
-from wingman.application.profile_manage import (
-    clear_profile,
-    rekind_item,
-    remove_item,
-    rename_item,
-    render_profile_listing,
-    resolve_item,
-)
-from wingman.application.telemetry_harvest import harvest_transcript
-from wingman.application.telemetry_summary import (
-    DEFAULT_GAP_MINUTES,
-    DEFAULT_TOP_N,
-    render_summary,
-    summarize as summarize_telemetry,
-)
-from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.providers.base import CapabilityClass, ProviderError
 from wingman.providers.embeddings import EmbeddingError
 from wingman.providers.router import (
@@ -178,6 +173,13 @@ from wingman.providers.router import (
     get_embedding_provider,
     get_provider,
 )
+from wingman.reporting.export import (
+    export_career,
+    export_company,
+    export_person,
+    materialize_person_export,
+)
+from wingman.version import wingman_version
 
 app = typer.Typer(help="Wingman: local-first career intelligence.")
 corpus_app = typer.Typer(help="Manage the corpus: your writing as citable evidence.")

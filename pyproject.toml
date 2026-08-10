@@ -23,11 +23,7 @@ wingman-host-status = "wingman.infrastructure.host_status:main"
 dev = [
   "mypy>=1.11",
   "pytest>=8.3",
-  # Held below 0.16 deliberately: that release adds and changes rules
-  # (B008, SIM117, UP037, ISC004, RUF100...) which flag ~151 pre-existing
-  # findings across this codebase. Adopting a new linter is a code change,
-  # not a dependency refresh, and mixing the two makes both unreviewable.
-  "ruff>=0.6,<0.16",
+  "ruff>=0.16",
 ]
 
 [build-system]
@@ -51,6 +47,32 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# RUF100 flags noqa codes for rules this config does not enable, and its fix is
+# to delete the comment. Several here carry the reasoning for a suppression
+# rather than just the code — "S603 — fixed binary, no shell", "BLE001 — one
+# clear failure, never a raw traceback". Deleting those loses a human's
+# argument and silently disarms the suppression for anyone who later enables
+# flake8-bandit. Keeping an unused noqa costs nothing; losing the rationale
+# does.
+ignore = ["RUF100"]
+
+[tool.ruff.lint.per-file-ignores]
+# SIM117 (combine nested `with`) and RUF012 (ClassVar for class attributes) are
+# style rules whose value is in library code. In tests, stacked context
+# managers read as the setup they are, and ruff offers no autofix for these —
+# so adopting them would mean 12 hand edits across 8 files, in a repository
+# other people are working in, for no behavioural gain. src/ is clean of both.
+"tests/**" = ["SIM117", "RUF012"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer's whole interface is declaring CLI metadata in argument defaults, so
+# B008 ("do not perform function call in argument defaults") fires on every
+# command in this codebase. These calls are the documented idiom and are not
+# the mutable-default hazard the rule exists for; rewriting them would break
+# the CLI. This is the exemption the rule's own documentation recommends.
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -248,7 +248,6 @@ def test_key_form_validates_before_storing(
 
     def good(value: str) -> None:
         calls.append(("ok", value))
-        return None
 
     def bad(value: str) -> str:
         calls.append(("bad", value))
@@ -377,7 +376,7 @@ def test_ui_is_path_mount_agnostic(client: tuple[TestClient, str]) -> None:
 
 def test_native_prefix_serves_and_root_unaffected(client: tuple[TestClient, str]) -> None:
     """--prefix /trent: the server itself listens on the folder (RFC-033 addendum)."""
-    http, token = client
+    _http, token = client
     register_ui(server, prefix="/trent")  # coexists with the root registration
     http2 = TestClient(server.streamable_http_app())
     page = http2.get(f"/trent/ui/{token}/")
@@ -529,7 +528,7 @@ def test_connect_tab_honors_wingman_tunnel_port_env(
 
 
 def test_connect_tab_respects_native_prefix(client: tuple[TestClient, str]) -> None:
-    http, token = client
+    _http, token = client
     host, port = server.settings.host, server.settings.port
     register_ui(server, prefix="/trent")
     http2 = TestClient(server.streamable_http_app())

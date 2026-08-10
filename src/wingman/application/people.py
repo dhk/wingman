@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import ClassVar
 from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel, Field
@@ -360,7 +361,7 @@ def _published_at(raw: str) -> datetime | None:
         pass
     if parsed is None:
         try:
-            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(raw)
         except ValueError:
             return None
     # A date string with no timezone token (RFC-822 or ISO) parses naive;
@@ -616,8 +617,8 @@ class _AlternateLinkParser(HTMLParser):
     href looks like a feed are kept as second-tier candidates.
     """
 
-    _FEED_TYPES = {"application/rss+xml", "application/atom+xml"}
-    _ANCHOR_HINTS = ("rss", "atom", "feed")
+    _FEED_TYPES: ClassVar[set[str]] = {"application/rss+xml", "application/atom+xml"}
+    _ANCHOR_HINTS: ClassVar[tuple[str, ...]] = ("rss", "atom", "feed")
 
     def __init__(self) -> None:
         super().__init__()

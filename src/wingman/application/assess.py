@@ -28,7 +28,6 @@ from wingman.agents.opportunity_analyst import (
 from wingman.application.evidence import fold_whitespace
 from wingman.application.ingest import IngestError, RejectedItem
 from wingman.domain import SourceRecord
-from wingman.domain.source_record import derive_document_key
 from wingman.domain.opportunity import (
     FitVerdict,
     Opportunity,
@@ -36,6 +35,7 @@ from wingman.domain.opportunity import (
     RequirementAssessment,
 )
 from wingman.domain.profile import EvidenceSpan, ItemStatus, ProfileItem
+from wingman.domain.source_record import derive_document_key
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage

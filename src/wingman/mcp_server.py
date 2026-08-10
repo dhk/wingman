@@ -38,15 +38,31 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from wingman.agents.profile_curator import ProposalParseError
+from wingman.application.answers import (
+    find_answer,
+    find_similar,
+    remove_answer,
+    render_answer,
+    render_answer_listing,
+    save_answer,
+)
 from wingman.application.assess import assess_job as assess_job_use_case
 from wingman.application.assess import fetch_job_posting
-from wingman.application.opportunities import list_opportunity_summaries, render_opportunity_listing
-from wingman.application.pack import build_application_pack
-from wingman.reporting.completeness import render_completeness_markdown, write_completeness
-from wingman.reporting.completeness_html import render_completeness_html
 from wingman.application.backup import create_backup
+from wingman.application.company_feeds import (
+    attach_company_feed,
+    fetch_company_feeds,
+    is_company_anchor,
+    list_company_feeds,
+    remove_company_feed,
+)
 from wingman.application.corpus import find_evidence
-from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
+from wingman.application.dossier import build_company_dossier, delete_dossier_reports
+from wingman.application.dossier_research import (
+    dossier_truncation_warning,
+    research_person_dossier,
+    save_person_dossier,
+)
 from wingman.application.feature_request import (
     file_feature_request,
     get_feature_repo,
@@ -59,8 +75,10 @@ from wingman.application.focus import (
     overnight_run,
     render_follow_report,
 )
-from wingman.application.pipeline import MisoReport
-from wingman.application.pipeline import make_it_so as make_it_so_use_case
+from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
+from wingman.application.opportunities import list_opportunity_summaries, render_opportunity_listing
+from wingman.application.outreach import build_outreach_brief, render_outreach_brief
+from wingman.application.pack import build_application_pack
 from wingman.application.people import (
     add_person,
     attach_feed,
@@ -74,14 +92,8 @@ from wingman.application.people import (
     rename_person,
     seed_from_connections,
 )
-from wingman.application.dossier import build_company_dossier, delete_dossier_reports
-from wingman.application.dossier_research import (
-    dossier_truncation_warning,
-    research_person_dossier,
-    save_person_dossier,
-)
-from wingman.application.outreach import build_outreach_brief, render_outreach_brief
-from wingman.domain.outreach import OutreachPurpose
+from wingman.application.pipeline import MisoReport
+from wingman.application.pipeline import make_it_so as make_it_so_use_case
 from wingman.application.pov import (
     CORPUS_PERSON_ID,
     build_company_pov,
@@ -89,27 +101,6 @@ from wingman.application.pov import (
     build_pov_card,
     company_card_id,
     render_pov_card,
-)
-from wingman.application.triage import (
-    mute_action,
-    render_verdicts,
-    snooze_action,
-    unmute_action,
-)
-from wingman.application.answers import (
-    find_answer,
-    find_similar,
-    remove_answer,
-    render_answer,
-    render_answer_listing,
-    save_answer,
-)
-from wingman.application.company_feeds import (
-    attach_company_feed,
-    fetch_company_feeds,
-    is_company_anchor,
-    list_company_feeds,
-    remove_company_feed,
 )
 from wingman.application.profile_manage import (
     clear_profile,
@@ -128,12 +119,7 @@ from wingman.application.research import (
     render_research_report,
     research_company,
 )
-from wingman.reporting.export import (
-    export_career,
-    export_company,
-    export_person,
-    materialize_person_export,
-)
+from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import (
     CompanySimilarityReport,
     SimilarPerson,
@@ -143,8 +129,22 @@ from wingman.application.similarity import (
     similar_companies,
     similar_people,
 )
-from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import people_like as people_like_use_case
+from wingman.application.telemetry_summary import (
+    DEFAULT_GAP_MINUTES,
+    DEFAULT_TOP_N,
+    render_summary,
+)
+from wingman.application.telemetry_summary import (
+    summarize as summarize_telemetry,
+)
+from wingman.application.triage import (
+    mute_action,
+    render_verdicts,
+    snooze_action,
+    unmute_action,
+)
+from wingman.domain.outreach import OutreachPurpose
 from wingman.domain.person import FeedAttribution, FeedKind, FeedSource, Person
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.host_config import migrate_legacy_host_file
@@ -156,7 +156,7 @@ from wingman.infrastructure.mcp_process import (
     read_server_pid,
     write_pidfile,
 )
-from wingman.version import wingman_version
+from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.infrastructure.telemetry import (
     count_events as telemetry_count,
 )
@@ -167,17 +167,19 @@ from wingman.infrastructure.telemetry import (
     list_events as telemetry_list,
 )
 from wingman.infrastructure.telemetry import record_event
-from wingman.application.telemetry_summary import (
-    DEFAULT_GAP_MINUTES,
-    DEFAULT_TOP_N,
-    render_summary,
-    summarize as summarize_telemetry,
-)
-from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.infrastructure.tenants import Tenant
 from wingman.providers.base import CapabilityClass, ProviderError
 from wingman.providers.embeddings import EmbeddingError
 from wingman.providers.router import ModelConfigError, get_embedding_provider, get_provider
+from wingman.reporting.completeness import render_completeness_markdown, write_completeness
+from wingman.reporting.completeness_html import render_completeness_html
+from wingman.reporting.export import (
+    export_career,
+    export_company,
+    export_person,
+    materialize_person_export,
+)
+from wingman.version import wingman_version
 
 server = FastMCP("wingman")
 
@@ -1071,7 +1073,7 @@ def heap(
     one by hand — ask how hot each is only if they haven't said, and
     default to warm rather than blocking capture on the question.
     """
-    from wingman.application.heap import add_to_heap, remove_from_heap, list_heap, render_heap
+    from wingman.application.heap import add_to_heap, list_heap, remove_from_heap, render_heap
 
     config = _ready_config()
     if config is None:
@@ -2782,7 +2784,7 @@ def _tailscale_dns_name(runner: Callable[..., Any] = subprocess.run) -> str | No
     try:
         proc = runner(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5)
         name = json.loads(proc.stdout)["Self"]["DNSName"]
-    except Exception:
+    except Exception:  # noqa: BLE001 — every failure here means "no tunnel", by design
         return None
     return str(name).rstrip(".") or None
 

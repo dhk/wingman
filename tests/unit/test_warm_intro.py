@@ -38,7 +38,7 @@ def test_warm_paths_to_person_calls_find_warmest_paths_with_target_name() -> Non
 def test_warm_paths_to_person_passes_from_person_when_given() -> None:
     caller = _fake_caller()
     warm_paths_to_person("Target Person", from_person="Dave Holmes", caller=caller)
-    tool, arguments = caller.calls[0]  # type: ignore[attr-defined]
+    _tool, arguments = caller.calls[0]  # type: ignore[attr-defined]
     assert arguments == {"to": "Target Person", "from": "Dave Holmes"}
 
 

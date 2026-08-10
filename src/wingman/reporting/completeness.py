@@ -35,8 +35,10 @@ def render_completeness_markdown(report: CompletenessReport) -> str:
     lines = [
         "# Completeness",
         "",
-        f"Generated: {report.generated_at.date().isoformat()} "
-        "(local data only — no fetch, no model call)",
+        (
+            f"Generated: {report.generated_at.date().isoformat()} "
+            "(local data only — no fetch, no model call)"
+        ),
         "",
         "## Career Profile",
         "",

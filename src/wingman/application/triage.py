@@ -67,7 +67,7 @@ def active_suppressions(storage: Storage) -> dict[str, str]:
     return active
 
 
-def filter_actions(actions: "list[ActionItem]", storage: Storage) -> "tuple[list[ActionItem], int]":
+def filter_actions(actions: list[ActionItem], storage: Storage) -> tuple[list[ActionItem], int]:
     """Apply the user's standing verdicts; returns (kept, suppressed_count)."""
     suppressed = active_suppressions(storage)
     if not suppressed:

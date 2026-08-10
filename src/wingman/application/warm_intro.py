@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from wingman.application.ingest import IngestError
 from wingman.infrastructure.woven_client import (
-    WovenCallError,
     WovenCaller,
+    WovenCallError,
     WovenNotConfigured,
     call_woven_tool,
 )

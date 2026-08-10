@@ -128,7 +128,7 @@ def signal_reload(registry_path: Path, command_of: CommandOf = _ps_command_of) -
     return pid
 
 
-def register_reload_handler(index: "TenantIndex", registry_path: Path) -> None:
+def register_reload_handler(index: TenantIndex, registry_path: Path) -> None:
     """Install a SIGHUP handler on the CURRENT process that reloads
     'index' from 'registry_path'. Call once, from the shared-process
     startup path, before serving. Safe to run directly inside a signal

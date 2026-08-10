@@ -450,8 +450,10 @@ def render_pov_card(card: PovCard) -> str:
     """Deterministic text rendering shared by the CLI and MCP surfaces."""
     lines = [
         f"POV card: {card.person_name}",
-        f"(built from {card.documents_used} documents, {card.provider}/{card.model}, "
-        f"{card.generated_at.date().isoformat()})",
+        (
+            f"(built from {card.documents_used} documents, {card.provider}/{card.model}, "
+            f"{card.generated_at.date().isoformat()})"
+        ),
         "",
         "Stances:",
     ]

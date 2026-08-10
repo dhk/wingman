@@ -11,11 +11,9 @@ character, only wrapping and indentation are forgiven.
 import json
 from pathlib import Path
 
-from wingman.application.evidence import locate_quote
-
 import pytest
 
-from wingman.application.evidence import fold_whitespace
+from wingman.application.evidence import fold_whitespace, locate_quote
 from wingman.application.ingest import ingest_resume
 from wingman.application.pov import _validate_proposal
 from wingman.domain.pov import PovProposal, ProposedStance
@@ -47,9 +45,11 @@ RESPONSE = json.dumps(
                 "classification": "fact",
                 "confidence": 0.9,
                 "quotes": [
-                    "Redesigned outreach scheduling with probabilistic outcome "
-                    "modeling; completion rate 0.89% → 4.95% across 100K+ "
-                    "member interactions."
+                    (
+                        "Redesigned outreach scheduling with probabilistic outcome "
+                        "modeling; completion rate 0.89% → 4.95% across 100K+ "
+                        "member interactions."
+                    )
                 ],
             },
             {
@@ -59,9 +59,11 @@ RESPONSE = json.dumps(
                 "classification": "fact",
                 "confidence": 0.9,
                 "quotes": [
-                    "Architected financial data integrity platform supporting "
-                    "$100B+ in ledger activity; to-the-penny reconciliation "
-                    "across banking partners."
+                    (
+                        "Architected financial data integrity platform supporting "
+                        "$100B+ in ledger activity; to-the-penny reconciliation "
+                        "across banking partners."
+                    )
                 ],
             },
             {

@@ -77,29 +77,39 @@ def save_criteria(config: Config, text: str) -> Path:
 INTERVIEW_AREAS: list[tuple[str, str]] = [
     (
         "Hard filters",
-        "The never-mind-how-good-it-sounds constraints: location/remote "
-        "requirements, minimum seniority or scope, comp floor, industries "
-        "you will not touch.",
+        (
+            "The never-mind-how-good-it-sounds constraints: location/remote "
+            "requirements, minimum seniority or scope, comp floor, industries "
+            "you will not touch."
+        ),
     ),
     (
         "Role families",
-        "The 2-3 shapes of job you would actually take. Describe the work, "
-        "not the title — titles lie.",
+        (
+            "The 2-3 shapes of job you would actually take. Describe the work, "
+            "not the title — titles lie."
+        ),
     ),
     (
         "Strong attractors",
-        "What makes you lean in when you see it: technologies, problem "
-        "domains, company stage, team shape — whatever it really is.",
+        (
+            "What makes you lean in when you see it: technologies, problem "
+            "domains, company stage, team shape — whatever it really is."
+        ),
     ),
     (
         "Anti-signals",
-        "Phrases or facts in a posting that make you close the tab even when "
-        "everything else fits. Be blunt; similarity can never learn this.",
+        (
+            "Phrases or facts in a posting that make you close the tab even when "
+            "everything else fits. Be blunt; similarity can never learn this."
+        ),
     ),
     (
         "Tie-breaker",
-        "When two plausible jobs compete for your attention, what wins: "
-        "comp, mission, people, growth, low chaos?",
+        (
+            "When two plausible jobs compete for your attention, what wins: "
+            "comp, mission, people, growth, low chaos?"
+        ),
     ),
 ]
 

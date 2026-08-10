@@ -53,7 +53,7 @@ def test_events_roundtrip_and_clipping(workspace: Path) -> None:
     [event] = list_events(config)
     assert event["surface"] == "mcp" and event["name"] == "search"
     assert len(event["payload"]["result"]) <= 4_000  # clipped, not duplicated
-    assert list(iter_events(config))[0]["name"] == "search"
+    assert next(iter(iter_events(config)))["name"] == "search"
 
 
 def test_keys_set_values_are_never_journaled() -> None:

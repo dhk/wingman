@@ -79,8 +79,10 @@ def build_application_pack(
     lines = [
         f"# Application pack: {opportunity.title}",
         "",
-        f"Generated {now.date().isoformat()} · assessed "
-        f"{opportunity.created_at.date().isoformat()} · next action: {opportunity.next_action}",
+        (
+            f"Generated {now.date().isoformat()} · assessed "
+            f"{opportunity.created_at.date().isoformat()} · next action: {opportunity.next_action}"
+        ),
         "",
         "## Fit, requirement by requirement",
         "",
@@ -151,8 +153,10 @@ def build_application_pack(
                 "",
                 "## Company",
                 "",
-                "- could not infer the company from the role title — "
-                're-run with --company "<name>" to attach company intelligence',
+                (
+                    "- could not infer the company from the role title — "
+                    're-run with --company "<name>" to attach company intelligence'
+                ),
             ]
         )
 

@@ -23,7 +23,7 @@ import sqlite3
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Self
 from uuid import uuid4
 
 from wingman.infrastructure.config import Config
@@ -209,7 +209,7 @@ def redact_argv(argv: list[str]) -> list[str]:
 
 
 class _Timer:
-    def __enter__(self) -> _Timer:
+    def __enter__(self) -> Self:
         self._start = time.monotonic()
         return self
 

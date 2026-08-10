@@ -49,7 +49,7 @@ def test_follow_enrolls_company_and_sourced_people(workspace: Path) -> None:
         add_person("Other Person", storage, company="Elsewhere")
 
         def probe(url: str) -> bytes:
-            if url.endswith("/careers") or url.endswith("/blog"):
+            if url.endswith(("/careers", "/blog")):
                 return CAREERS_PAGE
             raise FetchError("404")
 
@@ -270,10 +270,9 @@ def test_themes_failure_flips_target_status_instead_of_being_swallowed(
 
 
 def test_latest_digest_and_out_dir(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from wingman.application.focus import latest_digest
-
     import wingman.application.news as news_module
     import wingman.application.people as people_module
+    from wingman.application.focus import latest_digest
 
     config = load_config()
     assert latest_digest(config) is None

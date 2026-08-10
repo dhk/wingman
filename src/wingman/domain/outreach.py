@@ -9,9 +9,8 @@ own corpus verbatim: the model proposes, deterministic validation disposes.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import uuid4
-
 from enum import StrEnum
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 

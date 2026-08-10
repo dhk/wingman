@@ -24,9 +24,9 @@ from wingman.agents.profile_curator import (
 from wingman.application.evidence import locate_quote
 from wingman.application.profile_store import persist_items
 from wingman.domain import SourceRecord
-from wingman.domain.source_record import derive_document_key
 from wingman.domain.extraction import ProposedItem
 from wingman.domain.profile import EvidenceSpan, ProfileItem
+from wingman.domain.source_record import derive_document_key
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.fetch import FetchError
 from wingman.infrastructure.logs import get_logger

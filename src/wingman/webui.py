@@ -33,8 +33,9 @@ from wingman.infrastructure.logs import get_logger
 from wingman.reporting.design_tokens import DESIGN_TOKENS_CSS
 
 if TYPE_CHECKING:
-    from wingman.domain.profile import ProfileItem
     from mcp.server.fastmcp import FastMCP
+
+    from wingman.domain.profile import ProfileItem
     from wingman.infrastructure.tenants import TenantIndex
 
 _logger = get_logger("webui")
@@ -43,10 +44,10 @@ _logger = get_logger("webui")
 # None (the default) preserves today's single-workspace token-file
 # compare exactly — the still-separate shape-B processes (dhk, trent)
 # that stay on that model through the phased migration are unaffected.
-_tenant_index: "TenantIndex | None" = None
+_tenant_index: TenantIndex | None = None
 
 
-def configure_tenant_index(index: "TenantIndex | None") -> None:
+def configure_tenant_index(index: TenantIndex | None) -> None:
     """Bind (or clear) the tenant index '_authorized' consults, and gate
     the self-restart panel/route on. Call once at shared-process startup,
     BEFORE 'register_ui' — 'register_ui' decides whether to mount the
@@ -604,6 +605,8 @@ def _connect_panel(request: Request, token: str, step: str = "") -> str:
         _extra_allowed_hosts,
         _tunnel_port,
         connector_urls,
+    )
+    from wingman.mcp_server import (
         server as mcp_server,
     )
 
@@ -935,8 +938,9 @@ async def ui_upload(request: Request) -> Response:
 
 def key_status_rows(data_dir: Path) -> list[tuple[str, str, str]]:
     """(short, env var, source) per key: environment / workspace file / not set."""
-    from wingman.infrastructure.keys import KNOWN_KEYS, read_workspace_keys
     import os
+
+    from wingman.infrastructure.keys import KNOWN_KEYS, read_workspace_keys
 
     stored = read_workspace_keys(data_dir)
     rows: list[tuple[str, str, str]] = []
@@ -1102,7 +1106,7 @@ async def ui_health(request: Request) -> Response:
 # established when it removed the restart button.
 
 
-def _claim_flags(item: "ProfileItem") -> list[str]:
+def _claim_flags(item: ProfileItem) -> list[str]:
     """Why a reader should look harder at this claim."""
     flags: list[str] = []
     if item.classification.value != "fact":
@@ -1114,7 +1118,7 @@ def _claim_flags(item: "ProfileItem") -> list[str]:
     return flags
 
 
-def _evidence_html(item: "ProfileItem") -> str:
+def _evidence_html(item: ProfileItem) -> str:
     rows = []
     for span in item.evidence:
         rows.append(
@@ -1124,7 +1128,7 @@ def _evidence_html(item: "ProfileItem") -> str:
     return "".join(rows)
 
 
-def _profile_item_html(item: "ProfileItem", tenure: str = "") -> str:
+def _profile_item_html(item: ProfileItem, tenure: str = "") -> str:
     detail = f'<div class="detail">{_e(item.detail)}</div>' if item.detail else ""
     flags = "".join(f'<span class="flag">{_e(f)}</span>' for f in _claim_flags(item))
     return (
@@ -1225,7 +1229,7 @@ def normalize_prefix(prefix: str) -> str:
     return f"/{cleaned}" if cleaned else ""
 
 
-def register_ui(server: "FastMCP", prefix: str = "") -> None:
+def register_ui(server: FastMCP, prefix: str = "") -> None:
     """Mount the read surface, optionally under a native path prefix.
 
     With prefix='/trent' the server itself listens on /trent/ui/… — for
