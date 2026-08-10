@@ -1157,7 +1157,7 @@ def _plural(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
-def _completeness_band(report: "CompletenessReport", items: list["ProfileItem"]) -> str:
+def _completeness_band(report: CompletenessReport, items: list[ProfileItem]) -> str:
     """What is filled in, and what the gap costs — profile-scoped.
 
     The counts come from application/completeness.py (#313), not from a
