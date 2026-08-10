@@ -7,7 +7,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
-from wingman.domain.opportunity import FitVerdict, Opportunity
+from wingman.domain.opportunity import FitVerdict, Opportunity, count_verdicts
 from wingman.domain.profile import ProfileItem
 from wingman.infrastructure.config import Config
 
@@ -86,10 +86,8 @@ def render_fit_brief(
     gaps = [a for a in opportunity.assessments if a.verdict is FitVerdict.GAP]
     unknowns = [a for a in opportunity.assessments if a.verdict is FitVerdict.UNKNOWN]
     lines.extend(["## Summary", ""])
-    counts = {
-        label: sum(1 for a in opportunity.assessments if a.verdict is verdict)
-        for verdict, label in _VERDICT_LABEL.items()
-    }
+    counts_by_verdict = count_verdicts(opportunity.assessments)
+    counts = {label: counts_by_verdict[verdict] for verdict, label in _VERDICT_LABEL.items()}
     lines.append(" · ".join(f"{label}: {count}" for label, count in counts.items()))
     if gaps:
         lines.extend(

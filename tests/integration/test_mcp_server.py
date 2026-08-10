@@ -94,6 +94,7 @@ def test_all_tools_are_registered() -> None:
         "digest",
         "assess_job_url",
         "pack",
+        "opportunities_list",
         "feature_request",
         "changelog",
         "woven_warm_path",

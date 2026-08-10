@@ -63,3 +63,12 @@ class Opportunity(BaseModel):
     requirements: list[Requirement]
     assessments: list[RequirementAssessment]
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+def count_verdicts(assessments: list[RequirementAssessment]) -> dict[FitVerdict, int]:
+    """How many requirement assessments landed at each verdict.
+
+    Pulled out so the fit brief and the opportunity list (#312) count the
+    same way instead of two implementations quietly drifting apart.
+    """
+    return {verdict: sum(1 for a in assessments if a.verdict is verdict) for verdict in FitVerdict}
