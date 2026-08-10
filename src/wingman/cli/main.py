@@ -52,7 +52,12 @@ from wingman.application.people import (
     seed_from_connections,
 )
 from wingman.domain.person import Person
-from wingman.reporting.export import export_career, export_company, export_person
+from wingman.reporting.export import (
+    export_career,
+    export_company,
+    export_person,
+    materialize_person_export,
+)
 from wingman.application.demo import DEMO_REFERENCE_PERSON, seed_demo_watchlist
 from wingman.application.dossier import build_company_dossier, delete_dossier_reports
 from wingman.application.dossier_research import (
@@ -1404,6 +1409,7 @@ def people_pov(
                 err=True,
             )
             raise typer.Exit(code=1) from exc
+        materialize_person_export(person.name, config, storage)
     typer.echo(render_pov_card(report.card))
     for rejected in report.rejected:
         typer.echo(f"  rejected stance {rejected.statement!r}: {rejected.reason}")
@@ -1529,6 +1535,7 @@ def people_brief(
                 err=True,
             )
             raise typer.Exit(code=1) from exc
+        materialize_person_export(person.name, config, storage)
     typer.echo(render_outreach_brief(report.brief))
     for rejected in report.rejected:
         typer.echo(f"  rejected point {rejected.point!r}: {rejected.reason}")

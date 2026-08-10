@@ -128,7 +128,12 @@ from wingman.application.research import (
     render_research_report,
     research_company,
 )
-from wingman.reporting.export import export_career, export_company, export_person
+from wingman.reporting.export import (
+    export_career,
+    export_company,
+    export_person,
+    materialize_person_export,
+)
 from wingman.application.similarity import (
     CompanySimilarityReport,
     SimilarPerson,
@@ -1770,7 +1775,9 @@ def people_pov(name: str, refresh: bool = False) -> str:
     Returns the stored card when one exists; refresh=True rebuilds it (a
     model call — the person's stored posts go to the synthesize_balanced
     provider, and every stance is kept only if its quote appears verbatim
-    in the stored document).
+    in the stored document). Building or rebuilding also refreshes this
+    person's web-viewable export (reports/pdf/) — no separate export_pdf
+    call needed to browse it in the web UI (issue #175).
     """
     config = _ready_config()
     if config is None:
@@ -1791,6 +1798,7 @@ def people_pov(name: str, refresh: bool = False) -> str:
             return f"people pov failed: {exc}. Nothing was stored; call again to retry."
         except (IngestError, ModelConfigError, ProviderError) as exc:
             return f"people pov failed: {exc}"
+        materialize_person_export(person.name, config, storage)
     rejected = "".join(
         f"\n  rejected stance {item.statement!r}: {item.reason}" for item in report.rejected
     )
@@ -2567,6 +2575,10 @@ def people_brief(name: str, purpose: str = "introduction", refresh: bool = False
     interactions (RFC-037), a deterministic context footer is appended —
     goal/thesis/next-move plus recent interactions, verbatim, never
     model-generated. Cite it; don't restate it as your own judgment.
+
+    Building or rebuilding also refreshes this person's web-viewable export
+    (reports/pdf/) — no separate export_pdf call needed to browse it in the
+    web UI (issue #175).
     """
     config = _ready_config()
     if config is None:
@@ -2601,6 +2613,7 @@ def people_brief(name: str, purpose: str = "introduction", refresh: bool = False
             return f"people brief failed: {exc}. Nothing was stored; call again to retry."
         except (IngestError, ModelConfigError, ProviderError) as exc:
             return f"people brief failed: {exc}"
+        materialize_person_export(person.name, config, storage)
     rejected = "".join(
         f"\n  rejected point {item.point!r}: {item.reason}" for item in report.rejected
     )

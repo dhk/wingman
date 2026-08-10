@@ -200,3 +200,76 @@ def test_people_docs_lists_stored_documents(
     assert "On Kafka Migrations" in result.stdout
     assert "2026-07-14" in result.stdout
     assert "1 documents." in result.stdout
+
+
+def test_cli_pov_build_also_materializes_the_web_viewable_export(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """RFC-008 parity (#229 review). The auto-export landed in the MCP wrapper
+    only, so whether a person turned up in the web UI's Files list depended on
+    which surface had built the card — the CLI path built it and left nothing
+    to browse."""
+    import json
+
+    from wingman.infrastructure.config import load_config
+    from wingman.infrastructure.storage import Storage
+
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
+    runner.invoke(
+        app, ["people", "add", "Jane Author", "--substack", "https://example.substack.com"]
+    )
+    runner.invoke(app, ["people", "fetch", "Jane Author"])
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person = storage.find_person_by_name_key("jane author")
+        assert person is not None
+        doc_id = storage.list_external_documents(person.person_id)[0].doc_id
+
+    response = tmp_path / "pov-response.json"
+    response.write_text(
+        json.dumps(
+            {
+                "stances": [
+                    {
+                        "statement": "Believes streaming infrastructure is foundational.",
+                        "quote": "We moved billing to Apache Kafka",
+                        "doc_id": doc_id,
+                    }
+                ],
+                "topics": ["streaming"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config.models_config_path.write_text(
+        f'[models.synthesize_balanced]\nprovider = "recorded"\npath = "{response}"\n',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["people", "pov", "Jane Author"])
+
+    assert result.exit_code == 0, result.output
+    exported = list((config.reports_dir / "pdf").glob("jane-author-*.html"))
+    assert len(exported) == 1
+    assert "Jane Author" in exported[0].read_text(encoding="utf-8")
+
+
+def test_a_read_only_reports_directory_does_not_fail_a_build_that_succeeded(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The helper promises failure is swallowed, but caught only IngestError
+    while the work it wraps is mkdir() and write_text() — which raise OSError.
+    A full or read-only reports directory turned a stored card into a failed
+    command."""
+    from wingman.infrastructure.config import load_config
+    from wingman.reporting import export as export_module
+    from wingman.reporting.export import materialize_person_export
+
+    def explode(*args: object, **kwargs: object) -> None:
+        raise PermissionError("reports/pdf is read-only")
+
+    monkeypatch.setattr(export_module, "export_person", explode)
+
+    # Returns normally rather than propagating: the card is already stored.
+    materialize_person_export("Jane Author", load_config(), object())  # type: ignore[arg-type]

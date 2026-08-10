@@ -316,9 +316,99 @@ def test_people_pov_via_mcp_with_recorded_provider(
     card = people_pov("Jane Author")
     assert "POV card: Jane Author" in card
     assert "streaming pipelines everywhere" in card
-    # second call serves the stored card without a model call
+    # issue #175: building the card also refreshes a web-viewable export —
+    # no separate export_pdf call needed to browse it in the web UI.
+    export_dir = config.reports_dir / "pdf"
+    exported = list(export_dir.glob("jane-author-*.html"))
+    assert len(exported) == 1
+    assert "Jane Author" in exported[0].read_text(encoding="utf-8")
+    written_at = exported[0].stat().st_mtime
+    # second call serves the stored card without a model call, and does NOT
+    # re-trigger the export (nothing new was built)
     stored = people_pov("Jane Author")
     assert "stored card" in stored
+    assert exported[0].stat().st_mtime == written_at
+
+
+def test_people_brief_via_mcp_auto_exports_person(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """issue #175: building a brief refreshes the person's web-viewable export
+    too, so it shows up in the web UI without a separate export_pdf call."""
+    import json
+
+    import wingman.application.people as people_module
+    from wingman.application.corpus import add_to_corpus
+    from wingman.infrastructure.storage import Storage
+    from wingman.mcp_server import people_add, people_brief, people_fetch, people_pov
+
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
+    people_add("Jane Author", substack_url="https://jane.substack.com")
+    people_fetch("Jane Author")
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person = storage.find_person_by_name_key("jane author")
+        assert person is not None
+        doc_id = storage.list_external_documents(person.person_id)[0].doc_id
+
+    pov_response = tmp_path / "pov-response.json"
+    pov_response.write_text(
+        json.dumps(
+            {
+                "stances": [
+                    {
+                        "statement": "Believes streaming infrastructure is foundational.",
+                        "quote": "Kafka streaming pipelines everywhere",
+                        "doc_id": doc_id,
+                    }
+                ],
+                "topics": ["streaming"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config.models_config_path.write_text(
+        f'[models.synthesize_balanced]\nprovider = "recorded"\npath = "{pov_response}"\n',
+        encoding="utf-8",
+    )
+    people_pov("Jane Author")
+
+    essay = tmp_path / "essay.md"
+    essay.write_text("Streaming pipelines beat batch jobs.", encoding="utf-8")
+    with Storage(config.db_path) as storage:
+        add_to_corpus(essay, "writing", config, storage)
+        corpus_id = storage.list_corpus_documents()[0].doc_id
+
+    brief_response = tmp_path / "brief-response.json"
+    brief_response.write_text(
+        json.dumps(
+            {
+                "talking_points": [
+                    {
+                        "point": "You both bet on streaming.",
+                        "their_stance": "Believes streaming infrastructure is foundational.",
+                        "corpus_doc_id": corpus_id,
+                        "your_quote": "Streaming pipelines beat batch jobs.",
+                    }
+                ],
+                "intro_points": ["Ask about their Kafka rollout"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config.models_config_path.write_text(
+        f'[models.synthesize_balanced]\nprovider = "recorded"\npath = "{brief_response}"\n',
+        encoding="utf-8",
+    )
+    brief = people_brief("Jane Author")
+    assert "You both bet on streaming." in brief
+
+    export_dir = config.reports_dir / "pdf"
+    exported = list(export_dir.glob("jane-author-*.html"))
+    assert len(exported) == 1  # same day's export refreshed in place, not duplicated
+    text = exported[0].read_text(encoding="utf-8")
+    assert "they argue" in text and "you wrote" in text
 
 
 def test_people_deep_dive_via_mcp_with_recorded_provider(workspace: Path, tmp_path: Path) -> None:
