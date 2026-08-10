@@ -19,3 +19,7 @@ reports/*
 # Local model traces and credentials
 traces/
 secrets/
+
+# Written by scripts/wingman-tool-install.sh while pinning an install to
+# uv.lock; removed on exit, but a killed run must not leave a tracked file.
+.tool-constraints.txt

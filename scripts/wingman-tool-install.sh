@@ -35,7 +35,13 @@ cleanup() { if [ -n "$CONSTRAINTS" ]; then rm -f "$CONSTRAINTS"; fi; return 0; }
 trap cleanup EXIT
 
 if [ -f uv.lock ]; then
-  candidate="$(mktemp)"
+  # Inside the checkout, never /tmp. On one account here 'uv' is a snap, and a
+  # strictly-confined snap has a private /tmp — so a constraints file written
+  # with mktemp may be invisible to the very command it is passed to. That is
+  # the leading (unproven) explanation for an install that pinned nothing while
+  # reporting success (#319). The Alexandria installer writes its constraints
+  # into the release directory and has never shown this.
+  candidate="$REPO/.tool-constraints.txt"
   if uv export --frozen --no-dev --no-emit-project --format requirements-txt \
       >"$candidate" 2>/dev/null && [ -s "$candidate" ]; then
     CONSTRAINTS="$candidate"
@@ -53,3 +59,76 @@ else
   say "dependencies resolved freely: installed versions may differ from tested ones."
   uv tool install --reinstall .
 fi
+
+# Verify, because passing --constraints is not the same as having been pinned.
+# The whole point of this script is that the deployed versions are the tested
+# ones; an install that quietly resolved something else while reporting success
+# is the defect (#319), not an edge case.
+[ -n "$CONSTRAINTS" ] || exit 0
+
+say "verifying the installed versions match uv.lock"
+# Reuse the constraints already exported above. Re-running the export here and
+# redirecting into the same file would truncate it if that export failed,
+# leaving zero pins and a cheerful "no mismatches" — the exact false success
+# this block exists to prevent.
+TOOL_PYTHON="$(uv tool dir 2>/dev/null)/wingman/bin/python3"
+python3 - "$CONSTRAINTS" "$TOOL_PYTHON" <<'VERIFY'
+import json
+import re
+import subprocess
+import sys
+
+constraints, tool_python = sys.argv[1], sys.argv[2]
+with open(constraints, encoding="utf-8") as handle:
+    lines = handle.read().splitlines()
+
+# (name, version, has_marker). A pin carrying an environment marker may legitimately
+# not be installed on this platform, so only unconditional pins are required to
+# be present; conditional ones are still version-checked if they are.
+pins: list[tuple[str, str, bool]] = []
+for line in lines:
+    match = re.match(r"^([A-Za-z0-9_.-]+)==([^\s;\\]+)(.*)$", line)
+    if match:
+        pins.append((match.group(1), match.group(2), ";" in match.group(3)))
+
+if not pins:
+    print(
+        "ERROR: the constraints file holds no pins, so pinning cannot be verified.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+probe = (
+    "import importlib.metadata as m, json;"
+    "print(json.dumps({d.metadata['Name'].lower(): d.version"
+    " for d in m.distributions() if d.metadata['Name']}))"
+)
+try:
+    out = subprocess.run([tool_python, "-c", probe], capture_output=True, text=True, timeout=60)
+    installed = json.loads(out.stdout)
+except Exception as exc:  # noqa: BLE001 - any failure here means "cannot verify"
+    print(f"==> could not read the installed versions ({exc}); pinning unverified", file=sys.stderr)
+    raise SystemExit(1)
+
+wrong = [
+    (name, want, installed[name.lower()])
+    for name, want, _ in pins
+    if name.lower() in installed and installed[name.lower()] != want
+]
+# A locked package that is absent entirely is a broken install, not a pass.
+missing = [name for name, _, conditional in pins if not conditional and name.lower() not in installed]
+
+if wrong or missing:
+    print("ERROR: the install did not honour uv.lock. These differ:", file=sys.stderr)
+    for name, want, got in sorted(wrong):
+        print(f"  - {name}: lock says {want}, installed {got}", file=sys.stderr)
+    for name in sorted(missing):
+        print(f"  - {name}: locked but not installed at all", file=sys.stderr)
+    print(
+        "  Constraints were passed but did not take effect. The deployed code is\n"
+        "  not what was tested; refusing to report this as a successful install.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+print(f"==> pinned: {len(pins)} locked packages, no mismatches")
+VERIFY
