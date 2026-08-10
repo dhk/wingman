@@ -208,7 +208,7 @@ def test_test_key_openrouter_reports_provider_result(
 
 
 def test_workspace_key_file_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """RFC-034: env > keychain > workspace keys.env, hydrated by ensure_env."""
+    """RFC-034 as amended: the workspace's own key wins; env is a fallback."""
     from wingman.infrastructure.keys import (
         ensure_env,
         read_workspace_keys,
@@ -230,11 +230,15 @@ def test_workspace_key_file_resolution(tmp_path: Path, monkeypatch: pytest.Monke
 
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-stored"
 
-    # env wins: hydration never overwrites, storing reports shadowed
+    # Hydration still never overwrites a set variable — but the stored key
+    # is now the one a provider uses, so storing reports live, not shadowed.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
     assert ensure_env(data_dir=tmp_path, home=home) == []
-    assert store_workspace_key(tmp_path, "anthropic", "sk-ant-newer") is False
-    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-env"
+    assert store_workspace_key(tmp_path, "anthropic", "sk-ant-newer") is True
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-env"  # env untouched
+    from wingman.infrastructure.keys import resolve_provider_key
+
+    assert resolve_provider_key("ANTHROPIC_API_KEY", tmp_path) == "sk-ant-newer"
 
 
 def test_store_workspace_key_never_mutates_env(
@@ -265,12 +269,31 @@ def test_resolve_provider_key_reads_workspace_file_without_mutating_env(
     assert "ANTHROPIC_API_KEY" not in os.environ  # read-only, still
 
 
-def test_resolve_provider_key_env_always_wins(
+def test_the_workspaces_own_key_beats_the_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """BYOK: the key you provided is the key that gets used.
+
+    Inverts RFC-019/RFC-034's env-always-wins. That order was right when
+    one person ran one workspace on their own machine and wrong the moment
+    a shared process serves several: an operator's stale export silently
+    spending on a tenant's behalf is an attribution problem, and a form
+    that stores a key it will not use is a trap.
+    """
     from wingman.infrastructure.keys import resolve_provider_key, store_workspace_key
 
     store_workspace_key(tmp_path, "anthropic", "sk-ant-workspace")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+    assert resolve_provider_key("ANTHROPIC_API_KEY", tmp_path) == "sk-ant-workspace"
+
+
+def test_the_environment_is_still_the_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inverting precedence must not remove the env as a source — CI,
+    containers and a fresh workspace all depend on it."""
+    from wingman.infrastructure.keys import resolve_provider_key
+
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
     assert resolve_provider_key("ANTHROPIC_API_KEY", tmp_path) == "sk-ant-env"
 
@@ -363,8 +386,12 @@ def test_resolve_key_sources_flags_a_conflicting_duplicate(
     environ = {"ANTHROPIC_API_KEY": "sk-ant-shell-export"}
     sources = resolve_key_sources(environ, data_dir=tmp_path, home=tmp_path / "home")
     by_name = {source.short_name: source for source in sources}
-    assert by_name["anthropic"].winning_source == "environment"
-    assert by_name["anthropic"].shadowed_by == ["workspace file"]
+    # BYOK: the workspace's own key wins, and the stale shell export is
+    # what gets reported as shadowed. The #122 requirement is unchanged —
+    # the operator must be told the other copy exists — only which one
+    # wins has moved.
+    assert by_name["anthropic"].winning_source == "workspace file"
+    assert by_name["anthropic"].shadowed_by == ["environment"]
 
 
 def test_global_keys_file_fills_gaps_below_the_host_file(

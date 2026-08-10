@@ -124,7 +124,7 @@ def test_doctor_names_key_sources_and_flags_conflicting_duplicates(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-shell-export")  # a different value
 
     result = runner.invoke(app, ["doctor"])
-    assert "key anthropic: environment" in result.stdout
+    assert "key anthropic: workspace file" in result.stdout
     assert "workspace file" in result.stdout
     assert "key voyage: not set" in result.stdout
     assert result.exit_code == 1  # the conflicting duplicate is a FAIL, not silently ignored

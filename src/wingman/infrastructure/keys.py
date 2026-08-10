@@ -9,7 +9,7 @@ hydrated, in order: the Keychain, then the host's canonical secrets file
 server host reads, instead of shell dotfile exports from one setup session
 and a service EnvironmentFile from another silently drifting apart), then
 the workspace key file (`keys.env` inside the workspace, RFC-034). An
-environment variable that is already set always wins over all three, so
+workspace's own key wins over all of them (BYOK), so
 shell exports, launchd EnvironmentVariables, and a systemd
 `EnvironmentFile=` all behave exactly as before. On systems without the
 'security' binary (Linux, CI) Keychain hydration is a silent no-op and
@@ -218,9 +218,10 @@ def read_global_keys(path: Path | None = None) -> dict[str, str]:
 def store_workspace_key(data_dir: Path, name: str, value: str) -> bool:
     """Store one key in the workspace file (0600).
 
-    Returns True when the key will actually be used (nothing in the
-    environment already shadows it, RFC-019's "env always wins"); False
-    when an already-set environment variable takes precedence instead.
+    Returns True: a stored workspace key is now the one that gets used,
+    whatever the environment holds (BYOK — see 'resolve_provider_key').
+    The return value is kept so callers need not change shape, and so the
+    UI can keep saying whether the key is live.
     Deliberately does NOT touch 'os.environ' — under a single shared
     process serving multiple tenants (docs/RFC.md RFC-048), mutating the
     process environment here would make one tenant's just-submitted key
@@ -241,27 +242,43 @@ def store_workspace_key(data_dir: Path, name: str, value: str) -> bool:
     )
     path.chmod(0o600)
     _logger.info("workspace key stored var=%s", env_var)  # never the value
-    return not os.environ.get(env_var, "").strip()
+    # Always live now: the workspace key outranks the environment (BYOK).
+    return True
 
 
 def resolve_provider_key(env_var: str, data_dir: Path | None = None) -> str | None:
     """The value a provider should use for one known env var, read-only.
 
-    An already-set environment variable always wins (RFC-019); otherwise
-    the workspace key file is read fresh. This is the read-only
-    counterpart to the env-mutating hydration in 'ensure_env' — call it on
-    every provider construction instead of relying on a prior mutation
-    (e.g. 'store_workspace_key''s former env write) having happened, so a
-    key submitted through the web form takes effect on the very next call
-    with no process-wide state change.
+    **The workspace's own key wins** — bring-your-own-key means the key
+    you provided is the key that gets used. RFC-019 and RFC-034 originally
+    put an exported environment variable first; that was right when one
+    person ran one workspace on their own machine, and wrong the moment a
+    shared process serves several people. An operator's stale export
+    silently spending on a tenant's behalf is an attribution problem, not
+    just the misleading UI it also produced, and a form that stores a key
+    it will not use is a trap.
+
+    RFC-048's strict mode had already made this exception for tenants
+    (env skipped entirely); this generalises it rather than keeping two
+    competing truths.
+
+    The cost, accepted deliberately: an operator can no longer override a
+    stale stored key by exporting the variable — a bad workspace key must
+    be fixed where it lives ('wingman keys set', the web form, or deleting
+    keys.env).
+
+    Read-only counterpart to 'ensure_env': call it on every provider
+    construction rather than relying on a prior mutation, so a key
+    submitted through the web form takes effect on the very next call with
+    no process-wide state change.
     """
-    value = os.environ.get(env_var, "").strip()
-    if value:
-        return value
     if data_dir is not None:
         workspace_value = read_workspace_keys(data_dir).get(env_var, "").strip()
         if workspace_value:
             return workspace_value
+    value = os.environ.get(env_var, "").strip()
+    if value:
+        return value
     return None
 
 
@@ -375,6 +392,10 @@ def resolve_key_sources(
     results: list[KeySource] = []
     for short_name, env_var in KNOWN_KEYS.items():
         candidates: list[tuple[str, str]] = []
+        # Workspace first: the key its owner provided (BYOK). Everything
+        # below is somebody else's default.
+        if env_var in workspace_values:
+            candidates.append((_SOURCE_LABELS[4], workspace_values[env_var]))
         env_value = environ.get(env_var, "").strip()
         if env_value:
             candidates.append((_SOURCE_LABELS[0], env_value))
@@ -386,8 +407,6 @@ def resolve_key_sources(
             candidates.append((_SOURCE_LABELS[2], host_values[env_var]))
         if env_var in global_values:
             candidates.append((_SOURCE_LABELS[3], global_values[env_var]))
-        if env_var in workspace_values:
-            candidates.append((_SOURCE_LABELS[4], workspace_values[env_var]))
         if not candidates:
             results.append(KeySource(short_name, env_var, "not set"))
             continue
