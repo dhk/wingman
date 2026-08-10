@@ -490,3 +490,26 @@ def test_partial_names_resolve_with_did_you_mean(
     ambiguous = people_fetch("mark")
     assert "matches several people" in ambiguous
     assert "Mark Otero" in ambiguous and "Marko Klopets" in ambiguous
+
+
+def test_profile_html_measures_its_cap_in_bytes_not_characters(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The limit is denominated in bytes and bytes are what cross the wire.
+
+    A page of accented names, curly quotes or CJK runs well past its own
+    character count once encoded, so a character-based test waves through
+    exactly the documents most likely to be oversized. Here the page is
+    comfortably under the cap by characters and over it by bytes.
+    """
+    from wingman import mcp_server, webui
+
+    page = "é" * 100  # 100 characters, 200 bytes
+    monkeypatch.setattr(webui, "render_profile_html", lambda config: page)
+    monkeypatch.setattr(mcp_server, "_PROFILE_HTML_MAX_BYTES", 150)
+
+    result = mcp_server.profile_html()
+
+    assert result != page
+    assert "too large" in result
+    assert "browser" in result

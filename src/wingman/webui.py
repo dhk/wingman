@@ -35,6 +35,7 @@ from wingman.reporting.design_tokens import DESIGN_TOKENS_CSS
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
+    from wingman.application.completeness import CompletenessReport
     from wingman.domain.profile import ProfileItem
     from wingman.infrastructure.tenants import TenantIndex
 
@@ -1156,7 +1157,7 @@ def _plural(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
-def _completeness_band(config: Config, items: list["ProfileItem"]) -> str:
+def _completeness_band(report: "CompletenessReport", items: list["ProfileItem"]) -> str:
     """What is filled in, and what the gap costs — profile-scoped.
 
     The counts come from application/completeness.py (#313), not from a
@@ -1169,9 +1170,7 @@ def _completeness_band(config: Config, items: list["ProfileItem"]) -> str:
     are properties of this page's own subject matter, and the report is
     scoped to section counts across the whole workspace.
     """
-    from wingman.application.completeness import compute_completeness
     from wingman.domain.profile import ItemStatus, ProfileItemKind
-    from wingman.infrastructure.storage import Storage
 
     reported = (
         ProfileItemKind.ROLE,
@@ -1179,8 +1178,6 @@ def _completeness_band(config: Config, items: list["ProfileItem"]) -> str:
         ProfileItemKind.SKILL,
         ProfileItemKind.TESTIMONIAL,
     )
-    with Storage(config.db_path) as storage:
-        report = compute_completeness(storage, config)
     counts = {
         ProfileItemKind.ROLE: report.career.roles,
         ProfileItemKind.ACHIEVEMENT: report.career.achievements,
@@ -1268,6 +1265,7 @@ def render_profile_html(config: Config) -> str:
 
 def _profile_body(config: Config, show_path: bool = True) -> str:
     """The profile page's body — shared by the route and the export tool."""
+    from wingman.application.completeness import compute_completeness
     from wingman.domain.profile import ItemStatus, ProfileItemKind
     from wingman.infrastructure.storage import Storage
     from wingman.reporting.career import _reverse_chronological, _tenure
@@ -1275,8 +1273,12 @@ def _profile_body(config: Config, show_path: bool = True) -> str:
     if not config.db_path.exists():
         return _header(config, show_path) + "<h1>No workspace yet</h1>"
 
+    # One connection for the whole render. The band needs the completeness
+    # report and the page needs the items; opening a second connection to
+    # answer the second question is a database round trip for nothing.
     with Storage(config.db_path) as storage:
         items = storage.list_profile_items()
+        report = compute_completeness(storage, config)
 
     active = [i for i in items if i.status is ItemStatus.ACTIVE]
     conflicts = [i for i in items if i.status is ItemStatus.CONFLICT]
@@ -1288,7 +1290,7 @@ def _profile_body(config: Config, show_path: bool = True) -> str:
         f'<p class="dim">{len(active)} active · {len(conflicts)} contested · '
         f"{len(superseded)} superseded by newer versions of their source document</p>"
     )
-    body.append(_completeness_band(config, items))
+    body.append(_completeness_band(report, items))
 
     # Needs attention first: a page that buries the contested claims among
     # the settled ones is the flat document this replaces.

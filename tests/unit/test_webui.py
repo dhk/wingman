@@ -863,7 +863,7 @@ def test_profile_page_says_what_is_missing_and_what_it_costs(
 
 
 def test_completeness_band_goes_quiet_once_a_section_is_filled(
-    client: tuple[TestClient, str], tmp_path: Path
+    client: tuple[TestClient, str],
 ) -> None:
     """A checklist that keeps nagging about solved problems stops being read."""
     from wingman.application.job_scoring import criteria_path

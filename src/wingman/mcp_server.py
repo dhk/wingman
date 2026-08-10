@@ -1228,9 +1228,16 @@ def profile_html() -> str:
     # and a mature workspace renders hundreds of KB. Refuse rather than
     # truncate: half an HTML document is not a document, and silently
     # sending 300KB into a context is worse than saying no.
-    if len(page) > _PROFILE_HTML_MAX_BYTES:
+    #
+    # Measured in BYTES, which is what the limit is denominated in and what
+    # actually crosses the wire. len(page) counts characters, and a profile
+    # full of accented names, curly quotes or CJK runs 1.5-3x its character
+    # count once encoded — so the character test would wave through exactly
+    # the documents most likely to be oversized.
+    size = len(page.encode("utf-8"))
+    if size > _PROFILE_HTML_MAX_BYTES:
         return (
-            f"The profile page is {len(page) // 1024}KB, too large to return through a tool "
+            f"The profile page is {size // 1024}KB, too large to return through a tool "
             f"result (limit {_PROFILE_HTML_MAX_BYTES // 1024}KB). Open it in a browser "
             "instead: it is served at /ui/<token>/profile on this workspace's own URL."
         )
