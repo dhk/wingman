@@ -71,6 +71,37 @@ def test_tenant_url_tunnel_prefix_reaches_the_tunnel_line(tmp_path: Path) -> Non
     assert "https://lobster.tail.ts.net/shared/mcp/tok-jason" in result.output  # tunnel: has it
 
 
+def test_tenant_url_defaults_connector_name_to_wingman_slug(tmp_path: Path) -> None:
+    """Issue #253: 'wingman tenant url <slug>' auto-derives
+    'wingman-<slug>' with no flag needed."""
+    data_dir = _make_tenant(tmp_path, "taylor", "tok-taylor")
+    registry = _write_registry(tmp_path, ("taylor", data_dir))
+    result = cli.invoke(app, ["tenant", "url", "taylor", "--registry", str(registry)])
+    assert result.exit_code == 0
+    assert (
+        "claude mcp add --transport http wingman-taylor http://127.0.0.1:8787/mcp/tok-taylor"
+        in (result.output)
+    )
+
+
+def test_tenant_url_connector_name_override_and_suppression(tmp_path: Path) -> None:
+    data_dir = _make_tenant(tmp_path, "taylor", "tok-taylor")
+    registry = _write_registry(tmp_path, ("taylor", data_dir))
+
+    overridden = cli.invoke(
+        app,
+        ["tenant", "url", "taylor", "--registry", str(registry), "--connector-name", "my-taylor"],
+    )
+    assert overridden.exit_code == 0
+    assert "claude mcp add --transport http my-taylor " in overridden.output
+
+    suppressed = cli.invoke(
+        app, ["tenant", "url", "taylor", "--registry", str(registry), "--connector-name", ""]
+    )
+    assert suppressed.exit_code == 0
+    assert "claude mcp add" not in suppressed.output
+
+
 def test_tenant_url_unknown_slug_exits_nonzero(tmp_path: Path) -> None:
     registry = _write_registry(tmp_path)  # empty
     result = cli.invoke(app, ["tenant", "url", "nobody", "--registry", str(registry)])
@@ -103,6 +134,14 @@ def test_tenant_rotate_token_invalidates_old_and_issues_new(tmp_path: Path) -> N
     new_token = (data_dir / "mcp-http-token").read_text(encoding="utf-8").strip()
     assert new_token != "tok-old"
     assert new_token in result.output
+
+
+def test_tenant_rotate_token_defaults_connector_name_to_wingman_slug(tmp_path: Path) -> None:
+    data_dir = _make_tenant(tmp_path, "jason", "tok-old")
+    registry = _write_registry(tmp_path, ("jason", data_dir))
+    result = cli.invoke(app, ["tenant", "rotate-token", "jason", "--registry", str(registry)])
+    assert result.exit_code == 0
+    assert "claude mcp add --transport http wingman-jason " in result.output
 
 
 def test_tenant_rotate_token_tunnel_prefix_reaches_the_tunnel_line(
@@ -188,6 +227,18 @@ def test_tenant_urls_without_slug_lists_every_tenant(tmp_path: Path) -> None:
     assert "jason:" in result.output
     assert "tok-jason" in result.output
     assert "bob: not yet connected (no token minted)" in result.output
+
+
+def test_tenant_urls_without_slug_derives_a_name_per_tenant(tmp_path: Path) -> None:
+    """Issue #253: the roster view can't apply one fixed connector name
+    to every tenant, so each gets its own 'wingman-<slug>' automatically."""
+    jason = _make_tenant(tmp_path, "jason", "tok-jason")
+    bob = _make_tenant(tmp_path, "bob", "tok-bob")
+    registry = _write_registry(tmp_path, ("jason", jason), ("bob", bob))
+    result = cli.invoke(app, ["tenant", "urls", "--registry", str(registry)])
+    assert result.exit_code == 0
+    assert "claude mcp add --transport http wingman-jason " in result.output
+    assert "claude mcp add --transport http wingman-bob " in result.output
 
 
 def test_tenant_urls_without_slug_and_empty_registry(tmp_path: Path) -> None:

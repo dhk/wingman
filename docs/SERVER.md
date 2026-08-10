@@ -264,6 +264,14 @@ URL. Use the `/mcp/<token>` URL for the connector field, not the
 prints both together. The same URL works in Claude Desktop and the
 Claude mobile apps once the connector is added to your account.
 
+**Claude Code / Claude CLI:** `wingman mcp url` (and `wingman tenant
+url`/`tenant urls`, issue #253) also print a ready-to-paste `claude mcp
+add --transport http <name> <url>` line right under each MCP url — no
+need to remember the flag syntax or copy just the `/mcp/` line out by
+hand. `--connector-name` overrides the auto-derived name (`wingman` for
+a single instance, `wingman-<slug>` per tenant); pass `--connector-name
+''` to suppress it and print bare urls only, as before.
+
 **Troubleshooting: connector add fails on first try.** An
 OAuth-registration-shaped error against a *fresh* funnel domain right
 after `tailscale funnel` first comes up is often transient — Tailscale's

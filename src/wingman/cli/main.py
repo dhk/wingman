@@ -3068,6 +3068,24 @@ def mcp_stop(
         raise typer.Exit(code=1)
 
 
+def _checked_connector_name(value: str | None) -> str | None:
+    """Typer callback for every --connector-name flag.
+
+    The name is rendered into a 'claude mcp add' line whose whole purpose
+    is to be pasted into a shell, so a metacharacter in it is a second
+    command waiting to run. Rejecting at the flag turns that into an
+    ordinary usage error instead of a traceback.
+    """
+    from wingman.mcp_server import ConnectorNameError, validate_connector_name
+
+    if value is None or value == "":  # '' is the documented "suppress it" value
+        return value
+    try:
+        return validate_connector_name(value)
+    except ConnectorNameError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
 @mcp_app.command("url")
 def mcp_url(
     host: str = typer.Option("127.0.0.1", help="Bind address the server was started with."),
@@ -3082,6 +3100,13 @@ def mcp_url(
         help="External port the tunnel front uses, if not the implicit 443 (e.g. a second "
         "instance sharing this Tailscale hostname on its own funnel port). Falls back to "
         "WINGMAN_TUNNEL_PORT.",
+    ),
+    connector_name: str = typer.Option(
+        "wingman",
+        "--connector-name",
+        callback=_checked_connector_name,
+        help="Name for the ready-to-paste 'claude mcp add' command printed alongside each MCP "
+        "url (issue #253). Pass '' to suppress it and print bare urls only, as before.",
     ),
 ) -> None:
     """Print the ready-to-paste MCP connector and web UI URLs (#94, #122).
@@ -3105,6 +3130,7 @@ def mcp_url(
         port=port,
         prefix=prefix,
         tunnel_port=_tunnel_port(tunnel_port),
+        connector_name=connector_name,
     ):
         typer.echo(line)
     if not extra_hosts:
@@ -3171,6 +3197,14 @@ def tenant_url_cmd(
         "process itself runs with no --prefix, so omitting this when the tunnel needs it "
         "prints a URL that 404s at the tunnel, not at wingman.",
     ),
+    connector_name: str | None = typer.Option(
+        None,
+        "--connector-name",
+        callback=_checked_connector_name,
+        help="Name for the ready-to-paste 'claude mcp add' command printed alongside the MCP "
+        "url (issue #253). Default: 'wingman-<slug>'. Pass '' to suppress it and print bare "
+        "urls only, as before.",
+    ),
 ) -> None:
     """Print a registered tenant's connector URLs, by slug (#209).
 
@@ -3193,6 +3227,7 @@ def tenant_url_cmd(
         port=port,
         tunnel_port=_tunnel_port(tunnel_port),
         tunnel_prefix=tunnel_prefix,
+        connector_name=f"wingman-{slug}" if connector_name is None else connector_name,
     )
     for line in lines:
         typer.echo(line, err=not ok)
@@ -3234,6 +3269,14 @@ def tenant_urls_cmd(
         "process itself runs with no --prefix, so omitting this when the tunnel needs it "
         "prints a URL that 404s at the tunnel, not at wingman.",
     ),
+    connector_name: str | None = typer.Option(
+        None,
+        "--connector-name",
+        callback=_checked_connector_name,
+        help="Name for the ready-to-paste 'claude mcp add' command printed alongside each MCP "
+        "url (issue #253). Default: 'wingman-<slug>' for one tenant, auto-derived per tenant "
+        "for the full roster. Pass '' to suppress it and print bare urls only, as before.",
+    ),
 ) -> None:
     """Print connector URLs for one tenant, or every tenant in the
     registry at once (#209; the "all people" roster view added for
@@ -3258,6 +3301,10 @@ def tenant_urls_cmd(
     else:
         tenants, registry_path = _load_registry_or_exit(registry)
     extra_hosts = _extra_allowed_hosts(allowed_host or None)
+    if connector_name is None:
+        effective_name = f"wingman-{slug}" if slug is not None else "wingman"
+    else:
+        effective_name = connector_name
     lines, ok = render_tenant_urls(
         tenants,
         slug,
@@ -3267,6 +3314,7 @@ def tenant_urls_cmd(
         port=port,
         tunnel_port=_tunnel_port(tunnel_port),
         tunnel_prefix=tunnel_prefix,
+        connector_name=effective_name,
     )
     for line in lines:
         typer.echo(line, err=not ok)
@@ -3296,6 +3344,14 @@ def tenant_rotate_token_cmd(
         "--tunnel-prefix",
         help="Path prefix a STRIPPING tunnel front mounts this process under (e.g. /shared, "
         "matching WINGMAN_SHARED_TAILSCALE_PATH). Only changes the printed tunnel URLs.",
+    ),
+    connector_name: str | None = typer.Option(
+        None,
+        "--connector-name",
+        callback=_checked_connector_name,
+        help="Name for the ready-to-paste 'claude mcp add' command printed alongside the MCP "
+        "url (issue #253). Default: 'wingman-<slug>'. Pass '' to suppress it and print bare "
+        "urls only, as before.",
     ),
 ) -> None:
     """Rotate one tenant's capability token — invalidate and reissue in a
@@ -3341,6 +3397,7 @@ def tenant_rotate_token_cmd(
         port=port,
         tunnel_port=_tunnel_port(tunnel_port),
         tunnel_prefix=tunnel_prefix,
+        connector_name=f"wingman-{slug}" if connector_name is None else connector_name,
     ):
         typer.echo(line)
 
