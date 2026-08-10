@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -124,16 +125,24 @@ class ProposedAxisCitation(BaseModel):
     """One cited capture in a model proposal: which item, and which way it
     cuts relative to the axis the model just named.
 
-    `direction` is a bare `str` here, not `AxisDirection`, deliberately:
+    `direction` is typed loosely here, not as `AxisDirection`, deliberately:
     the model is untrusted output, and one unparseable direction must
     cost that one citation, not blow up the whole proposal. It is
     resolved (and anything unrecognized dropped) in
     `application.values._validate_proposal`, the same place an unknown
     `item_id` is dropped.
+
+    `Any` rather than `str` because a `str` annotation makes pydantic
+    reject the whole response before that dropping can happen: a model
+    emitting `"direction": null` — or a number, or an object — fails
+    validation on this field and takes every other axis in the proposal
+    down with it, which is the opposite of what the paragraph above
+    promises. Anything not a recognized string is dropped by
+    `_direction`.
     """
 
     item_id: str
-    direction: str = ""
+    direction: Any = ""
 
 
 class ProposedValueAxis(BaseModel):

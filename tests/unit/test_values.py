@@ -872,3 +872,73 @@ def test_mcp_my_values_floor_error_surfaces_as_a_message_not_a_traceback(
     result = mcp_server.my_values(refresh=True)
     assert "values failed" in result
     assert "not enough captured evidence" in result
+
+
+def test_a_null_direction_costs_that_citation_not_the_whole_proposal(
+    workspace: Path,
+) -> None:
+    """ProposedAxisCitation.direction is deliberately untyped so a malformed
+    value is DROPPED by _direction. Annotating it `str` broke that before it
+    could happen: pydantic rejected `"direction": null` during
+    model_validate, so one bad citation took every other axis down with it
+    and surfaced as ProposalParseError (#341 review)."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        ids = [item.item_id for item in storage.list_profile_items() if item.subtype]
+        provider = ScriptedProvider(
+            {
+                "axes": [
+                    {
+                        "name": "Has a null citation",
+                        "items": [
+                            {"item_id": ids[0], "direction": None},
+                            {"item_id": ids[1], "direction": "supports"},
+                        ],
+                    },
+                    {"name": "filler two", "items": _cite(ids[:1])},
+                    {"name": "filler three", "items": _cite(ids[:1])},
+                ]
+            }
+        )
+
+        report = build_value_profile(storage, provider)
+
+        axis = report.profile.axes[0]
+        assert axis.name == "Has a null citation"
+        assert [span.item_id for span in axis.evidence] == [ids[1]]
+        assert len(report.profile.axes) == 3  # the other axes survived
+
+
+def test_an_unusable_citation_does_not_suppress_a_later_valid_one(
+    workspace: Path,
+) -> None:
+    """Marking the item id 'seen' before validating it let a duplicate
+    invalid citation poison a valid one for the same item — [no direction,
+    supports] dropped BOTH, and could reject the axis for citing nothing
+    usable (#341 review)."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        ids = [item.item_id for item in storage.list_profile_items() if item.subtype]
+        provider = ScriptedProvider(
+            {
+                "axes": [
+                    {
+                        "name": "Cited twice, badly then well",
+                        "items": [
+                            {"item_id": ids[0], "direction": "sideways"},
+                            {"item_id": ids[0], "direction": "supports"},
+                        ],
+                    },
+                    {"name": "filler two", "items": _cite(ids[:1])},
+                    {"name": "filler three", "items": _cite(ids[:1])},
+                ]
+            }
+        )
+
+        report = build_value_profile(storage, provider)
+
+        axis = next(a for a in report.profile.axes if a.name == "Cited twice, badly then well")
+        assert [span.item_id for span in axis.evidence] == [ids[0]]
+        assert axis.evidence[0].direction is AxisDirection.SUPPORTS

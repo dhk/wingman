@@ -136,11 +136,19 @@ class ValueProfileReport(BaseModel):
     rejected: list[RejectedAxis] = Field(default_factory=list)
 
 
-def _direction(raw: str) -> AxisDirection | None:
+def _direction(raw: object) -> AxisDirection | None:
     """The model's per-item direction, resolved — or None if it gave one we
     don't recognize (or none at all). None means the citation is dropped,
     exactly as an unknown item_id is: a missing sign is never defaulted to
-    a sign, because a defaulted sign is precisely the bug (#340)."""
+    a sign, because a defaulted sign is precisely the bug (#340).
+
+    Takes `object`, not `str`: the field it reads is deliberately untyped
+    so a malformed value costs one citation instead of the whole
+    proposal, which means a non-string can reach here and must be
+    dropped rather than raise.
+    """
+    if not isinstance(raw, str):
+        return None
     try:
         return AxisDirection(raw.strip().lower())
     except ValueError:
@@ -244,7 +252,6 @@ def _validate_proposal(
         for citation in candidate.items:
             if citation.item_id in seen:
                 continue
-            seen.add(citation.item_id)
             item = eligible.get(citation.item_id)
             if item is None:
                 continue  # not among the supplied items — silently dropped, not fabricated
@@ -255,6 +262,11 @@ def _validate_proposal(
                 # anyway would mean inventing the one thing #340 proved
                 # we must not infer.
                 continue
+            # Marked seen only now that both checks have passed. Marking on
+            # sight let an unusable citation suppress a LATER valid one for
+            # the same item — [no direction, supports] dropped both, and
+            # could take the axis down with them for citing nothing usable.
+            seen.add(citation.item_id)
             evidence.append(
                 ValueAxisEvidence(
                     item_id=item.item_id,
