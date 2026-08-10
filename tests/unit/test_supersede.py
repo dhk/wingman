@@ -120,7 +120,6 @@ def test_third_version_drains_a_pre_existing_conflict_pile(
 ) -> None:
     """Workspaces already carrying pre-RFC-028 conflict rows heal on next ingest."""
     from wingman.application.ingest import _persist_source
-    from wingman.application.profile_store import persist_items
 
     with Storage(workspace.db_path) as storage:
         # Simulate the pre-fix pile: two versions persisted with no lineage.
@@ -134,20 +133,29 @@ def test_third_version_drains_a_pre_existing_conflict_pile(
         from wingman.domain.profile import EvidenceSpan, ProfileItem, ProfileItemKind
         from wingman.domain.provenance import ClaimClassification
 
-        persist_items(
-            [
-                ProfileItem(
-                    kind=ProfileItemKind.SKILL,
-                    name="BigQuery",
-                    detail="Rephrased.",
-                    classification=ClaimClassification.FACT,
-                    confidence=0.9,
-                    evidence=[EvidenceSpan(source_record_id=record.record_id, quote="q")],
-                    prompt_version="v",
-                    extracted_by="t",
-                )
-            ],
-            storage,  # no lineage passed: the old behavior, a conflict row
+        # Written straight to storage as a CONFLICT row, because that legacy
+        # SHAPE can no longer be produced through persist_items: a document
+        # does not conflict with itself any more (#336), so re-persisting a
+        # rephrased claim from the same document supersedes instead. What is
+        # being simulated here is old DATA, not the old code path.
+        rival = next(
+            i
+            for i in storage.list_profile_items()
+            if i.name == "BigQuery" and i.status is ItemStatus.ACTIVE
+        )
+        storage.add_profile_item(
+            ProfileItem(
+                kind=ProfileItemKind.SKILL,
+                name="BigQuery",
+                detail="Rephrased.",
+                classification=ClaimClassification.FACT,
+                confidence=0.9,
+                evidence=[EvidenceSpan(source_record_id=record.record_id, quote="q")],
+                prompt_version="v",
+                extracted_by="t",
+                status=ItemStatus.CONFLICT,
+                conflicts_with=rival.item_id,
+            )
         )
         conflicts = [i for i in storage.list_profile_items() if i.status is ItemStatus.CONFLICT]
         assert len(conflicts) == 1
