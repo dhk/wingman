@@ -156,12 +156,16 @@ def test_connector_name_adds_claude_mcp_add_after_each_mcp_url() -> None:
     named = render_urls("TOK", ["lobster.tail.ts.net"], port=9911, connector_name="wingman-taylor")
     assert named == [
         "MCP over HTTP: http://127.0.0.1:9911/mcp/TOK",
-        "Claude Code (paste this): claude mcp add --transport http wingman-taylor "
-        "http://127.0.0.1:9911/mcp/TOK",
+        (
+            "Claude Code (paste this): claude mcp add --transport http wingman-taylor "
+            "http://127.0.0.1:9911/mcp/TOK"
+        ),
         "Web UI (read + upload): http://127.0.0.1:9911/ui/TOK",
         "Tunnel MCP connector: https://lobster.tail.ts.net/mcp/TOK",
-        "Claude Code (paste this): claude mcp add --transport http wingman-taylor "
-        "https://lobster.tail.ts.net/mcp/TOK",
+        (
+            "Claude Code (paste this): claude mcp add --transport http wingman-taylor "
+            "https://lobster.tail.ts.net/mcp/TOK"
+        ),
         "Tunnel web UI: https://lobster.tail.ts.net/ui/TOK/",
     ]
 
