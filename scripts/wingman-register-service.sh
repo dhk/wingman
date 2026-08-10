@@ -104,11 +104,15 @@ say "1/3 reserving the endpoint"
 # otherwise refuses a port something is listening on, which is the right
 # default for a NEW reservation and wrong for recording an existing one.
 #
-# Deliberately no --health-url: wingman's /health reports version and
-# started_at but no 'service' field, and the helper verifies health by
-# comparing that field against the declared name. Declaring it would leave
-# this entry permanently 'stale'. Adding the field to /health first would let
-# a later change declare it honestly (#288).
+# --health-url is declared now that /health names the service it belongs to
+# (webui.HEALTH_SERVICE_NAME). The helper verifies health by fetching that
+# URL and comparing its 'service' field against the declared name, so before
+# that field existed this could only ever have reported failure — which is
+# why it was left off, and what the note here said to fix first (#288).
+#
+# The comparison, not just a 200, is the point: a probe that accepted any
+# response would call the entry healthy for whatever else ended up bound to
+# this port later.
 "$HELPER" --registry "$REGISTRY" \
   --static-range "$STATIC_RANGE" --dynamic-range "$DYNAMIC_RANGE" \
   reserve "$SERVICE_ID" \
@@ -118,6 +122,8 @@ say "1/3 reserving the endpoint"
   --address 127.0.0.1 \
   --port "$PORT" \
   --unit wingman-mcp.service \
+  --health-url "http://127.0.0.1:$PORT/health" \
+  --health-service wingman \
   --source dhk/wingman \
   --adopt-listener
 

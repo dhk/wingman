@@ -165,18 +165,57 @@ def test_the_endpoint_is_reserved_before_its_route(bin_dir: Path, tmp_path: Path
     assert commands == ["reserve", "reserve-route"]
 
 
-def test_no_health_check_is_declared_because_health_omits_the_service_field(
+def test_the_health_check_is_declared_under_the_name_health_answers_to(
     bin_dir: Path, tmp_path: Path
 ) -> None:
+    """The registry probe fetches the url and compares its 'service' field
+    against the declared name — so these two have to agree, and the pair has
+    to be declared together (the helper rejects one without the other).
+
+    This was deliberately left undeclared while /health carried no 'service'
+    field, because declaring it then could only ever have reported failure.
+    The companion test below is what keeps that from silently regressing.
+    """
     registry = tmp_path / "registry.json"
     log = _helper(bin_dir, registry)
     _tailscale(bin_dir, FUNNEL)
 
     assert _run(bin_dir, registry).returncode == 0
 
-    # Declaring one would compare a missing 'service' field against 'wingman'
-    # and mark the entry permanently stale.
-    assert "--health-url" not in log.read_text()
+    declared = log.read_text()
+    assert "--health-url" in declared
+    assert "http://127.0.0.1:8789/health" in declared
+    assert "--health-service" in declared
+    assert "wingman" in declared
+
+
+def test_health_answers_to_the_name_the_registry_is_told_to_expect() -> None:
+    """The other half of the contract, and the one that would rot silently:
+    the script declares a name, and /health has to actually return it. A
+    probe comparing 'service' against a name the endpoint never reports
+    fails forever while looking like a configuration problem."""
+    import json
+    import re
+
+    from wingman.webui import HEALTH_SERVICE_NAME
+
+    script = (
+        Path(__file__).resolve().parents[2] / "scripts" / "wingman-register-service.sh"
+    ).read_text()
+    match = re.search(r"--health-service (\S+)", script)
+    assert match is not None, "the script no longer declares a health service name"
+    assert match.group(1) == HEALTH_SERVICE_NAME
+
+    import asyncio
+
+    from wingman.webui import ui_health
+
+    response = asyncio.run(ui_health(None))  # type: ignore[arg-type]  # unused by the handler
+    payload = json.loads(bytes(response.body).decode("utf-8"))
+
+    assert payload["service"] == HEALTH_SERVICE_NAME
+    # The fields the redeploy health-poll and 'wingman-ctl hosts' already read.
+    assert payload["version"] and payload["started_at"]
 
 
 def test_falls_back_to_the_configured_path_when_the_funnel_cannot_be_read(
