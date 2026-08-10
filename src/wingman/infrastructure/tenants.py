@@ -23,6 +23,9 @@ from pathlib import Path
 
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.keys import KNOWN_KEYS, read_workspace_keys
+from wingman.infrastructure.logs import get_logger
+
+_logger = get_logger("tenants")
 
 _TOKEN_FILENAME = "mcp-http-token"  # mirrors mcp_server._TOKEN_FILENAME
 
@@ -160,11 +163,42 @@ class TenantIndex:
     def _load(self, tenants: list[Tenant]) -> None:
         by_slug: dict[str, Tenant] = {}
         by_token_hash: dict[str, Tenant] = {}
+        # Tokens that turned out to identify more than one tenant. Held
+        # separately so a later tenant carrying an already-seen token cannot
+        # reinstate it by writing over the entry we removed.
+        ambiguous: set[str] = set()
         for tenant in tenants:
             by_slug[tenant.slug] = tenant
             token = tenant.read_token()
-            if token is not None:
-                by_token_hash[_hash(token)] = tenant
+            if token is None:
+                continue
+            digest = _hash(token)
+            if digest in ambiguous:
+                _logger.error(
+                    "tenant %r shares a capability token with an earlier tenant; "
+                    "that token stays disabled",
+                    tenant.slug,
+                )
+                continue
+            claimed = by_token_hash.pop(digest, None)
+            if claimed is not None:
+                # Fail CLOSED. A token that identifies two people identifies
+                # nobody: resolving it to either one hands one tenant the
+                # other's workspace, silently, and last-writer-wins made which
+                # one depend on registry order (#327). Both lose the token;
+                # each can be issued a fresh one with 'tenant rotate-token'.
+                #
+                # Refusing to load the whole registry would be worse — one
+                # duplicated token would take every other tenant offline.
+                ambiguous.add(digest)
+                _logger.error(
+                    "tenants %r and %r present the same capability token; disabling it for "
+                    "both — rotate it ('wingman tenant rotate-token <slug>') to restore access",
+                    claimed.slug,
+                    tenant.slug,
+                )
+                continue
+            by_token_hash[digest] = tenant
         self._by_slug = by_slug
         self._by_token_hash = by_token_hash
 

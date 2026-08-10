@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from wingman.infrastructure.tenant_process import (
     clear_tenant_pidfile,
     read_tenant_process_pid,
@@ -136,3 +138,103 @@ def test_tenant_index_still_isolated_after_reload(tmp_path: Path) -> None:
     )
     index.reload(registry)
     assert index.resolve("tok-jason").slug == "jason"  # type: ignore[union-attr]
+
+
+def test_a_malformed_registry_does_not_take_the_shared_process_down(
+    tmp_path: Path,
+) -> None:
+    """#328 — the reload runs inside a signal handler, so an exception there
+    propagates into whatever the main thread was doing and kills a process
+    serving every tenant.
+
+    The trigger is ordinary operator work: one typo while adding somebody,
+    then any 'tenant rotate-token', which sends the SIGHUP by design.
+    """
+    import signal
+
+    jason_dir = tmp_path / "jason"
+    jason_dir.mkdir()
+    (jason_dir / "mcp-http-token").write_text("tok-jason", encoding="utf-8")
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n', encoding="utf-8")
+    index = TenantIndex.from_registry_path(registry)
+    assert index.resolve("tok-jason") is not None
+
+    # Somebody adds a tenant and fats-fingers the key.
+    registry.write_text(
+        f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n\n'
+        '[[tenant]]\nslugg = "taylor"\ndata_dir = "/tmp/taylor"\n',
+        encoding="utf-8",
+    )
+
+    old = signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    try:
+        register_reload_handler(index, registry)
+        os.kill(os.getpid(), signal.SIGHUP)  # would have raised out of the handler
+    finally:
+        signal.signal(signal.SIGHUP, old)
+
+    # Still serving, from the registry that was already loaded.
+    assert index.resolve("tok-jason") is not None
+
+
+def test_a_process_that_exits_before_the_signal_is_simply_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#329 — os.kill was unguarded, so a pid that vanished between the read
+    and the signal escaped as a traceback out of 'tenant rotate-token', after
+    the new token had already been written."""
+    registry = tmp_path / "tenants.toml"
+    write_tenant_pidfile(registry)
+    command_of = _fake_command_of({os.getpid(): "wingman-mcp --http --tenant-registry x"})
+
+    import signal as signal_module
+
+    # Only the SIGHUP raises. _alive() probes with os.kill(pid, 0), so a
+    # blanket fake makes the liveness check fail and signal_reload returns
+    # None before ever reaching the signal — passing for the wrong reason.
+    real_kill = os.kill
+    attempted: list[int] = []
+
+    def vanished(pid: int, sig: int) -> None:
+        if sig == signal_module.SIGHUP:
+            attempted.append(sig)
+            raise ProcessLookupError
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", vanished)
+    try:
+        assert signal_reload(registry, command_of=command_of) is None
+        assert attempted == [signal_module.SIGHUP], "the signal was never attempted"
+    finally:
+        clear_tenant_pidfile(registry)
+
+
+def test_a_process_we_may_not_signal_says_so_instead_of_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A different situation from 'not found', and the operator's next step
+    differs: the process is alive and healthy, this account just may not
+    signal it. Flattening it into "no process" sends them hunting for
+    something that is running fine."""
+    from wingman.infrastructure.tenant_process import TenantProcessSignalError
+
+    registry = tmp_path / "tenants.toml"
+    write_tenant_pidfile(registry)
+    command_of = _fake_command_of({os.getpid(): "wingman-mcp --http --tenant-registry x"})
+
+    import signal as signal_module
+
+    real_kill = os.kill
+
+    def not_permitted(pid: int, sig: int) -> None:
+        if sig == signal_module.SIGHUP:
+            raise PermissionError
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", not_permitted)
+    try:
+        with pytest.raises(TenantProcessSignalError, match="may not signal it"):
+            signal_reload(registry, command_of=command_of)
+    finally:
+        clear_tenant_pidfile(registry)

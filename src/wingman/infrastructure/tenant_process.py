@@ -34,6 +34,17 @@ if TYPE_CHECKING:
 
 _logger = get_logger("infrastructure.tenant_process")
 
+
+class TenantProcessSignalError(RuntimeError):
+    """The shared process is running but could not be signaled (#329).
+
+    Distinct from "no process found", which is an ordinary outcome this
+    module reports by returning None — here the process is alive and the
+    reload simply did not happen, which is a different thing for the
+    operator to do something about.
+    """
+
+
 PIDFILE_SUFFIX = ".pid"
 
 CommandOf = Callable[[int], str]
@@ -124,7 +135,23 @@ def signal_reload(registry_path: Path, command_of: CommandOf = _ps_command_of) -
     pid = read_tenant_process_pid(registry_path, command_of=command_of)
     if pid is None:
         return None
-    os.kill(pid, signal.SIGHUP)
+    try:
+        os.kill(pid, signal.SIGHUP)
+    except ProcessLookupError:
+        # It exited between the pid read and the signal. That is genuinely
+        # "no verified-live process", which this function's None branch and
+        # the caller's message already describe correctly (#329).
+        _logger.info("shared process pid=%s exited before it could be signaled", pid)
+        return None
+    except PermissionError:
+        # Different in kind: the process IS there, this account may not
+        # signal it. Flattening that into "not found" would send the
+        # operator looking for a process that is running fine.
+        raise TenantProcessSignalError(
+            f"the shared process (pid {pid}) is running but this account may not signal it "
+            "— rerun as its owner (or via the redeploy script, which runs as root). The new "
+            "token is written; it just will not be recognized until that process reloads."
+        ) from None
     return pid
 
 
@@ -139,6 +166,24 @@ def register_reload_handler(index: TenantIndex, registry_path: Path) -> None:
 
     def _handler(signum: int, frame: object) -> None:  # noqa: ARG001
         _logger.info("SIGHUP received — reloading tenant registry from %s", registry_path)
-        index.reload(registry_path)
+        try:
+            index.reload(registry_path)
+        except Exception:  # noqa: BLE001 — see below: this must never propagate
+            # An exception raised in a signal handler propagates into whatever
+            # the main thread was executing, and this process serves every
+            # tenant. A malformed registry — one typo'd key while adding
+            # somebody — would therefore take the whole host down on the next
+            # ordinary 'tenant rotate-token', which is what sends the SIGHUP
+            # (#328).
+            #
+            # A registry that cannot be read is a reason to keep serving from
+            # the last good one, not to stop answering. The reload is what
+            # failed, not the process.
+            _logger.exception(
+                "SIGHUP reload failed; continuing with the tenant registry already loaded "
+                "(%d tenant(s)). Fix %s and signal again.",
+                len(index),
+                registry_path,
+            )
 
     signal.signal(signal.SIGHUP, _handler)
