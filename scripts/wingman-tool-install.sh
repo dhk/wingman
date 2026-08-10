@@ -79,6 +79,20 @@ import subprocess
 import sys
 
 constraints, tool_python = sys.argv[1], sys.argv[2]
+
+
+def canonical(name: str) -> str:
+    """PEP 503 normalization: '-', '_' and '.' are the same character.
+
+    uv.lock spells these with hyphens; a wheel's own METADATA Name often
+    spells them with underscores (pydantic_core, typing_extensions,
+    docstring_parser). Comparing on a bare .lower() therefore matched
+    neither direction: locked-and-present packages were reported "not
+    installed at all", and — worse and silently — a genuinely WRONG
+    version of one of them could never be reported, because the wrong-set
+    below only looks at names it found (#231 deploy).
+    """
+    return re.sub(r"[-_.]+", "-", name).lower()
 with open(constraints, encoding="utf-8") as handle:
     lines = handle.read().splitlines()
 
@@ -110,13 +124,17 @@ except Exception as exc:  # noqa: BLE001 - any failure here means "cannot verify
     print(f"==> could not read the installed versions ({exc}); pinning unverified", file=sys.stderr)
     raise SystemExit(1)
 
+installed = {canonical(name): version for name, version in installed.items()}
+
 wrong = [
-    (name, want, installed[name.lower()])
+    (name, want, installed[canonical(name)])
     for name, want, _ in pins
-    if name.lower() in installed and installed[name.lower()] != want
+    if canonical(name) in installed and installed[canonical(name)] != want
 ]
 # A locked package that is absent entirely is a broken install, not a pass.
-missing = [name for name, _, conditional in pins if not conditional and name.lower() not in installed]
+missing = [
+    name for name, _, conditional in pins if not conditional and canonical(name) not in installed
+]
 
 if wrong or missing:
     print("ERROR: the install did not honour uv.lock. These differ:", file=sys.stderr)
