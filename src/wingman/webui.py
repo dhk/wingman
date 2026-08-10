@@ -70,6 +70,7 @@ _SERVE_TYPES = {
     ".txt": "text/plain; charset=utf-8",
     ".json": "application/json",
     ".css": "text/css",
+    ".svg": "image/svg+xml",
 }
 _MAX_LISTED_PER_SECTION = 12
 # #173: digests get their own, smaller cap — "last N overnight runs" rather
@@ -347,6 +348,7 @@ _GROUP_NAMES = {
     "dossiers": "Company dossiers",
     "pdf": "Exports",
     "reports": "Reports",
+    "charts": "Value charts",
 }
 _STAMP = re.compile(r"(20\d{6})T(\d{2})(\d{2})\d*Z?")
 _ISO_DATE = re.compile(r"(20\d{2}-\d{2}-\d{2})")

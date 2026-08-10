@@ -1807,6 +1807,49 @@ def values(
         typer.echo(f"  rejected axis {rejected.name!r}: {rejected.reason}")
 
 
+@app.command("values-chart")
+def values_chart(
+    out: Path | None = typer.Option(
+        None, "--out", help="Destination folder (default: the workspace's reports/charts/)."
+    ),
+) -> None:
+    """Render your inferred value dimensions (see 'wingman values') as an SVG
+    radar chart (v3 of issue #240 — presentation only; no model call, nothing
+    recomputed). Writes under reports/charts/ and prints the path.
+
+    Requires a stored profile — build one first with 'wingman values
+    --refresh'. If the stored profile predates newer captures, the chart
+    still renders, with the "N new captures" note printed on it as well as
+    to this terminal, same as 'wingman values' already does for a stale
+    stored profile.
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
+    ('wingman coach-persona set <name>'), this charts THEIR profile instead.
+    """
+    from wingman.application.coaching import get_active_persona, render_acting_as
+    from wingman.reporting.radar import export_value_radar
+
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "charted")
+    with Storage(config.db_path) as storage:
+        active_persona = get_active_persona(storage, config)
+        typer.echo(render_acting_as(active_persona))
+        try:
+            export = export_value_radar(config, storage, persona=active_persona, out_dir=out)
+        except IngestError as exc:
+            typer.echo(f"values-chart failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+    typer.echo(f"Wrote {export.path}")
+    if export.stale_new_captures:
+        noun = "capture" if export.stale_new_captures == 1 else "captures"
+        typer.echo(
+            f"{export.stale_new_captures} new {noun} since this profile was built — "
+            "'wingman values --refresh' to include them."
+        )
+    typer.echo(f'Open it: open "{export.path}"')
+
+
 _STEP_MARKS = {"ok": "✓", "skipped": "–", "failed": "✗"}
 
 

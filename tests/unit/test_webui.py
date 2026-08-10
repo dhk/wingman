@@ -140,6 +140,28 @@ def test_stylesheet_is_not_listed_as_a_report(client: tuple[TestClient, str]) ->
     assert served.status_code == 200
 
 
+def test_value_radar_svg_is_listed_and_served(client: tuple[TestClient, str]) -> None:
+    """v3 of issue #240: a chart written under reports/charts/ by
+    `reporting.radar.export_value_radar` (CLI `values-chart` / MCP
+    `values_chart`) surfaces through the same generic reports_dir listing
+    every other export uses — no bespoke webui route needed."""
+    http, token = client
+    config = load_config()
+    charts = config.reports_dir / "charts"
+    charts.mkdir(parents=True)
+    (charts / "your-corpus-values-radar.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><title>MARKER-CHART</title></svg>',
+        encoding="utf-8",
+    )
+    page = http.get(f"/ui/{token}/").text
+    assert "file/charts/your-corpus-values-radar.svg" in page
+    assert "Value charts" in page  # humanized group name, never the raw dir
+    served = http.get(f"/ui/{token}/file/charts/your-corpus-values-radar.svg")
+    assert served.status_code == 200
+    assert "MARKER-CHART" in served.text
+    assert served.headers["content-type"].startswith("image/svg+xml")
+
+
 def test_json_sidecar_is_deduped_against_its_md_twin(client: tuple[TestClient, str]) -> None:
     """Issue #141: career.md + career.json (and fit-brief-*.md/.json) list once."""
     http, token = client

@@ -2102,6 +2102,53 @@ def my_values(refresh: bool = False) -> str:
     return f"{render_acting_as(active_persona)}\n{render_value_profile(report.profile)}{rejected}"
 
 
+@server.tool()
+def values_chart(out_dir: str = "") -> str:
+    """Render your inferred value dimensions (see my_values) as an SVG
+    radar/spider chart (v3 of issue #240 — presentation only: no model call,
+    nothing recomputed, just a picture of the already-computed ValueProfile).
+
+    Writes under reports/charts/ (or out_dir, if given) and returns the
+    written path. Requires a stored profile — call my_values(refresh=True)
+    first if none exists yet; this tool never builds or rebuilds one itself.
+    A stale stored profile (new captures since it was built) still renders,
+    with the same "N new captures" note my_values already shows, printed on
+    the chart as well as in this tool's return text — staleness is a
+    warning here, not a refusal.
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
+    (coach_persona 'set'), this charts THEIR profile instead — never the
+    coach's own.
+    """
+    from wingman.application.coaching import get_active_persona, render_acting_as
+    from wingman.reporting.radar import export_value_radar
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    destination = Path(out_dir).expanduser() if out_dir.strip() else None
+    with Storage(config.db_path) as storage:
+        active_persona = get_active_persona(storage, config)
+        try:
+            export = export_value_radar(
+                config, storage, persona=active_persona, out_dir=destination
+            )
+        except IngestError as exc:
+            return f"values-chart failed: {exc}"
+        acting_as = render_acting_as(active_persona)
+    stale = ""
+    if export.stale_new_captures:
+        noun = "capture" if export.stale_new_captures == 1 else "captures"
+        stale = (
+            f"\n{export.stale_new_captures} new {noun} since this profile was built — "
+            "my_values(refresh=True) to include them."
+        )
+    return (
+        f"{acting_as}\nWrote {export.path}{stale}\n"
+        "Open it in a browser, or embed it (it's self-contained SVG)."
+    )
+
+
 def _miso_lines(report: MisoReport) -> str:
     marks = {"ok": "✓", "skipped": "–", "failed": "✗"}
     lines = [f"{report.target} ({report.kind}):"]
