@@ -199,11 +199,12 @@ body { margin: 0; }
 @media (min-width: 768px) {
   .ui-setup { max-width: 560px; }
   .tabbar { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
-  .tabbar label { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
+  .tabbar label, .tabbar .tablink { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
     letter-spacing: .04em; color: var(--text-dim); padding: 0 14px; min-height: 44px;
     display: flex; align-items: center; cursor: pointer; margin-bottom: -1px;
     border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
-  .tabbar label:hover { color: var(--text); }
+  .tabbar label:hover, .tabbar .tablink:hover { color: var(--text); }
+  .tabbar .tablink { text-decoration: none; }
   .tabpanel { display: none; }
   #tab-digest:checked ~ .tabpanel-digest,
   #tab-files:checked ~ .tabpanel-files,
@@ -523,7 +524,11 @@ def _changelog_panel(now: datetime) -> tuple[str, str]:
     return _changelog_tab_label(today_count, week_count), panel
 
 
-def _tabset(panels: list[tuple[str, str, str]], selected: str | None = None) -> str:
+def _tabset(
+    panels: list[tuple[str, str, str]],
+    selected: str | None = None,
+    links: list[tuple[str, str]] | None = None,
+) -> str:
     """Desktop tabs (spec section 6): radios first, then labels, then panels.
 
     CSS-only \u2014 hidden radio inputs drive :checked sibling selectors; the page
@@ -549,6 +554,15 @@ def _tabset(panels: list[tuple[str, str, str]], selected: str | None = None) -> 
         for key, _, _ in filled
     )
     labels = "".join(f'<label for="tab-{key}">{_e(label)}</label>' for key, label, _ in filled)
+    # Pages of their own, not panels. The tabs are CSS-only radios over
+    # content already on this page; the profile page is a separate route
+    # (it is also the export, so inlining it would render a whole second
+    # document into every home page load). It still belongs in the same
+    # bar, because a page nothing links to does not exist — the profile
+    # page shipped reachable only by typing its URL.
+    labels += "".join(
+        f'<a class="tablink" href="{_e(href)}">{_e(label)}</a>' for href, label in (links or [])
+    )
     sections = "\n".join(
         f'<div class="tabpanel tabpanel-{key}">\n{content}\n</div>' for key, _, content in filled
     )
@@ -561,8 +575,9 @@ def _tiers(
     connect: str,
     now: datetime,
     selected: str | None = None,
+    profile_href: str = "",
 ) -> str:
-    """Digest · Files · Changelog · Connect · Manage (tabs at >=768px, a stack below)."""
+    """Digest · Files · Changelog · Connect · Manage, plus a link to Profile."""
     digest = "\n".join(html for section, html in groups if section.split("/")[0] == "digests")
     files = "\n".join(html for section, html in groups if section.split("/")[0] != "digests")
     changelog_label, changelog = _changelog_panel(now)
@@ -575,6 +590,7 @@ def _tiers(
             ("manage", "Manage", manage),
         ],
         selected=selected,
+        links=[(profile_href, "Profile")] if profile_href else [],
     )
 
 
@@ -794,6 +810,10 @@ async def ui_home(request: Request) -> Response:
                 _connect_panel(request, token),
                 now,
                 selected=selected_tab,
+                profile_href="profile",  # relative, like every other link here:
+                # the home page is served at /ui/<token>/, and a relative
+                # href keeps working under a mount prefix or a tunnel that
+                # strips one.
             )
         )
         return _page("Wingman", "\n".join(body))
@@ -819,6 +839,7 @@ async def ui_home(request: Request) -> Response:
             _connect_panel(request, token),
             now,
             selected=selected_tab,
+            profile_href="profile",
         )
     )
     return _page("Wingman", "\n".join(body))
