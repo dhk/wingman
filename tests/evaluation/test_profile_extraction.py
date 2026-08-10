@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from wingman.application.ingest import ingest_resume
 from wingman.application.evidence import locate_quote
+from wingman.application.ingest import ingest_resume
 from wingman.application.resume_formats import extract_resume_text
 from wingman.infrastructure.config import ENV_DATA_DIR, load_config
 from wingman.infrastructure.storage import Storage

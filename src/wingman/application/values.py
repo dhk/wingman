@@ -133,8 +133,7 @@ def _target_from_item(item: ProfileItem) -> str:
     — display-only, never re-parsed for anything semantic."""
     name = item.name
     prefix = f"{item.subtype}: "
-    if name.startswith(prefix):
-        name = name[len(prefix) :]
+    name = name.removeprefix(prefix)
     persona_suffix = name.rfind(" (persona:")
     if persona_suffix != -1 and name.endswith(")"):
         name = name[:persona_suffix]
@@ -334,8 +333,10 @@ def render_value_profile(profile: ValueProfile, stale_new_captures: int = 0) -> 
     """Deterministic text rendering shared by the CLI and MCP surfaces."""
     lines = [
         f"Value profile: {profile.subject_name}",
-        f"(built from {profile.items_used} captured items, "
-        f"{profile.provider}/{profile.model}, {profile.generated_at.date().isoformat()})",
+        (
+            f"(built from {profile.items_used} captured items, "
+            f"{profile.provider}/{profile.model}, {profile.generated_at.date().isoformat()})"
+        ),
         "",
         "Axes:",
     ]

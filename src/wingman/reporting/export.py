@@ -327,7 +327,7 @@ def export_company(
         elif line.lstrip().startswith('[fact] "'):
             quote = _e(line.strip().removeprefix("[fact] "))
             line = f'<blockquote><span class="tag tag-fact">fact</span> {quote}</blockquote></div>'
-        elif line.startswith("Generated: ") or line.startswith("Newest attributable document"):
+        elif line.startswith(("Generated: ", "Newest attributable document")):
             line = f'<div class="meta">{_e(line)}</div>'
         elif line.startswith("- https://"):
             body = line.removeprefix("- ")

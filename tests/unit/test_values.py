@@ -565,7 +565,7 @@ def test_mcp_my_values_stored_profile_reads_active_persona(
 def test_mcp_my_values_refresh_builds_via_scripted_provider(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import wingman.mcp_server as mcp_server
+    from wingman import mcp_server
 
     config = load_config()
     with Storage(config.db_path) as storage:
@@ -591,7 +591,7 @@ def test_mcp_my_values_refresh_builds_via_scripted_provider(
 def test_mcp_my_values_floor_error_surfaces_as_a_message_not_a_traceback(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import wingman.mcp_server as mcp_server
+    from wingman import mcp_server
 
     config = load_config()
     Storage(config.db_path).close()  # initializes the workspace db file

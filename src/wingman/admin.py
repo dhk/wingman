@@ -252,7 +252,7 @@ async def installations_page(request: Request) -> Response:
 _registered = False
 
 
-def register_admin(server: "FastMCP") -> None:
+def register_admin(server: FastMCP) -> None:
     """Mount the installations page. Idempotent — safe to call once per
     process alongside 'register_ui' regardless of how many instances this
     process itself serves.

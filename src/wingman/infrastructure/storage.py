@@ -11,7 +11,6 @@ from typing import Self
 
 from wingman.domain import SourceRecord
 from wingman.domain.answer import AnswerRecord
-from wingman.domain.source_record import derive_document_key
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.heap import HeapItem
 from wingman.domain.opportunity import Opportunity
@@ -19,9 +18,10 @@ from wingman.domain.outreach import OutreachBrief
 from wingman.domain.person import ExternalDocument, NewsItem, Person, PersonDossier, PersonOrigin
 from wingman.domain.persona import Persona
 from wingman.domain.pov import PovCard
+from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 from wingman.domain.relationship import RelationshipLogEntry, RelationshipObjective
 from wingman.domain.research import CompanySource, NewLinkEvent, ResearchSnapshot
-from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
+from wingman.domain.source_record import derive_document_key
 from wingman.domain.values import ValueProfile
 
 _SCHEMA = """
@@ -603,7 +603,7 @@ class Storage:
             for row in cursor.fetchall()
         ]
 
-    def save_answer(self, record: "AnswerRecord") -> None:
+    def save_answer(self, record: AnswerRecord) -> None:
         """Insert or replace one answer-bank record and resync its FTS row (RFC-030)."""
         self._conn.execute(
             "INSERT OR REPLACE INTO answers (answer_id, payload, created_at) VALUES (?, ?, ?)",
@@ -616,12 +616,12 @@ class Storage:
         )
         self._conn.commit()
 
-    def get_answer(self, answer_id: str) -> "AnswerRecord | None":
+    def get_answer(self, answer_id: str) -> AnswerRecord | None:
         cursor = self._conn.execute("SELECT payload FROM answers WHERE answer_id = ?", (answer_id,))
         row: tuple[str] | None = cursor.fetchone()
         return AnswerRecord.model_validate_json(row[0]) if row else None
 
-    def list_answers(self) -> "list[AnswerRecord]":
+    def list_answers(self) -> list[AnswerRecord]:
         cursor = self._conn.execute("SELECT payload FROM answers ORDER BY created_at, answer_id")
         return [AnswerRecord.model_validate_json(row[0]) for row in cursor.fetchall()]
 
@@ -631,7 +631,7 @@ class Storage:
         self._conn.commit()
         return cursor.rowcount > 0
 
-    def search_answers(self, query: str, limit: int = 5) -> "list[tuple[AnswerRecord, str]]":
+    def search_answers(self, query: str, limit: int = 5) -> list[tuple[AnswerRecord, str]]:
         """Full-text search over questions and answers; (record, snippet) by relevance."""
         try:
             cursor = self._conn.execute(

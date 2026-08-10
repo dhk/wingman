@@ -17,6 +17,7 @@ import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime
 from html.parser import HTMLParser
+from typing import ClassVar
 from urllib.parse import urljoin
 
 from pydantic import BaseModel, Field
@@ -40,7 +41,7 @@ RESEARCH_STALE_AFTER_DAYS = 30
 class _PageParser(HTMLParser):
     """Visible text and absolute https links of one HTML page, nothing more."""
 
-    _SKIP = {"script", "style", "noscript", "template"}
+    _SKIP: ClassVar[set[str]] = {"script", "style", "noscript", "template"}
 
     def __init__(self, base_url: str) -> None:
         super().__init__(convert_charrefs=True)

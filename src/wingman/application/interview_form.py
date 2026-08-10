@@ -163,9 +163,11 @@ _SECTIONS: list[tuple[str, str, Destination]] = [
     ),
     (
         "People and organizations",
-        "Who you admire and who you would not want to be associated with — and "
-        "the same for organizations. These are about what you value, not what "
-        "you can do. There are no wrong answers and nothing here is scored.",
+        (
+            "Who you admire and who you would not want to be associated with — and "
+            "the same for organizations. These are about what you value, not what "
+            "you can do. There are no wrong answers and nothing here is scored."
+        ),
         "profile",
     ),
 ]

@@ -260,7 +260,7 @@ def test_carveoff_evidence_is_citable_via_career_render(
         assert "Grant writing" in rendered
         assert "## Evidence" in rendered
         assert "grant history" in rendered
-        seeded = [i for i in target_storage.list_profile_items() if i.name == "Grant writing"][0]
+        seeded = next(i for i in target_storage.list_profile_items() if i.name == "Grant writing")
         record_id = seeded.evidence[0].source_record_id
         assert f"source record `{record_id}`" in rendered
         # and the citation actually resolves, not just prints a bare id

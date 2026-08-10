@@ -37,7 +37,7 @@ DEFAULT_TOP_N = 10
 def _parse_ts(ts: str) -> datetime | None:
     """Best-effort ISO-8601 parse; a malformed timestamp is skipped, not fatal."""
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return datetime.fromisoformat(ts)
     except (ValueError, AttributeError):
         return None
 
@@ -147,9 +147,11 @@ def summarize(
 def render_summary(summary: TelemetrySummary) -> str:
     """The one text rendering shared by the CLI and MCP surfaces (dual-surface parity)."""
     lines = [
-        f"Sessions: {summary.session_count}  "
-        f"(gap boundary: {summary.gap_minutes:g}m; {summary.total_events} events, "
-        f"{summary.dated_events} with a usable timestamp)",
+        (
+            f"Sessions: {summary.session_count}  "
+            f"(gap boundary: {summary.gap_minutes:g}m; {summary.total_events} events, "
+            f"{summary.dated_events} with a usable timestamp)"
+        ),
     ]
     lines.append("")
     lines.append("Most frequent:")

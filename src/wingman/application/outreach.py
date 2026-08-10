@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import re
 
-
 from pydantic import BaseModel, Field
 
 from wingman.agents.outreach_writer import (
@@ -306,9 +305,11 @@ def render_outreach_brief(brief: OutreachBrief) -> str:
     """Deterministic text rendering shared by the CLI and MCP surfaces."""
     lines = [
         f"Outreach brief: {brief.person_name} (draft — nothing is sent)",
-        f"(POV card of {brief.pov_generated_at.date().isoformat()} + "
-        f"{brief.corpus_documents_used} of your documents, {brief.provider}/{brief.model}, "
-        f"{brief.generated_at.date().isoformat()})",
+        (
+            f"(POV card of {brief.pov_generated_at.date().isoformat()} + "
+            f"{brief.corpus_documents_used} of your documents, {brief.provider}/{brief.model}, "
+            f"{brief.generated_at.date().isoformat()})"
+        ),
     ]
     lines.append(f"Purpose: {brief.purpose.value}")
     if brief.alignment is not None:
@@ -330,8 +331,10 @@ def render_outreach_brief(brief: OutreachBrief) -> str:
         lines.extend(
             [
                 "",
-                "Intro material (unverified draft — compose it in your own voice and "
-                "check any claimed shared context; Wingman never sends, RFC-006):",
+                (
+                    "Intro material (unverified draft — compose it in your own voice and "
+                    "check any claimed shared context; Wingman never sends, RFC-006):"
+                ),
             ]
         )
         lines.extend(f"- {bullet}" for bullet in brief.intro_points)

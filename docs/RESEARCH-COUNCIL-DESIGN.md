@@ -28,13 +28,14 @@ An **engine** is an externally branded AI system queried as a distinct, attribut
 
 ```python
 class EngineResponse(BaseModel):
-    engine: str                      # "openai" | "anthropic" | "gemini" | "perplexity" | ...
+    engine: str  # "openai" | "anthropic" | "gemini" | "perplexity" | ...
     mode: Literal["api", "search_fallback", "skipped"]
     text: str | None
     citations: list[str] = []
     model: str | None = None
     degraded_reason: str | None = None
     latency_ms: int | None = None
+
 
 class EngineAdapter(Protocol):
     def ask(self, prompt: str) -> EngineResponse: ...

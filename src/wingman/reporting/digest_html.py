@@ -53,7 +53,7 @@ def _chip(label: str, kind: str = "fact") -> str:
     return f'<span class="tag tag-{kind}">{_e(label)}</span>'
 
 
-def _target_section(target: "OvernightTarget") -> list[str]:
+def _target_section(target: OvernightTarget) -> list[str]:
     mark = "✓" if target.status == "ok" else "✗"
     tone = "fact" if target.status == "ok" else "warn"
     parts = [
@@ -68,7 +68,7 @@ def _target_section(target: "OvernightTarget") -> list[str]:
     return parts
 
 
-def _action_block(number: int, action: "ActionItem") -> list[str]:
+def _action_block(number: int, action: ActionItem) -> list[str]:
     first = " first" if number == 1 else ""
     parts = [
         f'<div class="action{first}">',
@@ -85,8 +85,8 @@ def _action_block(number: int, action: "ActionItem") -> list[str]:
 
 def render_digest_html(
     now: datetime,
-    targets: "list[OvernightTarget]",
-    actions: "list[ActionItem]",
+    targets: list[OvernightTarget],
+    actions: list[ActionItem],
     suppressed: int,
     suggestions: list[str],
 ) -> str:

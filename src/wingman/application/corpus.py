@@ -142,7 +142,7 @@ def _parse_posts_manifest(
                 raw_date = (row.get("post_date") or "").strip()
                 if raw_date:
                     try:
-                        published = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+                        published = datetime.fromisoformat(raw_date)
                     except ValueError:
                         published = None
                 manifest[post_id] = (title, published)

@@ -106,7 +106,7 @@ def _rehome_item(item: ProfileItem, persona: Persona) -> ProfileItem:
     name_key, instead of participating in that machinery like every other
     first-person item does."""
     suffix = f" (persona:{persona.persona_id})"
-    name = item.name[: -len(suffix)] if item.name.endswith(suffix) else item.name
+    name = item.name.removesuffix(suffix)
     return item.model_copy(update={"persona_id": None, "name": name, "conflicts_with": None})
 
 

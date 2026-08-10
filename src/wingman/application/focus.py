@@ -21,9 +21,9 @@ the user's act, on their machine (RFC-006 untouched: nothing is ever sent).
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -205,7 +205,7 @@ def _evidence_url(entry: str) -> str | None:
     match = _EVIDENCE_URL.search(entry)
     if match:
         return match.group(1).rstrip("/")
-    if entry.startswith("http://") or entry.startswith("https://"):
+    if entry.startswith(("http://", "https://")):
         return entry.rstrip("/")
     return None
 
@@ -371,8 +371,10 @@ def _relationship_review_actions(storage: Storage) -> list[ActionItem]:
                 f'stalled, or was the thesis wrong? current thesis: "{objective.thesis}"',
                 who=person.name,
                 evidence=[
-                    f"say: review my objective with {person.name} "
-                    "(the relationship_objective tool walks it)",
+                    (
+                        f"say: review my objective with {person.name} "
+                        "(the relationship_objective tool walks it)"
+                    ),
                     f'or: wingman objective review "{person.name}"',
                 ],
                 key=f"relationship-review:{person.name_key}",
@@ -671,8 +673,10 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     lines = [
         f"# Overnight digest — {now.date().isoformat()}",
         "",
-        f"{len(targets)} targets processed, {failed} with failures. "
-        f"Generated {now.strftime('%Y-%m-%d %H:%M UTC')}.",
+        (
+            f"{len(targets)} targets processed, {failed} with failures. "
+            f"Generated {now.strftime('%Y-%m-%d %H:%M UTC')}."
+        ),
     ]
     for target in targets:
         marker = "✓" if target.status == "ok" else "✗"
@@ -699,8 +703,10 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
         lines.extend(
             [
                 "",
-                f"({suppressed} action(s) suppressed by your triage verdicts — "
-                "'wingman actions list' shows them, 'wingman actions unmute <key>' reverses.)",
+                (
+                    f"({suppressed} action(s) suppressed by your triage verdicts — "
+                    "'wingman actions list' shows them, 'wingman actions unmute <key>' reverses.)"
+                ),
             ]
         )
 

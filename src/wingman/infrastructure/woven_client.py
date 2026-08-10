@@ -58,15 +58,17 @@ def woven_url(env: Mapping[str, str] | None = None) -> str | None:
 
 
 async def _call(url: str, tool: str, arguments: dict[str, object]) -> str:
-    async with streamablehttp_client(url) as (read, write, _get_session_id):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.call_tool(tool, arguments)
-            parts = [block.text for block in result.content if isinstance(block, TextContent)]
-            text = "\n".join(parts) if parts else "(no result)"
-            if result.isError:
-                raise WovenCallError(text)
-            return text
+    async with (
+        streamablehttp_client(url) as (read, write, _get_session_id),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        result = await session.call_tool(tool, arguments)
+        parts = [block.text for block in result.content if isinstance(block, TextContent)]
+        text = "\n".join(parts) if parts else "(no result)"
+        if result.isError:
+            raise WovenCallError(text)
+        return text
 
 
 def call_woven_tool(

@@ -10,7 +10,6 @@ from wingman.domain.opportunity import FitVerdict, RequirementKind
 from wingman.domain.profile import ProfileItemKind
 from wingman.domain.provenance import ClaimClassification
 
-
 # The kinds a document extraction may propose. Deliberately NOT the whole
 # of ProfileItemKind: INTERVIEW items carry a subtype and a persona scope
 # (docs/COACHING-MODE-DESIGN.md) that an extraction has no way to supply,

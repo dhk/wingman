@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from wingman.application.ingest import IngestError
-from wingman.infrastructure.fetch import FetchError
 from wingman.application.people import (
     add_person,
     attach_feed,
@@ -15,6 +14,7 @@ from wingman.application.people import (
 )
 from wingman.domain.person import FeedAttribution, FeedKind, FeedSource
 from wingman.infrastructure.config import load_config
+from wingman.infrastructure.fetch import FetchError
 from wingman.infrastructure.storage import Storage
 
 ATOM_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>

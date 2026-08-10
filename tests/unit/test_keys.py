@@ -1,9 +1,9 @@
 """Keychain-backed keys (RFC-019): env wins, keychain fills gaps, no secrets shown."""
 
 import os
+from pathlib import Path
 
 import pytest
-from pathlib import Path
 
 from wingman.infrastructure import keys as keys_module
 from wingman.infrastructure.keys import (

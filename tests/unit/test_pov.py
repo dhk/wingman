@@ -346,9 +346,9 @@ def test_own_pov_with_persona_excludes_corpus_and_uses_only_their_captures(
             storage,
             persona_id=persona.persona_id,
         )
-        mike_doc_id = [
+        mike_doc_id = next(
             item for item in storage.list_profile_items() if item.persona_id == persona.persona_id
-        ][0].item_id
+        ).item_id
 
         provider = ScriptedProvider(
             {

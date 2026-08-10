@@ -119,8 +119,8 @@ def test_third_version_drains_a_pre_existing_conflict_pile(
     workspace: Config, tmp_path: Path
 ) -> None:
     """Workspaces already carrying pre-RFC-028 conflict rows heal on next ingest."""
-    from wingman.application.profile_store import persist_items
     from wingman.application.ingest import _persist_source
+    from wingman.application.profile_store import persist_items
 
     with Storage(workspace.db_path) as storage:
         # Simulate the pre-fix pile: two versions persisted with no lineage.

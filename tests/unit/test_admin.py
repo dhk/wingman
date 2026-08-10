@@ -3,15 +3,14 @@
 import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
 from starlette.testclient import TestClient
 from typer.testing import CliRunner
 
-import httpx
-
 from wingman.admin import (
-    Instance,
     InstallationsConfigError,
+    Instance,
     admin_token,
     load_instances,
     register_admin,
