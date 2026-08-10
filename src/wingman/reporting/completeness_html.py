@@ -17,6 +17,9 @@ from wingman.reporting.export import WINGMAN_PDF_CSS
 
 _COMPLETENESS_CSS = """
 .completeness { max-width: 760px; margin: 0 auto; padding: 48px 24px 64px; }
+.todo { padding-left: 20px; }
+.todo li { margin-bottom: 14px; line-height: 1.5; }
+.todo code { font-size: 12px; }
 .meter-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; }
 .meter-label { flex: 0 0 200px; font-size: 14px; }
 .meter-track { flex: 1; height: 8px; border-radius: 4px; background: var(--bg3);
@@ -64,11 +67,37 @@ def _person_line(person: PersonCompleteness) -> str:
     return f"<li><b>{_e(person.name)}</b>{where} — {link}, {logged}</li>"
 
 
+def _todo_html(report: CompletenessReport) -> list[str]:
+    """The 'what do I do next' half, first on the page.
+
+    Somebody opening this wants to know what to do, not to derive it from
+    six sections of counts. Every line names the consequence of the gap and
+    the sentence that closes it.
+    """
+    from wingman.application.completeness import next_actions
+
+    actions = next_actions(report)
+    parts = ['<div class="section-divider"><span>Things to do</span></div>']
+    if not actions:
+        parts.append('<p class="dim">Nothing outstanding — every section has something in it.</p>')
+        return parts
+    parts.append('<ol class="todo">')
+    for action in actions:
+        parts.append(
+            f"<li><b>{_e(action.title)}</b><br>"
+            f'<span class="dim">{_e(action.why)}</span><br>'
+            f"<code>{_e(action.how)}</code></li>"
+        )
+    parts.append("</ol>")
+    return parts
+
+
 def render_completeness_html(report: CompletenessReport) -> str:
     career = report.career
     body: list[str] = [
         f"<h1>Completeness — {report.generated_at.date().isoformat()}</h1>",
         '<div class="meta">local data only — no fetch, no model call</div>',
+        *_todo_html(report),
         '<div class="section-divider"><span>Career Profile</span></div>',
         _meter("Roles", career.roles),
         _meter("Achievements", career.achievements),

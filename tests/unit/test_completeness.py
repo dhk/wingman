@@ -150,3 +150,70 @@ def test_blocked_sections_named_in_markdown_and_html(workspace: Path) -> None:
     html = render_completeness_html(report)
     assert "Interview Bootstrap" in html
     assert "<!doctype html>" in html
+
+
+def test_next_actions_lead_with_job_criteria(workspace: Path) -> None:
+    """Ordered by what unblocks the most, not by what is emptiest. A
+    workspace can be full of everything else and still not tell you which
+    job to look at."""
+    from wingman.application.completeness import compute_completeness, next_actions
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        actions = next_actions(compute_completeness(storage, config))
+
+    assert actions
+    assert actions[0].title == "Set your job criteria"
+    assert "unscored" in actions[0].why
+    assert actions[0].how == "say: let's set up my job criteria"
+
+
+def test_every_action_says_what_the_gap_costs_and_how_to_close_it(workspace: Path) -> None:
+    """'Testimonials: 0' is a number; the reason to care is the point."""
+    from wingman.application.completeness import compute_completeness, next_actions
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        actions = next_actions(compute_completeness(storage, config))
+
+    for action in actions:
+        assert action.why.strip() and action.how.strip()
+        assert action.why != action.title
+
+
+def test_the_values_target_is_the_real_one_not_an_invented_denominator(
+    workspace: Path,
+) -> None:
+    """application.values refuses below these thresholds, so 'N of 6 across 2
+    kinds' is the actual contract — the distinction that keeps this from
+    being a made-up percentage."""
+    from wingman.application.completeness import compute_completeness
+    from wingman.application.values import MIN_ITEMS, MIN_SUBTYPES
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        report = compute_completeness(storage, config)
+
+    assert report.values.min_items == MIN_ITEMS
+    assert report.values.min_subtypes == MIN_SUBTYPES
+    assert report.values.captures == 0
+    assert not report.values.ready
+    assert not report.values.profile_built
+
+
+def test_the_rendered_report_leads_with_things_to_do(workspace: Path) -> None:
+    from wingman.application.completeness import compute_completeness
+    from wingman.reporting.completeness import render_completeness_markdown
+    from wingman.reporting.completeness_html import render_completeness_html
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        report = compute_completeness(storage, config)
+
+    markdown = render_completeness_markdown(report)
+    html = render_completeness_html(report)
+
+    assert markdown.index("Things to do") < markdown.index("Career Profile")
+    assert html.index("Things to do") < html.index("Career Profile")
+    assert "let's set up my job criteria" in markdown
+    assert "let&#x27;s set up my job criteria" in html or "let's set up my job criteria" in html
