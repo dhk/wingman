@@ -27,6 +27,19 @@ from wingman.infrastructure.logs import get_logger
 
 _logger = get_logger("tenants")
 
+#: Prefix on a Config.data_dir_source built by Tenant.config(). A config
+#: carrying it came from the registry, which means this process is the
+#: shared multi-tenant one and other people's workspaces are reachable from
+#: it. Solo installs never carry it, and must not be constrained as if they
+#: shared a machine with anyone (#333).
+TENANT_CONFIG_SOURCE = "tenant registry"
+
+
+def is_tenant_config(config: Config) -> bool:
+    """Whether this Config was bound to a registered tenant."""
+    return config.data_dir_source.startswith(TENANT_CONFIG_SOURCE)
+
+
 _TOKEN_FILENAME = "mcp-http-token"  # mirrors mcp_server._TOKEN_FILENAME
 
 # RFC-047-style default: root-provisioned, matching the global-secrets
@@ -92,7 +105,7 @@ class Tenant:
         workspace_keys = read_workspace_keys(self.data_dir)
         return Config(
             data_dir=self.data_dir,
-            data_dir_source=f"tenant registry ({self.slug})",
+            data_dir_source=f"{TENANT_CONFIG_SOURCE} ({self.slug})",
             anthropic_api_key=workspace_keys.get(KNOWN_KEYS["anthropic"]),
             voyage_api_key=workspace_keys.get(KNOWN_KEYS["voyage"]),
             openrouter_api_key=workspace_keys.get(KNOWN_KEYS["openrouter"]),

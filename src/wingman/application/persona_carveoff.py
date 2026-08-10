@@ -238,6 +238,70 @@ def seed_new_workspace(export: CarveOffExport, target_storage: Storage) -> ItemC
     return counts
 
 
+def _refuse_another_tenants_workspace(target_dir: Path, source_config: Config) -> None:
+    """Keep a carve-off inside the caller's own tenancy (#333).
+
+    The shared process (RFC-048) runs as ONE account that owns every
+    tenant's workspace, so a path is not an access control here — the
+    process can write all of them. Under the retired shape-B instances the
+    Unix account made this impossible; it is reachable now, and it writes
+    profile items, source records and conflict rows into somebody else's
+    live profile.
+
+    It is not a malice-only path either: an operator carving a persona and
+    mistyping a directory lands in the same place, silently, because the
+    target is created when absent.
+
+    Targets OUTSIDE the registry stay legal — carving into a brand-new
+    directory that is not yet a tenant is the documented flow, and the
+    report this command prints says exactly that. What is refused is a
+    target that is, contains, or sits inside another registered tenant's
+    data_dir.
+
+    Distinct from #271's `privileged` flag, which is authorization: this
+    is containment, and it must keep holding for a privileged caller and
+    for any future caller that forgets to check the flag.
+    """
+    from wingman.infrastructure.tenants import (
+        TenantRegistryError,
+        is_tenant_config,
+        load_registry,
+        tenant_registry_path,
+    )
+
+    # Only a tenant-bound config shares a process with anybody. A solo
+    # install owns its own machine and has no registry to consult — and, on
+    # a box that happens to host tenants under another account, cannot read
+    # one anyway. Checking unconditionally made every solo carve-off depend
+    # on a root-owned file.
+    if not is_tenant_config(source_config):
+        return
+
+    registry_path = tenant_registry_path()
+    try:
+        tenants = load_registry(registry_path)
+    except TenantRegistryError as exc:
+        # A registry we cannot read is not a licence to write anywhere. Solo
+        # installs are unaffected: an ABSENT registry parses as no tenants.
+        raise IngestError(
+            f"the tenant registry ({registry_path}) could not be read, so this cannot check "
+            f"that the target is not another tenant's workspace: {exc}"
+        ) from exc
+
+    own = source_config.data_dir.expanduser().resolve()
+    for tenant in tenants:
+        other = tenant.data_dir.expanduser().resolve()
+        if other == own:
+            continue
+        if target_dir == other or other in target_dir.parents or target_dir in other.parents:
+            raise IngestError(
+                f"the target {target_dir} belongs to the tenant {tenant.slug!r} — a carve-off "
+                "writes a profile into the target workspace, and that one is not yours. Point "
+                "it at a new directory instead; it becomes reachable once somebody registers "
+                "it as a tenant."
+            )
+
+
 def carve_off_persona(
     name_or_id: str, source_config: Config, source_storage: Storage, target_data_dir: Path
 ) -> CarveOffReport:
@@ -254,6 +318,7 @@ def carve_off_persona(
             "brand-new directory (e.g. what a fresh $WINGMAN_DATA_DIR would point at), "
             "not your current workspace."
         )
+    _refuse_another_tenants_workspace(target_dir, source_config)
     export = export_persona(name_or_id, source_storage)
     target_dir.mkdir(parents=True, exist_ok=True)
     target_config = Config(data_dir=target_dir, data_dir_source="persona carve-off target")
