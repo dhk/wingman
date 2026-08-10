@@ -346,7 +346,7 @@ def test_cli_values_chart_without_a_profile_fails_cleanly(
 def test_mcp_values_chart_writes_and_reports_path(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import wingman.mcp_server as mcp_server
+    from wingman import mcp_server
 
     config = load_config()
     with Storage(config.db_path) as storage:
@@ -362,7 +362,7 @@ def test_mcp_values_chart_writes_and_reports_path(
 def test_mcp_values_chart_without_a_profile_returns_a_message_not_a_traceback(
     workspace: Path,
 ) -> None:
-    import wingman.mcp_server as mcp_server
+    from wingman import mcp_server
 
     config = load_config()
     Storage(config.db_path).close()

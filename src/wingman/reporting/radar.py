@@ -159,10 +159,12 @@ def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -
     desc_id = "radar-desc"
 
     parts: list[str] = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {_WIDTH:.0f} {height:.0f}" '
-        f'width="{_WIDTH:.0f}" height="{height:.0f}" class="wingman-radar" role="img" '
-        f'aria-label="Value profile radar chart for {_e(profile.subject_name)}" '
-        f'aria-describedby="{desc_id}">',
+        (
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {_WIDTH:.0f} {height:.0f}" '
+            f'width="{_WIDTH:.0f}" height="{height:.0f}" class="wingman-radar" role="img" '
+            f'aria-label="Value profile radar chart for {_e(profile.subject_name)}" '
+            f'aria-describedby="{desc_id}">'
+        ),
         f"<title>Value profile: {_e(profile.subject_name)}</title>",
         f'<desc id="{desc_id}">{_e(description)}</desc>',
         f"<style>{RADAR_CSS}</style>",
