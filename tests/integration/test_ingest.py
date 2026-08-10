@@ -202,3 +202,116 @@ def test_repeat_url_ingest_never_overwrites_the_archive(workspace: Config) -> No
             )
     # both fetches were archived as distinct artifacts (microsecond stamps)
     assert len(list(workspace.inbox_dir.glob("*google-DOC1*"))) == 2
+
+
+# --- #317: a designed resume's section headings are not skills ---------------
+
+_HEADING_RESUME = (
+    "# Jo\n\n"
+    "Roadmap\n\n"
+    "Owned the 2026 roadmap end to end.\n\n"
+    "Analytics\n\n"
+    "Built the attribution pipeline in Python.\n"
+)
+
+
+def _heading_response(*items: tuple[str, str]) -> str:
+    return json.dumps(
+        {
+            "items": [
+                {
+                    "kind": "skill",
+                    "name": name,
+                    "detail": "",
+                    "classification": "fact",
+                    "confidence": 0.9,
+                    "quotes": [quote],
+                }
+                for name, quote in items
+            ]
+        }
+    )
+
+
+def test_a_section_heading_is_not_stored_as_a_skill(workspace: Config, tmp_path: Path) -> None:
+    """Layout-mode extraction (#278) keeps a designed resume's structure, which
+    is the point of it — and makes a heading look exactly like a short skill.
+    A heading can only ever cite itself; a real skill is claimed by a sentence
+    that uses it."""
+    response = _heading_response(("Roadmap", "Roadmap"), ("Analytics", "Analytics"))
+
+    with Storage(workspace.db_path) as storage:
+        report = ingest_resume(
+            _resume_file(tmp_path, _HEADING_RESUME),
+            workspace,
+            storage,
+            RecordedProvider(response),
+        )
+        stored = {item.name for item in storage.list_profile_items()}
+
+    assert stored == set()
+    assert {r.name for r in report.rejected} == {"Roadmap", "Analytics"}
+    assert all("its own name" in r.reason for r in report.rejected)
+
+
+def test_a_one_word_skill_a_sentence_actually_uses_still_survives(
+    workspace: Config, tmp_path: Path
+) -> None:
+    """The acceptance criterion that stops this becoming 'ban short names'."""
+    response = _heading_response(("Python", "Built the attribution pipeline in Python."))
+
+    with Storage(workspace.db_path) as storage:
+        ingest_resume(
+            _resume_file(tmp_path, _HEADING_RESUME),
+            workspace,
+            storage,
+            RecordedProvider(response),
+        )
+        stored = {item.name for item in storage.list_profile_items()}
+
+    assert stored == {"Python"}
+
+
+def test_the_heading_rule_ignores_case_and_typographic_punctuation(
+    workspace: Config, tmp_path: Path
+) -> None:
+    """The quote is the SOURCE's span, so it can differ from the proposed name
+    in case or punctuation and still be the very same label."""
+    resume = "# Jo\n\nROADMAP\n\nOwned the 2026 roadmap end to end.\n"
+    response = _heading_response(("Roadmap", "ROADMAP"))
+
+    with Storage(workspace.db_path) as storage:
+        report = ingest_resume(
+            _resume_file(tmp_path, resume), workspace, storage, RecordedProvider(response)
+        )
+        assert storage.list_profile_items() == []
+
+    assert [r.name for r in report.rejected] == ["Roadmap"]
+
+
+def test_only_skills_are_held_to_this_rule(workspace: Config, tmp_path: Path) -> None:
+    """A role or achievement carries structure of its own and does not fail
+    this way; widening the rule to every kind would reject real items."""
+    response = json.dumps(
+        {
+            "items": [
+                {
+                    "kind": "achievement",
+                    "name": "Roadmap",
+                    "detail": "Owned it.",
+                    "classification": "fact",
+                    "confidence": 0.9,
+                    "quotes": ["Roadmap"],
+                }
+            ]
+        }
+    )
+
+    with Storage(workspace.db_path) as storage:
+        ingest_resume(
+            _resume_file(tmp_path, _HEADING_RESUME),
+            workspace,
+            storage,
+            RecordedProvider(response),
+        )
+        assert [i.name for i in storage.list_profile_items()] == ["Roadmap"]
