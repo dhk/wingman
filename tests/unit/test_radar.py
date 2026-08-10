@@ -48,6 +48,7 @@ def _axis(name: str, score: float, label: str = "leans toward") -> ValueAxis:
                 target="Jane Goodall",
                 quote=f"{name} evidence quote.",
                 intensity="strong",
+                direction="supports" if score >= 0 else "opposes",
                 signed_weight=score,
             )
         ],
