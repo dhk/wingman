@@ -1054,3 +1054,41 @@ def test_the_profile_page_is_reachable_from_the_link_the_home_page_gives(
     followed = http.get(f"/ui/{token}/profile")
     assert followed.status_code == 200
     assert "Profile" in followed.text
+
+
+def test_the_home_page_links_to_the_progress_view(client: tuple[TestClient, str]) -> None:
+    """Someone working through setup wants to see how far along they are
+    without knowing a tool name — the completeness report existed only as a
+    tool response, and only wrote a page if you knew to pass as_html."""
+    http, token = client
+
+    page = http.get(f"/ui/{token}/").text
+
+    assert 'href="completeness"' in page
+    assert "Progress" in page
+
+
+def test_the_progress_view_renders_the_completeness_report(
+    client: tuple[TestClient, str],
+) -> None:
+    from wingman.domain.profile import ProfileItemKind
+
+    config = load_config()
+    _add_item(config, kind=ProfileItemKind.ROLE, name="Staff Analyst")
+
+    http, token = client
+    page = http.get(f"/ui/{token}/completeness")
+
+    assert page.status_code == 200
+    assert "Career Profile" in page.text
+    assert "Job Criteria" in page.text
+    # Reports blocked sections honestly rather than inventing a number.
+    assert "Blocked" in page.text
+
+
+def test_the_progress_view_needs_the_token_like_everything_else(
+    client: tuple[TestClient, str],
+) -> None:
+    http, _token = client
+
+    assert http.get("/ui/not-the-token/completeness").status_code == 404
