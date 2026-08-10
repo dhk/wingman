@@ -128,7 +128,12 @@ from wingman.application.research import (
     render_research_report,
     research_company,
 )
-from wingman.reporting.export import export_career, export_company, export_person
+from wingman.reporting.export import (
+    export_career,
+    export_company,
+    export_person,
+    materialize_person_export,
+)
 from wingman.application.similarity import (
     CompanySimilarityReport,
     SimilarPerson,
@@ -1362,20 +1367,6 @@ def _find_person(storage: Storage, name: str) -> Person | str:
     return f"No person named {name!r}; see people_list."
 
 
-def _materialize_person_export(name: str, config: Config, storage: Storage) -> None:
-    """Best-effort HTML export refresh after a brief/POV card is (re)built (issue #175).
-
-    Writes the same landscape briefing dock 'export_pdf(target="person")' would,
-    so the person shows up in the web UI's Files list without that being a
-    separate, explicit step. Failure here is swallowed — it must never turn a
-    successful brief/POV build into a failed tool call.
-    """
-    try:
-        export_person(name, config, storage, as_html=True)
-    except IngestError:
-        get_logger("mcp").warning("auto-export skipped for person=%s", name, exc_info=True)
-
-
 def _similarity_lines(reference: str, people: list[SimilarPerson]) -> str:
     lines = [f"Closest to {reference}:"]
     for number, entry in enumerate(people, start=1):
@@ -1807,7 +1798,7 @@ def people_pov(name: str, refresh: bool = False) -> str:
             return f"people pov failed: {exc}. Nothing was stored; call again to retry."
         except (IngestError, ModelConfigError, ProviderError) as exc:
             return f"people pov failed: {exc}"
-        _materialize_person_export(person.name, config, storage)
+        materialize_person_export(person.name, config, storage)
     rejected = "".join(
         f"\n  rejected stance {item.statement!r}: {item.reason}" for item in report.rejected
     )
@@ -2622,7 +2613,7 @@ def people_brief(name: str, purpose: str = "introduction", refresh: bool = False
             return f"people brief failed: {exc}. Nothing was stored; call again to retry."
         except (IngestError, ModelConfigError, ProviderError) as exc:
             return f"people brief failed: {exc}"
-        _materialize_person_export(person.name, config, storage)
+        materialize_person_export(person.name, config, storage)
     rejected = "".join(
         f"\n  rejected point {item.point!r}: {item.reason}" for item in report.rejected
     )

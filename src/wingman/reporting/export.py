@@ -677,3 +677,27 @@ def export_person(
         ]
     )
     return _write(directory, f"{_slug(person.name)}-{today}.md", markdown)
+
+
+def materialize_person_export(name: str, config: Config, storage: Storage) -> None:
+    """Best-effort HTML export refresh after a brief/POV card is (re)built (#175).
+
+    Writes the same landscape briefing dock 'export_pdf(target="person")'
+    would, so the person shows up in the web UI's Files list without that
+    being a separate, explicit step.
+
+    Lives here, and is called from BOTH the CLI and the MCP tools, because
+    RFC-008 makes the server a thin surface over the same pipelines the CLI
+    runs. When only the MCP wrapper did this, whether a person appeared in
+    the web UI depended on which surface had built the card.
+
+    Failure is swallowed by design: the card or brief is already stored and
+    the build genuinely succeeded, so a reports directory that is read-only,
+    full, or missing must not turn that into a failed command. That means
+    catching more than IngestError — the work here is mkdir() and
+    write_text(), which raise OSError.
+    """
+    try:
+        export_person(name, config, storage, as_html=True)
+    except Exception:  # noqa: BLE001 — see the docstring: this must never propagate
+        get_logger("export").warning("auto-export skipped for person=%s", name, exc_info=True)
