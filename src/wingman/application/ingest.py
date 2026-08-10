@@ -21,11 +21,15 @@ from wingman.agents.profile_curator import (
     build_prompt,
     parse_proposal,
 )
-from wingman.application.evidence import locate_quote
+from wingman.application.evidence import (
+    canonical_punctuation,
+    fold_whitespace,
+    locate_quote,
+)
 from wingman.application.profile_store import persist_items
 from wingman.domain import SourceRecord
 from wingman.domain.extraction import ProposedItem
-from wingman.domain.profile import EvidenceSpan, ProfileItem
+from wingman.domain.profile import EvidenceSpan, ProfileItem, ProfileItemKind
 from wingman.domain.source_record import derive_document_key
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.fetch import FetchError
@@ -103,6 +107,39 @@ def _persist_source(
     return record, False
 
 
+def _is_a_label_not_a_claim(proposed: ProposedItem, resolved: list[str]) -> bool:
+    """A skill whose every quote is just its own name (#317).
+
+    Layout-mode PDF extraction (#278) preserves a designed resume's visual
+    structure, which is what makes it worth using — and which means a
+    section heading now arrives looking exactly like a short skill entry.
+    'Roadmap', 'Outcomes', 'Analytics' and 'Engineering' were all ingested
+    as skills off one document's headings.
+
+    The deterministic tell is that a heading can only ever cite itself. A
+    real skill is claimed by a sentence that USES it; a label is claimed by
+    nothing, so its quote and its name are the same string. That check
+    needs no model and no layout metadata, and it is the same shape as
+    every other gate here: evidence before assertion.
+
+    It does also drop a bare entry from a resume's own Skills list, whose
+    quote is likewise just the word. That is the right side to err on: an
+    unadorned label in a list is the author asserting a skill rather than
+    evidencing one, and a claim nothing backs is exactly what this codebase
+    declines to store. The skill returns the moment any sentence in the
+    document actually uses it.
+
+    Scoped to skills. A role or achievement carries structure of its own
+    (company, title, dates, a detail) and does not fail this way.
+    """
+    if proposed.item_kind is not ProfileItemKind.SKILL:
+        return False
+    name = fold_whitespace(canonical_punctuation(proposed.name)).casefold()
+    if not name:
+        return False
+    return all(fold_whitespace(canonical_punctuation(q)).casefold() == name for q in resolved)
+
+
 def _validate_evidence(
     proposed: ProposedItem, source_text: str, record: SourceRecord
 ) -> ProfileItem | RejectedItem:
@@ -132,6 +169,14 @@ def _validate_evidence(
                 reason=f"evidence quote not found verbatim in source: {quote[:80]!r}",
             )
         resolved.append(found)
+    if _is_a_label_not_a_claim(proposed, resolved):
+        return RejectedItem(
+            name=proposed.name,
+            reason=(
+                "skill is only evidenced by its own name — a section heading, or a bare "
+                "list entry, with no sentence claiming it (#317)"
+            ),
+        )
     return ProfileItem(
         kind=proposed.item_kind,
         name=proposed.name,
