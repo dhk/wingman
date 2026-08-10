@@ -55,6 +55,7 @@ from wingman.application.focus import (
     overnight_run,
     render_follow_report,
 )
+from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
 from wingman.application.news import STALE_AFTER_DAYS, fetch_person_news
@@ -127,6 +128,8 @@ from wingman.domain.outreach import OutreachPurpose
 from wingman.domain.person import Person
 from wingman.infrastructure import doctor_deep
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
+from wingman.infrastructure.gdrive_auth import GDriveAuthError
+from wingman.infrastructure.gdrive_auth import drive_auth as run_drive_auth
 from wingman.infrastructure.host_config import (
     legacy_host_keys_path,
     migrate_legacy_host_file,
@@ -232,6 +235,10 @@ heap_app = typer.Typer(help="Capture-first inbox for leads, heat-rated, sorted o
 app.add_typer(heap_app, name="heap")
 admin_app = typer.Typer(help="The cross-instance installations page for a shape-B box (#130).")
 app.add_typer(admin_app, name="admin")
+drive_app = typer.Typer(
+    help="Google Drive push for backups + digests: per-account device-code OAuth (RFC-053, #205)."
+)
+app.add_typer(drive_app, name="drive")
 
 
 def _version_callback(value: bool) -> None:
@@ -703,6 +710,12 @@ def backup(
     keep: int = typer.Option(
         10, "--keep", help="Backups to retain at the destination (0 keeps all)."
     ),
+    drive: bool = typer.Option(
+        True,
+        "--drive/--no-drive",
+        help="Push the finished tarball to Drive once authorized ('wingman drive auth'). "
+        "A no-op before authorization; a push failure never affects the local backup.",
+    ),
 ) -> None:
     """Snapshot the workspace into a dated tarball: database, models.toml, inbox, reports."""
     configure_logging()
@@ -718,6 +731,8 @@ def backup(
     for name in report.pruned:
         typer.echo(f"  pruned old backup: {name}")
     typer.echo(f'Restore with: wingman restore "{report.path}"')
+    if drive:
+        typer.echo(push_backup(Path(report.path)).detail)
 
 
 @app.command()
@@ -2417,6 +2432,27 @@ def keys_unset(
     typer.echo("Removed." if removed else "Nothing was stored under that name.")
 
 
+@drive_app.command("auth")
+def drive_auth_cmd() -> None:
+    """Authorize wingman's Drive push with your own Google account (RFC-053, #205).
+
+    Google's device-code flow — no local browser needed, so this works on a
+    headless server: run this once to get a short code and a URL, open the
+    URL on any device (phone, laptop) and approve, then run this exact same
+    command again to finish. 'drive.file' scope only — wingman can see/write
+    only the files/folders it creates itself, nothing else in your Drive.
+    """
+    configure_logging()
+    try:
+        result = run_drive_auth()
+    except GDriveAuthError as exc:
+        typer.echo(f"drive auth failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(result.detail)
+    if result.status in ("pending", "expired", "denied"):
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def overnight(
     out: Path | None = typer.Option(
@@ -2424,6 +2460,12 @@ def overnight(
         "--out",
         help="Where the digest lands (default: the workspace's reports/digests/). "
         "Point it somewhere you actually look — Desktop, a synced folder.",
+    ),
+    drive: bool = typer.Option(
+        True,
+        "--drive/--no-drive",
+        help="Push the finished digest to Drive once authorized ('wingman drive auth'). "
+        "A no-op before authorization; a push failure never affects the local digest.",
     ),
 ) -> None:
     """Deep-refresh every followed company and person; write the dated digest (RFC-018).
@@ -2434,7 +2476,12 @@ def overnight(
     exports for everything on the 'overnight' watchlist. Ends in a digest
     under reports/digests/ — what changed, what failed, what to consider
     following next. Schedule it yourself (launchd/cron — see README);
-    wingman runs no daemon.
+    wingman runs no daemon. The digest itself pushes to Drive once you've
+    run 'wingman drive auth' (RFC-053, #205) — that adds one upload of a
+    file that is already written, and changes nothing about the provider
+    traffic listed above. Wingman still never sends anything ON YOUR
+    BEHALF: no message, no application, no external write except this
+    upload of your own artifact (RFC-006).
     """
     configure_logging()
     config = load_config()
@@ -2456,6 +2503,8 @@ def overnight(
     if pretty.exists():
         typer.echo(f"Pretty: {pretty}  (wingman digest --open)")
     typer.echo("Read it any time with: wingman digest")
+    if drive:
+        typer.echo(push_digest(Path(report.digest_path)).detail)
     if report.failed:
         raise typer.Exit(code=1)
 

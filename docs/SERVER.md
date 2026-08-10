@@ -893,3 +893,38 @@ live migrating dhk's own account: a key added to a running tenant's
 even though every server-side check (file contents, ownership, a direct
 `wingman keys test` run as the exact account and data dir the server
 uses) confirmed the key was correct and readable the whole time.
+## 10. Google Drive push for backups + digests (RFC-053, #205)
+
+Optional, per-account, opt-in: `wingman backup` and `wingman overnight`'s
+digest can push their finished output to Drive once you've authorized —
+nothing else about the workspace ever touches the network for this.
+
+```bash
+wingman drive auth
+# Open the printed URL on any device (phone, laptop), enter the code, approve.
+wingman drive auth   # same command again — finishes the authorization
+```
+
+The refresh token lands in `~/.config/wingman/gdrive-credentials.json`
+(mode 600), scoped to this Unix account exactly like `secrets.env` — dhk's
+and trent's authorizations are independent and isolated by construction.
+From then on, `wingman backup` and `wingman overnight` push automatically
+(`--no-drive` skips it for one run); before authorizing, both commands are
+unaffected and print `Drive: not authorized yet...`.
+
+A real Google Cloud OAuth client (Drive API enabled, "Testing" publishing
+status, your emails allowlisted) has to exist before this works end to
+end — that's a manual Console step, not something this checkout can do for
+you. Once it exists, point wingman at it via `wingman.env`:
+
+```bash
+cat >> ~/.config/wingman/wingman.env <<'EOF'
+WINGMAN_GDRIVE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+WINGMAN_GDRIVE_CLIENT_SECRET=your-client-secret
+EOF
+```
+
+(or export the same two names as environment variables — either wins over
+the placeholder default compiled into `gdrive_auth.py`). These aren't
+per-account secrets — the same client id identifies the app for every
+account on the box, so they live in `wingman.env`, not `secrets.env`.

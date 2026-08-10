@@ -77,6 +77,7 @@ from wingman.application.focus import (
     overnight_run,
     render_follow_report,
 )
+from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.opportunities import list_opportunity_summaries, render_opportunity_listing
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
@@ -149,6 +150,8 @@ from wingman.application.triage import (
 from wingman.domain.outreach import OutreachPurpose
 from wingman.domain.person import FeedAttribution, FeedKind, FeedSource, Person
 from wingman.infrastructure.config import Config, load_config
+from wingman.infrastructure.gdrive_auth import GDriveAuthError
+from wingman.infrastructure.gdrive_auth import drive_auth as run_drive_auth
 from wingman.infrastructure.host_config import migrate_legacy_host_file
 from wingman.infrastructure.keys import ensure_env
 from wingman.infrastructure.logs import configure_logging, get_logger
@@ -2271,13 +2274,16 @@ def company_follow(name: str, url: str = "") -> str:
 
 
 @server.tool()
-def overnight() -> str:
+def overnight(drive: bool = True) -> str:
     """Deep-refresh every followed target and write the dated digest (RFC-018).
 
     Deliberately expensive: research diffs, feed fetches, news queries (each
     enrolled name+company goes to the news provider), embeddings, fresh POV
     cards, company themes, briefs, exports. Returns the per-target results and
-    the digest path. Nothing is ever sent on the user's behalf (RFC-006).
+    the digest path. Nothing is ever sent anywhere except on the user's own
+    say-so: model/news calls above are the normal cost of this command, and
+    the finished digest additionally pushes to Drive only once you've run
+    drive_auth (RFC-053, #205) — pass drive=false to skip Drive just this run.
     """
     config = _ready_config()
     if config is None:
@@ -2293,6 +2299,8 @@ def overnight() -> str:
     ]
     lines.append(f"{report.processed} targets, {report.failed} with failures.")
     lines.append(f"Digest: {report.digest_path}")
+    if drive:
+        lines.append(push_digest(Path(report.digest_path)).detail)
     return "\n".join(lines)
 
 
@@ -2839,13 +2847,16 @@ def people_import_connections(export_path: str) -> str:
 
 
 @server.tool()
-def backup(dest: str = "", keep: int = 10) -> str:
+def backup(dest: str = "", keep: int = 10, drive: bool = True) -> str:
     """Snapshot the workspace into a dated tarball (database, models.toml, inbox, reports).
 
     dest: destination folder (default: the workspace's backups/). Point it at a
     synced folder — a closed tarball syncs safely where the live database does not.
     keep: backups to retain at the destination (0 keeps all). Restoring is
     deliberately CLI-only ('wingman restore') because it overwrites the workspace.
+    drive: push the finished tarball to Drive once authorized (drive_auth,
+    RFC-053, #205) — a no-op before authorization; pass False to skip Drive
+    just this run.
     """
     config = _ready_config()
     if config is None:
@@ -2857,7 +2868,28 @@ def backup(dest: str = "", keep: int = 10) -> str:
     lines = [f"Backup written: {report.path}", f"{report.files} files, {report.size_bytes} bytes"]
     lines.extend(f"pruned old backup: {name}" for name in report.pruned)
     lines.append(f'Restore (CLI only): wingman restore "{report.path}"')
+    if drive:
+        lines.append(push_backup(Path(report.path)).detail)
     return "\n".join(lines)
+
+
+@server.tool()
+def drive_auth() -> str:
+    """Authorize wingman's Drive push with your own Google account (RFC-053, #205).
+
+    Google's device-code flow — no local browser needed. Call this tool
+    once to get back a short code and a URL: open the URL on any device
+    (phone, laptop) and approve with your own Google login, then call this
+    exact same tool again to finish. 'drive.file' scope only — wingman can
+    see/write only the files/folders it creates itself, nothing else in
+    your Drive. Once authorized, 'backup' and 'overnight' push their
+    finished tarball/digest to Drive automatically.
+    """
+    try:
+        result = run_drive_auth()
+    except GDriveAuthError as exc:
+        return f"drive auth failed: {exc}"
+    return result.detail
 
 
 _TOKEN_FILENAME = "mcp-http-token"
