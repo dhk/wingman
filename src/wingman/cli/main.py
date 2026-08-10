@@ -1836,12 +1836,18 @@ def values_chart(
         active_persona = get_active_persona(storage, config)
         typer.echo(render_acting_as(active_persona))
         try:
-            path = export_value_radar(config, storage, persona=active_persona, out_dir=out)
+            export = export_value_radar(config, storage, persona=active_persona, out_dir=out)
         except IngestError as exc:
             typer.echo(f"values-chart failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
-    typer.echo(f"Wrote {path}")
-    typer.echo(f'Open it: open "{path}"')
+    typer.echo(f"Wrote {export.path}")
+    if export.stale_new_captures:
+        noun = "capture" if export.stale_new_captures == 1 else "captures"
+        typer.echo(
+            f"{export.stale_new_captures} new {noun} since this profile was built — "
+            "'wingman values --refresh' to include them."
+        )
+    typer.echo(f'Open it: open "{export.path}"')
 
 
 _STEP_MARKS = {"ok": "✓", "skipped": "–", "failed": "✗"}

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import html
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 from wingman.application.ingest import IngestError
@@ -143,13 +144,27 @@ def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -
     already-scored contract."""
     axes = profile.axes
     count = len(axes)
-    height = _CHART_BOTTOM + _LEGEND_TOP_PAD + _LEGEND_ROW_HEIGHT * count + 20.0
+    legend_bottom = _CHART_BOTTOM + _LEGEND_TOP_PAD + _LEGEND_ROW_HEIGHT * count
+    stale_y = legend_bottom + _LEGEND_ROW_HEIGHT * 0.5
+    height = legend_bottom + (_LEGEND_ROW_HEIGHT if stale_new_captures else 0.0) + 20.0
+
+    # role="img" tells assistive technology to treat the whole chart as a
+    # single image, so everything inside it — axis names, signed scores,
+    # labels — stops being reachable. The accessible name alone says only
+    # WHOSE chart this is. The <desc> is the text equivalent: the same
+    # information the legend carries, in reading order.
+    description = "; ".join(f"{axis.name} {axis.score:+.2f}, {axis.label}" for axis in axes)
+    if stale_new_captures:
+        description += f"; {stale_new_captures} new captures since this was built"
+    desc_id = "radar-desc"
 
     parts: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {_WIDTH:.0f} {height:.0f}" '
         f'width="{_WIDTH:.0f}" height="{height:.0f}" class="wingman-radar" role="img" '
-        f'aria-label="Value profile radar chart for {_e(profile.subject_name)}">',
+        f'aria-label="Value profile radar chart for {_e(profile.subject_name)}" '
+        f'aria-describedby="{desc_id}">',
         f"<title>Value profile: {_e(profile.subject_name)}</title>",
+        f'<desc id="{desc_id}">{_e(description)}</desc>',
         f"<style>{RADAR_CSS}</style>",
         f'<text class="radar-title" x="24" y="34">Value profile: {_e(profile.subject_name)}</text>',
         (
@@ -159,14 +174,6 @@ def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -
             f"{profile.generated_at.date().isoformat()}</text>"
         ),
     ]
-    if stale_new_captures:
-        noun = "capture" if stale_new_captures == 1 else "captures"
-        parts.append(
-            f'<text class="radar-stale" x="24" y="72">'
-            f"{stale_new_captures} new {noun} since this was built — rebuild with "
-            "'wingman values --refresh' to include them</text>"
-        )
-
     # Grid: one polygon ring per fraction, spokes from center to the outer
     # ring, one per axis. The 0.5 ring is dashed and separately classed —
     # this IS the score == 0 line the docstring promises.
@@ -235,6 +242,21 @@ def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -
         )
     parts.append("</g>")
 
+    # The staleness warning sits UNDER the legend, not at y=72 in the header.
+    # The first axis label is always at y=68 — _LABEL_RADIUS is fixed and the
+    # first spoke always points at 12 o'clock — so a warning at y=72 put two
+    # text rows 4px apart and obscured both, on every stale chart at every
+    # axis count. Down here it has the row to itself. (Shifting the whole
+    # chart down when stale would keep it near the top, but that means two
+    # different geometries to reason about for the sake of one line.)
+    if stale_new_captures:
+        noun = "capture" if stale_new_captures == 1 else "captures"
+        parts.append(
+            f'<text class="radar-stale" x="24" y="{stale_y:.2f}">'
+            f"{stale_new_captures} new {noun} since this was built — rebuild with "
+            "'wingman values --refresh' to include them</text>"
+        )
+
     parts.append("</svg>")
     return "\n".join(parts)
 
@@ -248,10 +270,33 @@ def _resolve_chart_dir(config: Config, out_dir: Path | None) -> Path:
     ).resolve()
 
 
+@dataclass(frozen=True)
+class RadarExport:
+    """Where the chart went, and whether what it shows is current.
+
+    The stale count was embedded in the SVG and then dropped on the floor,
+    because this returned a bare Path — so the CLI and MCP surfaces could
+    not print the "N new captures" note RFC-052 promises they show, and
+    only somebody who opened the file ever learned it was out of date.
+    """
+
+    path: Path
+    stale_new_captures: int
+
+
 def _write_svg(directory: Path, filename: str, svg: str) -> Path:
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / filename
-    path.write_text(svg, encoding="utf-8")
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / filename
+        path.write_text(svg, encoding="utf-8")
+    except OSError as exc:
+        # Both callers handle IngestError and print an actionable refusal.
+        # Letting OSError through instead gave them a traceback for the
+        # ordinary cases: a read-only --out, a full disk, no permission.
+        raise IngestError(
+            f"could not write the chart to {directory}: {exc}. Check the directory exists "
+            "and is writable, or pass a different --out."
+        ) from exc
     _logger.info("radar export path=%s", path)
     return path
 
@@ -261,10 +306,11 @@ def export_value_radar(
     storage: Storage,
     persona: Persona | None = None,
     out_dir: Path | None = None,
-) -> Path:
+) -> RadarExport:
     """Render the stored `ValueProfile` (own or, with `persona`, a coached
     Persona's — same scoping `application.values.build_value_profile` uses)
-    as an SVG radar chart under `reports/charts/`.
+    as an SVG radar chart under `reports/charts/`, returning a `RadarExport`
+    carrying both the path and the staleness count the callers report.
 
     No model call — this only reads whatever profile is already stored.
     Raises `IngestError`, same class of refusal `application.values` already
@@ -287,5 +333,10 @@ def export_value_radar(
     stale = new_captures_since(storage, profile, persona_id=persona_id)
     svg = render_value_radar_svg(profile, stale_new_captures=stale)
     directory = _resolve_chart_dir(config, out_dir)
-    filename = f"{_slug(profile.subject_name)}-values-radar.svg"
-    return _write_svg(directory, filename, svg)
+    # The subject_id, not the display name alone. Slugs are lossy: 'A/B' and
+    # 'A B' produce the same one, and a persona named "Your corpus" produces
+    # the corpus chart's. Two subjects whose stored profiles are completely
+    # isolated would then share a file, and the second export would silently
+    # overwrite the first. The name still leads, so the file is recognizable.
+    filename = f"{_slug(profile.subject_name)[:60]}-{_slug(subject_id)[:24]}-values-radar.svg"
+    return RadarExport(path=_write_svg(directory, filename, svg), stale_new_captures=stale)

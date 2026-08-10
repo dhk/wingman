@@ -160,12 +160,25 @@ def test_negative_and_positive_axes_of_equal_magnitude_plot_differently(workspac
     """The core design question this slice had to resolve: a -0.8 axis must
     NOT draw identically to a +0.8 axis (bare-magnitude plotting would erase
     the sign entirely)."""
+    import math
+
+    from wingman.reporting.radar import _CENTER_X, _CENTER_Y
+
     axes = [_axis("Pos", 0.8), _axis("Neg", -0.8), _axis("Filler", 0.0)]
     svg = render_value_radar_svg(_profile(axes))
     root = _parse(svg)
     pos = next(v for v in _findall(root, "circle") if v.get("data-axis") == "Pos")
     neg = next(v for v in _findall(root, "circle") if v.get("data-axis") == "Neg")
-    assert _num(pos, "cy") != pytest.approx(_num(neg, "cy"), abs=0.5)
+
+    # DISTANCE FROM THE CENTRE, not a raw coordinate. These two vertices sit
+    # on different spokes, so their cy values differ by geometry alone —
+    # comparing them passed even under bare-magnitude plotting, which is the
+    # exact bug this test exists to catch.
+    def radius(vertex: object) -> float:
+        return math.hypot(_num(vertex, "cx") - _CENTER_X, _num(vertex, "cy") - _CENTER_Y)
+
+    assert radius(pos) > radius(neg)
+    assert radius(pos) != pytest.approx(radius(neg), abs=0.5)
 
 
 # --- the sign is never lost: legend text + tooltip ---------------------------
@@ -221,7 +234,8 @@ def test_export_writes_under_reports_charts(workspace: Path) -> None:
     with Storage(config.db_path) as storage:
         axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
         storage.save_value_profile(_profile(axes))
-        path = export_value_radar(config, storage)
+        export = export_value_radar(config, storage)
+    path = export.path
     assert path.parent == config.reports_dir / "charts"
     assert path.suffix == ".svg"
     assert path.exists()
@@ -253,9 +267,11 @@ def test_export_still_renders_when_stale_and_notes_it(workspace: Path) -> None:
         capture_interview_reaction(
             "values_pro", "New Person", "A brand new nomination.", config, storage, intensity="mild"
         )
-        path = export_value_radar(config, storage)
-    text = path.read_text(encoding="utf-8")
+        export = export_value_radar(config, storage)
+    text = export.path.read_text(encoding="utf-8")
     assert "1 new capture" in text
+    # ...and the caller is told too, so it can say so without opening the file.
+    assert export.stale_new_captures == 1
 
 
 def test_export_persona_scoping(workspace: Path) -> None:
@@ -271,8 +287,8 @@ def test_export_persona_scoping(workspace: Path) -> None:
         # the persona's profile must not satisfy the coach's own (unscoped) chart
         with pytest.raises(IngestError, match="no value profile built for you yet"):
             export_value_radar(config, storage)
-        path = export_value_radar(config, storage, persona=persona)
-    assert "mike-chen" in path.name
+        export = export_value_radar(config, storage, persona=persona)
+    assert "mike-chen" in export.path.name
 
 
 def test_export_out_dir_overrides_default(workspace: Path, tmp_path: Path) -> None:
@@ -281,8 +297,8 @@ def test_export_out_dir_overrides_default(workspace: Path, tmp_path: Path) -> No
     with Storage(config.db_path) as storage:
         axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
         storage.save_value_profile(_profile(axes))
-        path = export_value_radar(config, storage, out_dir=custom)
-    assert path.parent == custom.resolve()
+        export = export_value_radar(config, storage, out_dir=custom)
+    assert export.path.parent == custom.resolve()
 
 
 # --- CLI + MCP surface --------------------------------------------------------
@@ -375,3 +391,126 @@ def test_mcp_values_chart_reads_active_persona(
     assert "mike-chen" in result
 
     coach_persona("clear")
+
+
+# --- what the review caught (#248) --------------------------------------------
+
+
+def test_the_stale_warning_does_not_land_on_the_top_axis_label(workspace: Path) -> None:
+    """The first axis label is always at y=68 — _LABEL_RADIUS is fixed and the
+    first spoke always points at 12 o'clock — while the warning was drawn at
+    y=72. Two 11-13px text rows 4px apart obscure each other, so every stale
+    chart hid both its warning and its top axis name."""
+    from wingman.reporting.radar import _CENTER_Y, _LABEL_RADIUS
+
+    axes = [_axis("Steadfastness", 0.4), _axis("B", 0.2), _axis("C", 0.3)]
+    svg = render_value_radar_svg(_profile(axes), stale_new_captures=3)
+    root = _parse(svg)
+
+    top_label_y = _CENTER_Y - _LABEL_RADIUS  # 12 o'clock
+    warning = next(t for t in _findall(root, "text") if "3 new captures" in (t.text or ""))
+
+    assert abs(_num(warning, "y") - top_label_y) > 20.0
+
+
+def test_a_stale_chart_reserves_the_room_it_draws_in(workspace: Path) -> None:
+    """Moving the warning below the legend only helps if the viewBox grows to
+    match — otherwise it is drawn outside the visible area, which is worse
+    than overlapping."""
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    fresh = _parse(render_value_radar_svg(_profile(axes)))
+    stale = _parse(render_value_radar_svg(_profile(axes), stale_new_captures=1))
+
+    warning = next(t for t in _findall(stale, "text") if "1 new capture" in (t.text or ""))
+    stale_height = float(stale.get("height", "0"))
+
+    assert stale_height > float(fresh.get("height", "0"))
+    assert _num(warning, "y") < stale_height
+
+
+def test_two_subjects_whose_names_slug_alike_do_not_overwrite_each_other(
+    workspace: Path,
+) -> None:
+    """Slugs are lossy: 'A/B' and 'A B' produce the same one. Two subjects
+    whose stored profiles are completely isolated would then share a filename,
+    and exporting the second silently destroyed the first."""
+    from wingman.application.coaching import find_or_create_persona
+
+    config = load_config()
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    with Storage(config.db_path) as storage:
+        first = find_or_create_persona("A/B", storage)
+        second = find_or_create_persona("A B", storage)
+        for persona in (first, second):
+            storage.save_value_profile(
+                _profile(
+                    axes,
+                    subject_id=persona_card_id(persona.persona_id),
+                    subject_name=persona.name,
+                )
+            )
+        one = export_value_radar(config, storage, persona=first)
+        two = export_value_radar(config, storage, persona=second)
+
+    assert one.path != two.path
+    assert one.path.exists() and two.path.exists()
+
+
+def test_a_persona_cannot_collide_with_the_corpus_chart(workspace: Path) -> None:
+    """A persona named 'Your corpus' slugs to whatever the corpus subject
+    does — different stored profiles, one file."""
+    from wingman.application.coaching import find_or_create_persona
+
+    config = load_config()
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_profile(axes))
+        mine = export_value_radar(config, storage)
+        impostor = find_or_create_persona(_profile(axes).subject_name, storage)
+        storage.save_value_profile(
+            _profile(
+                axes,
+                subject_id=persona_card_id(impostor.persona_id),
+                subject_name=impostor.name,
+            )
+        )
+        theirs = export_value_radar(config, storage, persona=impostor)
+
+    assert mine.path != theirs.path
+
+
+def test_an_unwritable_destination_is_a_refusal_not_a_traceback(
+    workspace: Path, tmp_path: Path
+) -> None:
+    """Both callers handle IngestError and print an actionable refusal. The
+    write is mkdir() + write_text(), which raise OSError — so a read-only
+    --out, a full disk or a permissions problem bypassed all of that."""
+    config = load_config()
+    blocked = tmp_path / "no-entry"
+    blocked.mkdir()
+    blocked.chmod(0o500)  # readable, not writable
+    try:
+        with Storage(config.db_path) as storage:
+            axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+            storage.save_value_profile(_profile(axes))
+            with pytest.raises(IngestError, match="could not write the chart"):
+                export_value_radar(config, storage, out_dir=blocked / "charts")
+    finally:
+        blocked.chmod(0o700)
+
+
+def test_the_chart_carries_a_text_equivalent_of_what_it_plots(workspace: Path) -> None:
+    """role="img" makes assistive technology treat the whole SVG as one
+    image, so the axis names, signed scores and labels inside it stop being
+    reachable. The accessible name alone says only whose chart this is."""
+    axes = [
+        _axis("Steadfastness", -0.45, label="leans away from"),
+        _axis("Candour", 0.8, label="leans toward"),
+        _axis("C", 0.3),
+    ]
+    root = _parse(render_value_radar_svg(_profile(axes)))
+
+    desc = next(iter(_findall(root, "desc")))
+    assert root.get("aria-describedby") == desc.get("id")
+    assert "Steadfastness -0.45, leans away from" in (desc.text or "")
+    assert "Candour +0.80, leans toward" in (desc.text or "")

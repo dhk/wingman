@@ -2076,12 +2076,22 @@ def values_chart(out_dir: str = "") -> str:
     with Storage(config.db_path) as storage:
         active_persona = get_active_persona(storage, config)
         try:
-            path = export_value_radar(config, storage, persona=active_persona, out_dir=destination)
+            export = export_value_radar(
+                config, storage, persona=active_persona, out_dir=destination
+            )
         except IngestError as exc:
             return f"values-chart failed: {exc}"
         acting_as = render_acting_as(active_persona)
+    stale = ""
+    if export.stale_new_captures:
+        noun = "capture" if export.stale_new_captures == 1 else "captures"
+        stale = (
+            f"\n{export.stale_new_captures} new {noun} since this profile was built — "
+            "my_values(refresh=True) to include them."
+        )
     return (
-        f"{acting_as}\nWrote {path}\nOpen it in a browser, or embed it (it's self-contained SVG)."
+        f"{acting_as}\nWrote {export.path}{stale}\n"
+        "Open it in a browser, or embed it (it's self-contained SVG)."
     )
 
 
