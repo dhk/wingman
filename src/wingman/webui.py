@@ -576,8 +576,9 @@ def _tiers(
     now: datetime,
     selected: str | None = None,
     profile_href: str = "",
+    completeness_href: str = "",
 ) -> str:
-    """Digest · Files · Changelog · Connect · Manage, plus a link to Profile."""
+    """Digest · Files · Changelog · Connect · Manage, plus Profile and Progress."""
     digest = "\n".join(html for section, html in groups if section.split("/")[0] == "digests")
     files = "\n".join(html for section, html in groups if section.split("/")[0] != "digests")
     changelog_label, changelog = _changelog_panel(now)
@@ -590,7 +591,14 @@ def _tiers(
             ("manage", "Manage", manage),
         ],
         selected=selected,
-        links=[(profile_href, "Profile")] if profile_href else [],
+        links=[
+            (href, label)
+            for href, label in (
+                (profile_href, "Profile"),
+                (completeness_href, "Progress"),
+            )
+            if href
+        ],
     )
 
 
@@ -814,6 +822,7 @@ async def ui_home(request: Request) -> Response:
                 # the home page is served at /ui/<token>/, and a relative
                 # href keeps working under a mount prefix or a tunnel that
                 # strips one.
+                completeness_href="completeness",
             )
         )
         return _page("Wingman", "\n".join(body))
@@ -840,6 +849,7 @@ async def ui_home(request: Request) -> Response:
             now,
             selected=selected_tab,
             profile_href="profile",
+            completeness_href="completeness",
         )
     )
     return _page("Wingman", "\n".join(body))
@@ -1397,6 +1407,34 @@ async def ui_profile(request: Request) -> Response:
     return _page("Wingman — profile", _profile_body(config))
 
 
+async def ui_completeness(request: Request) -> Response:
+    """How far through the workspace is — every section, with what is empty.
+
+    The same report the 'completeness' tool returns, which until now a
+    person could only see by asking for it in a chat and, to get a page
+    out of it, knowing to pass as_html. Someone working through setup
+    wants to see how far along they are without having to know a tool
+    name, so it lives at a URL the home page links to.
+
+    Served as the standalone document reporting/completeness_html already
+    renders, rather than re-implemented here: it carries the same design
+    tokens as every other export, and one renderer means the page and the
+    written file cannot drift apart.
+    """
+    from wingman.application.completeness import compute_completeness
+    from wingman.infrastructure.storage import Storage
+    from wingman.reporting.completeness_html import render_completeness_html
+
+    config = _authorized(request)
+    if config is None:
+        return _not_found()
+    if not config.db_path.exists():
+        return _page("Wingman — progress", _header(config) + "<h1>No workspace yet</h1>")
+    with Storage(config.db_path) as storage:
+        report = compute_completeness(storage, config)
+    return HTMLResponse(render_completeness_html(report))
+
+
 def normalize_prefix(prefix: str) -> str:
     """'' stays root; 'trent', '/trent', '/trent/' all become '/trent'."""
     cleaned = prefix.strip().strip("/")
@@ -1420,6 +1458,7 @@ def register_ui(server: FastMCP, prefix: str = "") -> None:
     server.custom_route(f"{mount}/ui/{{token}}", methods=["GET"])(ui_home_redirect)
     server.custom_route(f"{mount}/ui/{{token}}/", methods=["GET"])(ui_home)
     server.custom_route(f"{mount}/ui/{{token}}/profile", methods=["GET"])(ui_profile)
+    server.custom_route(f"{mount}/ui/{{token}}/completeness", methods=["GET"])(ui_completeness)
     server.custom_route(f"{mount}/ui/{{token}}/file/{{path:path}}", methods=["GET"])(ui_file)
     server.custom_route(f"{mount}/ui/{{token}}/upload", methods=["POST"])(ui_upload)
     server.custom_route(f"{mount}/ui/{{token}}/keys", methods=["POST"])(ui_keys)
