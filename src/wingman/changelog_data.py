@@ -10,6 +10,31 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-08-10", 330, "fix: three isolation defects in the shared multi-tenant process"),
+    ("2026-08-10", 326, "fix: /health names itself, so the registry can verify it (#288)"),
+    ("2026-08-10", 325, "fix: the lockfile check compares package names per PEP 503"),
+    (
+        "2026-08-10",
+        225,
+        "docs: RFC-049 — relationship proposer stays deferred, revisit triggers named (#117)",
+    ),
+    ("2026-08-10", 231, "Google Drive push for backups + digests (v1 slice of #151)"),
+    ("2026-08-10", 247, "Persona carve-off Phase 2: merge into an already-populated target"),
+    ("2026-08-10", 248, "Values-alignment feedback loop v3: SVG radar-chart visualization (#240)"),
+    ("2026-08-10", 254, "Print a ready-to-paste `claude mcp add` command alongside every MCP url"),
+    (
+        "2026-08-10",
+        318,
+        "feat: profile page says what is missing, and exports for local viewing (#284)",
+    ),
+    (
+        "2026-08-10",
+        324,
+        "fix: measure changelog freshness by distance, not commit identity (#228 review)",
+    ),
+    ("2026-08-09", 323, "chore: regenerate changelog_data.py (16 commits behind, ceiling is 15)"),
+    ("2026-08-09", 322, "chore: adopt ruff 0.16 (#307)"),
+    ("2026-08-09", 229, "Web UI: auto-materialize a person's export on brief/POV build (#175)"),
     (
         "2026-08-09",
         320,
@@ -533,7 +558,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "f4aefe86debef7282d8b4868cfa9b2944ca82387"
+GENERATED_FROM_COMMIT = "c6cfcad535bf7065a29b0759c8b69969a84252a6"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -543,4 +568,4 @@ GENERATED_FROM_COMMIT = "f4aefe86debef7282d8b4868cfa9b2944ca82387"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 148
+GENERATED_FROM_DISTANCE = 160
