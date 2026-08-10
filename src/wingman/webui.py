@@ -1094,16 +1094,32 @@ _registered_prefixes: set[str] = set()
 _STARTED_AT = datetime.now(UTC).isoformat(timespec="seconds")
 
 
+#: What this process answers to in the host service registry (#288). The
+#: registry's health probe fetches /health and compares this field against
+#: the name the service was declared under — a probe that only checked for
+#: a 200 would report "healthy" for whatever else happened to be bound to
+#: the port after a reshuffle, which is the failure it exists to catch.
+HEALTH_SERVICE_NAME = "wingman"
+
+
 async def ui_health(request: Request) -> Response:
-    """Deliberately unauthenticated: version + start time only, nothing
-    workspace-specific (no owner, no path, no data) — loopback-bound like
-    the rest of this server, so the exposure is the same as 'ps' already
-    gives anyone on the box. Lets the admin installations page (#130) tell
-    an instance is up without holding its capability token.
+    """Deliberately unauthenticated: the service's own name, version and
+    start time only — nothing workspace-specific (no owner, no path, no
+    data) — loopback-bound like the rest of this server, so the exposure is
+    the same as 'ps' already gives anyone on the box. Lets the admin
+    installations page (#130) tell an instance is up without holding its
+    capability token, and lets the host registry verify that the thing on
+    this port is still wingman (#288).
     """
     from wingman.version import wingman_version
 
-    return JSONResponse({"version": wingman_version(), "started_at": _STARTED_AT})
+    return JSONResponse(
+        {
+            "service": HEALTH_SERVICE_NAME,
+            "version": wingman_version(),
+            "started_at": _STARTED_AT,
+        }
+    )
 
 
 # --- profile page (#284) ----------------------------------------------

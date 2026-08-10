@@ -265,12 +265,20 @@ def test_open_url_loopback_fallback_omits_prefix_for_stripped_instance(
 
 
 def test_health_endpoint_is_unauthenticated_and_minimal(workspace: Path) -> None:
+    """Minimal means nothing workspace-specific — no owner, no path, no data,
+    no token. 'service' is a build-time constant naming which program answers
+    here (#288), so it says nothing about whose workspace this is; the pinned
+    key set is what keeps anything that WOULD from being added quietly."""
+    from wingman.webui import HEALTH_SERVICE_NAME
+
     register_ui(server)
     http = TestClient(server.streamable_http_app())
     response = http.get("/health")
     assert response.status_code == 200
     payload = response.json()
-    assert set(payload) == {"version", "started_at"}
+    assert set(payload) == {"service", "version", "started_at"}
+    assert payload["service"] == HEALTH_SERVICE_NAME
+    assert str(workspace) not in response.text
 
 
 def test_admin_url_command_prints_the_page_url(
