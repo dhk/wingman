@@ -297,8 +297,10 @@ def render_carveoff_report(report: CarveOffReport) -> str:
         pieces.append(f"{counts.conflicts} in CONFLICT with existing data")
     summary = ", ".join(pieces)
     lines = [
-        f"Carved off {report.persona_name!r} into {report.target_data_dir}: {summary}. "
-        f"{report.source_records_preserved} evidence record(s) preserved."
+        (
+            f"Carved off {report.persona_name!r} into {report.target_data_dir}: {summary}. "
+            f"{report.source_records_preserved} evidence record(s) preserved."
+        )
     ]
     if counts.conflicts:
         lines.append(
