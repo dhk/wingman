@@ -419,7 +419,7 @@ def test_carve_off_persona_end_to_end(coach_workspace: Config, tmp_path: Path) -
 
     assert report.persona_name == "Mike Chen"
     assert report.counts.accepted == 1
-    assert report.source_records_written == 1
+    assert report.source_records_preserved == 1
     summary = render_carveoff_report(report)
     assert "Mike Chen" in summary
     assert "1 new profile item(s) added" in summary
@@ -709,3 +709,103 @@ def test_mcp_carve_off_persona_not_initialized(
     monkeypatch.setenv(ENV_DATA_DIR, str(tmp_path / "uninitialized"))
     result = mcp_carve_off_persona("Mike Chen", str(tmp_path / "target"))
     assert "not initialized" in result
+
+
+def test_a_second_carve_off_with_the_conflict_still_unresolved_does_not_crash(
+    coach_workspace: Config, tmp_path: Path
+) -> None:
+    """Carving the same persona off twice is the documented re-run — 'after
+    coaching more of them'. If the first run left a CONFLICT row, the second
+    used to die on a DuplicateRecordError.
+
+    The mechanism: the exported item keeps its original item_id, the first run
+    stores it as CONFLICT, and find_active_item only ever searches the ACTIVE
+    rival — so the second run marks the export as a conflict all over again and
+    tries to INSERT an item_id that is already there. The person is left unable
+    to re-run until they resolve a conflict they may not have looked at yet.
+    """
+    from wingman.domain.profile import EvidenceSpan, ProfileItem, ProfileItemKind
+
+    with Storage(coach_workspace.db_path) as storage:
+        mike = find_or_create_persona("Mike Chen", storage)
+        capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            WHY_PRO,
+            coach_workspace,
+            storage,
+            persona_id=mike.persona_id,
+        )
+        export = export_persona("Mike Chen", storage)
+    carved_item = export.items[0]
+
+    target_dir = tmp_path / "mikes-workspace"
+    target_dir.mkdir(parents=True)
+    target_config = Config(data_dir=target_dir, data_dir_source="test")
+    target_config.reports_dir.mkdir(parents=True)
+    contradicting_why = "Actually I've never trusted her methods or her public claims."
+    with Storage(target_config.db_path) as target_storage:
+        target_storage.add_source_record(
+            SourceRecord(
+                record_id="mikes-own-record",
+                source_type="manual",
+                source_locator="Mike's own earlier note",
+                content_hash="own-hash",
+                document_key="",
+            )
+        )
+        target_storage.add_profile_item(
+            ProfileItem(
+                kind=ProfileItemKind.INTERVIEW,
+                subtype="values_pro",
+                name=carved_item.name,
+                detail=contradicting_why,
+                classification=ClaimClassification.FACT,
+                confidence=1.0,
+                evidence=[
+                    EvidenceSpan(source_record_id="mikes-own-record", quote=contradicting_why)
+                ],
+                prompt_version="v0",
+                extracted_by="user",
+            )
+        )
+        first = seed_new_workspace(export, target_storage)
+        assert first.conflicts == 1
+
+        # The conflict is deliberately left unresolved, which is the whole point.
+        second = seed_new_workspace(export, target_storage)
+
+        assert second.conflicts == 0
+        assert second.accepted == 0
+        assert second.skipped_duplicates == 1
+        # Still exactly one conflict row — not a second copy of the same claim.
+        conflicts = [
+            item
+            for item in target_storage.list_profile_items()
+            if item.status is ItemStatus.CONFLICT
+        ]
+        assert len(conflicts) == 1
+
+
+def test_the_conflict_advice_does_not_send_anyone_to_the_wrong_workspace(
+    coach_workspace: Config, tmp_path: Path
+) -> None:
+    """The report used to offer 'or from within that workspace' as a way to
+    reach the conflicts. Standing in a directory selects nothing — load_config
+    reads the tenant binding or WINGMAN_DATA_DIR and deliberately never the
+    invoking directory — so that advice quietly listed and resolved items in
+    the reader's OWN workspace instead."""
+    from wingman.application.persona_carveoff import CarveOffReport
+    from wingman.application.profile_store import ItemCounts
+
+    report = CarveOffReport(
+        persona_name="Mike Chen",
+        target_data_dir=str(tmp_path / "mikes-workspace"),
+        counts=ItemCounts(conflicts=1),
+        source_records_preserved=1,
+    )
+
+    text = render_carveoff_report(report)
+
+    assert "WINGMAN_DATA_DIR" in text
+    assert "from within that workspace" not in text

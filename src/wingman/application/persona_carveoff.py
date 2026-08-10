@@ -85,7 +85,12 @@ class CarveOffReport(BaseModel):
     persona_name: str
     target_data_dir: str
     counts: ItemCounts
-    source_records_written: int
+    # Named for what it counts: every evidence record the carve-off brought
+    # across and the target now has. A re-run writes none of them a second
+    # time (they are already there, skipped by record_id), and reporting
+    # "0 evidence records preserved" then would be false in the other
+    # direction — the evidence IS preserved, it just did not need writing.
+    source_records_preserved: int
 
 
 def _resolve_persona(name_or_id: str, storage: Storage) -> Persona:
@@ -202,11 +207,34 @@ def seed_new_workspace(export: CarveOffExport, target_storage: Storage) -> ItemC
     after coaching more of them) would otherwise hit a source-record-id
     collision even though the content is identical; already-present
     placeholder ids are skipped rather than re-inserted.
+
+    Carried-over ITEMS need the same treatment, for a reason that only
+    shows up once a re-run meets an unresolved conflict. A rehomed item
+    keeps its original `item_id`, and `persist_items` looks for a rival
+    among ACTIVE items only — so a conflict row written by the first run
+    is invisible to the second, which dutifully marks the same export as
+    a conflict again and tries to insert an `item_id` that is already
+    there. The person could not re-run at all until they had resolved a
+    conflict they may not have looked at yet.
+
+    Skipping is the honest answer rather than overwriting: the row is
+    already in that workspace awaiting their decision, re-importing
+    identical content cannot improve it, and replacing a row they may
+    have already started acting on would be worse than leaving it. A
+    genuinely CHANGED claim arrives as a new item with a new id, and
+    conflicts through the ordinary machinery like anything else.
     """
     for record in export.source_records:
         if target_storage.get_source_record(record.record_id) is None:
             target_storage.add_source_record(record)
-    counts = persist_items(export.items, target_storage)
+    fresh, already_there = [], 0
+    for item in export.items:
+        if target_storage.get_profile_item(item.item_id) is None:
+            fresh.append(item)
+        else:
+            already_there += 1
+    counts = persist_items(fresh, target_storage)
+    counts.skipped_duplicates += already_there
     return counts
 
 
@@ -247,7 +275,7 @@ def carve_off_persona(
         persona_name=export.persona_name,
         target_data_dir=str(target_dir),
         counts=counts,
-        source_records_written=len(export.source_records),
+        source_records_preserved=len(export.source_records),
     )
 
 
@@ -270,15 +298,17 @@ def render_carveoff_report(report: CarveOffReport) -> str:
     summary = ", ".join(pieces)
     lines = [
         f"Carved off {report.persona_name!r} into {report.target_data_dir}: {summary}. "
-        f"{report.source_records_written} evidence record(s) preserved."
+        f"{report.source_records_preserved} evidence record(s) preserved."
     ]
     if counts.conflicts:
         lines.append(
             f"{counts.conflicts} item(s) contradicted data already in that workspace and were "
             "NOT overwritten — they're surfaced as conflicts for the person to resolve "
-            "themselves: run 'wingman profile list' (with WINGMAN_DATA_DIR pointed at "
-            f"{report.target_data_dir}, or from within that workspace) to see them, then "
-            "'wingman profile resolve <id>' to settle each one."
+            "themselves: run 'wingman profile list' with WINGMAN_DATA_DIR pointed at "
+            f"{report.target_data_dir}, then 'wingman profile resolve <id>' to settle each "
+            "one. (The directory you happen to be standing in is never how a workspace "
+            "gets chosen — an installed CLI must not scatter data wherever it is run, so "
+            "load_config reads the tenant binding or WINGMAN_DATA_DIR and nothing else.)"
         )
     lines.append(
         "If this target workspace isn't already registered as a tenant, it has no live URL "
