@@ -1159,16 +1159,19 @@ def _plural(count: int, noun: str) -> str:
 def _completeness_band(config: Config, items: list["ProfileItem"]) -> str:
     """What is filled in, and what the gap costs — profile-scoped.
 
-    Deliberately narrow: this answers "is this profile usable yet", not
-    "how complete is the workspace". #313 is building the wider view over
-    people, companies and criteria; when it lands this band should read
-    from its report rather than compute a second, drifting answer.
+    The counts come from application/completeness.py (#313), not from a
+    second walk of the same data — one measurement, one answer, no drift.
+    This function's own job is the part that report deliberately leaves to
+    its callers: saying what each gap COSTS. 'Roles: 0' is a number;
+    "nothing here shows tenure, title or seniority" is the reason to care.
 
-    Each gap names its consequence. 'Roles: 0' is a number; "no roles, so
-    nothing shows tenure or seniority" is the reason to care.
+    The two claim-quality rows (contested, single-quote) stay local: they
+    are properties of this page's own subject matter, and the report is
+    scoped to section counts across the whole workspace.
     """
-    from wingman.application.job_scoring import load_criteria
+    from wingman.application.completeness import compute_completeness
     from wingman.domain.profile import ItemStatus, ProfileItemKind
+    from wingman.infrastructure.storage import Storage
 
     reported = (
         ProfileItemKind.ROLE,
@@ -1176,8 +1179,15 @@ def _completeness_band(config: Config, items: list["ProfileItem"]) -> str:
         ProfileItemKind.SKILL,
         ProfileItemKind.TESTIMONIAL,
     )
+    with Storage(config.db_path) as storage:
+        report = compute_completeness(storage, config)
+    counts = {
+        ProfileItemKind.ROLE: report.career.roles,
+        ProfileItemKind.ACHIEVEMENT: report.career.achievements,
+        ProfileItemKind.SKILL: report.career.skills,
+        ProfileItemKind.TESTIMONIAL: report.career.testimonials,
+    }
     active = [i for i in items if i.status is ItemStatus.ACTIVE]
-    counts = {kind: sum(1 for i in active if i.kind is kind) for kind in reported}
     contested = sum(1 for i in items if i.status is ItemStatus.CONFLICT)
     # Only the kinds this band actually reports. INTERVIEW nominations are
     # built with exactly one evidence span by construction
@@ -1186,7 +1196,7 @@ def _completeness_band(config: Config, items: list["ProfileItem"]) -> str:
     # anyone who used the interview — and the number named items that appear
     # in none of the page's sections, so it could not be reconciled.
     thin = sum(1 for i in active if i.kind in reported and len(i.evidence) == 1)
-    criteria_set = load_criteria(config) is not None
+    criteria_set = report.job_criteria.exists
 
     rows: list[tuple[bool, str]] = [
         (

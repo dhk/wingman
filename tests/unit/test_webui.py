@@ -967,3 +967,29 @@ def test_the_export_does_not_disclose_the_host_workspace_path(
 
     assert str(config.data_dir) in served, "the served page keeps it — it never leaves the host"
     assert str(config.data_dir) not in exported
+
+
+def test_the_band_and_the_completeness_tool_cannot_disagree(
+    client: tuple[TestClient, str],
+) -> None:
+    """One measurement, one answer. The band used to walk the items itself,
+    which meant two implementations of 'how many roles' that could drift
+    apart silently — the page saying one thing and `completeness` another."""
+    from wingman.application.completeness import compute_completeness
+    from wingman.domain.profile import ProfileItemKind
+    from wingman.infrastructure.storage import Storage
+
+    config = load_config()
+    for n in range(3):
+        _add_item(config, kind=ProfileItemKind.ROLE, name=f"Role {n}")
+    _add_item(config, kind=ProfileItemKind.SKILL, name="Python")
+
+    with Storage(config.db_path) as storage:
+        report = compute_completeness(storage, config)
+
+    http, token = client
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert f"{report.career.roles} roles" in page
+    assert report.career.roles == 3
+    assert "1 skill" in page and report.career.skills == 1
