@@ -809,3 +809,96 @@ def test_the_conflict_advice_does_not_send_anyone_to_the_wrong_workspace(
 
     assert "WINGMAN_DATA_DIR" in text
     assert "from within that workspace" not in text
+
+
+def test_a_tenant_cannot_carve_a_persona_into_another_tenants_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#333 — the write-side mirror of #327. The shared process runs as ONE
+    account that owns every tenant workspace, so the target path is not an
+    access control: it can write all of them. The only guard excluded the
+    caller's OWN directory and left every other tenant's reachable."""
+    from wingman.infrastructure.tenants import Tenant
+
+    theirs = tmp_path / "tenants" / "dhk"
+    mine = tmp_path / "tenants" / "trent"
+    for directory in (theirs, mine):
+        directory.mkdir(parents=True)
+        Storage(directory / "wingman.db").close()
+
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(
+        f'[[tenant]]\nslug = "dhk"\ndata_dir = "{theirs}"\n\n'
+        f'[[tenant]]\nslug = "trent"\ndata_dir = "{mine}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
+    )
+
+    my_config = Tenant(slug="trent", data_dir=mine).config()
+    with Storage(my_config.db_path) as storage:
+        _seed_persona_capture(my_config, "Mike Chen")
+        with pytest.raises(IngestError, match="belongs to the tenant 'dhk'"):
+            carve_off_persona("Mike Chen", my_config, storage, theirs)
+
+    # Nothing was written into their workspace.
+    with Storage(theirs / "wingman.db") as their_storage:
+        assert their_storage.list_profile_items() == []
+
+
+def test_a_directory_inside_another_tenants_workspace_is_refused_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Naming a subdirectory is the obvious way around an equality check, and
+    the target is created when absent — so it would have worked."""
+    from wingman.infrastructure.tenants import Tenant
+
+    theirs = tmp_path / "tenants" / "dhk"
+    mine = tmp_path / "tenants" / "trent"
+    for directory in (theirs, mine):
+        directory.mkdir(parents=True)
+        Storage(directory / "wingman.db").close()
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(
+        f'[[tenant]]\nslug = "dhk"\ndata_dir = "{theirs}"\n\n'
+        f'[[tenant]]\nslug = "trent"\ndata_dir = "{mine}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
+    )
+
+    my_config = Tenant(slug="trent", data_dir=mine).config()
+    with Storage(my_config.db_path) as storage:
+        _seed_persona_capture(my_config, "Mike Chen")
+        with pytest.raises(IngestError, match="belongs to the tenant 'dhk'"):
+            carve_off_persona("Mike Chen", my_config, storage, theirs / "nested")
+        assert not (theirs / "nested").exists()
+
+
+def test_a_brand_new_directory_outside_the_registry_is_still_the_normal_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Carving into a directory nobody has registered yet is the documented
+    path — the command's own report says it becomes reachable once somebody
+    registers it. Containment must not break that."""
+    from wingman.infrastructure.tenants import Tenant
+
+    mine = tmp_path / "tenants" / "trent"
+    mine.mkdir(parents=True)
+    Storage(mine / "wingman.db").close()
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(f'[[tenant]]\nslug = "trent"\ndata_dir = "{mine}"\n', encoding="utf-8")
+    monkeypatch.setattr(
+        "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
+    )
+
+    my_config = Tenant(slug="trent", data_dir=mine).config()
+    fresh = tmp_path / "somewhere-new"
+    with Storage(my_config.db_path) as storage:
+        _seed_persona_capture(my_config, "Mike Chen")
+        report = carve_off_persona("Mike Chen", my_config, storage, fresh)
+
+    assert report.counts.accepted > 0
+    assert (fresh / "wingman.db").exists()
