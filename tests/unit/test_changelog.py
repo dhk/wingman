@@ -6,7 +6,7 @@ import pytest
 
 from wingman.domain.changelog import (
     ChangelogEntry,
-    _running_commit_hash,
+    _distance_past_tag,
     counts_today_and_week,
     is_user_facing,
     load_entries,
@@ -88,38 +88,72 @@ def test_counts_are_zero_for_no_entries() -> None:
     assert counts_today_and_week([], date(2026, 7, 23)) == (0, 0)
 
 
-def test_running_commit_hash_parses_a_dev_build() -> None:
-    assert _running_commit_hash("0.4.1.dev82+g8dc960d46") == "8dc960d46"
+def test_distance_parses_a_dev_build() -> None:
+    assert _distance_past_tag("0.4.1.dev82+g8dc960d46") == 82
+    # A dirty tree appends '.dYYYYMMDD'. The old '+gHASH$' parse could not
+    # read that at all and went silent — on exactly the state a box is in
+    # right after an upgrade regenerates this file.
+    assert _distance_past_tag("0.4.1.dev82+g8dc960d46.d20260810") == 82
 
 
 @pytest.mark.parametrize("version", ["0.4.0", "unknown (not installed)", "not-a-version-at-all"])
-def test_running_commit_hash_is_none_when_unparseable(version: str) -> None:
-    assert _running_commit_hash(version) is None
+def test_distance_is_none_when_unparseable(version: str) -> None:
+    assert _distance_past_tag(version) is None
 
 
-def test_staleness_note_is_silent_when_hashes_match(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_freshly_committed_regeneration_says_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bug this replaced. Generating writes the file and committing it
+    makes a new commit, so the build containing a regeneration is ALWAYS one
+    commit past the sha stamped in it. Comparing shas could therefore never
+    return 'fresh' for a committed artifact — it warned every single time the
+    data was correctly regenerated, which is how a real warning gets ignored.
+    """
     import wingman.changelog_data as data_module
 
-    monkeypatch.setattr(data_module, "GENERATED_FROM_COMMIT", "8dc960d46abc")
-    assert staleness_note("0.4.1.dev82+g8dc960d46") is None
+    monkeypatch.setattr(data_module, "GENERATED_FROM_DISTANCE", 82)
+
+    assert staleness_note("0.4.1.dev83+ge01a0573f") is None
 
 
 def test_staleness_note_is_silent_when_unverifiable(monkeypatch: pytest.MonkeyPatch) -> None:
     import wingman.changelog_data as data_module
 
-    monkeypatch.setattr(data_module, "GENERATED_FROM_COMMIT", "8dc960d46abc")
-    assert staleness_note("0.4.0") is None  # an exact-tag build: no '+gHASH' to compare
+    monkeypatch.setattr(data_module, "GENERATED_FROM_DISTANCE", 82)
+    assert staleness_note("0.4.0") is None  # an exact-tag build: no '.devN' to compare
+
+    # And when the generator itself could not work out a distance.
+    monkeypatch.setattr(data_module, "GENERATED_FROM_DISTANCE", -1)
+    assert staleness_note("0.4.1.dev88+ge01a0573f") is None
 
 
-def test_staleness_note_warns_on_a_real_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_new_tag_since_generation_is_silence_not_a_false_all_clear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tag restarts the count, so the two numbers stop being comparable.
+    The subtraction goes negative and this says nothing — the safe direction."""
     import wingman.changelog_data as data_module
 
-    monkeypatch.setattr(data_module, "GENERATED_FROM_COMMIT", "8dc960d46abc")
+    monkeypatch.setattr(data_module, "GENERATED_FROM_DISTANCE", 148)
+    assert staleness_note("0.5.1.dev3+ge01a0573f") is None
+
+
+def test_staleness_note_says_how_many_merges_are_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The old note could only say merges 'may be missing'. Distance turns
+    that into a number."""
+    import wingman.changelog_data as data_module
+
+    monkeypatch.setattr(data_module, "GENERATED_FROM_DISTANCE", 82)
     note = staleness_note("0.4.1.dev88+ge01a0573f")
+
     assert note is not None
-    assert "8dc960d46" in note
-    assert "e01a0573f" in note
-    assert "may be missing" in note
+    assert "5 merges behind" in note  # 88 - 82 - 1 for the regeneration commit
+    assert "floor, not a total" in note
+
+    single = staleness_note("0.4.1.dev84+ge01a0573f")
+    assert single is not None
+    assert "1 merge behind" in single
 
 
 def test_render_changelog_leads_with_the_staleness_note(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -130,7 +164,7 @@ def test_render_changelog_leads_with_the_staleness_note(monkeypatch: pytest.Monk
         "CHANGELOG_DATA",
         (("2026-07-10", 10, "Add company dossiers"),),
     )
-    monkeypatch.setattr(data_module, "GENERATED_FROM_COMMIT", "8dc960d46abc")
+    monkeypatch.setattr(data_module, "GENERATED_FROM_DISTANCE", 82)
     rendered = render_changelog(date(2026, 7, 23), version_string="0.4.1.dev88+ge01a0573f")
     assert rendered.startswith("Note:")
     assert "Add company dossiers" in rendered
@@ -149,7 +183,7 @@ def test_render_changelog_reports_internal_filtered_count_in_window(
             ("2026-07-23", 11, "chore: bump lockfile"),
         ),
     )
-    monkeypatch.setattr(data_module, "GENERATED_FROM_COMMIT", "irrelevant")
+    monkeypatch.setattr(data_module, "GENERATED_FROM_DISTANCE", -1)
     rendered = render_changelog(date(2026, 7, 23), version_string="0.4.0")
     assert "0 new today, 0 in the last 7 days" in rendered
     assert "2 internal-only filtered from the last 7 days" in rendered

@@ -17,6 +17,12 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GIT_AVAILABLE = (_REPO_ROOT / ".git").exists()
 
+# How far the committed data may fall behind HEAD before CI fails. Generous
+# but real: 'wingman-ctl upgrade' keeps it near 0-1. Paired with
+# domain/changelog.py's _LAG_ALLOWANCE — see the test at the bottom of this
+# file for why the two must be read together.
+_CI_CEILING = 15
+
 pytestmark = pytest.mark.skipif(
     not _GIT_AVAILABLE, reason="no .git directory here (running from an installed build)"
 )
@@ -58,7 +64,31 @@ def test_changelog_data_is_not_far_behind_head() -> None:
         text=True,
         check=True,
     ).stdout.strip()
-    assert int(gap) <= 15, (
+    assert int(gap) <= _CI_CEILING, (
         f"changelog_data.py is {gap} commits behind HEAD (#202's original bug was "
         "61) — run 'python scripts/generate_changelog.py' and commit the result."
     )
+
+
+def test_the_ci_ceiling_and_the_runtime_allowance_stay_in_view_of_each_other() -> None:
+    """These two numbers answer the same question at different moments, and
+    they once disagreed: this file called a one-commit lag harmless while
+    staleness_note warned about it, which is what surfaced the freshness bug
+    (#228 review). The ceiling must stay the looser of the two, or CI would
+    pass data the running tool immediately calls stale."""
+    from wingman.domain.changelog import _LAG_ALLOWANCE
+
+    assert _LAG_ALLOWANCE == 1, "one commit: the regeneration's own commit"
+    assert _CI_CEILING > _LAG_ALLOWANCE
+
+
+def test_this_checkout_does_not_warn_about_itself() -> None:
+    """End to end, against the real committed stamp: a checkout whose data was
+    just regenerated must be silent. The old check could not satisfy this at
+    all."""
+    from wingman.changelog_data import GENERATED_FROM_DISTANCE
+    from wingman.domain.changelog import staleness_note
+
+    assert GENERATED_FROM_DISTANCE >= 0, "the generator could not stamp a distance"
+    # The build that contains this file is one commit past what it stamped.
+    assert staleness_note(f"0.4.1.dev{GENERATED_FROM_DISTANCE + 1}+gabc123def") is None
