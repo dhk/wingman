@@ -277,3 +277,43 @@ def test_a_constraints_file_with_no_pins_fails_rather_than_reporting_zero(
     assert result.returncode != 0
     assert "holds no pins" in result.stderr
     assert "no mismatches" not in result.stdout
+
+
+def test_a_lock_name_and_its_metadata_name_are_the_same_package(rig: dict[str, Path]) -> None:
+    """PEP 503: '-', '_' and '.' are one character.
+
+    uv.lock spells these with hyphens; a wheel's own METADATA Name often uses
+    underscores — pydantic_core, typing_extensions, docstring_parser. Comparing
+    on a bare .lower() failed a real lobster deploy of a perfectly good install,
+    reporting three packages as "locked but not installed at all" when nothing
+    would have imported at all had that been true.
+    """
+    exported = "pydantic-core==2.23.4\ntyping-extensions==4.12.2\ndocstring-parser==0.16\n"
+    underscored = _fake_tool_venv(
+        rig["tmp"],
+        {"pydantic_core": "2.23.4", "typing_extensions": "4.12.2", "docstring_parser": "0.16"},
+    )
+    (rig["repo"] / "uv.lock").write_text("# lock\n", encoding="utf-8")
+    _stub(rig, tool_dir=underscored, export_out=exported)
+
+    result = _run(rig)
+
+    assert result.returncode == 0, result.stderr
+    assert "not installed at all" not in result.stderr
+    assert "3 locked packages, no mismatches" in result.stdout
+
+
+def test_a_drifted_version_is_still_caught_across_that_spelling(rig: dict[str, Path]) -> None:
+    """The quieter half of the same bug. Because the wrong-version set only
+    inspected names it had already matched, an underscore-spelled package could
+    drift to any version at all and be reported as a clean install — the exact
+    false success this whole verification step exists to prevent (#319)."""
+    exported = "pydantic-core==2.23.4\n"
+    drifted = _fake_tool_venv(rig["tmp"], {"pydantic_core": "9.9.9"})
+    (rig["repo"] / "uv.lock").write_text("# lock\n", encoding="utf-8")
+    _stub(rig, tool_dir=drifted, export_out=exported)
+
+    result = _run(rig)
+
+    assert result.returncode != 0
+    assert "lock says 2.23.4, installed 9.9.9" in result.stderr
