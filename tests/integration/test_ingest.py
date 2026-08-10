@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from wingman.application.ingest import IngestError, ingest_resume
+from wingman.domain.profile import ItemStatus
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.storage import Storage
 from wingman.providers.recorded import RecordedProvider
@@ -134,7 +135,43 @@ def test_same_value_new_evidence_is_merged_not_dropped(workspace: Config, tmp_pa
         assert storage.count_profile_items() == 2  # no duplicate item created
         python_items = [i for i in storage.list_profile_items() if i.name == "Python"]
         assert len(python_items) == 1
-        assert {span.quote for span in python_items[0].evidence} == {
+        # Both files are 'resume.md', so they are two versions of ONE document.
+        # A newer version restating the same claim does not corroborate it —
+        # it replaces its own earlier words (#336). One voucher, and the quote
+        # is the current version's, not a line that may no longer be in the
+        # file. Two DIFFERENT documents still stack; that is the next test.
+        assert {span.quote for span in python_items[0].evidence} == {"Expert in Python daily."}
+
+
+def test_a_second_document_making_the_same_claim_does_corroborate_it(
+    workspace: Config, tmp_path: Path
+) -> None:
+    """The other side of #336: independent sources are exactly what should
+    accumulate. Only a document repeating itself is discounted."""
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    linkedin = "# Jo on LinkedIn\n\nExpert in Python daily.\n"
+    response = json.loads(RESPONSE)
+    response["items"] = [
+        {
+            "kind": "skill",
+            "name": "Python",
+            "detail": "",
+            "classification": "fact",
+            "confidence": 0.95,
+            "quotes": ["Expert in Python daily."],
+        }
+    ]
+
+    with Storage(workspace.db_path) as storage:
+        ingest_resume(_resume_file(tmp_path), workspace, storage, RecordedProvider(RESPONSE))
+        path = other / "linkedin-profile.md"
+        path.write_text(linkedin, encoding="utf-8")
+        report = ingest_resume(path, workspace, storage, RecordedProvider(json.dumps(response)))
+
+        assert report.evidence_merged == 1
+        python_item = next(i for i in storage.list_profile_items() if i.name == "Python")
+        assert {span.quote for span in python_item.evidence} == {
             "Skills: Python.",
             "Expert in Python daily.",
         }
@@ -315,3 +352,54 @@ def test_only_skills_are_held_to_this_rule(workspace: Config, tmp_path: Path) ->
             RecordedProvider(response),
         )
         assert [i.name for i in storage.list_profile_items()] == ["Roadmap"]
+
+
+def test_reingesting_an_unchanged_document_does_not_manufacture_a_conflict(
+    workspace: Config, tmp_path: Path
+) -> None:
+    """#336, seen on a real profile: the same achievement stored twice, side
+    by side, citing THE SAME source record and THE SAME quote — differing only
+    in the model's paraphrase of `detail`.
+
+    An unchanged file reuses its source record, so the superseded-record set
+    (which excludes the record being ingested) comes back empty and RFC-028's
+    lineage check cannot fire. Nothing was contradicted; the model just worded
+    it differently on the second run.
+    """
+    claim = "Developed and executed a sales strategy that generated $9.6M in one year."
+    resume = "# Jo\n\n- " + claim + "\n"
+
+    def response(detail: str) -> str:
+        return json.dumps(
+            {
+                "items": [
+                    {
+                        "kind": "achievement",
+                        "name": "Generated $9.6M in one year through sales strategy",
+                        "detail": detail,
+                        "classification": "fact",
+                        "confidence": 0.9,
+                        "quotes": [claim],
+                    }
+                ]
+            }
+        )
+
+    path = _resume_file(tmp_path, resume)
+    with Storage(workspace.db_path) as storage:
+        ingest_resume(path, workspace, storage, RecordedProvider(response(claim)))
+        report = ingest_resume(
+            path,
+            workspace,
+            storage,
+            RecordedProvider(response("Developed and executed sales strategy.")),
+        )
+
+        assert report.conflicts == 0
+        items = storage.list_profile_items()
+        active = [i for i in items if i.status is ItemStatus.ACTIVE]
+        assert len(active) == 1
+        assert not [i for i in items if i.status is ItemStatus.CONFLICT]
+        # The newer reading wins, and still rests on exactly one quote.
+        assert active[0].detail == "Developed and executed sales strategy."
+        assert len(active[0].evidence) == 1

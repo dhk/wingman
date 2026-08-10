@@ -59,11 +59,24 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
 
 
 def _ingest_twice(config: Config, storage: Storage, tmp_path: Path) -> None:
-    """Two ingests whose BigQuery detail differs -> one active + one conflict."""
-    resume = tmp_path / "resume.md"
-    resume.write_text(RESUME, encoding="utf-8")
-    ingest_resume(resume, config, storage, RecordedProvider(_response("")))
-    ingest_resume(resume, config, storage, RecordedProvider(_response("Used daily.")))
+    """Two DIFFERENT documents whose BigQuery detail differs -> active + conflict.
+
+    Deliberately two filenames. Ingesting one file twice used to produce this
+    same shape, but that was the bug in #336, not a conflict: a document does
+    not disagree with itself, and the second read's differing detail was only
+    the model wording the same claim differently. A genuine conflict needs two
+    sources, which is what these tests are actually about.
+    """
+    first = tmp_path / "resume.md"
+    first.write_text(RESUME, encoding="utf-8")
+    ingest_resume(first, config, storage, RecordedProvider(_response("")))
+
+    # Different CONTENT as well as a different name: an identical body hashes
+    # to the same source record and gets reused, which would make these one
+    # document again.
+    second = tmp_path / "linkedin-profile.md"
+    second.write_text(RESUME + "\nExported from LinkedIn.\n", encoding="utf-8")
+    ingest_resume(second, config, storage, RecordedProvider(_response("Used daily.")))
 
 
 def test_reingest_conflict_shape(workspace: Config, tmp_path: Path) -> None:
