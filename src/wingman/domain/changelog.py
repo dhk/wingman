@@ -19,14 +19,25 @@ are excluded, per the issue's own "when in doubt, include" instruction.
 #202: the static file went 61 PRs stale with no signal — `changelog`
 reported a confident "0 new" instead of an unverified one. Since there is
 still no live git access at runtime (RFC-038's constraint didn't change),
-the fix is a same-shape defense: the generator now stamps the exact commit
-it ran at (`changelog_data.GENERATED_FROM_COMMIT`); `render_changelog`
-compares that against the running build's own hatch-vcs-embedded commit
-hash (`wingman.version`) and leads with a plain warning when they diverge,
-rather than silently rendering counts from data it can't vouch for.
-`wingman-ctl upgrade`/`cycle` also now regenerate the file as part of every
-upgrade, so drift should stay at most one commit in practice — the
-runtime check is the backstop for whenever that doesn't happen.
+the fix is a same-shape defense: the generator stamps what it ran at, and
+`render_changelog` leads with a plain warning rather than silently
+rendering counts from data it can't vouch for.
+
+What it stamps is a DISTANCE (`changelog_data.GENERATED_FROM_DISTANCE`,
+commits past the last tag) as well as the commit sha. The sha is an
+identity — it is what the self-consistency test regenerates against — but
+it cannot answer freshness, because generating this file and committing it
+produces a different sha by construction. A stamped sha therefore never
+equals the sha of any build containing it, so comparing them warned after
+every correct regeneration, and a warning that fires when nothing is wrong
+is how a real one gets ignored (#228 review). Distance survives being
+committed, and is the same number a version's `.devN` carries, so the two
+subtract into "how many merges are missing".
+
+`wingman-ctl upgrade`/`cycle` regenerate the file as part of every upgrade,
+so drift should stay at most one commit in practice; the CI ceiling in
+tests/unit/test_changelog_freshness.py stops it reaching main at all, and
+this runtime check is what an installed build can still say for itself.
 """
 
 from __future__ import annotations
@@ -89,41 +100,70 @@ def internal_only_entries() -> list[ChangelogEntry]:
     return sorted(entries, key=lambda entry: entry.date, reverse=True)
 
 
-_COMMIT_HASH_RE = re.compile(r"\+g([0-9a-f]+)$")
+_DEV_DISTANCE_RE = re.compile(r"\.dev(\d+)")
+
+# Regenerating writes changelog_data.py; committing it makes a new commit.
+# So the build that CONTAINS a given regeneration is always at least one
+# commit past the one it was generated at, and a stricter allowance would
+# warn every single time the file is correctly regenerated and committed.
+#
+# This is the runtime half of a pair. The other half is the ceiling in
+# tests/unit/test_changelog_freshness.py, which fails CI once the committed
+# data falls too far behind HEAD. That test is the primary defence — it
+# stops drift from reaching main at all. This note is what an installed
+# build can still say for itself, having no git to consult. They disagreed
+# once (the test called a one-commit lag harmless while this warned about
+# it), which is what surfaced the bug fixed here; keep them in view of
+# each other.
+_LAG_ALLOWANCE = 1
 
 
-def _running_commit_hash(version_string: str) -> str | None:
-    """The commit hash hatch-vcs baked into this build's version string, or
-    None on an exact-tag build (no '+gHASH' suffix) or an unparseable one —
-    both cases mean 'can't verify', not 'stale', so callers must treat None
-    as silence, never as a mismatch."""
-    match = _COMMIT_HASH_RE.search(version_string)
-    return match.group(1) if match else None
+def _distance_past_tag(version_string: str) -> int | None:
+    """Commits past the last tag, from a version's '.devN', or None.
+
+    None on an exact-tag build (no '.devN' at all) and on anything
+    unparseable — both mean "can't verify", not "stale", so callers must
+    treat None as silence.
+    """
+    match = _DEV_DISTANCE_RE.search(version_string)
+    return int(match.group(1)) if match else None
 
 
 def staleness_note(version_string: str) -> str | None:
-    """None when the changelog data is known current (or verification isn't
-    possible); a plain-language warning when it's known to be behind (#202).
+    """None when the changelog data is current (or can't be checked); a
+    warning naming HOW MANY merges are missing when it is behind (#202).
 
-    'Known behind' means GENERATED_FROM_COMMIT (the commit
-    scripts/generate_changelog.py last ran at) doesn't match the commit this
-    exact build was installed from — the one honest, always-available signal
-    that needs no live git access (see wingman.version's own docstring).
-    A mismatch doesn't say how many merges are missing, only that the data
-    cannot be vouched for past that point — the tool must say so rather than
-    silently report counts computed from a list it knows is incomplete.
+    Freshness is measured in distance, not commit identity. Comparing
+    GENERATED_FROM_COMMIT against the running build's commit could never
+    return "fresh" for a committed artifact: generating the file and
+    committing it produces a different sha by construction, so that check
+    warned after every correct regeneration — and a warning that fires when
+    nothing is wrong is how a real one gets ignored. The sha is still
+    stamped, and is still what the self-consistency test regenerates
+    against; it is simply the wrong question to ask about freshness.
+
+    A version's '.devN' is the same count the generator stamps, so
+    subtracting them gives the number of merges this list cannot vouch
+    for. If a new tag landed since generation the running count restarts
+    lower, the subtraction goes negative, and this stays silent — the safe
+    direction when the two numbers aren't comparable.
     """
-    from wingman.changelog_data import GENERATED_FROM_COMMIT
+    from wingman.changelog_data import GENERATED_FROM_DISTANCE
 
-    running = _running_commit_hash(version_string)
-    if running is None or GENERATED_FROM_COMMIT.startswith(running):
+    if GENERATED_FROM_DISTANCE < 0:
         return None
+    running = _distance_past_tag(version_string)
+    if running is None:
+        return None
+    behind = running - GENERATED_FROM_DISTANCE - _LAG_ALLOWANCE
+    if behind <= 0:
+        return None
+    merges = "merge" if behind == 1 else "merges"
     return (
-        f"Note: this list was generated at commit {GENERATED_FROM_COMMIT[:9]}, but "
-        f"the running build is at a different commit ({running}) — merges after "
-        "generation time may be missing. Regenerate with "
-        "'python scripts/generate_changelog.py' (or 'wingman-ctl upgrade', which "
-        "does this automatically) before treating this list as complete."
+        f"Note: this list is {behind} {merges} behind the running build, so recent "
+        "entries are missing and any count below is a floor, not a total. "
+        "Regenerate with 'python scripts/generate_changelog.py' (or "
+        "'wingman-ctl upgrade', which does it automatically)."
     )
 
 
