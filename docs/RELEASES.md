@@ -4,6 +4,115 @@ Newest first. Versions are git tags; `wingman --version` reports the build
 you are running (hatch-vcs). Full decision history lives in
 [`RFC.md`](RFC.md).
 
+## v0.5.0 — 2026-08-10
+
+Wingman became something you can run *for other people*. 152 PRs, RFC-032
+through RFC-055, 71 MCP tools, 1120 tests.
+
+### One process, many people (RFC-048)
+
+- **Shared multi-tenancy.** Wingman used to mean one install per person —
+  a Unix account, a port, a systemd unit each. That shape doesn't scale
+  past a couple of friends, and every instance drifted independently. One
+  process now serves every tenant: share-nothing data (a SQLite workspace
+  per person, never a shared table), a capability token per tenant, and a
+  registry at `/etc/wingman/tenants.toml` naming who exists. Adding
+  somebody is `wingman-add-tenant.sh <slug>`; they get two links and
+  install nothing.
+- **Tokens rotate without a restart.** `wingman tenant rotate-token`
+  writes the new token and SIGHUPs the process, which re-reads the
+  registry in place — a restart would drop every other tenant's in-flight
+  connections, which is why the per-instance restart button was withdrawn
+  (RFC-041).
+- **Persona carve-off (RFC-049, RFC-054).** Coach someone inside your own
+  workspace, then hand them their own: every claim captured under their
+  persona is rehomed as their first-person profile, with honestly-labelled
+  placeholder evidence rather than a copy of your private capture notes.
+  Phase 2 merges into a workspace that already has data, surfacing genuine
+  contradictions as conflicts instead of overwriting them.
+- **Operator surfaces.** `wingman tenant urls` prints the roster,
+  `wingman-host-status` shows every instance on the box and what's stale,
+  and the shared process declares itself to the host service registry
+  (#288) so two services cannot silently claim the same port or path.
+
+### The read surface (RFC-033)
+
+A small web UI for the things a chat window is bad at: glancing, and
+files. Uploads at the top, everything Wingman has written underneath.
+The **profile page** (#284) shows each claim with its evidence and its
+lineage, and names what is still missing *and what the gap costs* —
+"no roles, so nothing here shows tenure or seniority", not "Roles: 0".
+`profile_html` returns it as a standalone document you can keep.
+
+### Knowing what you want, and what you're worth
+
+- **Job criteria and scoring (RFC-035).** A short interview across five
+  areas becomes a document every new posting is scored against —
+  embedding recall, then a judged brief that cites the criteria it used.
+- **Requirement resolution (RFC-036).** Answers you give while working
+  through an application are captured as evidence and recalled before you
+  are asked the same thing again.
+- **Value dimensions (RFC-050/051/052).** Nominations now carry sentiment
+  intensity and a company-reason taxonomy; `wingman values` infers a small
+  set of named value axes from them — the model proposes axes and cites
+  which captures support each, ordinary code does the scoring — and
+  `values-chart` renders them as a self-contained SVG radar chart.
+- **Relationship objectives (RFC-037).** A thesis per person, a tickler
+  that fires on the intersection of fresh material and a stated objective,
+  and a log of what actually happened — all citable evidence for the next
+  conversation.
+
+### Evidence that survives real documents
+
+Three separate ways the evidence gate was rejecting true claims: PDFs that
+extract without spaces (#278), typographic punctuation that differs from
+what the model quoted (#280), and résumés whose roles were never extracted
+with structure at all (#269). Profile items can now be re-kinded (#273)
+and renamed (#282) without losing their lineage, for the other half of a
+mis-capture.
+
+### Keys, config, and whose key wins
+
+The key ladder got a canonical home — `~/.config/wingman/secrets.env` and
+`wingman.env`, split by whether a value is a secret (RFC-046), with a
+global tier for shared credentials (RFC-047). And a reversal worth calling
+out: **a key you provide now outranks the operator's environment**
+(RFC-019a/RFC-034a). The original precedence made a hosted tenant's own
+key silently unused, which is an attribution problem as much as a
+correctness one — your spend should be yours.
+
+### Operability, and checks that can fail honestly
+
+- **`wingman-ctl`** (`wg`): status, start/stop, upgrade, `upgrade-all`
+  across accounts (RFC-042), and `redeploy-shared` for the shared process.
+- **`wingman doctor --deep`** (RFC-039) walks a guided diagnostic ladder
+  instead of printing a wall of state.
+- **Installs are pinned to `uv.lock` and verified** (#302, #319) — passing
+  `--constraints` is not the same as having been pinned, so the install
+  now checks, and refuses to report success when the deployed versions
+  are not the tested ones.
+- **The changelog knows when it is stale** (RFC-038, #202). It once went
+  61 PRs behind and reported a confident "0 new", which a downstream agent
+  relayed as fact. Freshness is now measured in commit *distance* — a
+  stamped commit sha can never equal the sha of a build containing it, so
+  that check warned after every correct regeneration — and the note says
+  how many merges are missing.
+- **Google Drive push (RFC-053).** Finished backups and digests can go to
+  your own Drive, per-account device-code OAuth, closed files only. The
+  live workspace stays local and single-writer, exactly where RFC-002 and
+  RFC-006 put it.
+
+### Isolation defects, found and fixed
+
+Retiring the per-account instances removed the Unix account as an
+isolation backstop, which raised the stakes on three defects a review had
+found and nobody had filed. A duplicate capability token silently swapped
+tenant identity — one person reading another's workspace, no error
+anywhere — and now fails closed. A malformed registry crashed the whole
+process through the SIGHUP handler on the next ordinary token rotation.
+And `os.kill` could surface a traceback from a command that had already
+written its token. (#327, #328, #329)
+
 ## v0.4.0 — 2026-07-20
 
 One day, one theme: wingman got honest about documents that change and
