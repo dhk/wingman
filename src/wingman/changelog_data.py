@@ -10,6 +10,32 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    (
+        "2026-08-09",
+        320,
+        "fix: a key you provide is the key that gets used (amends RFC-019/RFC-034)",
+    ),
+    ("2026-08-09", 321, "fix: pinning that cannot fail quietly (#319)"),
+    (
+        "2026-08-09",
+        316,
+        "feat: opportunities_list — list assessed roles by name, not just a count (#312)",
+    ),
+    ("2026-08-09", 315, "feat: interview_status — read-back path for interview_react captures"),
+    (
+        "2026-08-09",
+        314,
+        "fix: company_dossier degrades gracefully for a company with no watched people or documents",
+    ),
+    ("2026-08-09", 313, "feat: completeness — how filled-in each section of the workspace is"),
+    ("2026-08-09", 306, "chore: refresh the lockfile, and hold ruff below 0.16"),
+    ("2026-08-09", 308, "feat: upgrade-all names the cause, not the tool's error (#301)"),
+    ("2026-08-08", 309, "feat: a profile page that shows the evidence and the lineage (#284)"),
+    (
+        "2026-08-07",
+        304,
+        "feat: provision every path the shared instance fronts, not just one (#288)",
+    ),
     ("2026-08-07", 303, "fix: install the versions uv.lock records, on every install path (#302)"),
     ("2026-08-07", 300, "feat: decide telemetry when a tenant is provisioned (#299)"),
     ("2026-08-07", 227, "telemetry: add 'wingman telemetry summary' (CLI + MCP) — issue #223"),
@@ -507,4 +533,4 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "46046901889a2f7e936aa7bcdb3843be9f4515f9"
+GENERATED_FROM_COMMIT = "381d92d1b1136436c97a09f6a41144058eeeaace"
