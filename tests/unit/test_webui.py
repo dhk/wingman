@@ -841,3 +841,155 @@ def test_profile_page_puts_both_sides_of_a_conflict_together(
 def test_profile_page_needs_the_capability_path(client: tuple[TestClient, str]) -> None:
     http, _token = client
     assert http.get("/ui/not-the-token/profile").status_code == 404
+
+
+def test_profile_page_says_what_is_missing_and_what_it_costs(
+    client: tuple[TestClient, str],
+) -> None:
+    """'Roles: 0' is a number. The reason to care is that nothing then
+    shows tenure or seniority — which is what blocked two role framings on
+    a real profile for a day."""
+    from wingman.domain.profile import ProfileItemKind
+
+    http, token = client
+    _add_item(load_config(), kind=ProfileItemKind.SKILL, name="Python")
+
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert "No roles" in page and "tenure" in page
+    assert "No testimonials" in page
+    assert "No job criteria" in page and "unscored" in page
+    assert "1 skill" in page and "1 skills" not in page
+
+
+def test_completeness_band_goes_quiet_once_a_section_is_filled(
+    client: tuple[TestClient, str],
+) -> None:
+    """A checklist that keeps nagging about solved problems stops being read."""
+    from wingman.application.job_scoring import criteria_path
+    from wingman.domain.profile import ProfileItemKind
+
+    config = load_config()
+    _add_item(config, kind=ProfileItemKind.ROLE, name="Head of Data, Acme")
+    criteria_path(config).write_text("# criteria\n\nRemote only.\n", encoding="utf-8")
+
+    http, token = client
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert "No roles" not in page
+    assert "1 role" in page and "1 roles" not in page
+    assert "Job criteria set" in page
+    assert "unscored" not in page
+
+
+def test_render_profile_html_is_a_standalone_document(
+    client: tuple[TestClient, str],
+) -> None:
+    """The export path for a locally-running client: Claude runs on the
+    user's machine and talks to Wingman remotely, so the session holds both
+    halves — this returns the markup, the local side saves it."""
+    from wingman.domain.profile import ProfileItemKind
+    from wingman.webui import render_profile_html
+
+    _add_item(load_config(), kind=ProfileItemKind.ACHIEVEMENT, name="Shipped the rewrite")
+
+    html = render_profile_html(load_config())
+
+    assert html.lstrip().startswith("<!doctype html>"), "must open in a browser on its own"
+    assert "<style" in html, "self-contained: no stylesheet to fetch from the server"
+    assert "Shipped the rewrite" in html
+    assert "cutting latency" in html, "evidence travels with the claim"
+
+
+def test_the_exported_page_carries_no_capability_token(
+    client: tuple[TestClient, str],
+) -> None:
+    """This file gets saved to a laptop and sometimes forwarded. The
+    token that reaches the page must not be inside it."""
+    from wingman.webui import render_profile_html
+
+    _http, token = client
+    assert token not in render_profile_html(load_config())
+
+
+def test_interview_answers_are_not_counted_as_thin_evidence(
+    client: tuple[TestClient, str],
+) -> None:
+    """Interview nominations carry exactly one evidence span by
+    construction and nothing ever adds a second. Counting them meant
+    'N claims rest on a single quote' could never go green for anyone who
+    used the interview — the nagging-forever failure the band exists to
+    avoid — and named items that appear in none of the page's sections."""
+    from wingman.domain.profile import ProfileItemKind
+
+    config = load_config()
+    _add_item(config, kind=ProfileItemKind.ROLE, name="Head of Data, Acme")
+    _add_item(config, kind=ProfileItemKind.ACHIEVEMENT, name="Shipped it")
+    _add_item(config, kind=ProfileItemKind.SKILL, name="Python")
+    _add_item(config, kind=ProfileItemKind.TESTIMONIAL, name="She said so")
+    for n in range(5):
+        _add_item(config, kind=ProfileItemKind.INTERVIEW, name=f"nomination {n}")
+
+    http, token = client
+    page = http.get(f"/ui/{token}/profile").text
+
+    # Four reported claims each rest on one quote; the five interview items
+    # must not be added to that number.
+    assert "4 claims resting on a single quote" in page
+    assert "9 claims" not in page
+
+
+def test_every_empty_section_names_its_consequence(client: tuple[TestClient, str]) -> None:
+    """The band's own docstring says a bare count is useless. Two rows
+    printed '0 achievements' and '0 skills' while the rest explained
+    themselves."""
+    http, token = client
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert "No achievements — nothing here says what you actually did" in page
+    assert "No skills — nothing to match against" in page
+    assert "0 achievements" not in page and "0 skills" not in page
+
+
+def test_the_export_does_not_disclose_the_host_workspace_path(
+    client: tuple[TestClient, str],
+) -> None:
+    """The served page shows the workspace path in its header; the export
+    is a file that gets saved to a laptop and forwarded, and the path
+    names the host account."""
+    from wingman.webui import render_profile_html
+
+    config = load_config()
+    http, token = client
+
+    served = http.get(f"/ui/{token}/profile").text
+    exported = render_profile_html(config)
+
+    assert str(config.data_dir) in served, "the served page keeps it — it never leaves the host"
+    assert str(config.data_dir) not in exported
+
+
+def test_the_band_and_the_completeness_tool_cannot_disagree(
+    client: tuple[TestClient, str],
+) -> None:
+    """One measurement, one answer. The band used to walk the items itself,
+    which meant two implementations of 'how many roles' that could drift
+    apart silently — the page saying one thing and `completeness` another."""
+    from wingman.application.completeness import compute_completeness
+    from wingman.domain.profile import ProfileItemKind
+    from wingman.infrastructure.storage import Storage
+
+    config = load_config()
+    for n in range(3):
+        _add_item(config, kind=ProfileItemKind.ROLE, name=f"Role {n}")
+    _add_item(config, kind=ProfileItemKind.SKILL, name="Python")
+
+    with Storage(config.db_path) as storage:
+        report = compute_completeness(storage, config)
+
+    http, token = client
+    page = http.get(f"/ui/{token}/profile").text
+
+    assert f"{report.career.roles} roles" in page
+    assert report.career.roles == 3
+    assert "1 skill" in page and report.career.skills == 1

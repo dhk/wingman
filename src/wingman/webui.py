@@ -35,6 +35,7 @@ from wingman.reporting.design_tokens import DESIGN_TOKENS_CSS
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
+    from wingman.application.completeness import CompletenessReport
     from wingman.domain.profile import ProfileItem
     from wingman.infrastructure.tenants import TenantIndex
 
@@ -120,6 +121,13 @@ body { margin: 0; }
 .versus { font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em;
   text-transform: uppercase; opacity: .55; margin: 2px 0; }
 .divider .count { font-family: var(--font-mono); font-size: 10px; opacity: .5; }
+.band { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 4px 16px; margin: 12px 0 20px; }
+.check { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.check .mark { font-family: var(--font-mono); flex: none; }
+.check.yes { opacity: .6; }
+.check.no .mark { opacity: .9; }
+.check.no { font-weight: 600; }
 .divider { display: flex; align-items: center; gap: 12px; }
 .divider span { font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em;
   text-transform: uppercase; color: var(--text-dim); white-space: nowrap; }
@@ -403,11 +411,15 @@ def _group_name(section: str) -> str:
     return _GROUP_NAMES.get(section, section.replace("-", " ").replace("_", " ").title())
 
 
-def _header(config: Config) -> str:
+def _header(config: Config, show_path: bool = True) -> str:
+    # show_path=False for anything that leaves the server. The workspace
+    # path names the host account ('/home/trent/.local/share/wingman'),
+    # which is a disclosure in a file that gets saved to a laptop and
+    # sometimes forwarded — the same argument the token check already makes.
+    meta = f'<div class="meta">{_e(str(config.data_dir))}</div>' if show_path else ""
     return (
         '<div class="hdr"><span class="dot"></span>'
-        '<span class="wordmark">Wingman</span>'
-        f'<div class="meta">{_e(str(config.data_dir))}</div></div>'
+        f'<span class="wordmark">Wingman</span>{meta}</div>'
     )
 
 
@@ -1139,31 +1151,146 @@ def _profile_item_html(item: ProfileItem, tenure: str = "") -> str:
     )
 
 
-async def ui_profile(request: Request) -> Response:
-    """Every claim, its evidence, and what the last ingest changed."""
+def _plural(count: int, noun: str) -> str:
+    """'1 role', '2 roles' — six user-visible strings sat on the most
+    common first-ingest state (one role, one skill) before this."""
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+def _completeness_band(report: CompletenessReport, items: list[ProfileItem]) -> str:
+    """What is filled in, and what the gap costs — profile-scoped.
+
+    The counts come from application/completeness.py (#313), not from a
+    second walk of the same data — one measurement, one answer, no drift.
+    This function's own job is the part that report deliberately leaves to
+    its callers: saying what each gap COSTS. 'Roles: 0' is a number;
+    "nothing here shows tenure, title or seniority" is the reason to care.
+
+    The two claim-quality rows (contested, single-quote) stay local: they
+    are properties of this page's own subject matter, and the report is
+    scoped to section counts across the whole workspace.
+    """
+    from wingman.domain.profile import ItemStatus, ProfileItemKind
+
+    reported = (
+        ProfileItemKind.ROLE,
+        ProfileItemKind.ACHIEVEMENT,
+        ProfileItemKind.SKILL,
+        ProfileItemKind.TESTIMONIAL,
+    )
+    counts = {
+        ProfileItemKind.ROLE: report.career.roles,
+        ProfileItemKind.ACHIEVEMENT: report.career.achievements,
+        ProfileItemKind.SKILL: report.career.skills,
+        ProfileItemKind.TESTIMONIAL: report.career.testimonials,
+    }
+    active = [i for i in items if i.status is ItemStatus.ACTIVE]
+    contested = sum(1 for i in items if i.status is ItemStatus.CONFLICT)
+    # Only the kinds this band actually reports. INTERVIEW nominations are
+    # built with exactly one evidence span by construction
+    # (application/interview.py) and nothing ever adds a second, so counting
+    # them meant "N claims rest on a single quote" could never go green for
+    # anyone who used the interview — and the number named items that appear
+    # in none of the page's sections, so it could not be reconciled.
+    thin = sum(1 for i in active if i.kind in reported and len(i.evidence) == 1)
+    criteria_set = report.job_criteria.exists
+
+    rows: list[tuple[bool, str]] = [
+        (
+            counts[ProfileItemKind.ROLE] > 0,
+            _plural(counts[ProfileItemKind.ROLE], "role")
+            if counts[ProfileItemKind.ROLE]
+            else "No roles — nothing here shows tenure, title or seniority",
+        ),
+        (
+            counts[ProfileItemKind.ACHIEVEMENT] > 0,
+            _plural(counts[ProfileItemKind.ACHIEVEMENT], "achievement")
+            if counts[ProfileItemKind.ACHIEVEMENT]
+            else "No achievements — nothing here says what you actually did",
+        ),
+        (
+            counts[ProfileItemKind.SKILL] > 0,
+            _plural(counts[ProfileItemKind.SKILL], "skill")
+            if counts[ProfileItemKind.SKILL]
+            else "No skills — nothing to match against a posting's requirements",
+        ),
+        (
+            counts[ProfileItemKind.TESTIMONIAL] > 0,
+            _plural(counts[ProfileItemKind.TESTIMONIAL], "testimonial")
+            if counts[ProfileItemKind.TESTIMONIAL]
+            else "No testimonials — nobody else's words are in here",
+        ),
+        (
+            criteria_set,
+            "Job criteria set"
+            if criteria_set
+            else "No job criteria — every opening arrives unscored",
+        ),
+        (
+            contested == 0,
+            "No contested claims"
+            if contested == 0
+            else f"{_plural(contested, 'contested claim')} awaiting a decision",
+        ),
+        (
+            thin == 0,
+            "Every claim has corroboration"
+            if thin == 0
+            else f"{_plural(thin, 'claim')} resting on a single quote",
+        ),
+    ]
+    cells = "".join(
+        f'<div class="check {"yes" if ok else "no"}">'
+        f'<span class="mark">{"\u2713" if ok else "\u2022"}</span>{_e(text)}</div>'
+        for ok, text in rows
+    )
+    return f'<div class="band">{cells}</div>'
+
+
+def render_profile_html(config: Config) -> str:
+    """The profile page as a standalone document.
+
+    Split out of the route so an MCP client can ask for the page and write
+    it to the user's OWN machine (#284 follow-up). Claude runs locally and
+    talks to wingman remotely, so the assistant holds both halves: this
+    returns the markup, the local session saves it and opens it. No file
+    ever has to travel, and nothing needs a capability URL pasted into a
+    chat to be viewable.
+    """
+    # show_path=False: this document leaves the server.
+    return bytes(_page("Wingman — profile", _profile_body(config, show_path=False)).body).decode(
+        "utf-8"
+    )
+
+
+def _profile_body(config: Config, show_path: bool = True) -> str:
+    """The profile page's body — shared by the route and the export tool."""
+    from wingman.application.completeness import compute_completeness
     from wingman.domain.profile import ItemStatus, ProfileItemKind
     from wingman.infrastructure.storage import Storage
     from wingman.reporting.career import _reverse_chronological, _tenure
 
-    config = _authorized(request)
-    if config is None:
-        return _not_found()
     if not config.db_path.exists():
-        return _page("Wingman — profile", _header(config) + "<h1>No workspace yet</h1>")
+        return _header(config, show_path) + "<h1>No workspace yet</h1>"
 
+    # One connection for the whole render. The band needs the completeness
+    # report and the page needs the items; opening a second connection to
+    # answer the second question is a database round trip for nothing.
     with Storage(config.db_path) as storage:
         items = storage.list_profile_items()
+        report = compute_completeness(storage, config)
 
     active = [i for i in items if i.status is ItemStatus.ACTIVE]
     conflicts = [i for i in items if i.status is ItemStatus.CONFLICT]
     superseded = [i for i in items if i.status is ItemStatus.SUPERSEDED]
     by_id = {i.item_id: i for i in items}
 
-    body: list[str] = [_header(config), "<h1>Profile</h1>"]
+    body: list[str] = [_header(config, show_path), "<h1>Profile</h1>"]
     body.append(
         f'<p class="dim">{len(active)} active · {len(conflicts)} contested · '
         f"{len(superseded)} superseded by newer versions of their source document</p>"
     )
+    body.append(_completeness_band(report, items))
 
     # Needs attention first: a page that buries the contested claims among
     # the settled ones is the flat document this replaces.
@@ -1220,7 +1347,15 @@ async def ui_profile(request: Request) -> Response:
             )
         body.append("</div>")
 
-    return _page("Wingman — profile", "\n".join(body))
+    return "\n".join(body)
+
+
+async def ui_profile(request: Request) -> Response:
+    """Every claim, its evidence, and what the last ingest changed."""
+    config = _authorized(request)
+    if config is None:
+        return _not_found()
+    return _page("Wingman — profile", _profile_body(config))
 
 
 def normalize_prefix(prefix: str) -> str:

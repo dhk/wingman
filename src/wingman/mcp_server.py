@@ -1192,6 +1192,58 @@ def answer_bank(
     return f"unknown action {action!r}; use find, save, list, show, or remove."
 
 
+# Big enough for a real profile, small enough that a tool result cannot
+# quietly consume a context window.
+_PROFILE_HTML_MAX_BYTES = 250_000
+
+
+@server.tool()
+def profile_html() -> str:
+    """The whole career profile as a standalone HTML page, for saving locally.
+
+    Returns the same page the web UI serves at /ui/<token>/profile — every
+    claim with its evidence quote and source record, roles
+    reverse-chronological with tenure, contested claims and thin evidence
+    surfaced first, and a band naming what is still missing.
+
+    Claude runs on the user's own machine and talks to Wingman remotely,
+    so the two halves are already in one session: this returns the markup,
+    and the local session writes it wherever the user wants and tells them
+    to open it. Nothing has to travel, and no capability URL has to be
+    pasted into a chat to make the profile viewable.
+
+    Protocol: WRITE IT TO A FILE, do not paste it into the conversation —
+    it is a full HTML document, tens of kilobytes, and unreadable as
+    prose. Save it (e.g. ~/Downloads/wingman-profile.html) and give the
+    user the path to open. If the client cannot write files, render it as
+    an artifact instead; only fall back to describing it.
+    """
+    from wingman.webui import render_profile_html
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    page = render_profile_html(config)
+    # The result lands in the transcript whatever the docstring asks for,
+    # and a mature workspace renders hundreds of KB. Refuse rather than
+    # truncate: half an HTML document is not a document, and silently
+    # sending 300KB into a context is worse than saying no.
+    #
+    # Measured in BYTES, which is what the limit is denominated in and what
+    # actually crosses the wire. len(page) counts characters, and a profile
+    # full of accented names, curly quotes or CJK runs 1.5-3x its character
+    # count once encoded — so the character test would wave through exactly
+    # the documents most likely to be oversized.
+    size = len(page.encode("utf-8"))
+    if size > _PROFILE_HTML_MAX_BYTES:
+        return (
+            f"The profile page is {size // 1024}KB, too large to return through a tool "
+            f"result (limit {_PROFILE_HTML_MAX_BYTES // 1024}KB). Open it in a browser "
+            "instead: it is served at /ui/<token>/profile on this workspace's own URL."
+        )
+    return page
+
+
 @server.tool()
 def profile_manage(action: str, item_id: str = "", kind: str = "", name: str = "") -> str:
     """List, remove, resolve, re-kind, rename, or clear career-profile items (RFC-027).
