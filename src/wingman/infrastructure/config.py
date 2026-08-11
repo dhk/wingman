@@ -45,6 +45,10 @@ class Config(BaseModel):
     # happens to be set in the shared process's environment. False
     # (default) preserves today's single-tenant/CLI/stdio ladder exactly.
     strict_provider_keys: bool = False
+    #: Where feature requests from this workspace go, when the tenant
+    #: registry says so. None means fall back to the host setting and then
+    #: the per-workspace file — see application.feature_request (#371).
+    feature_repo: str | None = None
 
     @property
     def db_path(self) -> Path:

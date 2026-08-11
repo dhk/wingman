@@ -98,11 +98,57 @@ class FiledIssue(BaseModel):
 
 
 def get_feature_repo(config: Config) -> str | None:
+    """Where a feature request from this workspace goes.
+
+    Resolved rather than asked (#371). A hosted tenant has no terminal —
+    WALKTHROUGH-HOSTED opens by promising there is not one anywhere in it —
+    so the per-workspace file below, written by `wingman feature repo`, is
+    unreachable for exactly the people most likely to have a sharp request.
+    Every tenant preview read "(not set)", which made wingman's one
+    external write unusable for them.
+
+    Nobody is ever shown a repository chooser. Somebody reporting that a
+    button is confusing should not be handed a menu of repositories, so the
+    operator configures this once and it is invisible thereafter.
+
+    Order, most specific first:
+
+    1. The tenant's own registry entry, for the rare case one tenant's
+       requests belong somewhere else.
+    2. The per-workspace file — somebody who ran `wingman feature repo`
+       chose explicitly, and an explicit choice outranks a box-wide
+       default. A tenant has no such file, so this step is invisible to
+       them and the host setting below is what they get.
+    3. WINGMAN_FEATURE_REPO in the host settings file (RFC-046) — one
+       destination for every account on the box, which is the normal case
+       and the one that makes this usable for tenants at all.
+
+    Unset stays unset and is reported honestly, as before.
+    """
+    if config.feature_repo:
+        return config.feature_repo
     path = config.data_dir / _REPO_FILE
-    if not path.exists():
+    if path.exists():
+        value = path.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    return _host_feature_repo()
+
+
+def _host_feature_repo() -> str | None:
+    """WINGMAN_FEATURE_REPO from the host settings file, or None.
+
+    An unreadable host file is treated as absent rather than fatal, the
+    same posture the keys ladder takes: a box with a malformed wingman.env
+    should still be able to report "no repo set" instead of failing the
+    tool outright.
+    """
+    from wingman.infrastructure.host_config import HostEnvironmentError, read_host_settings
+
+    try:
+        return read_host_settings().get("WINGMAN_FEATURE_REPO", "").strip() or None
+    except (HostEnvironmentError, OSError):
         return None
-    value = path.read_text(encoding="utf-8").strip()
-    return value or None
 
 
 def set_feature_repo(config: Config, repo: str) -> str:
