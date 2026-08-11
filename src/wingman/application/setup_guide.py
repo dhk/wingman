@@ -54,8 +54,13 @@ def _overnight_lines(config: Config) -> list[str]:
 def render_setup_guide(config: Config, report: CompletenessReport) -> str:
     """First-run guidance, shaped by what this workspace already has."""
     done = _finished_steps(report)
+    # The heading follows the workspace. "Getting set up" is right for an
+    # empty one and wrong for an established one — and nobody with a
+    # populated workspace asks how to set up, so a first-run title is how
+    # this tool stops being called by the people it still has answers for
+    # (#365). The content already adapted; the label did not.
     lines = [
-        "Getting set up with wingman",
+        "Getting set up with wingman" if not done else "Where you are with wingman",
         "",
         (
             "Wingman helps you find a small number of genuinely good roles and be the "
@@ -79,6 +84,22 @@ def render_setup_guide(config: Config, report: CompletenessReport) -> str:
     if done:
         finished = ", ".join(done)
         lines.extend([f"Already done here, so skip anything that says otherwise: {finished}.", ""])
+    if report.job_criteria.exists:
+        # Done is not done forever. Criteria age — the digest already raises
+        # a criteria-review action once the document is a month old — and
+        # presenting them as permanently settled compounds, because every
+        # opening scored afterwards is judged against a document nobody
+        # revisited (#365).
+        lines.extend(
+            [
+                (
+                    "Your job criteria can be revisited whenever they stop fitting — "
+                    "say: review my job criteria. They age, and every opening is scored "
+                    "against them until you do."
+                ),
+                "",
+            ]
+        )
 
     lines.extend(_overnight_lines(config))
     lines.extend(
