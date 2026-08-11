@@ -11,6 +11,7 @@ from typing import Self
 
 from wingman.domain import SourceRecord
 from wingman.domain.answer import AnswerRecord
+from wingman.domain.commentary import CommentaryEntry
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.heap import HeapItem
 from wingman.domain.opportunity import Opportunity
@@ -182,6 +183,15 @@ CREATE TABLE IF NOT EXISTS heap_items (
     item_id TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
     added_at TEXT NOT NULL
+);
+-- The commentary corpus (RFC-058, #339). A table of its own, not a profile_items
+-- kind, and deliberately without an FTS index joined to corpus_fts: the
+-- isolation is structural, so a query that doesn't name this table cannot
+-- return commentary no matter what it asks for.
+CREATE TABLE IF NOT EXISTS commentary_entries (
+    entry_id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 """
 
@@ -1337,6 +1347,43 @@ class Storage:
         cursor = self._conn.execute("DELETE FROM heap_items WHERE item_id = ?", (item_id,))
         self._conn.commit()
         return cursor.rowcount > 0
+
+    def add_commentary_entry(self, entry: CommentaryEntry) -> None:
+        """Store one reading (#339). Its own table, read only by callers that
+        name it — nothing that walks the evidence stores can reach it."""
+        try:
+            self._conn.execute(
+                "INSERT INTO commentary_entries (entry_id, payload, created_at) VALUES (?, ?, ?)",
+                (entry.entry_id, entry.model_dump_json(), entry.created_at.isoformat()),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRecordError(f"commentary entry {entry.entry_id} already exists") from exc
+        self._conn.commit()
+
+    def list_commentary_entries(self) -> list[CommentaryEntry]:
+        cursor = self._conn.execute(
+            "SELECT payload FROM commentary_entries ORDER BY created_at, entry_id"
+        )
+        return [CommentaryEntry.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def get_commentary_entry(self, entry_id: str) -> CommentaryEntry | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM commentary_entries WHERE entry_id = ?", (entry_id,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return CommentaryEntry.model_validate_json(row[0]) if row else None
+
+    def delete_commentary_entry(self, entry_id: str) -> bool:
+        cursor = self._conn.execute(
+            "DELETE FROM commentary_entries WHERE entry_id = ?", (entry_id,)
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def count_commentary_entries(self) -> int:
+        cursor = self._conn.execute("SELECT COUNT(*) FROM commentary_entries")
+        count: int = cursor.fetchone()[0]
+        return count
 
     def search_external(self, query: str, limit: int = 10) -> list[tuple[ExternalDocument, str]]:
         """Full-text search over people's writing; returns (document, snippet) by rank."""

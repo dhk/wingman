@@ -233,6 +233,10 @@ objective_app = typer.Typer(
 app.add_typer(objective_app, name="objective")
 heap_app = typer.Typer(help="Capture-first inbox for leads, heat-rated, sorted on demand (#113).")
 app.add_typer(heap_app, name="heap")
+commentary_app = typer.Typer(
+    help="The assistant's readings of your material — attributed, and never evidence (#339)."
+)
+app.add_typer(commentary_app, name="commentary")
 admin_app = typer.Typer(help="The cross-instance installations page for a shape-B box (#130).")
 app.add_typer(admin_app, name="admin")
 drive_app = typer.Typer(
@@ -679,6 +683,7 @@ def status() -> None:
         documents = storage.count_corpus_documents()
         people = storage.count_people()
         external = storage.count_external_documents()
+        commentary_entries = storage.count_commentary_entries()
     typer.echo(f"Database: {config.db_path}")
     typer.echo(f"Source records: {sources}")
     typer.echo(f"Profile items: {items}")
@@ -686,6 +691,9 @@ def status() -> None:
     typer.echo(f"Corpus documents: {documents}")
     typer.echo(f"People: {people}")
     typer.echo(f"External documents: {external}")
+    typer.echo(
+        f"Commentary entries: {commentary_entries} (the assistant's readings — never evidence)"
+    )
 
 
 def _human_size(size_bytes: int) -> str:
@@ -4124,6 +4132,123 @@ def heap_remove(
         typer.echo(f"heap remove failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Removed: {removed.item}")
+
+
+@commentary_app.command("save")
+def commentary_save(
+    text: str = typer.Argument(..., help="The reading itself — the assistant's words, verbatim."),
+    topic: str = typer.Option("", "--topic", help="A short label for listings."),
+    model: str = typer.Option(
+        "", "--model", help="The model that wrote it (blank records 'unnamed model')."
+    ),
+    prompt_version: str = typer.Option(
+        "",
+        "--prompt-version",
+        help="The versioned prompt behind it; blank records 'none' (a conversation, or a human).",
+    ),
+    drawn_from: list[str] = typer.Option(
+        [],
+        "--from",
+        help="Id (or prefix) of a capture the reading was drawn from; repeatable. "
+        "An id matching nothing is refused.",
+    ),
+) -> None:
+    """Save a reading OF your material — attributed to its author, never stored as your words.
+
+    Kept out of POV cards, outreach briefs, fit assessments, 'wingman evidence',
+    workspace search and the profile pages by construction: its own store (#339).
+    """
+    configure_logging()
+    from wingman.application.commentary import save_commentary
+
+    config = load_config()
+    _require_workspace(config, "saved")
+    try:
+        with Storage(config.db_path) as storage:
+            entry = save_commentary(
+                text,
+                storage,
+                topic=topic,
+                model=model,
+                prompt_version=prompt_version,
+                drawn_from=list(drawn_from),
+            )
+    except IngestError as exc:
+        typer.echo(f"commentary save failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Saved commentary [{entry.entry_id[:8]}] — {entry.attribution()}.")
+
+
+@commentary_app.command("list")
+def commentary_list(
+    full: bool = typer.Option(False, "--full", help="Print each reading in full, not clipped."),
+) -> None:
+    """Every saved reading, newest first, under its authorship."""
+    configure_logging()
+    from wingman.application.commentary import list_commentary, render_commentary
+
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        typer.echo(render_commentary(list_commentary(storage), storage, full=full))
+
+
+@commentary_app.command("find")
+def commentary_find(
+    query: str = typer.Argument(..., help="Plain words; every one must appear."),
+    limit: int = typer.Option(10, "--limit", help="Maximum entries to return."),
+) -> None:
+    """Search the commentary store — its own retrieval, since workspace search excludes it."""
+    configure_logging()
+    from wingman.application.commentary import find_commentary, render_commentary
+
+    config = load_config()
+    _require_workspace(config, "searched")
+    try:
+        with Storage(config.db_path) as storage:
+            typer.echo(
+                render_commentary(find_commentary(query, storage, limit=limit), storage, full=True)
+            )
+    except IngestError as exc:
+        typer.echo(f"commentary find failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@commentary_app.command("show")
+def commentary_show(
+    entry_id: str = typer.Argument(..., help="Entry id (or a prefix), from 'commentary list'."),
+) -> None:
+    """One reading in full, with the material it was drawn from."""
+    configure_logging()
+    from wingman.application.commentary import get_commentary, render_commentary_entry
+
+    config = load_config()
+    _require_workspace(config, "shown")
+    try:
+        with Storage(config.db_path) as storage:
+            typer.echo(render_commentary_entry(get_commentary(entry_id, storage), storage))
+    except IngestError as exc:
+        typer.echo(f"commentary show failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@commentary_app.command("remove")
+def commentary_remove(
+    entry_id: str = typer.Argument(..., help="Entry id (or a prefix), from 'commentary list'."),
+) -> None:
+    """Delete one reading."""
+    configure_logging()
+    from wingman.application.commentary import remove_commentary
+
+    config = load_config()
+    _require_workspace(config, "removed")
+    try:
+        with Storage(config.db_path) as storage:
+            removed = remove_commentary(entry_id, storage)
+    except IngestError as exc:
+        typer.echo(f"commentary remove failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Removed commentary [{removed.entry_id[:8]}].")
 
 
 @actions_app.command("mute")

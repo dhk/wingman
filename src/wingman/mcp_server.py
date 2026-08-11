@@ -212,7 +212,9 @@ def status() -> str:
             f"Source records: {storage.count_source_records()}\n"
             f"Profile items: {storage.count_profile_items()}\n"
             f"Opportunities: {storage.count_opportunities()}\n"
-            f"Corpus documents: {storage.count_corpus_documents()}"
+            f"Corpus documents: {storage.count_corpus_documents()}\n"
+            f"Commentary entries: {storage.count_commentary_entries()}"
+            " (the assistant's readings — never evidence)"
         )
 
 
@@ -1149,6 +1151,102 @@ def heap(
     except IngestError as exc:
         return f"heap {action} failed: {exc}"
     return f"unknown action {action!r}; use add, show, or remove."
+
+
+@server.tool()
+def commentary(
+    action: str = "list",
+    text: str = "",
+    topic: str = "",
+    model: str = "",
+    prompt_version: str = "",
+    drawn_from: list[str] | None = None,
+    entry_id: str = "",
+    query: str = "",
+    limit: int = 10,
+) -> str:
+    """The commentary corpus (RFC-058, #339): YOUR reading of the user's material,
+    kept where it can never be mistaken for something they said.
+
+    Use this when you have offered an observation about the user's own
+    captures — a pattern across their nominations, a connection between
+    two things they said — and they want it kept ("save that reading").
+    Every other capture surface here is evidence-shaped: interview_react
+    stores their words, qa_capture their answers, corpus add their
+    writing. Putting a synthesis of yours through any of them files YOUR
+    words as THEIR evidence, and every later POV card, brief and fit
+    assessment would cite it as something they claimed. This store is
+    separate by construction — POV stances, outreach briefs, fit briefs,
+    'evidence', workspace 'search', 'my_pov' and the profile pages cannot
+    read from it, and never will.
+
+    action is 'save' (store `text` — YOUR words, not theirs), 'list',
+    'find' (`query`, plain words — this store's own retrieval, since
+    workspace search deliberately excludes it), 'show' (`entry_id`, a
+    prefix of the id 'list' shows), or 'remove' (`entry_id`).
+
+    On save: name yourself in `model` (e.g. 'claude-opus-4') and set
+    `prompt_version` to the versioned prompt behind the reading, or leave
+    it blank for 'none' when it came out of conversation, as it usually
+    does. `drawn_from` is the ids of the captures the reading is ABOUT —
+    profile items (interview captures included), corpus documents, a
+    watched person's documents, banked answers; a full id or a prefix.
+    An id that matches nothing is refused, because a reading nobody can
+    check against the material is the thing this codebase refuses
+    everywhere else. `topic` is a short label for listings.
+
+    Protocol — BP-06, echo verbatim before you commit, the same gate as
+    interview_react and qa_capture: show the user the EXACT text you are
+    about to store, in a quote block ("Saving this as my reading of your
+    material, not your words: …"), with Save / Reword / Discard, and call
+    this tool only after they say save. Never save silently, and never
+    quietly tidy the reading between the echo and the call. Offer the save
+    when THEY signal the reading landed; do not file your own observations
+    on a hunch that they might be useful later.
+    """
+    from wingman.application.commentary import (
+        find_commentary,
+        get_commentary,
+        list_commentary,
+        remove_commentary,
+        render_commentary,
+        render_commentary_entry,
+        save_commentary,
+    )
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "save":
+                entry = save_commentary(
+                    text,
+                    storage,
+                    topic=topic,
+                    model=model,
+                    prompt_version=prompt_version,
+                    drawn_from=drawn_from,
+                )
+                return (
+                    f"Saved commentary [{entry.entry_id[:8]}] — {entry.attribution()}.\n"
+                    "Stored as your reading, never as the user's evidence; it stays out of "
+                    "POV cards, briefs, fit assessments and workspace search.\n"
+                    "Review with commentary(action='list'), delete with "
+                    f"commentary(action='remove', entry_id='{entry.entry_id[:8]}')."
+                )
+            if action == "list":
+                return render_commentary(list_commentary(storage), storage)
+            if action == "find":
+                return render_commentary(find_commentary(query, storage, limit=limit), storage)
+            if action == "show":
+                return render_commentary_entry(get_commentary(entry_id, storage), storage)
+            if action == "remove":
+                removed = remove_commentary(entry_id, storage)
+                return f"Removed commentary [{removed.entry_id[:8]}]."
+    except IngestError as exc:
+        return f"commentary {action} failed: {exc}"
+    return f"unknown action {action!r}; use save, list, find, show, or remove."
 
 
 @server.tool()
