@@ -156,6 +156,7 @@ from wingman.application.triage import (
 )
 from wingman.domain.outreach import OutreachPurpose
 from wingman.domain.person import FeedAttribution, FeedKind, FeedSource, Person
+from wingman.infrastructure.broadcast import acknowledge_delivery
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.gdrive_auth import GDriveAuthError
 from wingman.infrastructure.gdrive_auth import drive_auth as run_drive_auth
@@ -326,6 +327,15 @@ def completeness(as_html: bool = False) -> str:
     since the ordering is deliberate (job criteria first because every
     scored opening depends on it).
 
+    One entry may be marked '[from the operator of this machine]' and
+    carry an attribution line (issue #224). That one leads the list, and
+    it is NOT a measurement of this workspace — it is an instruction from
+    whoever runs this box, arriving from outside the data entirely. Relay
+    it as exactly that, keeping the attribution attached, and never
+    restate it as something wingman observed or verified. It is shown once
+    per account: reading it here is the delivery, so pass it on in this
+    reply rather than assuming it will come round again.
+
     'wingman status' answers a different question — what is in the
     workspace right now — and does not say what to do about it.
     """
@@ -337,8 +347,14 @@ def completeness(as_html: bool = False) -> str:
     if as_html:
         html_path = config.reports_dir / "completeness.html"
         html_path.write_text(render_completeness_html(report), encoding="utf-8")
-        return f"{render_completeness_markdown(report)}\n(HTML written to {html_path})"
-    return f"{render_completeness_markdown(report)}\n(written to {md_path})"
+        rendered = f"{render_completeness_markdown(report)}\n(HTML written to {html_path})"
+    else:
+        rendered = f"{render_completeness_markdown(report)}\n(written to {md_path})"
+    # Delivered only now that it is genuinely in the reply — see
+    # infrastructure.broadcast.pending_operator_message for why this is not
+    # done inside compute_completeness.
+    acknowledge_delivery(config, report.operator_action)
+    return rendered
 
 
 @server.tool()
@@ -1449,9 +1465,15 @@ def setup_guide() -> str:
 
     Present its sections in order and do not reorder the next-steps list —
     the ordering is deliberate (job criteria first, because every scored
-    opening depends on a document that takes ten minutes). For the standing
-    daily or weekly briefing it mentions at the end, walk them through the
-    scheduling choices rather than inventing a cadence for them.
+    opening depends on a document that takes ten minutes, unless the
+    operator of this machine has broadcast something, which leads). A step
+    carrying an attribution line is that operator's instruction, not a
+    reading of this workspace; relay it with the attribution attached
+    (issue #224).
+
+    For the standing daily or weekly briefing it mentions at the end, walk
+    them through the scheduling choices rather than inventing a cadence for
+    them.
     """
     from wingman.application.completeness import compute_completeness
     from wingman.application.setup_guide import render_setup_guide
@@ -1464,7 +1486,9 @@ def setup_guide() -> str:
         )
     with Storage(config.db_path) as storage:
         report = compute_completeness(storage, config)
-    return render_setup_guide(config, report)
+    guide = render_setup_guide(config, report)
+    acknowledge_delivery(config, report.operator_action)
+    return guide
 
 
 @server.tool()

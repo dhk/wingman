@@ -251,6 +251,7 @@ def setup_guide_cmd() -> None:
     """How to get started, shaped by what this workspace already has (#360)."""
     from wingman.application.completeness import compute_completeness
     from wingman.application.setup_guide import render_setup_guide
+    from wingman.infrastructure.broadcast import acknowledge_delivery
 
     configure_logging()
     config = load_config()
@@ -258,6 +259,96 @@ def setup_guide_cmd() -> None:
     with Storage(config.db_path) as storage:
         report = compute_completeness(storage, config)
     typer.echo(render_setup_guide(config, report))
+    # Printed, therefore delivered (issue #224).
+    acknowledge_delivery(config, report.operator_action)
+
+
+motd_app = typer.Typer(
+    help="The operator's box-wide message — one shared file, delivered once per account "
+    "as a thing to do rather than a banner (#224)."
+)
+app.add_typer(motd_app, name="motd")
+
+
+@motd_app.command("show")
+def motd_show() -> None:
+    """What the shared file currently says, and whether this account has seen it.
+
+    Read-only and deliberately non-consuming: an operator checking their own
+    message must not spend their own copy of it. This is also the answer to
+    "why did nobody get it" — a malformed file degrades to silence
+    everywhere else on purpose, and this is where that silence is visible.
+    """
+    from wingman.infrastructure.broadcast import (
+        OPERATOR_MESSAGE_PATH,
+        last_seen_id,
+        read_operator_message,
+    )
+
+    configure_logging()
+    config = load_config()
+    typer.echo(f"Shared file: {OPERATOR_MESSAGE_PATH}")
+    if not OPERATOR_MESSAGE_PATH.exists():
+        typer.echo("No message set — the file does not exist. Nobody is being told anything.")
+        return
+    message = read_operator_message()
+    if message is None:
+        typer.echo(
+            "The file exists but could not be read as a message (unreadable, too large, "
+            "not JSON, or missing 'id'/'action'). Every account is silently getting "
+            "nothing — 'wingman motd set' writes a file this reader accepts."
+        )
+        return
+    seen = last_seen_id(config)
+    typer.echo(f"  id:     {message.id}")
+    typer.echo(f"  action: {message.action}")
+    typer.echo(f"  why:    {message.why or '(none given)'}")
+    typer.echo(f"  how:    {message.how or '(none given)'}")
+    typer.echo(
+        f"This account ({config.data_dir}): "
+        + ("already shown" if seen == message.id else "not yet shown")
+    )
+
+
+@motd_app.command("set")
+def motd_set(
+    action: str = typer.Argument(..., help="The imperative, e.g. 'Re-ingest your CV'."),
+    message_id: str = typer.Option(
+        "", "--id", help="Opaque id. Changing it re-delivers to everyone. Defaults to today."
+    ),
+    why: str = typer.Option("", "--why", help="What the request costs if ignored."),
+    how: str = typer.Option("", "--how", help="The exact sentence that does it."),
+    path: Path | None = typer.Option(None, "--path", help="Write somewhere other than /etc."),
+) -> None:
+    """Broadcast one action to every account on this box.
+
+    Needs write access to the shared file (root, or a member of a group the
+    operator has granted). Writing by hand is still fine — this exists so
+    the JSON is guaranteed to be the shape the reader accepts, because a
+    typo there costs every account its message with no error anywhere.
+    """
+    from datetime import UTC, datetime
+
+    from wingman.infrastructure.broadcast import OperatorMessage, write_operator_message
+
+    configure_logging()
+    resolved_id = message_id.strip() or datetime.now(UTC).date().isoformat()
+    message = OperatorMessage(
+        id=resolved_id, action=action.strip(), why=why.strip(), how=how.strip()
+    )
+    if not message.action:
+        typer.echo("The action is empty; nothing was written.")
+        raise typer.Exit(code=1)
+    try:
+        written = write_operator_message(message, path)
+    except OSError as exc:
+        typer.echo(f"Could not write the shared message file: {exc}")
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Broadcast written to {written} (id {message.id}).")
+    typer.echo(
+        "Every account sees it once, the next time they ask what to do next. "
+        "Change --id to say something new; delete the file to stop saying anything."
+    )
 
 
 artifacts_app = typer.Typer(
