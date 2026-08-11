@@ -275,6 +275,9 @@ def test_nothing_built_yet_is_reported_as_unchecked_not_as_current(
 
     assert not report.checked
     assert "nothing to be stale" in " ".join(report.reasons)
+    # "we could not look" is not evidence in either direction — an
+    # unjudgeable artefact must read as neither stale nor current.
+    assert not report.stale
 
 
 def test_the_report_names_the_kinds_it_did_not_examine(workspace: Config) -> None:

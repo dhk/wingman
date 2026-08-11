@@ -102,7 +102,11 @@ class ArtefactStaleness(BaseModel):
 
     @property
     def stale(self) -> bool:
-        return bool(self.reasons)
+        """A positive verdict, and only ever that. An artefact this module
+        could not judge (`checked=False`) is not stale — it is unknown, and
+        the two must not collapse into one boolean: "we could not look" is
+        not evidence of anything, in either direction."""
+        return self.checked and bool(self.reasons)
 
 
 def values_radar_fingerprint(profile: ValueProfile) -> str:
