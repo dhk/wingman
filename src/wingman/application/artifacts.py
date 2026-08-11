@@ -1,10 +1,8 @@
 """Remembering where a rendered view of this workspace was published.
 
-See `domain.artifacts` for why this exists: an artifact can only be updated
-in place by something that knows its URL, and a conversation that did not
-publish it never does. Wingman holds the URL so the next conversation — a
-scheduled one included — refreshes the canonical page instead of minting a
-second one.
+See `domain.artifacts`: the client publishes, wingman holds the URL so the
+next conversation — a scheduled one included — refreshes that page instead
+of minting a second one.
 """
 
 from __future__ import annotations
