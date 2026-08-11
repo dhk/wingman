@@ -13,6 +13,7 @@ from typing import Self
 from wingman.domain import SourceRecord
 from wingman.domain.answer import AnswerRecord
 from wingman.domain.artifacts import PublishedArtifact
+from wingman.domain.briefing import BriefingSchedule
 from wingman.domain.commentary import CommentaryEntry
 from wingman.domain.company import CompanyDossier
 from wingman.domain.corpus import CorpusDocument
@@ -208,6 +209,14 @@ CREATE TABLE IF NOT EXISTS commentary_entries (
 -- artifact in place needs its URL, and a conversation that did not publish
 -- it has no other way to know one. Keyed by kind so a re-publish replaces
 -- rather than accumulates.
+-- The standing briefing's answers (issue #359): kept so changing the time
+-- does not mean redoing the interview, and so two people in one workspace
+-- get the same briefing. One row; a workspace has one rhythm.
+CREATE TABLE IF NOT EXISTS briefing_schedule (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    payload TEXT NOT NULL,
+    saved_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS published_artifacts (
     kind TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
@@ -1139,6 +1148,20 @@ class Storage:
         )
         row: tuple[str] | None = cursor.fetchone()
         return OutreachBrief.model_validate_json(row[0]) if row else None
+
+    def save_briefing_schedule(self, schedule: BriefingSchedule) -> None:
+        """Store the one standing briefing, replacing any earlier answers."""
+        self._conn.execute(
+            "INSERT INTO briefing_schedule (id, payload, saved_at) VALUES (1, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET payload = excluded.payload,"
+            " saved_at = excluded.saved_at",
+            (schedule.model_dump_json(), schedule.saved_at.isoformat()),
+        )
+        self._conn.commit()
+
+    def get_briefing_schedule(self) -> BriefingSchedule | None:
+        row = self._conn.execute("SELECT payload FROM briefing_schedule WHERE id = 1").fetchone()
+        return BriefingSchedule.model_validate_json(row[0]) if row else None
 
     def record_published_artifact(self, artifact: PublishedArtifact) -> None:
         """Remember where this kind of view was published, replacing any

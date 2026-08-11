@@ -39,6 +39,7 @@ def test_all_tools_are_registered() -> None:
         "career_profile",
         "completeness",
         "artifacts",
+        "briefing",
         "setup_guide",
         "profile_html",
         "profile_manage",
