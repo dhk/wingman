@@ -487,6 +487,7 @@ def interview_react(
     target: str,
     why: str,
     primary_purpose: str = "",
+    value_statement: str = "",
     intensity: str = "",
     company_reason: str = "",
     persona: str = "",
@@ -594,11 +595,45 @@ def interview_react(
     agent's protocol to follow, same as qa_capture/resolve_requirement
     elsewhere in this codebase.
 
+    The value statement (RFC-057, issue #343) — ask for the same subtypes
+    intensity covers (values_pro/con, values_fallback_pro/con,
+    mission_alignment_pro/con); NOT for alignment_of_perspective or
+    network_admired. Ask it AFTER 'why' and BEFORE the intensity card, as
+    its own free-text question (BP-02, one decision per card):
+
+        "What does that tell us you value?"
+
+    Capture the answer VERBATIM in value_statement, in their own words —
+    free text, never preset options (BP-03: this is substance, not
+    structure), never tidied or rephrased by you. The point is that a
+    nomination on its own records a verdict about somebody ELSE, and half
+    of these sections are condemnations by design; this turns one into a
+    positive statement about the person answering ("I value people having
+    the information they need to choose"), which is what a later value-axis
+    pass actually needs.
+
+    Two things to watch, because this question is harder than it looks:
+    - If the answer just restates the 'why' (still about the nominee —
+      "he lied to Congress"), re-ask ONCE, pointed at them rather than the
+      nominee: "and what does that say about what YOU value?" Never a
+      third attempt (BP-08) — an empty or repeated answer is a valid one,
+      and an omitted value_statement still saves the capture.
+    - Never supply the value yourself, not even as an illustrative
+      example. A model naming the value and the person agreeing is exactly
+      the inference this field exists to replace.
+    Echo it in the BP-06 confirm-before-save step alongside the 'why', on
+    its own visually distinct line and equally verbatim ("…and this as
+    what it tells you you value: …") — it is the person's own words, held
+    to the same standard as the evidence quote itself. Same
+    protocol-not-code-enforcement status as everything else here: omitting
+    it saves the capture with the field unset, so ask it rather than
+    relying on a rejection to catch a skipped question.
+
     Sentiment intensity (RFC-049, issue #240 v1) — ask for Values and
     Mission alignment (values_pro/con, values_fallback_pro/con,
     mission_alignment_pro/con); NOT asked for alignment_of_perspective or
-    network_admired, which stay exactly as they were. After 'why' is
-    given but BEFORE the BP-06 echo-and-save step, ask ONE extra
+    network_admired, which stay exactly as they were. After the value
+    statement above and BEFORE the BP-06 echo-and-save step, ask ONE extra
     structured question — a single-select card, options for structure
     since this is a scale choice, not evidence (BP-03): "How strongly do
     you feel about this?" with options 'mild' / 'moderate' / 'strong'
@@ -684,6 +719,7 @@ def interview_react(
                 primary_purpose=primary_purpose,
                 intensity=intensity,
                 company_reason=company_reason,
+                value_statement=value_statement,
                 persona_id=persona_id,
                 persona_authored=persona_authored,
             )
@@ -695,12 +731,14 @@ def interview_react(
     if report.company_reason is not None:
         tags.append(report.company_reason.value)
     tag_str = f" [{', '.join(tags)}]" if tags else ""
+    # Its own line, quoted: prose in the person's own words, not a tag.
+    values_line = f'\nvalues: "{report.value_statement}"' if report.value_statement else ""
     position = (
         f" Position: {count} of {cap} captured for {subtype} so far." if count * 2 >= cap else ""
     )
     return (
         f"{render_acting_as(active_persona)}\n"
-        f"{report.outcome}: [{report.subtype}] {report.target}{title}{tag_str}\n"
+        f"{report.outcome}: [{report.subtype}] {report.target}{title}{tag_str}{values_line}\n"
         "Review with 'wingman profile list', or 'my_pov'/'wingman pov' to synthesize "
         f"captures (and any corpus writing) into a cited stance.{position}"
     )

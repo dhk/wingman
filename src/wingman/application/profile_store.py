@@ -102,6 +102,10 @@ def persist_items(
                 and existing.classification == item.classification
                 and existing.intensity == item.intensity
                 and existing.company_reason == item.company_reason
+                # RFC-057: without this, re-capturing a nomination purely to
+                # ADD the value statement it was missing reads as "already
+                # captured — nothing changed" and the statement is dropped.
+                and existing.value_statement == item.value_statement
             ):
                 # A claim restated in a new version of the SAME document is
                 # not better supported than it was before — it is one source

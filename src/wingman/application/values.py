@@ -35,6 +35,16 @@ the old rule ("cons always support") would only relocate the bug — it
 breaks the moment the model names an axis as a disvalue — so the
 direction is asked for per item instead.
 
+**The value statement (issue #343, RFC-057).** A capture may now carry
+the person's own answer to "what does that tell us you value?" — a
+POSITIVE statement, by construction, alongside a `why` that for half the
+interview is a condemnation. Where one exists it goes into the prompt
+next to the quote, so the direction judgment reads an explicit statement
+of the value instead of inferring it from a verdict about somebody else.
+It augments `direction` rather than replacing it: every capture made
+before the question existed has none, and those must keep inferring
+exactly as they did.
+
 **The minimum-data floor.** A person with a couple of nominations
 shouldn't get a confident multi-axis profile — v3's chart would just be
 noise. `MIN_ITEMS`/`MIN_SUBTYPES` (see below) gate inference outright,
@@ -212,6 +222,14 @@ def _items_block(items: list[ProfileItem]) -> str:
         if item.company_reason is not None:
             lines.append(f"company_reason: {item.company_reason.value}")
         lines.append(f"why: {item.detail}")
+        # RFC-057: when the person said what this nomination tells them
+        # they value, the model reads that alongside the 'why' — a
+        # statement that is positive by construction, next to a verdict
+        # that may not be. Absent for every capture that predates the
+        # question, so the line is conditional rather than "not given":
+        # a labelled blank invites the model to fill it in.
+        if item.value_statement:
+            lines.append(f"what this tells them they value: {item.value_statement}")
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
@@ -275,6 +293,7 @@ def _validate_proposal(
                     quote=item.detail,
                     intensity=item.intensity.value if item.intensity else None,
                     direction=direction,
+                    value_statement=item.value_statement,
                     signed_weight=_signed_weight(item, direction),
                 )
             )
@@ -441,6 +460,8 @@ def render_value_profile(profile: ValueProfile, stale_new_captures: int = 0) -> 
             lines.append(
                 f'    "{span.quote}" — {span.subtype}: {span.target}{intensity}{direction}'
             )
+            if span.value_statement:
+                lines.append(f'      values: "{span.value_statement}"')
     if _predates_direction(profile):
         lines.append("")
         lines.append(

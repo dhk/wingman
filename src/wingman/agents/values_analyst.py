@@ -21,6 +21,14 @@ axis evidenced by a condemnation — being horrified by a liar is evidence
 you value honesty, not evidence you oppose it. Direction is a semantic
 judgment about content, so the model makes it; it is still code that
 turns it into a number.
+
+`value_axes_v3` (RFC-057, issue #343) is the same schema fed better
+evidence: an item may now carry the person's own answer to "what does
+that tell us you value?", and the prompt says to judge direction against
+that statement first where it exists. The version bump is because the
+prompt TEXT changed — `ValueProfile.prompt_version` is provenance, and a
+stored profile has to name the prompt that actually produced it. Nothing
+about the output schema moved, so a v2-era proposal still parses.
 """
 
 from __future__ import annotations
@@ -32,7 +40,7 @@ from pydantic import ValidationError
 from wingman.agents.profile_curator import ProposalParseError
 from wingman.domain.values import ValueAxisProposal
 
-PROMPT_VERSION = "value_axes_v2"
+PROMPT_VERSION = "value_axes_v3"
 
 SYSTEM_PROMPT = (
     "You identify the small set of underlying value dimensions that a person's "

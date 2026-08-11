@@ -47,6 +47,20 @@ ALONGSIDE the free-text 'why', never replacing it). Unlike
 `primary_purpose`, both are persisted directly on the `ProfileItem`
 itself, not just the inbox note, so a later value-dimension inference pass
 (v2, not built here) has structured fields to read.
+
+The value statement (RFC-057, issue #343): every subtype that takes
+`intensity` also takes `value_statement` — "what does that tell us you
+value?", asked after the 'why' and before the intensity card, captured in
+the user's own words. A nomination on its own records a VERDICT about
+somebody else; half of the Values and Mission-alignment sections are
+condemnations by design, and a condemnation only reaches the profile as
+an inference about its target. This field is the positive value statement
+behind it ("I value people having the information they need to choose"),
+so `application/values.py`'s axis inference reads evidence that is
+positive BY CONSTRUCTION rather than judging which way a condemnation
+cuts. It augments RFC-056's per-item `direction` rather than replacing it
+— every capture predating this field has none, and inference must keep
+working without one.
 """
 
 from __future__ import annotations
@@ -125,6 +139,15 @@ VALID_SUBTYPES = REACTION_SUBTYPES | NOMINATION_SUBTYPES
 # network_admired (pro-only, no polarity to scale against).
 SENTIMENT_INTENSITY_SUBTYPES = VALUES_SUBTYPES | MISSION_ALIGNMENT_SUBTYPES
 
+# The value-statement question (RFC-057, issue #343) — "what does that
+# tell us you value?" — is asked for exactly the subtypes that take an
+# intensity, and defined as that set rather than duplicating its members:
+# both answer the same question about which captures are a values signal
+# at all. alignment_of_perspective_* (a reaction to content, not a
+# nomination) and network_admired (a warm-path identifier, not a values
+# signal) are outside it, by the same reasoning that keeps intensity out.
+VALUE_STATEMENT_SUBTYPES = SENTIMENT_INTENSITY_SUBTYPES
+
 # Company reason taxonomy (RFC-049, issue #240 v1): required for every
 # subtype that names a COMPANY — the values fallback and Mission
 # alignment pairs — never the people-naming subtypes (values_pro/con,
@@ -193,6 +216,7 @@ class InterviewReactionReport(BaseModel):
     counts: ItemCounts
     intensity: SentimentIntensity | None = None
     company_reason: CompanyReasonCategory | None = None
+    value_statement: str = ""
 
 
 def _fetch_stimulus(target: str, fetcher: Callable[[str], bytes] | None) -> tuple[str, str | None]:
@@ -283,6 +307,7 @@ def capture_interview_reaction(
     primary_purpose: str | None = None,
     intensity: str | None = None,
     company_reason: str | None = None,
+    value_statement: str | None = None,
     persona_id: str | None = None,
     persona_authored: bool = False,
 ) -> InterviewReactionReport:
@@ -322,6 +347,21 @@ def capture_interview_reaction(
     non-empty value that doesn't match the enum IS rejected, regardless of
     subtype — this only tolerates *absence*, never a garbled answer.
 
+    'value_statement' (RFC-057, issue #343) is what this nomination tells
+    the person they VALUE, in their own words — free text, no enum, asked
+    AFTER the 'why' and BEFORE the intensity card, for the same subtypes
+    intensity covers (VALUE_STATEMENT_SUBTYPES). "What does that tell us
+    you value?" turns a verdict about somebody else into a positive
+    statement about the person answering, which is what the axis inference
+    actually needs; see this function's caller's docstring for the exact
+    question and its one re-ask. Same protocol-not-code-enforcement status
+    as the two fields above — an omitted statement leaves the stored
+    item's `value_statement` empty rather than blocking the capture, which
+    is also how every capture predating this question reads. Unlike them
+    there is nothing to reject: any non-empty text is the person's own
+    words, and tidying or validating it would be exactly the paraphrasing
+    the BP-06 echo exists to prevent.
+
     persona_id scopes this capture to a Persona (docs/COACHING-MODE-
     DESIGN.md) instead of the coach's own work — None (the default) is
     unchanged, existing behavior. persona_authored distinguishes the
@@ -351,6 +391,10 @@ def capture_interview_reaction(
         except ValueError as exc:
             valid = ", ".join(level.value for level in SentimentIntensity)
             raise IngestError(f"unknown intensity {intensity_raw!r}; use one of: {valid}.") from exc
+
+    # Free text, so there is no enum to check — only the same emptiness
+    # normalization every other optional prose field here gets.
+    value_statement = (value_statement or "").strip()
 
     company_reason_raw = (company_reason or "").strip().lower()
     company_reason_value: CompanyReasonCategory | None = None
@@ -393,6 +437,8 @@ def capture_interview_reaction(
     content = f"# Interview capture\n\nSubtype: {subtype}\n\nTarget: {target}\n\nWhy: {why}\n"
     if primary_purpose is not None:
         content += f"\nUnderstood primary purpose: {primary_purpose}\n"
+    if value_statement:
+        content += f"\nWhat this says they value: {value_statement}\n"
     if intensity_value is not None:
         content += f"\nIntensity: {intensity_value.value}\n"
     if company_reason_value is not None:
@@ -458,6 +504,7 @@ def capture_interview_reaction(
         confidence=confidence,
         intensity=intensity_value,
         company_reason=company_reason_value,
+        value_statement=value_statement,
         evidence=[EvidenceSpan(source_record_id=record.record_id, quote=why)],
         prompt_version=INTERVIEW_PROMPT_VERSION,
         extracted_by=extracted_by,
@@ -483,6 +530,7 @@ def capture_interview_reaction(
         counts=counts,
         intensity=intensity_value,
         company_reason=company_reason_value,
+        value_statement=value_statement,
     )
 
 
@@ -494,7 +542,12 @@ def render_interview_reaction(report: InterviewReactionReport) -> str:
     if report.company_reason is not None:
         tags.append(report.company_reason.value)
     tag_str = f" [{', '.join(tags)}]" if tags else ""
-    return f"{report.subtype}: {report.target}{title}{tag_str} — {report.outcome}"
+    line = f"{report.subtype}: {report.target}{title}{tag_str} — {report.outcome}"
+    # Prose, so it gets its own line rather than joining the bracketed
+    # enum tags — and it is quoted, because it is the person's own words.
+    if report.value_statement:
+        line += f'\n  values: "{report.value_statement}"'
+    return line
 
 
 def list_interview_documents(

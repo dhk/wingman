@@ -96,6 +96,16 @@ class ProfileItem(BaseModel):
     # subtypes populate which field.
     intensity: SentimentIntensity | None = None
     company_reason: CompanyReasonCategory | None = None
+    # What the nomination tells the person they VALUE, in their own words
+    # (RFC-057, issue #343) — the same subtypes that take `intensity`. A
+    # nomination records a verdict about somebody else; this records the
+    # positive value statement behind it ("I value people having the
+    # information they need to choose"), so a later inference pass reads
+    # evidence that is positive by construction instead of judging which
+    # way a condemnation cuts. Empty for every capture that predates the
+    # question, and for every subtype outside that set — same
+    # protocol-not-code enforcement as the two fields above.
+    value_statement: str = ""
     # Role structure (#269). Empty for every other kind, and optionally
     # empty for a role too: a résumé stating a position without dates
     # yields a role whose dates are visibly absent rather than invented.

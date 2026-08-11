@@ -238,6 +238,36 @@ value dimensions from this data) and v3 (a radar-chart visualization of
 those dimensions) are separate, later slices of issue #240 — nothing here
 does either.
 
+### What it tells you that you value (issue #343, RFC-057)
+
+The same six subtypes ask one more question, between the "why" and the
+strength question above:
+
+> **What does that tell us you value?**
+
+Captured verbatim, in the person's own words, and stored on the
+`ProfileItem` alongside the "why" it follows. The reason it exists: a
+nomination records a verdict about somebody *else*, and half of these
+sections are condemnations by design — so today a `values_con` capture
+reaches the profile only as an inference about its target. Asked
+directly, the same capture also yields *"I value people having the
+information they need to choose"*: a positive statement, by construction,
+which is what the value-axis inference (v2 above, and RFC-056's per-item
+direction) actually needs. The alternative is a model reading a
+condemnation and deciding which way it cuts — the one place in this
+design a model was trusted to say what somebody meant.
+
+Two protocol notes, because the question is harder than it looks. It
+invites a restatement of the "why," so re-ask once — pointed at the
+person rather than the nominee ("and what does that say about what YOU
+value?") — and never a third time; an empty answer is a valid answer
+(BP-08), and the capture saves without it. And never supply the value
+yourself, not even as an illustrative example: a model naming the value
+and the person agreeing is exactly the inference this replaces.
+Captures made before this question existed have no statement and keep
+inferring exactly as they did — it augments the direction judgment rather
+than replacing it.
+
 ## Trust ladder
 
 | Tier | Ask | Commitment |
