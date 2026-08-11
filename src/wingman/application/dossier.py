@@ -25,6 +25,7 @@ from wingman.application.similarity import (
     company_key,
     similar_companies,
 )
+from wingman.domain.company import DIMENSION_HEADINGS, CompanyDimension
 from wingman.domain.person import ExternalDocument, FeedAttribution
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
@@ -189,6 +190,32 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
             lines.append("")
             lines.append("Writes about: " + ", ".join(company_card.topics))
 
+    deep_dive = storage.get_company_dossier(key)
+    if deep_dive is not None:
+        provenance = f"{deep_dive.provider}/{deep_dive.model}" if deep_dive.provider else "unknown"
+        lines.extend(
+            [
+                "",
+                (
+                    "## Open-web deep dive (researched "
+                    f"{deep_dive.generated_at.date().isoformat()}, {provenance})"
+                ),
+                "",
+            ]
+        )
+        for dimension in CompanyDimension:
+            entries = deep_dive.by_dimension(dimension)
+            if not entries:
+                continue
+            lines.append(f"### {DIMENSION_HEADINGS[dimension]}")
+            for finding in entries:
+                lines.append(f"- [inference] {finding.claim}")
+                if finding.quote:
+                    lines.append(f'  [fact] "{finding.quote}"')
+                title = finding.source_title or finding.source_url
+                lines.append(f"  [source] [{title}]({finding.source_url})")
+            lines.append("")
+
     lines.extend(["", "## What its people argue", ""])
     cards = 0
     missing_cards: list[str] = []
@@ -239,6 +266,12 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
         gaps.append(
             f"no synthesized company themes — 'wingman company pov \"{display}\"' "
             "builds them (a model call, validated quote-by-quote)"
+        )
+    if deep_dive is None:
+        gaps.append(
+            f"no open-web deep dive — 'wingman company deep-dive \"{display}\"' researches "
+            "market position, stated values and culture (a paid call: it confirms first, "
+            "and stores nothing until you approve what came back)"
         )
     if not research_sources:
         gaps.append(

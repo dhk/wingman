@@ -27,6 +27,13 @@ from wingman.application.answers import (
 )
 from wingman.application.assess import assess_job, fetch_job_posting
 from wingman.application.backup import create_backup, restore_backup
+from wingman.application.company_deep_dive import (
+    render_findings,
+    research_company_dossier,
+    review_findings,
+    save_company_dossier,
+    spend_warning,
+)
 from wingman.application.company_feeds import (
     attach_company_feed,
     fetch_company_feeds,
@@ -2336,6 +2343,76 @@ def company_dossier(
         raise typer.Exit(code=1) from exc
     typer.echo(report.markdown)
     typer.echo(f"(written to {report.path})")
+
+
+@company_app.command("deep-dive")
+def company_deep_dive(
+    name: str = typer.Argument(..., help="Company to research, e.g. 'Anthropic'."),
+    yes: bool = typer.Option(False, "--yes", help="Skip both confirmation prompts."),
+) -> None:
+    """One-shot open-web research on a company (#350): market position,
+    stated values, culture — every finding carrying the source that backs it.
+
+    One of two wingman lookups that reach the open web (the other is
+    'people deep-dive') and one of two that cost API usage per call —
+    everything else stays inside approved sources or stored data. Asks
+    before searching (the paid call) and again before storing. A finding
+    whose URL was not among the pages the search actually returned is
+    reported as rejected and never stored.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "researched")
+    if not yes and not typer.confirm(
+        f"{spend_warning(name)}\n\nSearch now?",
+        default=False,
+    ):
+        typer.echo("Nothing was searched.")
+        raise typer.Exit(code=1)
+    try:
+        provider = get_provider(CapabilityClass.RESEARCH_WEBSEARCH, config)
+        response = research_company_dossier(name, provider)
+        review = review_findings(name, response)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        typer.echo(f"company deep-dive failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except ProposalParseError as exc:
+        typer.echo(
+            f"company deep-dive failed: {exc}. Nothing was stored; re-run to retry.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    warning = dossier_truncation_warning(response)
+    if warning:
+        typer.echo(warning, err=True)
+        typer.echo("")
+    content = render_findings(review)
+    typer.echo(content)
+    if not review.findings:
+        typer.echo(
+            "No finding survived the source gate — nothing to store.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if not yes and not typer.confirm(
+        f"Store these {len(review.findings)} sourced findings as {name}'s deep-dive?",
+        default=False,
+    ):
+        typer.echo("Nothing was stored.")
+        return
+    try:
+        with Storage(config.db_path) as storage:
+            dossier = save_company_dossier(
+                name, content, storage, provider=response.provider, model=response.model
+            )
+    except IngestError as exc:
+        typer.echo(f"company deep-dive save failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"Stored deep-dive for {dossier.company_name} "
+        f"({len(dossier.findings)} sourced findings). "
+        f"It renders in 'wingman company dossier \"{dossier.company_name}\"'."
+    )
 
 
 @company_app.command("follow")

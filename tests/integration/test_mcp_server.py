@@ -76,6 +76,8 @@ def test_all_tools_are_registered() -> None:
         "company_similar",
         "company_like",
         "company_dossier",
+        "company_deep_dive",
+        "company_deep_dive_save",
         "export_pdf",
         "my_pov",
         "my_values",
@@ -451,6 +453,65 @@ def test_people_deep_dive_via_mcp_with_recorded_provider(workspace: Path, tmp_pa
     assert "Stored deep-dive for Scott Brady" in saved
     stored = people_dossier("Scott Brady")
     assert "https://example.com/bio" in stored
+
+
+def test_company_deep_dive_via_mcp_with_recorded_provider(workspace: Path, tmp_path: Path) -> None:
+    """#350's contract, tool by tool: the preview costs nothing, the paid
+    call stores nothing, and only the separate save tool writes — and it
+    writes only findings whose source the search actually returned."""
+    from wingman.mcp_server import company_deep_dive, company_deep_dive_save, company_dossier
+
+    # confirmed=False: no provider is configured at all, so a network call
+    # here would raise — proving the preview path never reaches the provider.
+    preview = company_deep_dive("Acme Corp")
+    assert "Ask the user to confirm" in preview
+    assert "confirmed=true" in preview
+    assert "$0.04" in preview
+
+    response_path = tmp_path / "company-response.json"
+    response_path.write_text(
+        '{"findings": [\n'
+        '  {"dimension": "values", "claim": "Acme says safety comes before speed.",\n'
+        '   "quote": "we will delay a launch rather than ship an unsafe product",\n'
+        '   "source_url": "https://acme.example/values", "source_title": "Our values"},\n'
+        '  {"dimension": "culture", "claim": "Acme has a four-day week.",\n'
+        '   "source_url": "https://invented.example/four-day-week"}\n'
+        "]}\n\nSources:\n- [Our values](https://acme.example/values)",
+        encoding="utf-8",
+    )
+    config = load_config()
+    config.models_config_path.write_text(
+        f'[models.research_websearch]\nprovider = "recorded"\npath = "{response_path}"\n',
+        encoding="utf-8",
+    )
+
+    found = company_deep_dive("Acme Corp", confirmed=True)
+    assert "Acme says safety comes before speed." in found
+    assert "https://acme.example/values" in found
+    assert "not among the pages the search returned" in found  # the invented one
+    assert "Not stored" in found
+    # Nothing was written: the dossier still reports the deep-dive gap.
+    assert "no open-web deep dive" in company_dossier("Acme Corp")
+
+    saved = company_deep_dive_save("Acme Corp", found)
+    assert "Stored deep-dive for Acme Corp (1 sourced findings)." in saved
+    stored = company_dossier("Acme Corp")
+    assert "## Open-web deep dive" in stored
+    assert "https://acme.example/values" in stored
+    assert "four-day week" not in stored
+
+
+def test_company_deep_dive_save_refuses_unsourced_content(workspace: Path) -> None:
+    """The storage tool is reachable directly, so it re-checks rather than
+    trusting that a preview produced its input."""
+    from wingman.mcp_server import company_deep_dive_save, company_dossier
+
+    refused = company_deep_dive_save(
+        "Acme Corp",
+        "## Stated values\n\n- claim: Acme is the best company in the world.\n",
+    )
+    assert "verifiable source" in refused
+    assert "no open-web deep dive" in company_dossier("Acme Corp")
 
 
 def test_new_tools_report_uninitialized_workspace(

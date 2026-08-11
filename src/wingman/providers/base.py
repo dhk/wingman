@@ -14,7 +14,8 @@ class CapabilityClass(StrEnum):
     REASON_FRONTIER = "reason_frontier"
     CRITIC_INDEPENDENT = "critic_independent"
     # The only capability class whose provider reaches the open web
-    # (#222's person deep-dive) — every other class stays inside
+    # (#222's person deep-dive, #350's company deep-dive) — every other
+    # class stays inside
     # approved/named sources (RFC-015) or user-dropped items (the heap,
     # #113). Deliberately its own class, never a fallback for the others.
     RESEARCH_WEBSEARCH = "research_websearch"

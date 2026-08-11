@@ -219,9 +219,15 @@ Everything below is a sentence to Claude, not a command to remember:
   time to sort them? "add these to the heap" (`heap`) captures them
   instantly, hottest first — nothing fetched or spent until you sort later.
 - **Deep-dive a person** — "do a deep dive on Jane Author" (`people_deep_dive`)
-  is the one lookup that reaches the open web and costs real API spend; it
+  is one of two lookups that reach the open web and cost real API spend; it
   always asks you to confirm before spending, and only saves to
   `people_dossier` after you approve the findings.
+- **Deep-dive a company** — "what is Acme actually like?" (`company_deep_dive`)
+  is the other one: market position, stated values and culture, each finding
+  carrying the source that backs it. Same deal — it quotes the cost before
+  searching, shows everything, and stores nothing until you approve; a claim
+  citing a page its own search never returned is reported as rejected, not
+  saved. Approved findings render inside `company_dossier`.
 - **No writing to start from?** — "help me build my profile" walks the
   Perspectives interview — react to a few things you've read, name people
   or organizations you value — and turns your own answers into cited

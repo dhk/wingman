@@ -12,6 +12,7 @@ from typing import Self
 from wingman.domain import SourceRecord
 from wingman.domain.answer import AnswerRecord
 from wingman.domain.commentary import CommentaryEntry
+from wingman.domain.company import CompanyDossier
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.heap import HeapItem
 from wingman.domain.opportunity import Opportunity
@@ -155,6 +156,14 @@ CREATE TABLE IF NOT EXISTS new_link_events (
 CREATE TABLE IF NOT EXISTS dossier_state (
     company_key TEXT PRIMARY KEY,
     last_generated_at TEXT NOT NULL
+);
+-- A company's open-web deep dive (#350/RFC-059): one row per company,
+-- rebuilt rather than versioned, the same lifecycle as person_dossiers.
+CREATE TABLE IF NOT EXISTS company_dossiers (
+    dossier_id TEXT PRIMARY KEY,
+    company_key TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS relationship_objectives (
     objective_id TEXT PRIMARY KEY,
@@ -859,6 +868,50 @@ class Storage:
         )
         row: tuple[str] | None = cursor.fetchone()
         return PersonDossier.model_validate_json(row[0]) if row else None
+
+    def save_company_dossier(self, dossier: CompanyDossier) -> None:
+        """Insert or replace a company's deep dive (rebuilt, not versioned — #350)."""
+        self._conn.execute(
+            "INSERT INTO company_dossiers (dossier_id, company_key, payload, created_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(company_key) DO UPDATE SET dossier_id = excluded.dossier_id,"
+            " payload = excluded.payload, created_at = excluded.created_at",
+            (
+                dossier.dossier_id,
+                dossier.company_key,
+                dossier.model_dump_json(),
+                dossier.generated_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def get_company_dossier(self, company_key: str) -> CompanyDossier | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM company_dossiers WHERE company_key = ?", (company_key,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return CompanyDossier.model_validate_json(row[0]) if row else None
+
+    def delete_company_dossier(self, company_key: str) -> bool:
+        cursor = self._conn.execute(
+            "DELETE FROM company_dossiers WHERE company_key = ?", (company_key,)
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def move_company_dossier(self, old_key: str, new_key: str, new_name: str) -> bool:
+        """Re-key a stored deep dive on rename. A dossier already present under
+        new_key wins; the old one is dropped rather than overwriting it (the
+        same rule move_pov_card follows)."""
+        dossier = self.get_company_dossier(old_key)
+        if dossier is None:
+            return False
+        self.delete_company_dossier(old_key)
+        if self.get_company_dossier(new_key) is None:
+            self.save_company_dossier(
+                dossier.model_copy(update={"company_key": new_key, "company_name": new_name})
+            )
+        return True
 
     def save_objective(self, objective: RelationshipObjective) -> None:
         """Insert or replace the objective for its person (RFC-037: revised, not versioned)."""
