@@ -680,6 +680,93 @@ def test_render_warns_that_a_pre_direction_profile_may_have_the_wrong_sign(
     assert "wingman values --refresh" in rendered
 
 
+# --- the code half of staleness (#355) ----------------------------------------
+
+
+def test_a_built_profile_records_the_scoring_rule_that_produced_it(workspace: Path) -> None:
+    """`prompt_version` versions the MODEL half. The deterministic half had
+    none, and #340 was a change to exactly that half — so every profile and
+    every chart built before the fix asserted the opposite of the truth with
+    nothing on it to say which rule had produced it. AGENTS.md already
+    required this of anything that scores."""
+    from wingman.domain.values import SCORING_CONTRACT_VERSION
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        item_ids = _all_item_ids(storage)
+        provider = ScriptedProvider(
+            {
+                "axes": [
+                    {"name": "One", "items": _cite(item_ids)},
+                    {"name": "Two", "items": _cite(item_ids[:1])},
+                    {"name": "Three", "items": _cite(item_ids[:1])},
+                ]
+            }
+        )
+        report = build_value_profile(storage, provider)
+
+    assert report.profile.scoring_version == SCORING_CONTRACT_VERSION
+    # And it survives the round trip, or the stamp answers nothing later.
+    with Storage(config.db_path) as storage:
+        stored = storage.get_value_profile(report.profile.subject_id)
+    assert stored is not None
+    assert stored.scoring_version == SCORING_CONTRACT_VERSION
+    assert SCORING_CONTRACT_VERSION in render_value_profile(stored)
+
+
+def test_a_profile_scored_under_a_replaced_rule_says_so_on_read(workspace: Path) -> None:
+    """The general case RFC-056's warning could not cover: directions were
+    recorded, the evidence looks fine, and the numbers still came from a
+    rule this codebase no longer runs."""
+    from wingman.application.values import scoring_is_current
+    from wingman.domain.values import (
+        SCORING_CONTRACT_VERSION,
+        ValueAxis,
+        ValueAxisEvidence,
+        ValueProfile,
+    )
+
+    superseded = ValueProfile(
+        subject_id=CORPUS_PERSON_ID,
+        subject_name=CORPUS_PERSON_NAME,
+        items_used=1,
+        source_item_ids=["seed-item"],
+        provider="scripted",
+        model="scripted-1",
+        prompt_version="value_axes_v3",
+        scoring_version="values-scoring-0",
+        axes=[
+            ValueAxis(
+                name="Honesty and the right to informed choice",
+                score=1.0,
+                label="strongly drawn to",
+                evidence=[
+                    ValueAxisEvidence(
+                        item_id="seed-item",
+                        subtype="values_con",
+                        target="A liar",
+                        quote="They lied to people who could not check.",
+                        intensity="strong",
+                        direction="supports",
+                        signed_weight=1.0,
+                    )
+                ],
+            )
+        ],
+    )
+    rendered = render_value_profile(superseded)
+
+    assert not scoring_is_current(superseded)
+    assert "values-scoring-0" in rendered
+    assert SCORING_CONTRACT_VERSION in rendered
+    assert "wingman values --refresh" in rendered
+    # ...and only ONE warning: two overlapping ones train the reader to skip
+    # both, so the specific #340 diagnosis is reserved for the profiles it
+    # actually describes.
+    assert "may have the wrong sign" not in rendered
+
+
 # --- CLI + MCP surface --------------------------------------------------------
 
 

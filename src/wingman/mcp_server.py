@@ -1414,23 +1414,35 @@ def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = 
     the canonical page.
 
     action is 'list', 'remember' (store `kind` + `url`, replacing any
-    earlier record for that kind), 'show' (`kind`), or 'forget' (`kind`).
-    kind is one of: values_radar, completeness, profile.
+    earlier record for that kind), 'show' (`kind`), 'forget' (`kind`), or
+    'stale'. kind is one of: values_radar, completeness, profile.
 
     Protocol: after you publish or update one of these views, call
     action='remember' with the url the client gave you. Before publishing
     one, call action='show' for that kind — if a url comes back, update
     THAT page rather than creating another.
 
-    These are snapshots. Nothing here checks whether the workspace has
-    moved on since; say so rather than presenting a recorded url as
-    necessarily current.
+    action='stale' answers "is this still true" (#355): what no longer
+    reflects the current captures OR the current code, and the exact
+    command that rebuilds each. Two artefacts can look identical and only
+    one be true — a change to the scoring rule (#340) inverted every axis
+    evidenced by a condemnation, and the charts built beforehand kept
+    drawing the opposite of the truth. It reports; it never refuses.
+
+    A recorded url is a snapshot. Nothing here fetches the page to check
+    it; say so rather than presenting a recorded url as necessarily
+    current, and run action='stale' if the question is whether to refresh.
     """
     from wingman.application.artifacts import (
         forget_artifact,
         published_artifact,
         remember_artifact,
         render_artifacts,
+    )
+    from wingman.application.freshness import (
+        current_fingerprint,
+        render_staleness,
+        stale_artefacts,
     )
 
     config = _ready_config()
@@ -1440,8 +1452,23 @@ def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = 
         with Storage(config.db_path) as storage:
             if action == "list":
                 return render_artifacts(storage.list_published_artifacts())
+            if action == "stale":
+                return render_staleness(stale_artefacts(config, storage))
             if action == "remember":
-                artifact = remember_artifact(kind, url, storage, title=title)
+                artifact = remember_artifact(
+                    kind,
+                    url,
+                    storage,
+                    title=title,
+                    # Stamped here rather than asked of the caller: a
+                    # fingerprint a model has to carry between two tool
+                    # calls is one it can drop or paraphrase, and a wrong
+                    # one is worse than none. The cost is that recording a
+                    # url for a page published from an OLD export stamps
+                    # today's inputs on it — the same assumption every
+                    # "you just did this" protocol in this server makes.
+                    built_from=current_fingerprint(kind, storage),
+                )
                 return (
                     f"Recorded {artifact.kind} -> {artifact.url}. Update THAT page next time "
                     "rather than publishing a new one."
@@ -1462,7 +1489,7 @@ def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = 
                 )
     except IngestError as exc:
         return f"artifacts failed: {exc}"
-    return "artifacts: action must be 'list', 'remember', 'show', or 'forget'."
+    return "artifacts: action must be 'list', 'remember', 'show', 'forget', or 'stale'."
 
 
 @server.tool()
@@ -2479,7 +2506,10 @@ def values_chart(out_dir: str = "") -> str:
     A stale stored profile (new captures since it was built) still renders,
     with the same "N new captures" note my_values already shows, printed on
     the chart as well as in this tool's return text — staleness is a
-    warning here, not a refusal.
+    warning here, not a refusal. So is the other kind (#355): a profile
+    scored under a superseded scoring contract renders with a warning ON
+    the chart saying its shape may be wrong, because an exported SVG can
+    be emailed away from every surface that would otherwise say so.
 
     Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
     (coach_persona 'set'), this charts THEIR profile instead — never the
@@ -2501,15 +2531,21 @@ def values_chart(out_dir: str = "") -> str:
         except IngestError as exc:
             return f"values-chart failed: {exc}"
         acting_as = render_acting_as(active_persona)
-    stale = ""
+    warnings = ""
+    if export.scoring_superseded:
+        warnings += (
+            "\nThis chart was drawn from a profile scored under a rule this version of "
+            "wingman no longer runs — the shape may be superseded, and axes evidenced by "
+            "'con' nominations may be inverted. my_values(refresh=True), then chart again."
+        )
     if export.stale_new_captures:
         noun = "capture" if export.stale_new_captures == 1 else "captures"
-        stale = (
+        warnings += (
             f"\n{export.stale_new_captures} new {noun} since this profile was built — "
             "my_values(refresh=True) to include them."
         )
     return (
-        f"{acting_as}\nWrote {export.path}{stale}\n"
+        f"{acting_as}\nWrote {export.path}{warnings}\n"
         "Open it in a browser, or embed it (it's self-contained SVG)."
     )
 

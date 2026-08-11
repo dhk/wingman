@@ -289,18 +289,46 @@ def artifacts_remember(
     Wingman cannot publish or update it — a server has no route back into
     the client. Keeping the url is what stops the next refresh creating a
     second page and leaving this one quietly wrong.
+
+    The record is stamped with what the view would be built from right now,
+    so 'wingman artifacts stale' can later tell a page built from today's
+    profile from one built from the profile before it (#355).
     """
     from wingman.application.artifacts import remember_artifact
+    from wingman.application.freshness import current_fingerprint
 
     configure_logging()
     config = load_config()
     with Storage(config.db_path) as storage:
         try:
-            artifact = remember_artifact(kind, url, storage, title=title)
+            artifact = remember_artifact(
+                kind, url, storage, title=title, built_from=current_fingerprint(kind, storage)
+            )
         except IngestError as exc:
             typer.echo(f"artifacts remember failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
     typer.echo(f"Recorded {artifact.kind} -> {artifact.url}")
+
+
+@artifacts_app.command("stale")
+def artifacts_stale() -> None:
+    """What no longer reflects current inputs OR current code, and the exact
+    command that rebuilds each (#355).
+
+    Two ways a derived artefact stops being true: new evidence arrived, or
+    the code that shaped it changed. Only the first was ever answerable, and
+    #340 is what the second costs — a scoring change inverted every axis
+    evidenced by a condemnation, and the charts already on disk went on
+    drawing the inverted shape with nothing on them to say so.
+
+    Reports, never refuses. Every stale line carries its rebuild command.
+    """
+    from wingman.application.freshness import render_staleness, stale_artefacts
+
+    configure_logging()
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        typer.echo(render_staleness(stale_artefacts(config, storage)))
 
 
 @artifacts_app.command("forget")
@@ -1957,6 +1985,16 @@ def values_chart(
             typer.echo(f"values-chart failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
     typer.echo(f"Wrote {export.path}")
+    # The superseded warning goes first and is stated as a shape problem,
+    # not a completeness one: new captures make a chart incomplete, a
+    # replaced scoring rule can make it point the wrong way (#340/#355).
+    if export.scoring_superseded:
+        typer.echo(
+            "This chart was drawn from a profile scored under a rule this version of "
+            "wingman no longer runs — the shape may be superseded, and axes evidenced by "
+            "'con' nominations may be inverted. Rebuild with 'wingman values --refresh', "
+            "then re-export."
+        )
     if export.stale_new_captures:
         noun = "capture" if export.stale_new_captures == 1 else "captures"
         typer.echo(

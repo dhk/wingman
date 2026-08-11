@@ -32,6 +32,31 @@ axis's vertex `<title>` (a hover tooltip when the SVG is opened directly or
 embedded via `<object>`), alongside a short evidence excerpt — so the shape
 and the number can always be cross-checked against each other, never one
 without the other.
+
+**What a file that has left the workspace can say for itself (issue #355,
+RFC-063, amending RFC-056).**
+This module produces the one artefact that has already been wrong in the
+field: #340 inverted every axis evidenced by a condemnation, and the charts
+under `reports/charts/` went on drawing the inverted shape with nothing on
+them to say so. RFC-056 conceded that gap on the grounds that it was a
+one-time migration window; it is not, because the scoring rule will change
+again. So a chart now carries three things, in descending order of how much
+they survive:
+
+  - a VISIBLE line, in the chart's own notice rows, when the profile it
+    draws was scored under a rule this codebase no longer runs. It survives
+    a screenshot, which is the only thing that does, and it is the one
+    warning that matters — the shape may be inverted;
+  - a visible built-at meta line naming the scoring and chart contract
+    versions, so a reader can tell WHICH wingman drew this;
+  - an XML comment carrying the machine-comparable fingerprint
+    (`application.freshness`), which survives copying and emailing but not
+    a screenshot, and lets `wingman artifacts stale` judge a file on disk
+    without re-deriving it.
+
+Nothing is built for the screenshot case beyond that first line. A picture
+that has been photographed is outside what any code here can reach, and
+pretending otherwise would mean designing for a promise that cannot be kept.
 """
 
 from __future__ import annotations
@@ -41,11 +66,17 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+from wingman.application.freshness import artefact_stamp, values_radar_fingerprint
 from wingman.application.ingest import IngestError
 from wingman.application.pov import CORPUS_PERSON_ID, persona_card_id
-from wingman.application.values import new_captures_since
+from wingman.application.values import new_captures_since, scoring_is_current
 from wingman.domain.persona import Persona
-from wingman.domain.values import ValueAxis, ValueProfile
+from wingman.domain.values import (
+    RADAR_CONTRACT_VERSION,
+    SCORING_CONTRACT_VERSION,
+    ValueAxis,
+    ValueProfile,
+)
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -78,6 +109,9 @@ svg.wingman-radar { background: var(--bg); }
   font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; fill: var(--text-dim);
 }
 .wingman-radar .radar-stale { font-size: 11px; fill: var(--accent-orange); }
+.wingman-radar .radar-superseded {
+  font-size: 11px; font-weight: 700; fill: var(--accent-orange);
+}
 .wingman-radar .radar-ring { fill: none; stroke: var(--border); stroke-width: 1; }
 .wingman-radar .radar-ring-neutral { stroke: var(--text-dim); stroke-width: 1.25; stroke-dasharray: 4 3; }
 .wingman-radar .radar-spoke { stroke: var(--border); stroke-width: 1; }
@@ -137,6 +171,60 @@ def _ring_points(count: int, fraction: float) -> str:
     return " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
 
 
+@dataclass(frozen=True)
+class _Notice:
+    """One warning row under the legend: the text, and the class that styles
+    it. A list rather than the single stale line this used to hold, because
+    a chart can now be out of date in two independent ways at once and
+    neither may silently displace the other."""
+
+    text: str
+    css_class: str
+
+
+def _notices(profile: ValueProfile, stale_new_captures: int) -> list[_Notice]:
+    """Every warning this chart has to carry, most serious first.
+
+    The superseded-scoring warning leads because it is the one that says
+    the SHAPE may be wrong, where the stale-captures warning only says the
+    shape is incomplete. A reader who reads one line reads that one.
+
+    The wording is this module's own rather than
+    `application.values.scoring_note`'s, deliberately: that one is a
+    parenthetical sized for a terminal, and this one has to fit a 640px
+    canvas at 11px with no wrapping. Both surfaces warning for the same
+    profile is what a test asserts; matching prose is not.
+    """
+    notices: list[_Notice] = []
+    if not scoring_is_current(profile):
+        headline = (
+            "⚠ built before per-item direction was recorded — an axis evidenced by a "
+            "'con' may be inverted"
+            if any(span.direction is None for axis in profile.axes for span in axis.evidence)
+            else (
+                f"⚠ scored under {profile.scoring_version or 'an unrecorded rule'}; current is "
+                f"{SCORING_CONTRACT_VERSION} — this shape may be superseded"
+            )
+        )
+        notices.append(_Notice(headline, "radar-superseded"))
+        notices.append(
+            _Notice(
+                "rebuild with 'wingman values --refresh', then re-export this chart",
+                "radar-superseded",
+            )
+        )
+    if stale_new_captures:
+        noun = "capture" if stale_new_captures == 1 else "captures"
+        notices.append(
+            _Notice(
+                f"{stale_new_captures} new {noun} since this was built — rebuild with "
+                "'wingman values --refresh' to include them",
+                "radar-stale",
+            )
+        )
+    return notices
+
+
 def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -> str:
     """A self-contained SVG radar chart of `profile.axes` — see this module's
     docstring for the signed-score-to-radius convention. Never mutates or
@@ -144,18 +232,21 @@ def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -
     already-scored contract."""
     axes = profile.axes
     count = len(axes)
+    notices = _notices(profile, stale_new_captures)
     legend_bottom = _CHART_BOTTOM + _LEGEND_TOP_PAD + _LEGEND_ROW_HEIGHT * count
-    stale_y = legend_bottom + _LEGEND_ROW_HEIGHT * 0.5
-    height = legend_bottom + (_LEGEND_ROW_HEIGHT if stale_new_captures else 0.0) + 20.0
+    notice_top = legend_bottom + _LEGEND_ROW_HEIGHT * 0.5
+    height = legend_bottom + _LEGEND_ROW_HEIGHT * len(notices) + 20.0
 
     # role="img" tells assistive technology to treat the whole chart as a
     # single image, so everything inside it — axis names, signed scores,
     # labels — stops being reachable. The accessible name alone says only
     # WHOSE chart this is. The <desc> is the text equivalent: the same
-    # information the legend carries, in reading order.
+    # information the legend carries, in reading order — including the
+    # notices, because a warning a screen reader cannot reach is a warning
+    # for sighted readers only.
     description = "; ".join(f"{axis.name} {axis.score:+.2f}, {axis.label}" for axis in axes)
-    if stale_new_captures:
-        description += f"; {stale_new_captures} new captures since this was built"
+    for notice in notices:
+        description += f"; {notice.text}"
     desc_id = "radar-desc"
 
     parts: list[str] = [
@@ -165,14 +256,27 @@ def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -
             f'aria-label="Value profile radar chart for {_e(profile.subject_name)}" '
             f'aria-describedby="{desc_id}">'
         ),
+        # The file's own provenance, machine-comparable, so 'wingman
+        # artifacts stale' can judge a chart sitting on disk without
+        # re-deriving it. A comment because it must not draw: the visible
+        # warning below is what a reader needs, and a fingerprint printed
+        # on the picture is noise to everyone but a script.
+        f"<!-- {_e(artefact_stamp(profile.subject_id, values_radar_fingerprint(profile)))} -->",
         f"<title>Value profile: {_e(profile.subject_name)}</title>",
         f'<desc id="{desc_id}">{_e(description)}</desc>',
         f"<style>{RADAR_CSS}</style>",
         f'<text class="radar-title" x="24" y="34">Value profile: {_e(profile.subject_name)}</text>',
+        # The contract versions ride the meta line unconditionally, next to
+        # the provider and model that were already there: a reader deciding
+        # whether to trust a chart they were sent needs to know which
+        # wingman drew it, and a version that only shows up when something
+        # is wrong teaches nobody what right looks like.
         (
             f'<text class="radar-meta" x="24" y="54">'
             f"built from {profile.items_used} captured items · "
             f"{_e(profile.provider)}/{_e(profile.model)} · "
+            f"scoring {_e(profile.scoring_version or 'unrecorded')} · "
+            f"chart {_e(RADAR_CONTRACT_VERSION)} · "
             f"{profile.generated_at.date().isoformat()}</text>"
         ),
     ]
@@ -244,19 +348,18 @@ def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -
         )
     parts.append("</g>")
 
-    # The staleness warning sits UNDER the legend, not at y=72 in the header.
-    # The first axis label is always at y=68 — _LABEL_RADIUS is fixed and the
+    # The warnings sit UNDER the legend, not at y=72 in the header. The
+    # first axis label is always at y=68 — _LABEL_RADIUS is fixed and the
     # first spoke always points at 12 o'clock — so a warning at y=72 put two
     # text rows 4px apart and obscured both, on every stale chart at every
-    # axis count. Down here it has the row to itself. (Shifting the whole
-    # chart down when stale would keep it near the top, but that means two
-    # different geometries to reason about for the sake of one line.)
-    if stale_new_captures:
-        noun = "capture" if stale_new_captures == 1 else "captures"
+    # axis count. Down here they have rows to themselves, one per notice,
+    # with `height` reserving exactly that many. (Shifting the whole chart
+    # down when stale would keep them near the top, but that means two
+    # different geometries to reason about for the sake of a couple of lines.)
+    for index, notice in enumerate(notices):
         parts.append(
-            f'<text class="radar-stale" x="24" y="{stale_y:.2f}">'
-            f"{stale_new_captures} new {noun} since this was built — rebuild with "
-            "'wingman values --refresh' to include them</text>"
+            f'<text class="{notice.css_class}" x="24" '
+            f'y="{notice_top + _LEGEND_ROW_HEIGHT * index:.2f}">{_e(notice.text)}</text>'
         )
 
     parts.append("</svg>")
@@ -280,10 +383,19 @@ class RadarExport:
     because this returned a bare Path — so the CLI and MCP surfaces could
     not print the "N new captures" note RFC-052 promises they show, and
     only somebody who opened the file ever learned it was out of date.
+
+    `scoring_superseded` is the other half of the same mistake (#355): a
+    chart drawn from a profile scored under a rule this codebase no longer
+    runs may be showing the wrong SHAPE, not merely an incomplete one, and
+    the surfaces have to be able to say so without parsing the SVG back.
+    `fingerprint` is what the file was built from, so a caller recording a
+    published page can stamp the same value on it.
     """
 
     path: Path
     stale_new_captures: int
+    scoring_superseded: bool = False
+    fingerprint: str = ""
 
 
 def _write_svg(directory: Path, filename: str, svg: str) -> Path:
@@ -322,6 +434,13 @@ def export_value_radar(
     chart. A stale profile (new captures since it was built) still renders —
     staleness is a warning printed on the chart, not a refusal, matching how
     `wingman values`/`my_values` already treat a stored-but-stale profile.
+
+    The same call for a profile scored under a superseded contract (#355):
+    it renders, with a warning, and `scoring_superseded` set so the caller
+    can repeat it in the terminal. Refusing would be new behaviour, and the
+    wrong new behaviour — somebody asking for the chart of a profile they
+    have been told is suspect is usually asking precisely in order to see
+    how suspect it is.
     """
     subject_id = persona_card_id(persona.persona_id) if persona is not None else CORPUS_PERSON_ID
     profile = storage.get_value_profile(subject_id)
@@ -341,4 +460,9 @@ def export_value_radar(
     # isolated would then share a file, and the second export would silently
     # overwrite the first. The name still leads, so the file is recognizable.
     filename = f"{_slug(profile.subject_name)[:60]}-{_slug(subject_id)[:24]}-values-radar.svg"
-    return RadarExport(path=_write_svg(directory, filename, svg), stale_new_captures=stale)
+    return RadarExport(
+        path=_write_svg(directory, filename, svg),
+        stale_new_captures=stale,
+        scoring_superseded=not scoring_is_current(profile),
+        fingerprint=values_radar_fingerprint(profile),
+    )

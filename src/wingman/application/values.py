@@ -50,13 +50,30 @@ shouldn't get a confident multi-axis profile — v3's chart would just be
 noise. `MIN_ITEMS`/`MIN_SUBTYPES` (see below) gate inference outright,
 `IngestError`, before any model call is made.
 
-**Staleness.** A `ValueProfile` is a stored, rebuilt-on-demand artifact —
-the same lifecycle `domain.pov.PovCard` already uses (a fresh call
-replaces the prior one; no versioned history). `source_item_ids` records
-exactly which captures fed the stored profile, so `new_captures_since`
-answers "is this stale" deterministically (a set difference against the
-currently-eligible items) without any model call — only a rebuild
-(`refresh=True`) actually re-invokes the model.
+**Staleness, both kinds (issue #355, RFC-063).** A `ValueProfile` is a stored,
+rebuilt-on-demand artifact — the same lifecycle `domain.pov.PovCard`
+already uses (a fresh call replaces the prior one; no versioned history).
+It can stop being true two ways, and only one of them used to be
+answerable:
+
+  - *New evidence.* `source_item_ids` records exactly which captures fed
+    the stored profile, so `new_captures_since` answers it
+    deterministically (a set difference against the currently-eligible
+    items) without any model call — only a rebuild (`refresh=True`)
+    actually re-invokes the model.
+  - *Changed code.* The scoring rule below is as much an input to the
+    number as the captures are. #340 changed it and every stored profile
+    kept displaying its pre-fix numbers as current. So the rule now has a
+    version — `domain.values.SCORING_CONTRACT_VERSION`, stamped onto
+    every profile this module builds — and `scoring_is_current` answers
+    the second question the same way `new_captures_since` answers the
+    first: deterministically, from stored data, with no model call.
+
+Both are WARNINGS, never refusals: a superseded profile still renders,
+with a line saying what is wrong with it and the one command that fixes
+it. That is the precedent RFC-015's stale snapshots and RFC-056's render
+warning already set — a refusal would take away the only view of the
+evidence at the moment somebody is trying to understand it.
 """
 
 from __future__ import annotations
@@ -75,6 +92,7 @@ from wingman.application.pov import CORPUS_PERSON_ID, CORPUS_PERSON_NAME, person
 from wingman.domain.persona import Persona
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind, SentimentIntensity
 from wingman.domain.values import (
+    SCORING_CONTRACT_VERSION,
     AxisDirection,
     ValueAxis,
     ValueAxisEvidence,
@@ -367,6 +385,7 @@ def build_value_profile(
         provider=response.provider,
         model=response.model,
         prompt_version=PROMPT_VERSION,
+        scoring_version=SCORING_CONTRACT_VERSION,
     )
     storage.save_value_profile(profile)
     _logger.info(
@@ -401,8 +420,56 @@ def _predates_direction(profile: ValueProfile) -> bool:
     stored profile is read as-is until asked to refresh), so the read
     surface has to say the numbers are suspect rather than show them
     plain. Deliberately checked on the evidence rather than on
-    `prompt_version`: the evidence is what the score was computed from."""
+    `prompt_version`: the evidence is what the score was computed from.
+
+    Kept alongside `scoring_version` rather than replaced by it (#355):
+    the version says a profile is superseded, this says HOW, and naming
+    the specific damage ("an axis evidenced by a 'con' nomination may have
+    the wrong sign") is worth more to a reader than a version string. It
+    is also what stays true for the profiles that predate the stamp
+    entirely, which are exactly the ones #340 broke."""
     return any(span.direction is None for axis in profile.axes for span in axis.evidence)
+
+
+def scoring_is_current(profile: ValueProfile) -> bool:
+    """Was this profile scored by the rule the codebase runs today?
+
+    The code half of "is this still true" (#355), and the exact question
+    nothing could answer when #340 landed. False for a profile stamped
+    with a superseded version AND for one stamped with none at all —
+    an unstamped profile predates the stamp, which means it predates
+    #340's fix, which is the worst case, not the benign one. Silence is
+    read as "unknown", never as "current".
+    """
+    return profile.scoring_version == SCORING_CONTRACT_VERSION
+
+
+def scoring_note(profile: ValueProfile) -> str:
+    """The one line to show a reader of a profile scored under a rule this
+    codebase no longer runs — or "" when it is current.
+
+    At most one line, and the most specific one that applies. A profile
+    with no `direction` on its evidence gets the named diagnosis and the
+    named consequence (#340 inverted its signs); every other superseded
+    profile gets the general form, because a future contract change has no
+    way to know in advance what it will have broken. Two overlapping
+    warnings on the same profile would train the reader to skip both.
+    """
+    if scoring_is_current(profile):
+        return ""
+    if _predates_direction(profile):
+        return (
+            "(this profile was built before per-item direction was recorded, so an axis "
+            "evidenced by a 'con' nomination may have the wrong sign — rebuild with "
+            "'wingman values --refresh' to correct it)"
+        )
+    built_under = profile.scoring_version or "an unrecorded scoring rule"
+    return (
+        f"(scored under {built_under}; the current scoring contract is "
+        f"{SCORING_CONTRACT_VERSION}. The numbers above came from a rule this version of "
+        "wingman no longer runs — rebuild with 'wingman values --refresh' to score them "
+        "under the current one)"
+    )
 
 
 def _contested_directions(axis: ValueAxis) -> int:
@@ -434,9 +501,15 @@ def render_value_profile(profile: ValueProfile, stale_new_captures: int = 0) -> 
     """Deterministic text rendering shared by the CLI and MCP surfaces."""
     lines = [
         f"Value profile: {profile.subject_name}",
+        # The scoring-rule version is printed unconditionally, not only when
+        # it is stale: AGENTS.md requires a score to expose the rule that
+        # produced it, and a version that only appears when something is
+        # wrong teaches nobody what the normal case looks like.
         (
             f"(built from {profile.items_used} captured items, "
-            f"{profile.provider}/{profile.model}, {profile.generated_at.date().isoformat()})"
+            f"{profile.provider}/{profile.model}, "
+            f"scoring {profile.scoring_version or 'unrecorded'}, "
+            f"{profile.generated_at.date().isoformat()})"
         ),
         "",
         "Axes:",
@@ -462,13 +535,10 @@ def render_value_profile(profile: ValueProfile, stale_new_captures: int = 0) -> 
             )
             if span.value_statement:
                 lines.append(f'      values: "{span.value_statement}"')
-    if _predates_direction(profile):
+    contract = scoring_note(profile)
+    if contract:
         lines.append("")
-        lines.append(
-            "(this profile was built before per-item direction was recorded, so an axis "
-            "evidenced by a 'con' nomination may have the wrong sign — rebuild with "
-            "'wingman values --refresh' to correct it)"
-        )
+        lines.append(contract)
     if stale_new_captures:
         noun = "capture" if stale_new_captures == 1 else "captures"
         lines.append("")
