@@ -244,6 +244,69 @@ commentary_app = typer.Typer(
     help="The assistant's readings of your material — attributed, and never evidence (#339)."
 )
 app.add_typer(commentary_app, name="commentary")
+artifacts_app = typer.Typer(
+    help="Where this workspace's rendered views were published — wingman records the url, "
+    "it never publishes (#355)."
+)
+app.add_typer(artifacts_app, name="artifacts")
+
+
+@artifacts_app.command("list")
+def artifacts_list() -> None:
+    """Every published view this workspace knows the url for."""
+    from wingman.application.artifacts import render_artifacts
+
+    configure_logging()
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        typer.echo(render_artifacts(storage.list_published_artifacts()))
+
+
+@artifacts_app.command("remember")
+def artifacts_remember(
+    kind: str = typer.Argument(..., help="values_radar, completeness, or profile."),
+    url: str = typer.Argument(..., help="The https:// url the client published it at."),
+    title: str = typer.Option("", "--title", help="Optional label for listings."),
+) -> None:
+    """Record where a view was published, so later runs update THAT page.
+
+    Wingman cannot publish or update it — a server has no route back into
+    the client. Keeping the url is what stops the next refresh creating a
+    second page and leaving this one quietly wrong.
+    """
+    from wingman.application.artifacts import remember_artifact
+
+    configure_logging()
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        try:
+            artifact = remember_artifact(kind, url, storage, title=title)
+        except IngestError as exc:
+            typer.echo(f"artifacts remember failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+    typer.echo(f"Recorded {artifact.kind} -> {artifact.url}")
+
+
+@artifacts_app.command("forget")
+def artifacts_forget(
+    kind: str = typer.Argument(..., help="values_radar, completeness, or profile."),
+) -> None:
+    """Drop a recorded url (the published page itself is untouched)."""
+    from wingman.application.artifacts import forget_artifact
+
+    configure_logging()
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        try:
+            dropped = forget_artifact(kind, storage)
+        except IngestError as exc:
+            typer.echo(f"artifacts forget failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"Forgot the {kind!r} artifact url." if dropped else f"No {kind!r} artifact recorded."
+    )
+
+
 admin_app = typer.Typer(help="The cross-instance installations page for a shape-B box (#130).")
 app.add_typer(admin_app, name="admin")
 drive_app = typer.Typer(
