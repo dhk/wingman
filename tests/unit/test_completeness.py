@@ -138,18 +138,46 @@ def test_write_completeness_writes_json_and_markdown(workspace: Path) -> None:
     assert "Ruth Katz" in render_completeness_markdown(report)
 
 
-def test_blocked_sections_named_in_markdown_and_html(workspace: Path) -> None:
+def test_nothing_is_reported_blocked_that_has_since_shipped(workspace: Path) -> None:
+    """This test used to assert the report SAID interview read-back and
+    opportunity listing were impossible. They shipped — #311 as
+    interview_status, #312 as opportunities_list — and the claim outlived
+    them, so the one place somebody looks for progress declared the data
+    unavailable while the tools sat right there.
+
+    What it guards now is the shape rather than the content: a blocked
+    entry must name a real, still-open reason."""
     config = load_config()
     with Storage(config.db_path) as storage:
         report = compute_completeness(storage, config)
     markdown = render_completeness_markdown(report)
-    assert "Interview Bootstrap" in markdown
-    assert "#311" in markdown
-    assert "Applications" in markdown
-    assert "#312" in markdown
     html = render_completeness_html(report)
-    assert "Interview Bootstrap" in html
+
+    assert "#311" not in markdown
+    assert "#312" not in markdown
+    assert "no tool reads back" not in markdown
+    for text in (markdown, html):
+        assert "Interview" in text
+        assert "Applications" in text
     assert "<!doctype html>" in html
+
+
+def test_the_interview_section_reports_every_subtype_against_its_real_cap(
+    workspace: Path,
+) -> None:
+    """6 per subtype is application.interview's own cap, so this is a
+    fraction the code actually enforces rather than a denominator invented
+    to fill a progress bar."""
+    from wingman.application.interview import VALID_SUBTYPES, _max_submissions_per_subtype
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        report = compute_completeness(storage, config)
+
+    assert {row.subtype for row in report.interview} == VALID_SUBTYPES
+    cap = _max_submissions_per_subtype()
+    assert all(row.cap == cap for row in report.interview)
+    assert f"0/{cap}" in render_completeness_markdown(report)
 
 
 def test_next_actions_lead_with_job_criteria(workspace: Path) -> None:

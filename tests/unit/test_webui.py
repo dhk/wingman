@@ -1082,8 +1082,14 @@ def test_the_progress_view_renders_the_completeness_report(
     assert page.status_code == 200
     assert "Career Profile" in page.text
     assert "Job Criteria" in page.text
-    # Reports blocked sections honestly rather than inventing a number.
-    assert "Blocked" in page.text
+    # Interview progress, against the cap application.interview enforces —
+    # the one section here with a denominator that is not invented.
+    assert "Interview" in page.text
+    assert "values_pro" in page.text
+    assert "Applications" in page.text
+    # Nothing is claimed blocked now that #311 and #312 have shipped; this
+    # assertion used to require the opposite.
+    assert "Blocked" not in page.text
 
 
 def test_the_progress_view_needs_the_token_like_everything_else(

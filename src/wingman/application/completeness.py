@@ -77,6 +77,26 @@ class ValuesCompleteness(BaseModel):
         return self.captures >= self.min_items and self.subtypes >= self.min_subtypes
 
 
+class InterviewCompleteness(BaseModel):
+    """Per-subtype interview standing, against the REAL per-subtype cap.
+
+    The cap is `application.interview`'s own
+    WINGMAN_INTERVIEW_MAX_PER_SUBTYPE (default 6), so "3 of 6" here is the
+    contract the interview enforces, not a target invented to fill a
+    progress bar (AGENTS.md invariant 9). Same distinction that lets the
+    values floor be shown as a fraction.
+    """
+
+    subtype: str
+    category: str
+    count: int
+    cap: int
+
+
+class OpportunityCompleteness(BaseModel):
+    assessed: int
+
+
 class NextAction(BaseModel):
     """One thing worth doing next, and why it is worth doing.
 
@@ -98,6 +118,42 @@ class CompletenessReport(BaseModel):
     people: list[PersonCompleteness]
     companies: list[CompanyCompleteness]
     values: ValuesCompleteness
+    interview: list[InterviewCompleteness]
+    opportunities: OpportunityCompleteness
+
+
+def _interview_completeness(storage: Storage) -> list[InterviewCompleteness]:
+    """Every interview subtype and where it stands (#311 shipped as
+    `interview_status`; this report went on claiming no read-back existed
+    long after it did, so the one place somebody looks for progress told
+    them the data was unavailable while the tool sat right there).
+
+    Ordered by _STATUS_CATEGORIES rather than by iterating the subtype
+    sets, for the same reason that list exists: set order is not stable,
+    and this is read by humans.
+    """
+    from wingman.application.interview import _STATUS_CATEGORIES, subtype_status
+
+    status = subtype_status(storage)
+    rows: list[InterviewCompleteness] = []
+    for category, subtypes in _STATUS_CATEGORIES:
+        for subtype in subtypes:
+            entry = status.get(subtype)
+            if entry is None:
+                continue
+            rows.append(
+                InterviewCompleteness(
+                    subtype=subtype,
+                    category=category,
+                    count=entry.count,
+                    cap=entry.cap,
+                )
+            )
+    return rows
+
+
+def _opportunity_completeness(storage: Storage) -> OpportunityCompleteness:
+    return OpportunityCompleteness(assessed=len(storage.list_opportunities()))
 
 
 def _values_completeness(storage: Storage) -> ValuesCompleteness:
@@ -290,4 +346,6 @@ def compute_completeness(storage: Storage, config: Config) -> CompletenessReport
         people=_people_completeness(storage),
         companies=_companies_completeness(storage),
         values=_values_completeness(storage),
+        interview=_interview_completeness(storage),
+        opportunities=_opportunity_completeness(storage),
     )
