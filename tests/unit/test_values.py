@@ -942,3 +942,56 @@ def test_an_unusable_citation_does_not_suppress_a_later_valid_one(
         axis = next(a for a in report.profile.axes if a.name == "Cited twice, badly then well")
         assert [span.item_id for span in axis.evidence] == [ids[0]]
         assert axis.evidence[0].direction is AxisDirection.SUPPORTS
+
+
+# --- the direction cross-check (#342) ---------------------------------------
+
+
+def test_an_opposing_citation_is_flagged_for_a_human_to_check(workspace: Path) -> None:
+    """The capture knows which way it points about its TARGET; the model
+    decides which way it points about the axis. Where those disagree is
+    where #340's inversion would show itself, so it is surfaced — as a
+    note, never as a rejection."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        ids = [item.item_id for item in storage.list_profile_items() if item.subtype]
+        provider = ScriptedProvider(
+            {
+                "axes": [
+                    {"name": "Winning at any cost", "items": _cite(ids, direction="opposes")},
+                    {"name": "filler two", "items": _cite(ids[:1])},
+                    {"name": "filler three", "items": _cite(ids[:1])},
+                ]
+            }
+        )
+        report = build_value_profile(storage, provider)
+
+    rendered = render_value_profile(report.profile)
+
+    assert "worth checking" in rendered
+    assert f"{len(ids)} captures cited as OPPOSING" in rendered
+    # ...and it is a note, not a refusal: the axis is still there and scored.
+    assert "Winning at any cost" in rendered
+    assert report.profile.axes[0].score < 0
+
+
+def test_an_axis_everything_supports_says_nothing(workspace: Path) -> None:
+    """No noise on the ordinary case — a value-shaped axis where both the
+    admiration and the condemnation argue for it."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        ids = [item.item_id for item in storage.list_profile_items() if item.subtype]
+        provider = ScriptedProvider(
+            {
+                "axes": [
+                    {"name": "Honesty", "items": _cite(ids, direction="supports")},
+                    {"name": "filler two", "items": _cite(ids[:1])},
+                    {"name": "filler three", "items": _cite(ids[:1])},
+                ]
+            }
+        )
+        report = build_value_profile(storage, provider)
+
+    assert "worth checking" not in render_value_profile(report.profile)

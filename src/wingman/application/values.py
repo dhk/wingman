@@ -386,6 +386,31 @@ def _predates_direction(profile: ValueProfile) -> bool:
     return any(span.direction is None for axis in profile.axes for span in axis.evidence)
 
 
+def _contested_directions(axis: ValueAxis) -> int:
+    """How many of this axis's citations point the opposite way from the
+    nomination they came from (#342).
+
+    On an axis named as a value the person HOLDS, both halves of the
+    interview should read as `supports`: admiring an exemplar, and
+    condemning someone who violated it, are both arguments for the value.
+    An `opposes` citation is therefore where a naming/direction mismatch
+    would show itself — the shape #340 was.
+
+    Deliberately a count, not a rule. Two legitimate shapes disagree here
+    and neither may be blocked:
+
+      - an axis genuinely named as a DISVALUE ("Growth at any human
+        cost"), where every citation opposes it and should;
+      - real ambivalence — admiring one person's risk-taking while
+        condemning another's recklessness is a position, and the
+        near-zero score already reports it.
+
+    So this reports and lets a human judge. The sign still comes from the
+    model's direction; nothing here overrides it.
+    """
+    return sum(1 for span in axis.evidence if span.direction is AxisDirection.OPPOSES)
+
+
 def render_value_profile(profile: ValueProfile, stale_new_captures: int = 0) -> str:
     """Deterministic text rendering shared by the CLI and MCP surfaces."""
     lines = [
@@ -401,6 +426,15 @@ def render_value_profile(profile: ValueProfile, stale_new_captures: int = 0) -> 
         lines.append(f"- {axis.name}  [{axis.score:+.2f} — {axis.label}]")
         if axis.description:
             lines.append(f"    {axis.description}")
+        contested = _contested_directions(axis)
+        if contested:
+            noun = "capture" if contested == 1 else "captures"
+            lines.append(
+                f"    ⚠ worth checking: {contested} {noun} cited as OPPOSING this axis. That is "
+                "correct if the axis names something you do not hold, or if you are genuinely "
+                "of two minds — but on an axis named as a value you hold, both admiring "
+                "someone and condemning someone argue FOR it."
+            )
         for span in axis.evidence:
             intensity = f", {span.intensity}" if span.intensity else ""
             direction = f", {span.direction.value} this axis" if span.direction else ""
