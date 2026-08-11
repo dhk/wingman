@@ -125,6 +125,35 @@ regardless of who actually filed it, pair this with a per-account
 `wingman feature-request` stamps `Submitted by: <name>` into the issue
 body automatically, once, before it's ever previewed or filed.
 
+**Telling everyone on the box something** (RFC-065, issue #224). The same
+`/etc/wingman` directory holds one optional broadcast file. It is
+delivered as the FIRST entry in every account's "what should I do next"
+list — `completeness`, the setup guide, and the web UI's Progress page —
+labelled as an instruction from the operator rather than as something
+wingman measured, and shown to each account exactly once:
+
+```bash
+sudo wingman motd set "Re-ingest your CV" \
+  --why "The resume parser changed on the 10th and older ingests lost job titles." \
+  --how "say: here's my resume"
+wingman motd show    # what it says, and whether THIS account has seen it
+sudo rm /etc/wingman/motd.json   # stop saying anything
+```
+
+The file is root-owned and world-readable; what actually gates it is the
+`/etc/wingman` directory above (750 root:wingman), because this is an
+announcement rather than a credential and locking the file to
+`640 root:root` would shut out exactly the accounts it is written for.
+
+Each account records the id it was shown in its own data directory, so
+nothing here is group-writable and no account can affect another's. A
+message with an unchanged `--id` is a correction, not a new instruction,
+and is not re-delivered; changing the id (it defaults to today's date)
+re-delivers to everybody. **A malformed file degrades to silence rather
+than an error** — deliberately, since this file sits on the path of every
+account's status — so `wingman motd show` is the one place that silence
+is visible, and worth running once after any hand-edit.
+
 ## 3. Migrate the workspace from a Mac (optional)
 
 The workspace is fully self-contained, so migration is one backup:

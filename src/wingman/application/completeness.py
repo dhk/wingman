@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import UTC, datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -28,6 +29,7 @@ from wingman.application.company_feeds import is_company_anchor
 from wingman.application.job_scoring import load_criteria
 from wingman.application.similarity import company_key
 from wingman.domain.profile import ItemStatus, ProfileItemKind
+from wingman.infrastructure.broadcast import OperatorMessage, pending_operator_message
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.storage import Storage
 
@@ -97,6 +99,16 @@ class OpportunityCompleteness(BaseModel):
     assessed: int
 
 
+# The one sentence that keeps an instruction from passing as a fact.
+# Every surface that renders a next-actions list must show it alongside an
+# operator action — see NextAction.attribution below for why it is a
+# constant here rather than prose repeated in three renderers.
+OPERATOR_ATTRIBUTION = (
+    "Asked for by whoever runs this machine — an instruction, "
+    "not something wingman measured in your workspace."
+)
+
+
 class NextAction(BaseModel):
     """One thing worth doing next, and why it is worth doing.
 
@@ -104,11 +116,29 @@ class NextAction(BaseModel):
     is the reason to care, and 'how' is the sentence to actually say. The
     band on the profile page already works this way; this is the same idea
     across the whole workspace.
+
+    'origin' is load-bearing, not decoration (issue #224). Every other
+    action in this list is DERIVED: the workspace says roles == 0, so the
+    action is checkable against the workspace, and wrong only if the count
+    is wrong. An operator action is somebody's instruction, arriving from
+    outside the workspace entirely, and nothing in the data can confirm or
+    contradict it. Rendering the two identically would let an instruction
+    read as a measured fact — the same conflation the commentary corpus
+    (RFC-058) exists to prevent one layer up, where the assistant's
+    reading of your material is kept in a store no evidence path can
+    reach. So the distinction is carried in the model, and every renderer
+    is obliged to show it.
     """
 
     title: str
     why: str
     how: str
+    origin: Literal["workspace", "operator"] = "workspace"
+
+    @property
+    def attribution(self) -> str:
+        """The provenance line a renderer must show, or '' when derived."""
+        return OPERATOR_ATTRIBUTION if self.origin == "operator" else ""
 
 
 class CompletenessReport(BaseModel):
@@ -120,6 +150,14 @@ class CompletenessReport(BaseModel):
     values: ValuesCompleteness
     interview: list[InterviewCompleteness]
     opportunities: OpportunityCompleteness
+    # The box-wide broadcast this account has not been shown yet, if any
+    # (issue #224). None whenever there is no message, the account has
+    # already seen this one, or the shared file is absent/unreadable/
+    # malformed — infrastructure.broadcast collapses all of those to the
+    # same answer on purpose. Serialised into completeness.json alongside
+    # everything else, so what an account was told is as inspectable as
+    # what was counted.
+    operator_action: OperatorMessage | None = None
 
 
 def _interview_completeness(storage: Storage) -> list[InterviewCompleteness]:
@@ -180,10 +218,51 @@ def next_actions(report: CompletenessReport) -> list[NextAction]:
     minutes to write; a workspace can be full of everything else and still
     tell you nothing about which job to look at.
 
-    Deterministic and derived from the report — no model, no guessing, and
-    nothing here that the numbers above do not already say.
+    **An operator action outranks every computed one** (issue #224). This
+    is a written rule, not an accident of insertion order, and it costs
+    job criteria the lead it otherwise holds. Three reasons, in order of
+    weight:
+
+    1. The operator knows something the workspace cannot. Every computed
+       action is inferred from local state; an operator action exists
+       precisely because something happened outside it — a parser changed,
+       a migration is coming, a box is moving. There is no way to derive
+       it, so there is no way for a computed action to be more informed.
+    2. A computed action is durable; this one is not. "Set your job
+       criteria" persists until criteria exist, so burying it costs a
+       reading, not the message. An operator action is shown ONCE and then
+       never again, so ranking it below anything is functionally the same
+       as dropping it.
+    3. It is usually time-bound in a way none of the others are. "Do this
+       at your earliest convenience" was the phrasing that produced this
+       feature.
+
+    The cost, accepted deliberately: an operator can push the single most
+    unblocking computed step down the list, for any account on the box, by
+    writing one file. That is a real power and the reason origin is
+    visible everywhere it renders — the person reading it can see that
+    line came from a human and weigh it accordingly, which they could not
+    do if it were dressed as a measurement.
+
+    Otherwise deterministic and derived from the report — no model, no
+    guessing, and nothing here that the numbers above do not already say.
     """
     actions: list[NextAction] = []
+    if report.operator_action is not None:
+        broadcast = report.operator_action
+        actions.append(
+            NextAction(
+                title=broadcast.action,
+                # The fallbacks are honest about their own emptiness rather
+                # than inventing a rationale on the operator's behalf: if
+                # they did not say why, saying "because you were asked" is
+                # the whole of the truth, and any richer sentence would be
+                # wingman making up somebody else's reasoning.
+                why=broadcast.why or "No reason was given beyond the request itself.",
+                how=broadcast.how or "ask whoever runs this machine if this is not clear",
+                origin="operator",
+            )
+        )
     if not report.job_criteria.exists:
         actions.append(
             NextAction(
@@ -338,7 +417,15 @@ def _companies_completeness(storage: Storage) -> list[CompanyCompleteness]:
 
 
 def compute_completeness(storage: Storage, config: Config) -> CompletenessReport:
-    """The current completeness snapshot across the four measurable sections."""
+    """The current completeness snapshot across the four measurable sections.
+
+    Reads the box-wide operator broadcast but never marks it delivered —
+    this function is also called by paths with no human on the other end
+    (the profile page's progress band, the profile HTML export), and
+    consuming a once-only message there would burn it unread. Whoever
+    actually shows a next-actions list calls
+    `broadcast.acknowledge_delivery` after rendering.
+    """
     return CompletenessReport(
         generated_at=datetime.now(UTC),
         career=_career_completeness(storage),
@@ -348,4 +435,5 @@ def compute_completeness(storage: Storage, config: Config) -> CompletenessReport
         values=_values_completeness(storage),
         interview=_interview_completeness(storage),
         opportunities=_opportunity_completeness(storage),
+        operator_action=pending_operator_message(config),
     )

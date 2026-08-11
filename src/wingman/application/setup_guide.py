@@ -77,6 +77,11 @@ def render_setup_guide(config: Config, report: CompletenessReport) -> str:
         for number, action in enumerate(todo, start=1):
             lines.append(f"{number}. {action.title} — {action.why}")
             lines.append(f"   → {action.how}")
+            # Somebody new to the box is exactly the person who cannot tell
+            # an operator's instruction from a measured gap, so the
+            # provenance line is not optional here either (issue #224).
+            if action.attribution:
+                lines.append(f"   _{action.attribution}_")
         lines.append("")
     else:
         lines.extend(["**Nothing outstanding** — every section has something in it. ", ""])

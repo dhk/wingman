@@ -1426,6 +1426,7 @@ async def ui_completeness(request: Request) -> Response:
     written file cannot drift apart.
     """
     from wingman.application.completeness import compute_completeness
+    from wingman.infrastructure.broadcast import acknowledge_delivery
     from wingman.infrastructure.storage import Storage
     from wingman.reporting.completeness_html import render_completeness_html
 
@@ -1436,7 +1437,12 @@ async def ui_completeness(request: Request) -> Response:
         return _page("Wingman — progress", _header(config) + "<h1>No workspace yet</h1>")
     with Storage(config.db_path) as storage:
         report = compute_completeness(storage, config)
-    return HTMLResponse(render_completeness_html(report))
+    page = HTMLResponse(render_completeness_html(report))
+    # The page is built, so the operator's broadcast has been shown to this
+    # account (issue #224). The profile page's own progress band deliberately
+    # does NOT acknowledge — it never renders the next-actions list.
+    acknowledge_delivery(config, report.operator_action)
+    return page
 
 
 def normalize_prefix(prefix: str) -> str:

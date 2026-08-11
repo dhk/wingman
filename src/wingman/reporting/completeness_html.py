@@ -83,10 +83,21 @@ def _todo_html(report: CompletenessReport) -> list[str]:
         return parts
     parts.append('<ol class="todo">')
     for action in actions:
+        # An operator action is somebody's instruction, not a measurement
+        # of this workspace (issue #224), so it is labelled before it is
+        # read and attributed after — never styled as one more count.
+        badge = (
+            '<span class="dim">[from the operator of this machine] </span>'
+            if action.origin == "operator"
+            else ""
+        )
+        attribution = (
+            f'<br><span class="dim">{_e(action.attribution)}</span>' if action.attribution else ""
+        )
         parts.append(
-            f"<li><b>{_e(action.title)}</b><br>"
+            f"<li>{badge}<b>{_e(action.title)}</b><br>"
             f'<span class="dim">{_e(action.why)}</span><br>'
-            f"<code>{_e(action.how)}</code></li>"
+            f"<code>{_e(action.how)}</code>{attribution}</li>"
         )
     parts.append("</ol>")
     return parts

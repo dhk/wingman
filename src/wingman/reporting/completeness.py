@@ -44,6 +44,10 @@ def _todo_markdown(report: CompletenessReport) -> list[str]:
     for number, action in enumerate(actions, start=1):
         lines.append(f"{number}. **{action.title}** — {action.why}")
         lines.append(f"   → {action.how}")
+        # An operator action is somebody's instruction, not a measurement
+        # of this workspace (issue #224). It never renders like the others.
+        if action.attribution:
+            lines.append(f"   _{action.attribution}_")
     lines.append("")
     return lines
 
