@@ -70,6 +70,10 @@ class Tenant:
 
     slug: str
     data_dir: Path
+    #: Where this tenant's feature requests go, when theirs differ from the
+    #: box's. Normally unset: one destination per box is the common case,
+    #: and a tenant is never asked to choose one (#371).
+    feature_repo: str | None = None
 
     def token_path(self) -> Path:
         return self.data_dir / _TOKEN_FILENAME
@@ -105,6 +109,7 @@ class Tenant:
         workspace_keys = read_workspace_keys(self.data_dir)
         return Config(
             data_dir=self.data_dir,
+            feature_repo=self.feature_repo,
             data_dir_source=f"{TENANT_CONFIG_SOURCE} ({self.slug})",
             anthropic_api_key=workspace_keys.get(KNOWN_KEYS["anthropic"]),
             voyage_api_key=workspace_keys.get(KNOWN_KEYS["voyage"]),
@@ -145,7 +150,21 @@ def load_registry(path: Path) -> list[Tenant]:
         if slug in seen_slugs:
             raise TenantRegistryError(f"tenant registry {path} lists {slug!r} more than once.")
         seen_slugs.add(slug)
-        tenants.append(Tenant(slug=slug, data_dir=Path(data_dir).expanduser()))
+        feature_repo = entry.get("feature_repo")
+        if feature_repo is not None and (
+            not isinstance(feature_repo, str) or feature_repo.count("/") != 1
+        ):
+            raise TenantRegistryError(
+                f"tenant {slug!r} in {path} has a malformed 'feature_repo' — "
+                "it must look like owner/name."
+            )
+        tenants.append(
+            Tenant(
+                slug=slug,
+                data_dir=Path(data_dir).expanduser(),
+                feature_repo=feature_repo,
+            )
+        )
     return tenants
 
 

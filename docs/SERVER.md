@@ -850,6 +850,33 @@ above.) Logs: `sudo -u wingman-shared env XDG_RUNTIME_DIR=/run/user/$(id -u wing
 
 A one-off run any time: `sudo -iu wingman-shared bash -c 'export PATH="$HOME/.local/bin:$PATH"; wingman tenant overnight'`.
 
+**Where tenants' feature requests go** (#371). A tenant has no terminal,
+so they cannot run `wingman feature repo` and must never be shown a
+repository chooser — the operator sets the destination once and it is
+invisible thereafter. One line in the host settings file covers every
+account on the box:
+
+```
+# ~/.config/wingman/wingman.env  (RFC-046)
+WINGMAN_FEATURE_REPO=dhk/wingman
+```
+
+A single tenant whose requests belong elsewhere can carry their own in the
+registry, which wins over the host setting:
+
+```toml
+[[tenant]]
+slug = "trent"
+data_dir = "/home/wingman-shared/tenants/trent"
+feature_repo = "dhk/wingman"
+```
+
+Filing itself already runs through the shared credential
+(`GITHUB_API_ISSUES_KEY`, RFC-047) with attribution-by-body-stamp, so no
+tenant needs their own `gh auth login`. RFC-025's confirmation gate is
+untouched: the preview still shows the exact issue and nothing is filed
+without an explicit yes.
+
 **Redeploying the shared process** (#150's "safe restart primitive" —
 deliberately not wired to any automatic CI/CD trigger; every tenant on
 the shared process is briefly interrupted by a restart, and this repo

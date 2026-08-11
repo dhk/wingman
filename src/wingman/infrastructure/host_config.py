@@ -69,6 +69,7 @@ WINGMAN_ENV_FILENAME = "wingman.env"
 HOST_SETTINGS = frozenset(
     {
         "WINGMAN_REPO",
+        "WINGMAN_FEATURE_REPO",
         "WINGMAN_OPERATOR_NAME",
         "WINGMAN_TENANT_REGISTRY",
         "WINGMAN_GDRIVE_CLIENT_ID",
