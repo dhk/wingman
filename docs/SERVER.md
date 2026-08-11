@@ -136,9 +136,18 @@ wingman measured, and shown to each account exactly once:
 sudo wingman motd set "Re-ingest your CV" \
   --why "The resume parser changed on the 10th and older ingests lost job titles." \
   --how "say: here's my resume"
+sudo wingman motd set "Rotate your API key" --to trent   # one tenant, by slug
 wingman motd show    # what it says, and whether THIS account has seen it
 sudo rm /etc/wingman/motd.json   # stop saying anything
 ```
+
+`--to` takes a tenant slug or `all` (the default). A slug is checked
+against the registry when it is written, because a mistyped one reaches
+nobody, silently and forever. Addressing **fails closed**: an account
+whose slug this box cannot resolve — no registry, an unreadable one, a
+solo install — gets everything addressed to `all` and nothing addressed
+to a slug. An operator can re-send a message that reached nobody; they
+cannot unsend one that reached the wrong person.
 
 The file is root-owned and world-readable; what actually gates it is the
 `/etc/wingman` directory above (750 root:wingman), because this is an
@@ -153,6 +162,38 @@ re-delivers to everybody. **A malformed file degrades to silence rather
 than an error** — deliberately, since this file sits on the path of every
 account's status — so `wingman motd show` is the one place that silence
 is visible, and worth running once after any hand-edit.
+
+**Asking everyone on the box something** (RFC-067, issue #224). The other
+direction, and the same delivery path: a question arrives in each
+addressee's "what to do next" list, labelled as yours, carrying the
+sentence that tells them you will be able to read the answer.
+
+```bash
+sudo wingman qotd set "What is slowing you down this week?" \
+  --why "Deciding what to build next month."
+sudo wingman qotd set "Did the new digest land for you?" --to trent
+wingman qotd show          # what is being asked, of whom, and whether THIS account answered
+wingman tenant answers     # every tenant's answers — an operator act, run by you
+wingman tenant answers trent --id 2026-08-11   # one tenant, one question
+sudo rm /etc/wingman/qotd.json   # stop asking
+```
+
+**Each answer is stored in that person's own workspace and nowhere else** —
+their own SQLite database, like every other capture. Nothing here is
+group-writable, no account can read another's answer, and `tenant
+answers` is you reading N workspaces with the access you already have,
+not N accounts writing into one place. On the tenant's side the answer is
+given through the `qotd` tool (or `wingman qotd answer`), which echoes the
+exact words back before storing them and never paraphrases.
+
+Unlike a message, a question **stands until it is answered** rather than
+being shown once — the stored answer is what marks it done. Nobody is
+obliged to answer; delete the file to stop asking, change `--id` to ask
+something new. An answer is deliberately **not evidence**: it never
+appears in POV cards, briefs, fit assessments or workspace search,
+because the question that shaped it was written by whoever reads the
+reply. If somebody wants what they said kept as career evidence, they say
+it to wingman as an ordinary capture, in their own frame.
 
 ## 3. Migrate the workspace from a Mac (optional)
 

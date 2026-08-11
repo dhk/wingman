@@ -67,6 +67,15 @@ def _person_line(person: PersonCompleteness) -> str:
     return f"<li><b>{_e(person.name)}</b>{where} — {link}, {logged}</li>"
 
 
+# What the badge in front of an operator-side line says. A page is scanned
+# rather than read top to bottom, so this goes BEFORE the text; the fuller
+# attribution goes after it (issue #224).
+_OPERATOR_BADGES = {
+    "operator": "from the operator of this machine",
+    "operator_question": "a question from the operator of this machine",
+}
+
+
 def _todo_html(report: CompletenessReport) -> list[str]:
     """The 'what do I do next' half, first on the page.
 
@@ -83,12 +92,15 @@ def _todo_html(report: CompletenessReport) -> list[str]:
         return parts
     parts.append('<ol class="todo">')
     for action in actions:
-        # An operator action is somebody's instruction, not a measurement
-        # of this workspace (issue #224), so it is labelled before it is
-        # read and attributed after — never styled as one more count.
+        # An operator action is somebody's instruction, and an operator
+        # question is somebody's question — neither is a measurement of this
+        # workspace (issue #224). Both are labelled before they are read and
+        # attributed after, never styled as one more count. The test is
+        # `from_the_operator` rather than `origin == "operator"` so a third
+        # origin cannot arrive unlabelled.
         badge = (
-            '<span class="dim">[from the operator of this machine] </span>'
-            if action.origin == "operator"
+            f'<span class="dim">[{_OPERATOR_BADGES[action.origin]}] </span>'
+            if action.from_the_operator
             else ""
         )
         attribution = (

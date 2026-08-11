@@ -18,6 +18,7 @@ from wingman.domain.commentary import CommentaryEntry
 from wingman.domain.company import CompanyDossier
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.heap import HeapItem
+from wingman.domain.operator_answer import OperatorAnswer
 from wingman.domain.opportunity import Opportunity
 from wingman.domain.outreach import OutreachBrief
 from wingman.domain.person import ExternalDocument, NewsItem, Person, PersonDossier, PersonOrigin
@@ -223,6 +224,18 @@ CREATE TABLE IF NOT EXISTS published_artifacts (
     kind TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
     published_at TEXT NOT NULL
+);
+-- Answers to the operator's question of the day (RFC-067, #224). A table of
+-- its own for the same structural reason commentary_entries is one: an
+-- answer is the person's own words but was PROMPTED by whoever will read
+-- it, so it must never be reachable from an evidence path. No FTS index, no
+-- ProfileItemKind — a query that does not name this table cannot return an
+-- answer no matter what it asks for.
+CREATE TABLE IF NOT EXISTS operator_answers (
+    answer_id TEXT PRIMARY KEY,
+    question_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 """
 
@@ -1599,6 +1612,54 @@ class Storage:
     def delete_commentary_entry(self, entry_id: str) -> bool:
         cursor = self._conn.execute(
             "DELETE FROM commentary_entries WHERE entry_id = ?", (entry_id,)
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def add_operator_answer(self, answer: OperatorAnswer) -> None:
+        """Store one answer to the operator's question (#224).
+
+        Its own table, like commentary: nothing that walks the evidence
+        stores can reach it, and nothing needs to remember to exclude it.
+        """
+        try:
+            self._conn.execute(
+                "INSERT INTO operator_answers (answer_id, question_id, payload, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    answer.answer_id,
+                    answer.question_id,
+                    answer.model_dump_json(),
+                    answer.created_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRecordError(
+                f"operator answer {answer.answer_id} already exists"
+            ) from exc
+        self._conn.commit()
+
+    def list_operator_answers(self) -> list[OperatorAnswer]:
+        cursor = self._conn.execute(
+            "SELECT payload FROM operator_answers ORDER BY created_at, answer_id"
+        )
+        return [OperatorAnswer.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def answered_question_ids(self) -> set[str]:
+        """Which operator questions this workspace has already answered.
+
+        The whole of a question's delivery state: no seen-marker file, and
+        so no fourth call site that can forget to write one. A question with
+        no answer here is still outstanding, which is exactly how every
+        computed next action behaves.
+        """
+        cursor = self._conn.execute("SELECT DISTINCT question_id FROM operator_answers")
+        return {row[0] for row in cursor.fetchall()}
+
+    def delete_operator_answer(self, answer_id: str) -> bool:
+        """Remove one answer — the person's own words stay theirs to withdraw."""
+        cursor = self._conn.execute(
+            "DELETE FROM operator_answers WHERE answer_id = ?", (answer_id,)
         )
         self._conn.commit()
         return cursor.rowcount > 0

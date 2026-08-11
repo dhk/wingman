@@ -38,6 +38,7 @@ def test_all_tools_are_registered() -> None:
         "evidence",
         "career_profile",
         "completeness",
+        "qotd",
         "artifacts",
         "briefing",
         "setup_guide",
