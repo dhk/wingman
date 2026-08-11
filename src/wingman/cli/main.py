@@ -244,6 +244,22 @@ commentary_app = typer.Typer(
     help="The assistant's readings of your material — attributed, and never evidence (#339)."
 )
 app.add_typer(commentary_app, name="commentary")
+
+
+@app.command("setup-guide")
+def setup_guide_cmd() -> None:
+    """How to get started, shaped by what this workspace already has (#360)."""
+    from wingman.application.completeness import compute_completeness
+    from wingman.application.setup_guide import render_setup_guide
+
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "described")
+    with Storage(config.db_path) as storage:
+        report = compute_completeness(storage, config)
+    typer.echo(render_setup_guide(config, report))
+
+
 artifacts_app = typer.Typer(
     help="Where this workspace's rendered views were published — wingman records the url, "
     "it never publishes (#355)."
