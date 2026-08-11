@@ -12,6 +12,7 @@ from typing import Self
 
 from wingman.domain import SourceRecord
 from wingman.domain.answer import AnswerRecord
+from wingman.domain.artifacts import PublishedArtifact
 from wingman.domain.commentary import CommentaryEntry
 from wingman.domain.company import CompanyDossier
 from wingman.domain.corpus import CorpusDocument
@@ -202,6 +203,15 @@ CREATE TABLE IF NOT EXISTS commentary_entries (
     entry_id TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+-- One current published page per kind (issue #355's enabler): updating an
+-- artifact in place needs its URL, and a conversation that did not publish
+-- it has no other way to know one. Keyed by kind so a re-publish replaces
+-- rather than accumulates.
+CREATE TABLE IF NOT EXISTS published_artifacts (
+    kind TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    published_at TEXT NOT NULL
 );
 """
 
@@ -1129,6 +1139,40 @@ class Storage:
         )
         row: tuple[str] | None = cursor.fetchone()
         return OutreachBrief.model_validate_json(row[0]) if row else None
+
+    def record_published_artifact(self, artifact: PublishedArtifact) -> None:
+        """Remember where this kind of view was published, replacing any
+        earlier record for it.
+
+        Replace rather than append: there is one current page per kind, and
+        a list of former URLs is a list of pages that are now wrong. The
+        client's own update semantics work the same way — republishing
+        keeps the URL and overwrites what is there.
+        """
+        self._conn.execute(
+            "INSERT INTO published_artifacts (kind, payload, published_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(kind) DO UPDATE SET payload = excluded.payload,"
+            " published_at = excluded.published_at",
+            (artifact.kind, artifact.model_dump_json(), artifact.published_at.isoformat()),
+        )
+        self._conn.commit()
+
+    def get_published_artifact(self, kind: str) -> PublishedArtifact | None:
+        row = self._conn.execute(
+            "SELECT payload FROM published_artifacts WHERE kind = ?", (kind,)
+        ).fetchone()
+        return PublishedArtifact.model_validate_json(row[0]) if row else None
+
+    def list_published_artifacts(self) -> list[PublishedArtifact]:
+        rows = self._conn.execute(
+            "SELECT payload FROM published_artifacts ORDER BY published_at DESC"
+        ).fetchall()
+        return [PublishedArtifact.model_validate_json(row[0]) for row in rows]
+
+    def forget_published_artifact(self, kind: str) -> bool:
+        cursor = self._conn.execute("DELETE FROM published_artifacts WHERE kind = ?", (kind,))
+        self._conn.commit()
+        return cursor.rowcount > 0
 
     def add_company_source(self, source: CompanySource) -> bool:
         """Record a user-approved research URL; False if it was already approved."""

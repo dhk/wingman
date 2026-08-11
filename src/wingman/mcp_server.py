@@ -1361,6 +1361,79 @@ _PROFILE_HTML_MAX_BYTES = 250_000
 
 
 @server.tool()
+def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = "") -> str:
+    """Where this workspace's rendered views have been published (#355's enabler).
+
+    Wingman renders things a chat window shows badly — the values radar,
+    the completeness report, the profile with its evidence. A Claude client
+    can publish one as an artifact: a page with a stable url, rendered
+    in-app rather than behind a browser link.
+
+    THIS TOOL PUBLISHES NOTHING, and cannot. MCP runs one way, so a server
+    has no route back into the client to create or update a page. You do
+    the publishing; this records where you put it.
+
+    Why that record matters: updating an artifact in place requires its
+    url, and a conversation that did not publish it has no way to know one
+    — it would mint a second page instead. So without this, every refresh
+    leaves another orphan, and the person collects a graveyard of
+    half-true snapshots. It is also what lets a SCHEDULED conversation,
+    which by definition never published the original, refresh the
+    canonical page.
+
+    action is 'list', 'remember' (store `kind` + `url`, replacing any
+    earlier record for that kind), 'show' (`kind`), or 'forget' (`kind`).
+    kind is one of: values_radar, completeness, profile.
+
+    Protocol: after you publish or update one of these views, call
+    action='remember' with the url the client gave you. Before publishing
+    one, call action='show' for that kind — if a url comes back, update
+    THAT page rather than creating another.
+
+    These are snapshots. Nothing here checks whether the workspace has
+    moved on since; say so rather than presenting a recorded url as
+    necessarily current.
+    """
+    from wingman.application.artifacts import (
+        forget_artifact,
+        published_artifact,
+        remember_artifact,
+        render_artifacts,
+    )
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "list":
+                return render_artifacts(storage.list_published_artifacts())
+            if action == "remember":
+                artifact = remember_artifact(kind, url, storage, title=title)
+                return (
+                    f"Recorded {artifact.kind} -> {artifact.url}. Update THAT page next time "
+                    "rather than publishing a new one."
+                )
+            if action == "show":
+                found = published_artifact(kind, storage)
+                if found is None:
+                    return (
+                        f"No {kind!r} artifact recorded. Publishing one now creates a new page; "
+                        "record its url here afterwards so later runs can update it."
+                    )
+                return render_artifacts([found])
+            if action == "forget":
+                return (
+                    f"Forgot the {kind!r} artifact url."
+                    if forget_artifact(kind, storage)
+                    else f"No {kind!r} artifact was recorded."
+                )
+    except IngestError as exc:
+        return f"artifacts failed: {exc}"
+    return "artifacts: action must be 'list', 'remember', 'show', or 'forget'."
+
+
+@server.tool()
 def profile_html() -> str:
     """The whole career profile as a standalone HTML page, for saving locally.
 
