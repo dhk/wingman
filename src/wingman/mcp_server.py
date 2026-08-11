@@ -2070,10 +2070,17 @@ def my_values(refresh: bool = False) -> str:
     2 subtypes) rather than guessing from too little evidence — the
     returned message says exactly what to capture more of. Returns the
     stored profile when one exists; refresh=True rebuilds it (a model
-    call — synthesize_balanced — that only groups and names axes; the
-    numeric score is always computed deterministically afterward from
-    each cited item's own captured intensity and pro/con polarity, never
-    asked of the model).
+    call — synthesize_balanced — that only names axes, groups the items
+    that evidence each one, and says per item whether that item supports
+    or opposes the axis as named; the numeric score is always computed
+    deterministically afterward — magnitude from each cited item's own
+    captured intensity, sign from that direction — never asked of the
+    model).
+
+    A score's sign says what the person is drawn to or repelled by ON
+    THAT NAMED AXIS. It is not the pro/con of the nominations: being
+    horrified by somebody who lied is evidence of VALUING honesty, and
+    scores positive on an axis named for honesty.
 
     Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
     (coach_persona 'set'), this builds THEIR profile instead — from only

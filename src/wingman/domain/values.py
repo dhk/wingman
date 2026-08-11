@@ -15,14 +15,41 @@ arithmetic") from the signed intensity of the axis's own supporting items,
 never asked of or trusted from the model directly. `label` is a short,
 deterministically-bucketed human-readable summary of the same score, for
 a caller that wants prose instead of (or alongside) the number.
+
+The SIGN of an item's contribution is `AxisDirection` — the model's
+per-item judgment of whether that capture supports or opposes the axis
+AS NAMED (RFC-056) — never the `_pro`/`_con` suffix of its subtype. A
+condemnation of somebody who violated a value is evidence the person
+HOLDS that value; reading the sign off the subtype inverted exactly
+those axes (issue #340).
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+
+
+class AxisDirection(StrEnum):
+    """Which way one cited capture cuts, relative to the axis AS NAMED.
+
+    SUPPORTS: this capture is evidence the person holds/is drawn to the
+    named value — whether they admired somebody who embodied it (`_pro`)
+    or were disgusted by somebody who trampled it (`_con`).
+    OPPOSES: this capture is evidence the person rejects the named
+    dimension — which a `_pro` nomination can equally well be, when the
+    model names an axis the person's admiration argues against.
+
+    Classifying this is semantic judgment, so the model does it; turning
+    it into a number is arithmetic, so code does that (AGENTS.md).
+    """
+
+    SUPPORTS = "supports"
+    OPPOSES = "opposes"
 
 
 class ValueAxisEvidence(BaseModel):
@@ -31,14 +58,23 @@ class ValueAxisEvidence(BaseModel):
     back to which specific captures informed it, never a black-box
     number. `signed_weight` is this item's own deterministic contribution
     to the axis `score` (see `ValueAxis.score`), in [-1.0, 1.0]: the
-    item's captured `intensity` as a magnitude, signed by whether its
-    subtype is the `_pro` or `_con` side of the nomination."""
+    item's captured `intensity` as a magnitude, signed by `direction` —
+    the model's judgment of whether this capture supports or opposes the
+    axis as named.
+
+    `direction` is `None` only for a profile stored before RFC-056 (issue
+    #340) added it. Such a profile's scores were computed under the old
+    sign-from-subtype rule and are not trustworthy — every writer since
+    sets it, and `application.values.render_value_profile` says so on
+    read rather than presenting the stale numbers as current.
+    """
 
     item_id: str
     subtype: str
     target: str
     quote: str
     intensity: str | None = None
+    direction: AxisDirection | None = None
     signed_weight: float = Field(ge=-1.0, le=1.0)
 
 
@@ -85,12 +121,36 @@ class ValueProfile(BaseModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class ProposedAxisCitation(BaseModel):
+    """One cited capture in a model proposal: which item, and which way it
+    cuts relative to the axis the model just named.
+
+    `direction` is typed loosely here, not as `AxisDirection`, deliberately:
+    the model is untrusted output, and one unparseable direction must
+    cost that one citation, not blow up the whole proposal. It is
+    resolved (and anything unrecognized dropped) in
+    `application.values._validate_proposal`, the same place an unknown
+    `item_id` is dropped.
+
+    `Any` rather than `str` because a `str` annotation makes pydantic
+    reject the whole response before that dropping can happen: a model
+    emitting `"direction": null` — or a number, or an object — fails
+    validation on this field and takes every other axis in the proposal
+    down with it, which is the opposite of what the paragraph above
+    promises. Anything not a recognized string is dropped by
+    `_direction`.
+    """
+
+    item_id: str
+    direction: Any = ""
+
+
 class ProposedValueAxis(BaseModel):
     """A model-proposed axis, before deterministic validation and scoring."""
 
     name: str = ""
     description: str = ""
-    item_ids: list[str] = Field(default_factory=list)
+    items: list[ProposedAxisCitation] = Field(default_factory=list)
 
 
 class ValueAxisProposal(BaseModel):

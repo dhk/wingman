@@ -10,15 +10,30 @@ owner's explicit constraint). v3 (a later, separate PR) renders these axes
 as a radar/spider chart; nothing here draws anything.
 
 **Model use.** One `synthesize_balanced` call proposes axis names,
-descriptions, and which captured item_ids support each one — the
-"determine you cared about ~environmental stewardship~ from these
-specific nominations" kind of judgment worth a model. Grouping proposed by
-the model is then deterministically validated (an axis survives only if
-it cites at least one item we actually supplied — the same "model
-proposes, code disposes" discipline `application/pov.py` applies to
-quotes) and SCORED entirely in code — never by the model, per AGENTS.md's
-"do not use a model for arithmetic" — from each cited item's own captured
-`intensity` and its subtype's `_pro`/`_con` polarity.
+descriptions, which captured item_ids evidence each one, and — per cited
+item — whether that item SUPPORTS or OPPOSES the axis as named. That is
+the "determine you cared about ~environmental stewardship~ from these
+specific nominations" kind of judgment worth a model. What the model
+proposes is then deterministically validated (an axis survives only if it
+cites at least one item we actually supplied, with a direction we
+recognize — the same "model proposes, code disposes" discipline
+`application/pov.py` applies to quotes) and SCORED entirely in code —
+never by the model, per AGENTS.md's "do not use a model for arithmetic" —
+magnitude from each cited item's own captured `intensity`, sign from that
+item's direction.
+
+**Why direction, not the subtype (issue #340, RFC-056).** The sign used to
+come from whether the item's subtype ended in `_pro` or `_con`. That is a
+syntactic tell, not a semantic one: the model names an axis as a VALUE
+("Honesty and the right to informed choice"), and a `_con` nomination is a
+condemnation of somebody who VIOLATED that value — evidence the person
+HOLDS it. Reading the sign off the suffix therefore reported the owner as
+"strongly repelled by" honesty and accountability, and cancelled a strong
+`_pro` against a strong `_con` (Francis vs. Ratzinger on moral courage) to
+exactly 0.00 "mixed / ambivalent" when both cut the same way. Inverting
+the old rule ("cons always support") would only relocate the bug — it
+breaks the moment the model names an axis as a disvalue — so the
+direction is asked for per item instead.
 
 **The minimum-data floor.** A person with a couple of nominations
 shouldn't get a confident multi-axis profile — v3's chart would just be
@@ -50,6 +65,7 @@ from wingman.application.pov import CORPUS_PERSON_ID, CORPUS_PERSON_NAME, person
 from wingman.domain.persona import Persona
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind, SentimentIntensity
 from wingman.domain.values import (
+    AxisDirection,
     ValueAxis,
     ValueAxisEvidence,
     ValueAxisProposal,
@@ -120,11 +136,23 @@ class ValueProfileReport(BaseModel):
     rejected: list[RejectedAxis] = Field(default_factory=list)
 
 
-def _polarity(subtype: str) -> float:
-    """+1.0 for a '_pro' subtype, -1.0 for '_con' — every subtype in
-    SENTIMENT_INTENSITY_SUBTYPES is one or the other by construction
-    (application/interview.py's VALUES_SUBTYPES | MISSION_ALIGNMENT_SUBTYPES)."""
-    return 1.0 if subtype.endswith("_pro") else -1.0
+def _direction(raw: object) -> AxisDirection | None:
+    """The model's per-item direction, resolved — or None if it gave one we
+    don't recognize (or none at all). None means the citation is dropped,
+    exactly as an unknown item_id is: a missing sign is never defaulted to
+    a sign, because a defaulted sign is precisely the bug (#340).
+
+    Takes `object`, not `str`: the field it reads is deliberately untyped
+    so a malformed value costs one citation instead of the whole
+    proposal, which means a non-string can reach here and must be
+    dropped rather than raise.
+    """
+    if not isinstance(raw, str):
+        return None
+    try:
+        return AxisDirection(raw.strip().lower())
+    except ValueError:
+        return None
 
 
 def _target_from_item(item: ProfileItem) -> str:
@@ -140,16 +168,18 @@ def _target_from_item(item: ProfileItem) -> str:
     return name
 
 
-def _signed_weight(item: ProfileItem) -> float:
-    # subtype is never None here: every eligible item was filtered by
-    # _eligible_items to have subtype in SENTIMENT_INTENSITY_SUBTYPES.
-    assert item.subtype is not None
+def _signed_weight(item: ProfileItem, direction: AxisDirection) -> float:
+    """This item's contribution to one axis: magnitude from its own
+    captured `intensity`, sign from the model's per-item direction for
+    THAT axis. The same item can therefore weigh +1.0 on one axis and
+    -1.0 on another — which is the point: a capture's meaning is relative
+    to the dimension it is being read against, not fixed by its subtype."""
     magnitude = (
         _INTENSITY_MAGNITUDE.get(item.intensity, _DEFAULT_MAGNITUDE)
         if item.intensity is not None
         else _DEFAULT_MAGNITUDE
     )
-    return magnitude * _polarity(item.subtype)
+    return magnitude * (1.0 if direction is AxisDirection.SUPPORTS else -1.0)
 
 
 def _label_for_score(score: float) -> str:
@@ -200,10 +230,11 @@ def _eligible_items(storage: Storage, persona_id: str | None) -> list[ProfileIte
 def _validate_proposal(
     proposal: ValueAxisProposal, eligible: dict[str, ProfileItem]
 ) -> tuple[list[ValueAxis], list[RejectedAxis]]:
-    """Model proposes groupings, this disposes: every axis must cite at
-    least one item_id we actually supplied, and its score is computed
-    here from those items' own captured fields — never trusted from or
-    asked of the model (AGENTS.md's "no model for arithmetic")."""
+    """Model proposes groupings and per-item directions, this disposes:
+    every axis must cite at least one item_id we actually supplied WITH a
+    direction we recognize, and its score is computed here from those
+    items' own captured fields — never trusted from or asked of the model
+    (AGENTS.md's "no model for arithmetic")."""
     axes: list[ValueAxis] = []
     rejected: list[RejectedAxis] = []
     for candidate in proposal.axes:
@@ -218,13 +249,24 @@ def _validate_proposal(
             continue
         seen: set[str] = set()
         evidence: list[ValueAxisEvidence] = []
-        for item_id in candidate.item_ids:
-            if item_id in seen:
+        for citation in candidate.items:
+            if citation.item_id in seen:
                 continue
-            seen.add(item_id)
-            item = eligible.get(item_id)
+            item = eligible.get(citation.item_id)
             if item is None:
                 continue  # not among the supplied items — silently dropped, not fabricated
+            direction = _direction(citation.direction)
+            if direction is None:
+                # Same discipline as the unknown item_id above: an
+                # unusable citation costs that citation. Scoring it
+                # anyway would mean inventing the one thing #340 proved
+                # we must not infer.
+                continue
+            # Marked seen only now that both checks have passed. Marking on
+            # sight let an unusable citation suppress a LATER valid one for
+            # the same item — [no direction, supports] dropped both, and
+            # could take the axis down with them for citing nothing usable.
+            seen.add(citation.item_id)
             evidence.append(
                 ValueAxisEvidence(
                     item_id=item.item_id,
@@ -232,12 +274,16 @@ def _validate_proposal(
                     target=_target_from_item(item),
                     quote=item.detail,
                     intensity=item.intensity.value if item.intensity else None,
-                    signed_weight=_signed_weight(item),
+                    direction=direction,
+                    signed_weight=_signed_weight(item, direction),
                 )
             )
         if not evidence:
             rejected.append(
-                RejectedAxis(name=name, reason="cited no item_id among the supplied items")
+                RejectedAxis(
+                    name=name,
+                    reason="cited no item_id, with a usable direction, among the supplied items",
+                )
             )
             continue
         score = sum(span.signed_weight for span in evidence) / len(evidence)
@@ -329,6 +375,17 @@ def new_captures_since(
     return len(current_ids - set(profile.source_item_ids))
 
 
+def _predates_direction(profile: ValueProfile) -> bool:
+    """True for a profile stored before RFC-056 — its evidence carries no
+    `direction`, so its scores came from the inverted sign-from-subtype
+    rule (#340). Rebuilding is the fix, but nothing forces a rebuild (a
+    stored profile is read as-is until asked to refresh), so the read
+    surface has to say the numbers are suspect rather than show them
+    plain. Deliberately checked on the evidence rather than on
+    `prompt_version`: the evidence is what the score was computed from."""
+    return any(span.direction is None for axis in profile.axes for span in axis.evidence)
+
+
 def render_value_profile(profile: ValueProfile, stale_new_captures: int = 0) -> str:
     """Deterministic text rendering shared by the CLI and MCP surfaces."""
     lines = [
@@ -346,7 +403,17 @@ def render_value_profile(profile: ValueProfile, stale_new_captures: int = 0) -> 
             lines.append(f"    {axis.description}")
         for span in axis.evidence:
             intensity = f", {span.intensity}" if span.intensity else ""
-            lines.append(f'    "{span.quote}" — {span.subtype}: {span.target}{intensity}')
+            direction = f", {span.direction.value} this axis" if span.direction else ""
+            lines.append(
+                f'    "{span.quote}" — {span.subtype}: {span.target}{intensity}{direction}'
+            )
+    if _predates_direction(profile):
+        lines.append("")
+        lines.append(
+            "(this profile was built before per-item direction was recorded, so an axis "
+            "evidenced by a 'con' nomination may have the wrong sign — rebuild with "
+            "'wingman values --refresh' to correct it)"
+        )
     if stale_new_captures:
         noun = "capture" if stale_new_captures == 1 else "captures"
         lines.append("")
