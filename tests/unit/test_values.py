@@ -995,3 +995,110 @@ def test_an_axis_everything_supports_says_nothing(workspace: Path) -> None:
         report = build_value_profile(storage, provider)
 
     assert "worth checking" not in render_value_profile(report.profile)
+
+
+# --- The value statement reaching inference (RFC-057, issue #343) -----------
+
+
+def _capture_with_value_statement(storage: Storage, config: Config) -> str:
+    """One more con capture, this one carrying the person's own answer to
+    'what does that tell us you value?' — returns its item_id."""
+    capture_interview_reaction(
+        "values_con",
+        "David Duncan",
+        "He shredded the documents that would have told people the truth.",
+        config,
+        storage,
+        intensity="strong",
+        value_statement="I value people having the information they need to choose.",
+    )
+    return next(
+        item.item_id
+        for item in storage.list_profile_items()
+        if item.name == "values_con: David Duncan"
+    )
+
+
+def test_the_prompt_carries_a_captures_value_statement_alongside_its_quote(
+    workspace: Path,
+) -> None:
+    """#343's whole point: the model should read a statement that is
+    POSITIVE BY CONSTRUCTION, not infer the value from a verdict about
+    somebody the person condemned. If the statement never reaches the
+    prompt, capturing it changes nothing."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        _capture_with_value_statement(storage, config)
+        ids = _all_item_ids(storage)
+        provider = ScriptedProvider(
+            {
+                "axes": [
+                    {"name": "One", "items": _cite(ids)},
+                    {"name": "Two", "items": _cite(ids[:1])},
+                    {"name": "Three", "items": _cite(ids[:1])},
+                ]
+            }
+        )
+        build_value_profile(storage, provider)
+
+    assert provider.last_prompt is not None
+    assert "I value people having the information they need to choose." in provider.last_prompt
+    # and the prompt tells the model what that line is and how to use it
+    assert "what this tells them they value" in provider.last_prompt
+
+
+def test_a_capture_without_a_value_statement_carries_no_empty_label(workspace: Path) -> None:
+    """Captures predating the question must keep working unchanged — and a
+    labelled blank ('value: not given') is an invitation to fill it in,
+    which is the model judgment #343 exists to remove."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        ids = _all_item_ids(storage)
+        provider = ScriptedProvider(
+            {
+                "axes": [
+                    {"name": "One", "items": _cite(ids)},
+                    {"name": "Two", "items": _cite(ids[:1])},
+                    {"name": "Three", "items": _cite(ids[:1])},
+                ]
+            }
+        )
+        report = build_value_profile(storage, provider)
+
+    assert provider.last_prompt is not None
+    assert "what this tells them they value:" not in provider.last_prompt
+    # direction is untouched — RFC-056 still supplies every sign (#343
+    # augments it; it does not replace it)
+    assert all(
+        span.direction is AxisDirection.SUPPORTS
+        for axis in report.profile.axes
+        for span in axis.evidence
+    )
+
+
+def test_a_cited_captures_value_statement_is_shown_with_its_evidence(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        item_id = _capture_with_value_statement(storage, config)
+        ids = _all_item_ids(storage)
+        provider = ScriptedProvider(
+            {
+                "axes": [
+                    {"name": "Honesty", "items": _cite(ids)},
+                    {"name": "Two", "items": _cite([item_id])},
+                    {"name": "Three", "items": _cite(ids[:1])},
+                ]
+            }
+        )
+        report = build_value_profile(storage, provider)
+
+    cited = {span.item_id: span for axis in report.profile.axes for span in axis.evidence}
+    assert (
+        cited[item_id].value_statement
+        == "I value people having the information they need to choose."
+    )
+    rendered = render_value_profile(report.profile)
+    assert 'values: "I value people having the information they need to choose."' in rendered

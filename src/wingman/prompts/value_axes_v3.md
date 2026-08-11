@@ -4,7 +4,13 @@ You are given a person's own captured reactions from the Values and
 Mission-alignment interview modules: people or organizations they named as
 ones they admire (pro) or are horrified by (con), each with how strongly
 they feel about it (mild / moderate / strong, when given) and their own
-verbatim reason why.
+verbatim reason why. Some items also carry "what this tells them they
+value" — the person's own answer, in their own words, to what that
+nomination says about what THEY value. Where that line is present it is
+the most direct evidence in the item: it states the value outright,
+rather than leaving it to be read off a verdict about somebody else.
+Items captured before the interview asked that question do not have it;
+read those from the reason alone, exactly as before.
 
 Identify the small set of underlying value dimensions this collection of
 reactions reveals — what this person actually cares about, in terms that
@@ -43,6 +49,10 @@ Rules:
     of someone who refused to do it is `"opposes"` as well.
   - Prefer naming axes as values the person holds. It makes the direction
     judgment easier and the result easier to read.
+  - When an item carries "what this tells them they value," decide the
+    direction against THAT statement first — it is the person saying what
+    they value, not you inferring it from who they condemned. Use the
+    reason to understand it, never to overrule it.
 - If an item's reasoning does not clearly cut either way for an axis,
   leave the item out of that axis rather than guessing a direction.
 - Do NOT compute or propose a numeric score, weight, or strength for an

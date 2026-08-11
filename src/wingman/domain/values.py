@@ -22,6 +22,13 @@ AS NAMED (RFC-056) — never the `_pro`/`_con` suffix of its subtype. A
 condemnation of somebody who violated a value is evidence the person
 HOLDS that value; reading the sign off the subtype inverted exactly
 those axes (issue #340).
+
+RFC-057 (issue #343) augments that rather than replacing it: a capture
+may now also carry the person's own answer to "what does that tell us you
+value?", which is positive by construction and so makes the direction
+judgment a reading of an explicit statement rather than an inference from
+a verdict. Captures predating the question have none, so `direction` is
+still what the sign comes from in every case.
 """
 
 from __future__ import annotations
@@ -67,6 +74,13 @@ class ValueAxisEvidence(BaseModel):
     sign-from-subtype rule and are not trustworthy — every writer since
     sets it, and `application.values.render_value_profile` says so on
     read rather than presenting the stale numbers as current.
+
+    `value_statement` (RFC-057, issue #343) is what the person said this
+    nomination tells them they VALUE, in their own words — empty for a
+    capture made before the interview asked. It is carried here for the
+    same reason `quote` is: an axis inferred partly from a positive value
+    statement should show the reader that statement, not only the verdict
+    about the nominee that occasioned it.
     """
 
     item_id: str
@@ -75,6 +89,7 @@ class ValueAxisEvidence(BaseModel):
     quote: str
     intensity: str | None = None
     direction: AxisDirection | None = None
+    value_statement: str = ""
     signed_weight: float = Field(ge=-1.0, le=1.0)
 
 

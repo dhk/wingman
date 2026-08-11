@@ -1024,6 +1024,219 @@ def test_cli_interview_rejects_unknown_intensity(
     assert "unknown intensity" in result.output
 
 
+# --- The value statement (RFC-057, issue #343) ------------------------------
+#
+# "What does that tell us you value?", asked after the 'why' and before the
+# intensity card. A nomination on its own records a verdict about somebody
+# else; this records the positive value behind it, in the person's own words.
+
+VALUE_CON = "I value people having the information they need to choose."
+VALUE_PRO = "I value sticking with something long after it stops being rewarded."
+
+
+def test_value_statement_round_trips_through_capture_and_storage(workspace: Config) -> None:
+    """The whole point of #343: a condemnation yields a POSITIVE value
+    statement, stored on the ProfileItem next to the verdict — not left for
+    a model to extract from the 'why' afterwards."""
+    with Storage(workspace.db_path) as storage:
+        report = capture_interview_reaction(
+            "values_con",
+            "A. Public Figure",
+            WHY_CON,
+            workspace,
+            storage,
+            intensity="strong",
+            value_statement=VALUE_CON,
+        )
+        assert report.value_statement == VALUE_CON
+        item = storage.list_profile_items()[0]
+        assert item.value_statement == VALUE_CON
+        # 'why' is still the only EVIDENCE quote — the value statement is a
+        # field alongside it, exactly as intensity/company_reason are, and
+        # never replaces or edits the person's stated reasoning.
+        assert item.detail == WHY_CON
+        assert item.evidence[0].quote == WHY_CON
+        # and it is durable in the inbox note too, like every other answer
+        record = storage.get_source_record(item.evidence[0].source_record_id)
+        assert record is not None
+        note = (workspace.data_dir / record.source_locator).read_text(encoding="utf-8")
+        assert VALUE_CON in note
+
+
+def test_value_statement_is_optional_and_a_capture_without_one_is_unchanged(
+    workspace: Config,
+) -> None:
+    """Protocol-enforced, never a runtime gate (RFC-050's own status, and
+    RFC-057 follows it): every pre-#343 call site keeps working, and the
+    stored item simply carries no statement."""
+    with Storage(workspace.db_path) as storage:
+        report = capture_interview_reaction(
+            "values_pro", "Jane Goodall", WHY_PRO, workspace, storage, intensity="strong"
+        )
+        assert report.outcome == "saved"
+        assert report.value_statement == ""
+        item = storage.list_profile_items()[0]
+        assert item.value_statement == ""
+        # nothing about the capture note changed either — no empty label
+        record = storage.get_source_record(item.evidence[0].source_record_id)
+        assert record is not None
+        note = (workspace.data_dir / record.source_locator).read_text(encoding="utf-8")
+        assert "What this says they value" not in note
+
+
+def test_adding_a_value_statement_alone_registers_as_an_update_not_a_no_op(
+    workspace: Config,
+) -> None:
+    """persist_items' dedupe check compares value_statement too. Without
+    that, re-capturing a nomination purely to ADD the statement it was
+    missing reads as 'already captured — nothing changed' and the answer
+    is silently dropped — which is precisely the retrofit path for the
+    eleven captures that predate the question."""
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction(
+            "values_con", "A. Public Figure", WHY_CON, workspace, storage, intensity="strong"
+        )
+        report = capture_interview_reaction(
+            "values_con",
+            "A. Public Figure",
+            WHY_CON,
+            workspace,
+            storage,
+            intensity="strong",
+            value_statement=VALUE_CON,
+        )
+        assert "superseded" in report.outcome
+        active = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
+        assert len(active) == 1
+        assert active[0].value_statement == VALUE_CON
+
+
+def test_a_changed_value_statement_is_also_a_real_update(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction(
+            "values_pro", "Jane Goodall", WHY_PRO, workspace, storage, value_statement=VALUE_PRO
+        )
+        report = capture_interview_reaction(
+            "values_pro",
+            "Jane Goodall",
+            WHY_PRO,
+            workspace,
+            storage,
+            value_statement="I value evidence over authority.",
+        )
+        assert "superseded" in report.outcome
+        active = [i for i in storage.list_profile_items() if i.status is ItemStatus.ACTIVE]
+        assert len(active) == 1
+        assert active[0].value_statement == "I value evidence over authority."
+
+
+def test_render_interview_reaction_shows_the_value_statement(workspace: Config) -> None:
+    with Storage(workspace.db_path) as storage:
+        report = capture_interview_reaction(
+            "values_con",
+            "A. Public Figure",
+            WHY_CON,
+            workspace,
+            storage,
+            intensity="strong",
+            value_statement=VALUE_CON,
+        )
+    rendered = render_interview_reaction(report)
+    assert VALUE_CON in rendered
+
+
+def test_profile_list_renders_the_value_statement(workspace: Config) -> None:
+    from wingman.application.profile_manage import render_profile_listing
+
+    with Storage(workspace.db_path) as storage:
+        capture_interview_reaction(
+            "values_con",
+            "A. Public Figure",
+            WHY_CON,
+            workspace,
+            storage,
+            value_statement=VALUE_CON,
+        )
+        listing = render_profile_listing(storage.list_profile_items())
+    assert VALUE_CON in listing
+
+
+def test_mcp_interview_react_passes_through_the_value_statement(workspace: Config) -> None:
+    from wingman.mcp_server import interview_react as interview_react_tool
+
+    result = interview_react_tool(
+        "values_con",
+        "A. Public Figure",
+        WHY_CON,
+        value_statement=VALUE_CON,
+        intensity="strong",
+    )
+    assert VALUE_CON in result
+    items = storage_items(workspace)
+    assert len(items) == 1
+    assert items[0].value_statement == VALUE_CON
+
+
+def test_mcp_interview_react_docstring_asks_what_that_tells_you_you_value() -> None:
+    """The question is protocol, not code — so the docstring IS the
+    implementation, and its wording and position are the contract."""
+    from wingman.mcp_server import interview_react as interview_react_tool
+
+    doc = interview_react_tool.__doc__ or ""
+    assert "What does that tell us you value?" in doc
+    assert "value_statement" in doc
+    lowered = doc.lower()
+    # asked after the why and before the intensity card...
+    assert lowered.index("what does that tell us you value?") < lowered.index(
+        "how strongly do"  # the intensity card's own question, line-wrapped
+    )
+    # ...and echoed in the confirm-before-save step
+    assert "bp-06" in lowered.split("what does that tell us you value?")[1]
+
+
+def test_cli_interview_value_statement_flag(
+    workspace: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+
+    monkeypatch.setenv(ENV_DATA_DIR, str(workspace.data_dir))
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "interview",
+            "values_con",
+            "A. Public Figure",
+            WHY_CON,
+            "--value-statement",
+            VALUE_CON,
+            "--intensity",
+            "strong",
+        ],
+    )
+    assert result.exit_code == 0
+    items = storage_items(workspace)
+    assert len(items) == 1
+    assert items[0].value_statement == VALUE_CON
+
+
+def test_value_statement_subtypes_match_the_intensity_subtypes() -> None:
+    """One set, defined as the other — the question is asked for exactly
+    the captures that are a values signal, and would drift silently if the
+    two were maintained as separate literals."""
+    from wingman.application.interview import (
+        SENTIMENT_INTENSITY_SUBTYPES,
+        VALUE_STATEMENT_SUBTYPES,
+    )
+
+    assert VALUE_STATEMENT_SUBTYPES == SENTIMENT_INTENSITY_SUBTYPES
+    assert "alignment_of_perspective_agree" not in VALUE_STATEMENT_SUBTYPES
+    assert "network_admired" not in VALUE_STATEMENT_SUBTYPES
+
+
 def test_subtype_status_all_nine_subtypes_start_at_zero(workspace: Config) -> None:
     """issue #311: subtype_status covers every VALID_SUBTYPES entry, not
     just the three capture_progress_summary buckets — nothing captured

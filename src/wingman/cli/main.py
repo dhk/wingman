@@ -3743,6 +3743,15 @@ def interview_react(
         "organization's primary purpose to be, e.g. 'Pepsi sells cola'. Stored as "
         "context alongside the capture, never as evidence.",
     ),
+    value_statement: str = typer.Option(
+        "",
+        "--value-statement",
+        help="For values_pro/con, values_fallback_pro/con, and "
+        "mission_alignment_pro/con: what this nomination tells you that YOU value, "
+        "in your own words — asked after 'why' and before --intensity. Stored "
+        "verbatim alongside the capture; a condemnation becomes a positive value "
+        "statement. Not asked for alignment_of_perspective or network_admired.",
+    ),
     intensity: str = typer.Option(
         "",
         "--intensity",
@@ -3788,10 +3797,20 @@ def interview_react(
     interview module's own protocol — conduct it in that order; it isn't
     enforced by this command itself.
 
+    The value statement (RFC-057, issue #343): for every Values/Mission-
+    alignment subtype, ask "what does that tell us you value?" right after
+    'why' and before --intensity, and pass the answer verbatim as
+    --value-statement. A nomination on its own records a verdict about
+    somebody else; this records the positive value behind it, in the
+    person's own words, so a later value-axis pass reads a statement of
+    the value rather than inferring it from who they condemned. If the
+    answer just restates the 'why', re-ask once — pointed at them, not the
+    nominee — and never a third time.
+
     Sentiment intensity and company reason (RFC-049, issue #240 v1): for
     every Values/Mission-alignment subtype, ask --intensity right after
-    'why' — how strongly they feel, on top of the pro/con the subtype
-    already carries (mild/moderate/strong; a con nominee is never
+    the value statement — how strongly they feel, on top of the pro/con
+    the subtype already carries (mild/moderate/strong; a con nominee is never
     "positive," only how strongly negative). For the company-naming
     subtypes specifically (values_fallback_pro/con, mission_alignment_pro/
     con), also ask --company-reason — is this about the company itself,
@@ -3824,6 +3843,7 @@ def interview_react(
                 primary_purpose=primary_purpose,
                 intensity=intensity,
                 company_reason=company_reason,
+                value_statement=value_statement,
                 persona_id=active_persona.persona_id if active_persona is not None else None,
                 persona_authored=persona_authored,
             )
