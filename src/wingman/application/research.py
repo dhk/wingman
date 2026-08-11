@@ -118,6 +118,40 @@ def _resolve_company(name: str) -> str:
     return key
 
 
+def canonical_source_url(url: str) -> str:
+    """The identity of a research URL, for deciding whether we already have it.
+
+    Approved sources are compared as raw strings, so following a company
+    twice with 'https://anthropic.com' and 'https://www.anthropic.com'
+    approves both — and every later research run then fetches eight pages
+    for four pages of content, against somebody else's servers, with a
+    diff that reports every change twice (#348).
+
+    Used ONLY for the identity check. The URL the user supplied is what
+    gets stored and fetched, deliberately: plenty of hosts serve only one
+    of www/bare, so rewriting what we fetch could turn a working source
+    into a 404. Two spellings of the same page should not become two
+    sources; that is the whole claim being made here.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(url.strip())
+    host = parts.hostname or ""
+    host = host.removeprefix("www.")
+    if parts.port and parts.port not in (80, 443):
+        host = f"{host}:{parts.port}"
+    path = parts.path.rstrip("/")
+    return urlunsplit((parts.scheme.lower(), host.lower(), path, parts.query, ""))
+
+
+def _existing_source(key: str, url: str, storage: Storage) -> CompanySource | None:
+    wanted = canonical_source_url(url)
+    for source in storage.list_company_sources(key):
+        if canonical_source_url(source.url) == wanted:
+            return source
+    return None
+
+
 def add_company_source(
     name: str, url: str, storage: Storage, label: str | None = None
 ) -> tuple[CompanySource, bool]:
@@ -126,6 +160,11 @@ def add_company_source(
     url = url.strip()
     if not url.startswith("https://"):
         raise IngestError(f"only https:// research sources are accepted (RFC-009); got {url!r}")
+    already = _existing_source(key, url, storage)
+    if already is not None:
+        # Same page, different spelling — report it as already approved
+        # rather than approving it twice (#348).
+        return already, False
     source = CompanySource(
         company_key=key, company_name=name.strip(), url=url, label=(label or "").strip() or None
     )
@@ -134,8 +173,15 @@ def add_company_source(
 
 
 def remove_company_source(name: str, url: str, storage: Storage) -> bool:
-    """Withdraw an approved source (and its stored snapshot)."""
-    return storage.remove_company_source(_resolve_company(name), url.strip())
+    """Withdraw an approved source (and its stored snapshot).
+
+    Matches the same way approval does (#348): a source approved as
+    'https://www.example.com/about' is withdrawn by either spelling, so
+    removal is never harder than the addition that created it.
+    """
+    key = _resolve_company(name)
+    existing = _existing_source(key, url, storage)
+    return storage.remove_company_source(key, existing.url if existing else url.strip())
 
 
 def list_company_sources(name: str, storage: Storage) -> list[CompanySource]:

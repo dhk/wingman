@@ -281,3 +281,58 @@ def test_page_title_extraction() -> None:
     assert page_title(b"<html><title>A\n   B</title><title>second</title></html>") == "A B"
     assert page_title(b"<html><body>no title here</body></html>") is None
     assert page_title(b"\x00\xffnot html at all") is None
+
+
+def test_www_and_bare_are_one_source_not_two(storage: Storage) -> None:
+    """#348, hit live on Anthropic: following a company again with the www
+    spelling approved four more copies of pages already approved on the bare
+    domain. Every later research run then fetched eight pages for four pages
+    of content — double the requests against somebody else's servers, and a
+    diff reporting every change twice."""
+    first, created = add_company_source(
+        "Acme", "https://acme.example.com/about", storage, label="values"
+    )
+    assert created
+
+    same, again = add_company_source("Acme", "https://www.acme.example.com/about", storage)
+
+    assert not again
+    assert same.url == first.url  # the original approval, not a second one
+    assert [s.url for s in list_company_sources("Acme", storage)] == [
+        "https://acme.example.com/about"
+    ]
+
+
+def test_the_url_we_fetch_is_the_one_that_was_approved(storage: Storage) -> None:
+    """Canonicalisation decides IDENTITY only. Rewriting what gets stored
+    would change what gets fetched, and plenty of hosts serve only one of
+    www/bare — turning a working source into a 404 to tidy a string."""
+    source, _ = add_company_source("Acme", "https://www.acme.example.com/careers", storage)
+
+    assert source.url == "https://www.acme.example.com/careers"
+    assert [s.url for s in list_company_sources("Acme", storage)] == [
+        "https://www.acme.example.com/careers"
+    ]
+
+
+def test_a_trailing_slash_is_not_a_different_page(storage: Storage) -> None:
+    add_company_source("Acme", "https://acme.example.com/about", storage)
+    _, again = add_company_source("Acme", "https://acme.example.com/about/", storage)
+    assert not again
+
+
+def test_a_source_is_withdrawn_by_either_spelling(storage: Storage) -> None:
+    """Removal must not be harder than the addition that created it."""
+    add_company_source("Acme", "https://acme.example.com/about", storage)
+
+    assert remove_company_source("Acme", "https://www.acme.example.com/about/", storage)
+    assert list_company_sources("Acme", storage) == []
+
+
+def test_different_pages_on_one_host_stay_separate(storage: Storage) -> None:
+    """The guard must not collapse genuinely distinct sources."""
+    add_company_source("Acme", "https://acme.example.com/about", storage)
+    _, created = add_company_source("Acme", "https://acme.example.com/careers", storage)
+
+    assert created
+    assert len(list_company_sources("Acme", storage)) == 2
