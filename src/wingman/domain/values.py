@@ -29,6 +29,18 @@ value?", which is positive by construction and so makes the direction
 judgment a reading of an explicit statement rather than an inference from
 a verdict. Captures predating the question have none, so `direction` is
 still what the sign comes from in every case.
+
+**Why the contract versions live here** (issue #355, RFC-063). `SCORING_CONTRACT_VERSION`
+and `RADAR_CONTRACT_VERSION` name behaviour implemented elsewhere —
+`application.values` scores, `reporting.radar` draws. They are declared in
+the domain anyway because a contract version is part of the artefact's
+data contract rather than of the code that satisfies it, and three layers
+have to agree on the same string: application stamps it onto the stored
+`ValueProfile`, reporting stamps it into the exported SVG, and
+`application.freshness` compares both against what is current. Domain is
+the only layer all three may import (RFC-001), so putting the constants
+beside the models they describe is what keeps the comparison from becoming
+a sideways import.
 """
 
 from __future__ import annotations
@@ -39,6 +51,38 @@ from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+
+#: The version of the DETERMINISTIC half of this artefact's contract: the
+#: rule that turns captures into `ValueAxis.score`/`label` — magnitude from
+#: `intensity`, sign from `direction`, the mean over an axis's evidence, and
+#: the score->prose buckets. Bump it whenever OUTPUT SEMANTICS change: the
+#: same captures would now produce a different number, a different sign, or
+#: a different label. Do not bump it for a refactor, a comment, or a
+#: performance change that leaves every output identical.
+#:
+#: `prompt_version` already versions the MODEL half (which axes get named,
+#: how direction is judged). This is the half it never covered, and #340 was
+#: a change to exactly this half: the sign flipped for every axis evidenced
+#: by a condemnation, so every profile and every exported chart built before
+#: the fix asserted the opposite of the truth with nothing on it to say so.
+#: A version stamped on the artefact makes that detectable after the fact
+#: instead of relying on somebody noticing the numbers look wrong.
+#: AGENTS.md already requires it of anything that scores ("Scores must
+#: expose ... scoring-rule version"); this is that requirement, honoured.
+#:
+#: `tests/contract/test_values_contract_version.py` fails if the behaviour
+#: this names changes without this string moving — the rule is enforced, not
+#: remembered.
+SCORING_CONTRACT_VERSION = "values-scoring-1"
+
+#: The version of the chart's geometry contract: how a signed score becomes
+#: a radius (`reporting.radar._radius_fraction`), and therefore what shape a
+#: reader is being asked to believe. Kept SEPARATE from the scoring version
+#: on purpose: remapping the geometry makes an exported chart wrong without
+#: making the stored `ValueProfile` wrong, and one version covering both
+#: would mark every stored profile stale for a change that never touched a
+#: number.
+RADAR_CONTRACT_VERSION = "values-radar-1"
 
 
 class AxisDirection(StrEnum):
@@ -122,6 +166,15 @@ class ValueProfile(BaseModel):
     time (`application.values.new_captures_since`) by diffing against
     the currently-eligible item set — no model call needed to detect it,
     only to recompute.
+
+    `scoring_version` is the other half of that question (#355): inputs
+    can sit still while the CODE that shaped them moves. It records the
+    `SCORING_CONTRACT_VERSION` in force when this profile's numbers were
+    computed, so a profile scored under a rule the codebase has since
+    replaced can be recognized as superseded without re-deriving it.
+    Empty means the profile was stored before the field existed — which
+    includes every profile scored under the inverted sign rule #340
+    fixed, so empty is treated as "not current", never as "fine".
     """
 
     profile_id: str = Field(default_factory=lambda: str(uuid4()))
@@ -133,6 +186,7 @@ class ValueProfile(BaseModel):
     provider: str
     model: str
     prompt_version: str
+    scoring_version: str = ""
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

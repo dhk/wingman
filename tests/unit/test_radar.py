@@ -12,7 +12,13 @@ import pytest
 
 from wingman.application.ingest import IngestError
 from wingman.application.pov import CORPUS_PERSON_ID, CORPUS_PERSON_NAME, persona_card_id
-from wingman.domain.values import ValueAxis, ValueAxisEvidence, ValueProfile
+from wingman.domain.values import (
+    RADAR_CONTRACT_VERSION,
+    SCORING_CONTRACT_VERSION,
+    ValueAxis,
+    ValueAxisEvidence,
+    ValueProfile,
+)
 from wingman.infrastructure.config import load_config
 from wingman.infrastructure.storage import Storage
 from wingman.reporting.radar import (
@@ -59,7 +65,12 @@ def _profile(
     axes: list[ValueAxis],
     subject_id: str = CORPUS_PERSON_ID,
     subject_name: str = CORPUS_PERSON_NAME,
+    scoring_version: str = SCORING_CONTRACT_VERSION,
 ) -> ValueProfile:
+    """A profile scored under the CURRENT contract unless a test says
+    otherwise — the default has to be the ordinary case, or every chart in
+    this module would render carrying a superseded-scoring warning and the
+    tests about the ordinary chart would stop being about it (#355)."""
     return ValueProfile(
         subject_id=subject_id,
         subject_name=subject_name,
@@ -69,6 +80,7 @@ def _profile(
         provider="scripted",
         model="scripted-1",
         prompt_version="v1",
+        scoring_version=scoring_version,
     )
 
 
@@ -515,3 +527,169 @@ def test_the_chart_carries_a_text_equivalent_of_what_it_plots(workspace: Path) -
     assert root.get("aria-describedby") == desc.get("id")
     assert "Steadfastness -0.45, leans away from" in (desc.text or "")
     assert "Candour +0.80, leans toward" in (desc.text or "")
+
+
+# --- what an exported chart says about itself (#355, amending RFC-056) --------
+
+
+def _pre_direction_axis(name: str, score: float) -> ValueAxis:
+    """An axis whose evidence carries no per-item direction — the shape of
+    every profile stored before RFC-056, i.e. every profile whose signs the
+    #340 bug may have inverted."""
+    return ValueAxis(
+        name=name,
+        description=f"{name} description.",
+        score=score,
+        label="leans toward",
+        evidence=[
+            ValueAxisEvidence(
+                item_id=f"item-{name}",
+                subtype="values_con",
+                target="Jane Goodall",
+                quote=f"{name} evidence quote.",
+                intensity="strong",
+                direction=None,
+                signed_weight=score,
+            )
+        ],
+    )
+
+
+def test_a_chart_of_a_pre_340_profile_warns_on_the_chart_itself(workspace: Path) -> None:
+    """RFC-056 accepted this gap explicitly: a ValueProfile stored before the
+    sign fix rendered with a warning, but the SVG carried none — so an
+    exported chart went on drawing the inverted shape, and the owner's chart
+    said 'strongly repelled by honesty' for hours with nothing on it to say
+    the numbers were suspect. The concession assumed a one-time migration
+    window. It is not one; the scoring rule will move again (#355).
+    """
+    axes = [_pre_direction_axis("Honesty", 0.4), _axis("B", 0.2), _axis("C", 0.3)]
+    svg = render_value_radar_svg(_profile(axes, scoring_version=""))
+
+    root = _parse(svg)
+    texts = [t.text or "" for t in _findall(root, "text")]
+    assert any("may be inverted" in text for text in texts)
+    assert any("wingman values --refresh" in text for text in texts)
+
+
+def test_a_superseded_scoring_contract_warns_even_with_directions_recorded(
+    workspace: Path,
+) -> None:
+    """The general case, not only #340's: any profile scored under a rule
+    this codebase no longer runs. A future contract change has no way to
+    know in advance what it broke, so the chart says the shape may be
+    superseded and names both versions."""
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    svg = render_value_radar_svg(_profile(axes, scoring_version="values-scoring-0"))
+
+    root = _parse(svg)
+    texts = [t.text or "" for t in _findall(root, "text")]
+    assert any("values-scoring-0" in text and SCORING_CONTRACT_VERSION in text for text in texts)
+
+
+def test_a_current_chart_carries_no_warning_at_all(workspace: Path) -> None:
+    """A warning that is always there is not a warning. This is the control
+    for the two above."""
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    svg = render_value_radar_svg(_profile(axes))
+
+    texts = [t.text or "" for t in _findall(_parse(svg), "text")]
+    assert not any("superseded" in text or "inverted" in text for text in texts)
+
+
+def test_both_warnings_get_their_own_row_and_the_viewbox_grows_for_them(
+    workspace: Path,
+) -> None:
+    """A chart can be out of date both ways at once. Stacking two warnings on
+    one row hides both, and drawing them past the viewBox hides both as
+    well — which is how the stale note failed the first time (#248)."""
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    current = _parse(render_value_radar_svg(_profile(axes)))
+    both = _parse(render_value_radar_svg(_profile(axes, scoring_version=""), stale_new_captures=2))
+
+    warnings = [
+        t
+        for t in _findall(both, "text")
+        if "superseded" in (t.text or "")
+        or "re-export" in (t.text or "")
+        or "2 new captures" in (t.text or "")
+    ]
+    height = float(both.get("height", "0"))
+
+    assert len(warnings) == 3  # headline, rebuild instruction, stale count
+    assert len({_num(t, "y") for t in warnings}) == 3  # no two share a row
+    assert height > float(current.get("height", "0"))
+    assert all(_num(t, "y") < height for t in warnings)
+
+
+def test_the_chart_names_the_contracts_that_drew_it_even_when_current(
+    workspace: Path,
+) -> None:
+    """AGENTS.md: a score must expose the scoring-rule version. A version
+    that only appears when something is wrong teaches nobody what right
+    looks like, and a reader sent a chart cannot ask the workspace."""
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    texts = [t.text or "" for t in _findall(_parse(render_value_radar_svg(_profile(axes))), "text")]
+
+    meta = next(text for text in texts if "built from" in text)
+    assert SCORING_CONTRACT_VERSION in meta
+    assert RADAR_CONTRACT_VERSION in meta
+
+
+def test_an_exported_file_can_be_judged_without_the_workspace(workspace: Path) -> None:
+    """The provenance stamp is what lets 'wingman artifacts stale' tell a
+    chart on disk from the profile it should have been drawn from. A comment
+    rather than drawn text: it must not be noise on the picture, and it does
+    not need to be — the visible warning is what a reader needs."""
+    from wingman.application.freshness import stamp_in, values_radar_fingerprint
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+        profile = _profile(axes)
+        storage.save_value_profile(profile)
+        export = export_value_radar(config, storage)
+
+    subject, fingerprint = stamp_in(export.path.read_text(encoding="utf-8"))
+    assert subject == CORPUS_PERSON_ID
+    assert fingerprint == values_radar_fingerprint(profile) == export.fingerprint
+
+
+def test_the_surfaces_repeat_the_superseded_warning_without_opening_the_file(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Somebody who never opens the SVG still has to hear it — the same
+    mistake the stale count made when export returned a bare Path."""
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+    from wingman.infrastructure.config import ENV_DATA_DIR
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        axes = [_pre_direction_axis("Honesty", 0.4), _axis("B", 0.2), _axis("C", 0.3)]
+        storage.save_value_profile(_profile(axes, scoring_version=""))
+        assert export_value_radar(config, storage).scoring_superseded
+
+    monkeypatch.setenv(ENV_DATA_DIR, str(config.data_dir))
+    result = CliRunner().invoke(app, ["values-chart"])
+    assert result.exit_code == 0, result.output
+    assert "no longer runs" in result.output
+
+    from wingman.mcp_server import values_chart as values_chart_tool
+
+    assert "no longer runs" in values_chart_tool()
+
+
+def test_a_superseded_chart_still_renders_rather_than_refusing(workspace: Path) -> None:
+    """Warn, do not refuse (RFC-015, RFC-056). Somebody asking for the chart
+    of a profile they have been told is suspect is usually asking precisely
+    in order to see how suspect it is."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        axes = [_pre_direction_axis("Honesty", 0.4), _axis("B", 0.2), _axis("C", 0.3)]
+        storage.save_value_profile(_profile(axes, scoring_version=""))
+        export = export_value_radar(config, storage)
+
+    assert export.path.exists()
+    assert "<polygon" in export.path.read_text(encoding="utf-8")
