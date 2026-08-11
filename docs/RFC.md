@@ -847,3 +847,19 @@ One thing HAS changed since this entry was first drafted, and it changes the rea
 
 **Revisit if.** Client capabilities change such that an artifact can call back for fresh data, in which case "keep it up to date" stops meaning "republish" and this table's role narrows. Or the kind set stops being enumerable — if arbitrary views become publishable, `kind` becomes a name rather than a contract and the regenerability guarantee goes with it.
 
+## RFC-062: First-run guidance is a tool, and it answers from this workspace
+
+**Decision.** `setup_guide` (MCP) and `wingman setup-guide` (CLI, RFC-008 parity) return first-run guidance built from the workspace it is called in: the outstanding work comes from `completeness.next_actions`, finished steps are named as finished, and the overnight-run advice branches on whether this is a hosted tenant or somebody running their own copy. Read-only — collects nothing, changes nothing, no model call, the same posture as `perspectives_start` one step later in the journey.
+
+**Why a tool and not a document.** `docs/WALKTHROUGH-HOSTED.md` is written for exactly this reader and opens by promising there is no terminal anywhere in it — yet it lives in a repository they do not have and cannot browse. The instructions were available everywhere except the place the person is standing, which is a conversation. This does not replace that document: it is what somebody gets once they are already in, and the walkthrough remains what you send them beforehand.
+
+**Why it reads the workspace.** A generic checklist tells somebody who ingested a CV an hour ago to ingest a CV, and a reader who is told to do something they have plainly finished stops trusting the rest of the advice. `completeness` already computes what is missing and what each gap costs; leaning on it means one opinion about what matters next rather than two that drift.
+
+**Why it branches on deployment.** A tenant on the shared multi-tenant process (RFC-048) has an overnight run happening for them on the operator's schedule. Telling them to install cron is not merely noise — it sends them after somebody else's job, and the wrongness is invisible because the advice sounds reasonable. `tenants.is_tenant_config` makes this checkable rather than guessable.
+
+**What it deliberately does not do.** It does not invent a cadence for the standing daily or weekly briefing; it points at that conversation and stops. Choosing a time, a timezone and a set of contents is an interview (#359), and a guessed schedule is one somebody has to undo.
+
+**Alternatives.** Shipping the walkthrough's text as a tool response (rejected — it would be a second copy of a document that already exists, free to drift, and still generic). Growing a second list of next steps here (rejected for the same reason `completeness` owns that list: two opinions about priority is worse than either). Making it interactive, asking what the person wants (rejected — somebody asking "how do I set this up" wants an answer, not a form; the interactive parts are the criteria interview and #359, which it hands off to).
+
+**Revisit if.** The guidance and the walkthrough disagree in practice — that is a bug in itself, and the trigger to test one against the other rather than to keep editing both. Or deployment shapes multiply beyond tenant/solo, at which point branching on a boolean stops being enough.
+

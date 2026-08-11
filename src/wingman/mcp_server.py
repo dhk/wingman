@@ -1361,6 +1361,44 @@ _PROFILE_HTML_MAX_BYTES = 250_000
 
 
 @server.tool()
+def setup_guide() -> str:
+    """How to get started with wingman — call this whenever somebody asks how
+    to set it up, what to do first, or what any of this is for (issue #360).
+
+    Read-only: collects nothing, changes nothing, no model call.
+
+    Answers from THIS workspace rather than reciting a generic checklist.
+    Somebody who uploaded a CV an hour ago and is then told to upload a CV
+    stops trusting the rest of the advice, so finished steps are named as
+    finished and the outstanding work comes from `completeness` — one
+    opinion about what matters next, not two that can drift apart.
+
+    It also knows whether this is a hosted tenant or somebody running their
+    own copy. A tenant's overnight run already happens for them; telling
+    them to schedule one is the most common wrong answer and sends them
+    after somebody else's job.
+
+    Present its sections in order and do not reorder the next-steps list —
+    the ordering is deliberate (job criteria first, because every scored
+    opening depends on a document that takes ten minutes). For the standing
+    daily or weekly briefing it mentions at the end, walk them through the
+    scheduling choices rather than inventing a cadence for them.
+    """
+    from wingman.application.completeness import compute_completeness
+    from wingman.application.setup_guide import render_setup_guide
+
+    config = _ready_config()
+    if config is None:
+        return (
+            "No workspace yet — run 'wingman init' (or ask whoever set this up for you "
+            "to provision one), then ask again and this will tell you what to do next."
+        )
+    with Storage(config.db_path) as storage:
+        report = compute_completeness(storage, config)
+    return render_setup_guide(config, report)
+
+
+@server.tool()
 def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = "") -> str:
     """Where this workspace's rendered views have been published (#355's enabler).
 
