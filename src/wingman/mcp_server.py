@@ -1508,7 +1508,8 @@ def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = 
 
     action is 'list', 'remember' (store `kind` + `url`, replacing any
     earlier record for that kind), 'show' (`kind`), 'forget' (`kind`), or
-    'stale'. kind is one of: values_radar, completeness, profile.
+    'stale'. kind is one of: values_radar, values_radar_work, completeness,
+    profile.
 
     Protocol: after you publish or update one of these views, call
     action='remember' with the url the client gave you. Before publishing
@@ -2515,7 +2516,7 @@ def my_pov(refresh: bool = False) -> str:
 
 
 @server.tool()
-def my_values(refresh: bool = False) -> str:
+def my_values(refresh: bool = False, view: str = "character") -> str:
     """Your inferred value dimensions (v2 of issue #240 — inference only,
     no chart; v3 is a separate, later tool that will render these axes as
     a radar chart, and will read this tool's ValueAxis.score/label as its
@@ -2542,6 +2543,16 @@ def my_values(refresh: bool = False) -> str:
     horrified by somebody who lied is evidence of VALUING honesty, and
     scores positive on an axis named for honesty.
 
+    view='work' (issue #356) reads the SAME captures as ways of WORKING —
+    what this person wants authority over, the conditions they need, the
+    standard they hold work to — instead of as character traits. Same
+    captures, same evidence citations, same deterministic scoring; only
+    the naming instruction to the model differs, plus the work view also
+    reads alignment_of_perspective reactions (about ideas, not people).
+    That is the reading a fit assessment can cite directly, and
+    'wingman assess' renders it into the fit brief. Each view is stored
+    and rebuilt on its own — refreshing one never rebuilds the other.
+
     Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
     (coach_persona 'set'), this builds THEIR profile instead — from only
     their own scoped interview captures, never the coach's.
@@ -2551,12 +2562,17 @@ def my_values(refresh: bool = False) -> str:
     from wingman.application.values import (
         build_value_profile,
         new_captures_since,
+        parse_value_view,
         render_value_profile,
     )
 
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
+    try:
+        value_view = parse_value_view(view)
+    except IngestError as exc:
+        return f"values failed: {exc}"
     with Storage(config.db_path) as storage:
         active_persona = get_active_persona(storage, config)
         subject_id = (
@@ -2566,7 +2582,7 @@ def my_values(refresh: bool = False) -> str:
         )
         persona_id = active_persona.persona_id if active_persona is not None else None
         if not refresh:
-            stored = storage.get_value_profile(subject_id)
+            stored = storage.get_value_profile(subject_id, value_view)
             if stored is not None:
                 stale = new_captures_since(storage, stored, persona_id=persona_id)
                 return (
@@ -2576,7 +2592,7 @@ def my_values(refresh: bool = False) -> str:
                 )
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
-            report = build_value_profile(storage, provider, persona=active_persona)
+            report = build_value_profile(storage, provider, persona=active_persona, view=value_view)
         except ProposalParseError as exc:
             return f"values failed: {exc}. Nothing was stored; call again to retry."
         except (IngestError, ModelConfigError, ProviderError) as exc:
@@ -2588,7 +2604,7 @@ def my_values(refresh: bool = False) -> str:
 
 
 @server.tool()
-def values_chart(out_dir: str = "") -> str:
+def values_chart(out_dir: str = "", view: str = "character") -> str:
     """Render your inferred value dimensions (see my_values) as an SVG
     radar/spider chart (v3 of issue #240 — presentation only: no model call,
     nothing recomputed, just a picture of the already-computed ValueProfile).
@@ -2604,22 +2620,31 @@ def values_chart(out_dir: str = "") -> str:
     the chart saying its shape may be wrong, because an exported SVG can
     be emailed away from every surface that would otherwise say so.
 
+    view='work' charts the work reading (issue #356) instead of the
+    character one — one chart per view, same geometry, its own file, so
+    neither overwrites the other.
+
     Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
     (coach_persona 'set'), this charts THEIR profile instead — never the
     coach's own.
     """
     from wingman.application.coaching import get_active_persona, render_acting_as
+    from wingman.application.values import parse_value_view, refresh_tool
     from wingman.reporting.radar import export_value_radar
 
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
+    try:
+        value_view = parse_value_view(view)
+    except IngestError as exc:
+        return f"values-chart failed: {exc}"
     destination = Path(out_dir).expanduser() if out_dir.strip() else None
     with Storage(config.db_path) as storage:
         active_persona = get_active_persona(storage, config)
         try:
             export = export_value_radar(
-                config, storage, persona=active_persona, out_dir=destination
+                config, storage, persona=active_persona, out_dir=destination, view=value_view
             )
         except IngestError as exc:
             return f"values-chart failed: {exc}"
@@ -2629,13 +2654,13 @@ def values_chart(out_dir: str = "") -> str:
         warnings += (
             "\nThis chart was drawn from a profile scored under a rule this version of "
             "wingman no longer runs — the shape may be superseded, and axes evidenced by "
-            "'con' nominations may be inverted. my_values(refresh=True), then chart again."
+            f"'con' nominations may be inverted. {refresh_tool(value_view)}, then chart again."
         )
     if export.stale_new_captures:
         noun = "capture" if export.stale_new_captures == 1 else "captures"
         warnings += (
             f"\n{export.stale_new_captures} new {noun} since this profile was built — "
-            "my_values(refresh=True) to include them."
+            f"{refresh_tool(value_view)} to include them."
         )
     return (
         f"{acting_as}\nWrote {export.path}{warnings}\n"

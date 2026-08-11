@@ -74,6 +74,31 @@ with a line saying what is wrong with it and the one command that fixes
 it. That is the precedent RFC-015's stale snapshots and RFC-056's render
 warning already set — a refusal would take away the only view of the
 evidence at the moment somebody is trying to understand it.
+
+**The work view (issue #356, RFC-066).** The axes above are named as
+CHARACTER: "compassion for the marginalized", "accountability over power".
+That is what the Values interview asks for and it is real, but nothing
+downstream can cite it — `assess_job` scores a posting against
+`job-criteria.md`, and a fit brief argues why a role suits somebody;
+neither can reach "compassion for the marginalized" without a leap, and
+an unaudited leap is what this codebase refuses everywhere else.
+
+So the same captures get a second READING, selected by `ValueView`:
+
+  - The character view is unchanged in every respect.
+  - The work view names axes as ways of working — what someone wants
+    authority over, the conditions they need, the standard they hold work
+    to. Only the prompt's naming instruction differs; the sign contract,
+    the arithmetic, the buckets and the storage lifecycle are the same
+    code, so the two views can never disagree about how a number is made.
+  - The work view is additionally eligible to read the perspective
+    reactions (`alignment_of_perspective_*`). Those are reactions to
+    IDEAS, not verdicts about people, which makes them the better raw
+    material for a work axis — and they are invisible to the character
+    view, which asks a question about people.
+
+`WORK_GROUNDING_SUBTYPES` is not a floor (see `work_grounding_note`): a
+work profile built only from nominations still renders, and says so.
 """
 
 from __future__ import annotations
@@ -81,13 +106,13 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from wingman.agents.values_analyst import (
-    PROMPT_VERSION,
+    PROMPT_VERSIONS,
     SYSTEM_PROMPT,
     build_prompt,
     parse_value_axis_proposal,
 )
 from wingman.application.ingest import IngestError
-from wingman.application.interview import SENTIMENT_INTENSITY_SUBTYPES
+from wingman.application.interview import REACTION_SUBTYPES, SENTIMENT_INTENSITY_SUBTYPES
 from wingman.application.pov import CORPUS_PERSON_ID, CORPUS_PERSON_NAME, persona_card_id
 from wingman.domain.persona import Persona
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind, SentimentIntensity
@@ -98,6 +123,7 @@ from wingman.domain.values import (
     ValueAxisEvidence,
     ValueAxisProposal,
     ValueProfile,
+    ValueView,
 )
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -117,6 +143,49 @@ _logger = get_logger("application.values")
 # to have anything to triangulate.
 MIN_ITEMS = 6
 MIN_SUBTYPES = 2
+
+# Which captures each view may read (#356).
+#
+# The character view asks a question about PEOPLE ("name someone you
+# admire"), so it reads the nomination subtypes and nothing else —
+# unchanged from RFC-051.
+#
+# The work view reads those AND the perspective reactions. A reaction is a
+# response to a claim someone read, which is the only capture in this
+# interview that is about ideas rather than about a person; for axes named
+# as ways of working that is the more direct evidence, and it carries no
+# `intensity` precisely because it has no pro/con polarity to scale (see
+# `application.interview`). It is scored at `_DEFAULT_MAGNITUDE` like any
+# other intensity-less capture — which is the honest weight for evidence
+# whose strength was never asked for, not a penalty.
+_ELIGIBLE_SUBTYPES: dict[ValueView, frozenset[str]] = {
+    ValueView.CHARACTER: frozenset(SENTIMENT_INTENSITY_SUBTYPES),
+    ValueView.WORK: frozenset(SENTIMENT_INTENSITY_SUBTYPES | REACTION_SUBTYPES),
+}
+
+#: The bare noun for one view, for a sentence that already carries its own
+#: framing ("N value axis(es) survived", "no work profile built yet"). The
+#: character view keeps saying "value": that is what every existing message
+#: says and what a reader of the character view has always been told.
+VIEW_NOUNS: dict[ValueView, str] = {
+    ValueView.CHARACTER: "value",
+    ValueView.WORK: "work",
+}
+
+#: What each view is CALLED where a person reads it. The view is named on
+#: every rendering, not only the non-default one: two profiles for the same
+#: subject with differently-worded axes, and only one of them labelled, is
+#: an invitation to quote the wrong one.
+VIEW_TITLES: dict[ValueView, str] = {
+    ValueView.CHARACTER: "Value profile (character view)",
+    ValueView.WORK: "Work profile (how you want to work)",
+}
+
+
+# The captures that make a work axis a reading of what somebody said about
+# WORK rather than a re-reading of a verdict about a person. Used for
+# disclosure, never for refusal — see `work_grounding_note`.
+WORK_GROUNDING_SUBTYPES = frozenset(REACTION_SUBTYPES)
 
 # Axis count bound (design question #3): a floor of 3 and ceiling of 6,
 # the same "3-6, not a fixed preset but not unbounded either" reasoning
@@ -252,14 +321,17 @@ def _items_block(items: list[ProfileItem]) -> str:
     return "\n\n".join(parts)
 
 
-def _eligible_items(storage: Storage, persona_id: str | None) -> list[ProfileItem]:
+def _eligible_items(
+    storage: Storage, persona_id: str | None, view: ValueView = ValueView.CHARACTER
+) -> list[ProfileItem]:
+    subtypes = _ELIGIBLE_SUBTYPES[view]
     return [
         item
         for item in storage.list_profile_items()
         if item.kind is ProfileItemKind.INTERVIEW
         and item.status is ItemStatus.ACTIVE
         and item.persona_id == persona_id
-        and item.subtype in SENTIMENT_INTENSITY_SUBTYPES
+        and item.subtype in subtypes
     ]
 
 
@@ -336,8 +408,41 @@ def _validate_proposal(
     return axes, rejected
 
 
+def _not_enough_evidence(
+    subject: str, view: ValueView, eligible: int, subtypes_present: int
+) -> IngestError:
+    """The refusal below the floor, worded for the view that hit it.
+
+    The character view's advice ("capture both pro and con nominations") is
+    wrong advice for the work view, whose best evidence is the perspective
+    reactions the character view cannot even see — telling somebody to go
+    nominate more people when what the pass needs is reactions to ideas
+    sends them to do the wrong work.
+    """
+    what = (
+        "Values/Mission-alignment item(s)"
+        if view is ValueView.CHARACTER
+        else "Values/Mission-alignment or perspective-reaction item(s)"
+    )
+    how = (
+        "e.g. both values_pro and values_con nominations, or add mission_alignment ones"
+        if view is ValueView.CHARACTER
+        else "reactions to something you read (alignment_of_perspective_agree/_disagree) are "
+        "the most direct evidence for how you want to work"
+    )
+    return IngestError(
+        f"not enough captured evidence to infer {VIEW_NOUNS[view]} dimensions for {subject} yet — "
+        f"{eligible} {what} across {subtypes_present} subtype(s) captured; need at least "
+        f"{MIN_ITEMS} items spanning at least {MIN_SUBTYPES} subtypes ({how}). Capture more "
+        "with 'wingman interview' or interview_react, then try again."
+    )
+
+
 def build_value_profile(
-    storage: Storage, provider: ModelProvider, persona: Persona | None = None
+    storage: Storage,
+    provider: ModelProvider,
+    persona: Persona | None = None,
+    view: ValueView = ValueView.CHARACTER,
 ) -> ValueProfileReport:
     """Build (or rebuild) the value-dimension profile for the user's own
     captures, or (with persona set) a coached Persona's own captures
@@ -345,33 +450,34 @@ def build_value_profile(
     already uses ("my evidence and their point of view never mix",
     docs/COACHING-MODE-DESIGN.md, extended to this axis).
 
+    `view` (#356) selects the READING, not the pipeline: the same eligible
+    captures, the same validation, the same arithmetic. It changes which
+    prompt names the axes and, for the work view, widens the eligible set
+    to include the perspective reactions. Each view is rebuilt on its own
+    call — deliberately not both at once, because one view failing
+    validation would then destroy a rebuild of the other, and a refresh
+    somebody asked for must not fail on account of a view they did not.
+
     Raises IngestError before any model call if the minimum-data floor
     (MIN_ITEMS/MIN_SUBTYPES) isn't met, or after the model call if fewer
     than MIN_AXES_REQUIRED axes survive validation — in both cases
     nothing is stored.
     """
     persona_id = persona.persona_id if persona is not None else None
-    eligible = _eligible_items(storage, persona_id)
+    eligible = _eligible_items(storage, persona_id, view)
     subtypes_present = {item.subtype for item in eligible}
     if len(eligible) < MIN_ITEMS or len(subtypes_present) < MIN_SUBTYPES:
         subject = persona.name if persona is not None else "you"
-        raise IngestError(
-            f"not enough captured evidence to infer value dimensions for {subject} yet — "
-            f"{len(eligible)} Values/Mission-alignment item(s) across "
-            f"{len(subtypes_present)} subtype(s) captured; need at least {MIN_ITEMS} items "
-            f"spanning at least {MIN_SUBTYPES} subtypes (e.g. both values_pro and values_con "
-            "nominations, or add mission_alignment ones). Capture more with 'wingman "
-            "interview' or interview_react, then try again."
-        )
+        raise _not_enough_evidence(subject, view, len(eligible), len(subtypes_present))
     eligible = _newest(eligible, MAX_ITEMS_FOR_INFERENCE)
 
-    prompt = build_prompt(_items_block(eligible))
+    prompt = build_prompt(_items_block(eligible), view)
     response = provider.complete(ModelRequest(system=SYSTEM_PROMPT, prompt=prompt))
     proposal = parse_value_axis_proposal(response.text)
     axes, rejected = _validate_proposal(proposal, {item.item_id: item for item in eligible})
     if len(axes) < MIN_AXES_REQUIRED:
         raise IngestError(
-            f"only {len(axes)} value axis(es) survived validation ({len(rejected)} "
+            f"only {len(axes)} {VIEW_NOUNS[view]} axis(es) survived validation ({len(rejected)} "
             f"rejected) — need at least {MIN_AXES_REQUIRED} for a meaningful profile. "
             "Nothing was stored; capture more evidence or re-run to retry."
         )
@@ -379,18 +485,20 @@ def build_value_profile(
     profile = ValueProfile(
         subject_id=persona_card_id(persona.persona_id) if persona is not None else CORPUS_PERSON_ID,
         subject_name=persona.name if persona is not None else CORPUS_PERSON_NAME,
+        view=view,
         axes=axes,
         items_used=len(eligible),
         source_item_ids=[item.item_id for item in eligible],
         provider=response.provider,
         model=response.model,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=PROMPT_VERSIONS[view],
         scoring_version=SCORING_CONTRACT_VERSION,
     )
     storage.save_value_profile(profile)
     _logger.info(
-        "value_profile persona_id=%s items=%d axes=%d rejected=%d provider=%s model=%s",
+        "value_profile persona_id=%s view=%s items=%d axes=%d rejected=%d provider=%s model=%s",
         persona_id,
+        view.value,
         len(eligible),
         len(axes),
         len(rejected),
@@ -408,8 +516,14 @@ def new_captures_since(
     `profile.source_item_ids`, deterministic and model-free. 0 means the
     stored profile still reflects every eligible capture; a caller wanting
     the update reflected has to explicitly rebuild (refresh=True), the
-    same "stored until asked to rebuild" contract PovCard already uses."""
-    current_ids = {item.item_id for item in _eligible_items(storage, persona_id)}
+    same "stored until asked to rebuild" contract PovCard already uses.
+
+    Eligibility is read off `profile.view` rather than passed in (#356):
+    the two views have different eligible sets, and a caller that had to
+    supply the view could supply the wrong one — which would report a work
+    profile stale for every perspective reaction in the workspace, or
+    never stale for any of them."""
+    current_ids = {item.item_id for item in _eligible_items(storage, persona_id, profile.view)}
     return len(current_ids - set(profile.source_item_ids))
 
 
@@ -444,6 +558,88 @@ def scoring_is_current(profile: ValueProfile) -> bool:
     return profile.scoring_version == SCORING_CONTRACT_VERSION
 
 
+def parse_value_view(raw: str) -> ValueView:
+    """One place that turns a CLI flag or an MCP argument into a `ValueView`.
+
+    Refuses an unknown one by name rather than silently falling back to the
+    character view: a typo that quietly builds the OTHER reading, under a
+    heading that says so in small print, is how somebody ends up quoting
+    character axes at a hiring conversation believing they are work ones.
+    """
+    cleaned = raw.strip().lower() or ValueView.CHARACTER.value
+    try:
+        return ValueView(cleaned)
+    except ValueError as exc:
+        known = ", ".join(view.value for view in ValueView)
+        raise IngestError(
+            f"unknown value view {raw!r}; use one of: {known}. Nothing was built."
+        ) from exc
+
+
+def refresh_command(view: ValueView) -> str:
+    """The one command that rebuilds this view. Named once, here, because it
+    is quoted by the renderer, the chart's notice rows, the freshness report
+    and the fit brief — and a rebuild instruction that omits `--view work`
+    rebuilds the wrong artefact while looking like it worked."""
+    return (
+        "wingman values --refresh"
+        if view is ValueView.CHARACTER
+        else f"wingman values --refresh --view {view.value}"
+    )
+
+
+def refresh_tool(view: ValueView) -> str:
+    """The same instruction for a conversation rather than a shell."""
+    return (
+        "my_values(refresh=True)"
+        if view is ValueView.CHARACTER
+        else f"my_values(refresh=True, view={view.value!r})"
+    )
+
+
+def work_grounding_note(profile: ValueProfile) -> str:
+    """What a WORK-view profile has to admit about its own evidence — or ""
+    when there is nothing to admit.
+
+    The work view's characteristic failure is not thin evidence, it is a
+    leap of REGISTER: axes about how somebody works, read entirely off
+    verdicts about people's character. The perspective reactions
+    (`alignment_of_perspective_*`) are the captures that are actually about
+    ideas, and a work profile with none of them is one where every axis was
+    inferred at one remove.
+
+    Disclosed, not refused, and that is a deliberate trade-off. A floor
+    requiring reactions would refuse the work view on essentially every
+    workspace that exists today, including the owner's — the reaction
+    subtypes are the least-used part of the interview. A feature nobody can
+    run is not a floor, it is a wall, and it would leave the character axes
+    as the only thing a fit brief could reach for, which is the exact
+    problem #356 was filed about. So the profile renders, names the gap,
+    and says what closes it. The cost, stated: somebody who ignores this
+    line cites work axes that rest on character evidence.
+
+    Counted from the stored evidence's own subtypes rather than from a new
+    field, so it cannot drift from what the axes actually cite.
+    """
+    if profile.view is not ValueView.WORK:
+        return ""
+    grounded = {
+        span.item_id
+        for axis in profile.axes
+        for span in axis.evidence
+        if span.subtype in WORK_GROUNDING_SUBTYPES
+    }
+    if grounded:
+        return ""
+    return (
+        "(every axis above was read off nominations about PEOPLE — this workspace has no "
+        "perspective reactions among the cited evidence, so the work reading is an inference "
+        "at one remove. Capture reactions to things you read "
+        "(interview_react 'alignment_of_perspective_agree'/'_disagree') and rebuild to ground "
+        "it in evidence about ideas.)"
+    )
+
+
 def scoring_note(profile: ValueProfile) -> str:
     """The one line to show a reader of a profile scored under a rule this
     codebase no longer runs — or "" when it is current.
@@ -457,17 +653,18 @@ def scoring_note(profile: ValueProfile) -> str:
     """
     if scoring_is_current(profile):
         return ""
+    rebuild = refresh_command(profile.view)
     if _predates_direction(profile):
         return (
             "(this profile was built before per-item direction was recorded, so an axis "
-            "evidenced by a 'con' nomination may have the wrong sign — rebuild with "
-            "'wingman values --refresh' to correct it)"
+            f"evidenced by a 'con' nomination may have the wrong sign — rebuild with "
+            f"'{rebuild}' to correct it)"
         )
     built_under = profile.scoring_version or "an unrecorded scoring rule"
     return (
         f"(scored under {built_under}; the current scoring contract is "
         f"{SCORING_CONTRACT_VERSION}. The numbers above came from a rule this version of "
-        "wingman no longer runs — rebuild with 'wingman values --refresh' to score them "
+        f"wingman no longer runs — rebuild with '{rebuild}' to score them "
         "under the current one)"
     )
 
@@ -500,7 +697,7 @@ def _contested_directions(axis: ValueAxis) -> int:
 def render_value_profile(profile: ValueProfile, stale_new_captures: int = 0) -> str:
     """Deterministic text rendering shared by the CLI and MCP surfaces."""
     lines = [
-        f"Value profile: {profile.subject_name}",
+        f"{VIEW_TITLES[profile.view]}: {profile.subject_name}",
         # The scoring-rule version is printed unconditionally, not only when
         # it is stale: AGENTS.md requires a score to expose the rule that
         # produced it, and a version that only appears when something is
@@ -539,6 +736,10 @@ def render_value_profile(profile: ValueProfile, stale_new_captures: int = 0) -> 
     if contract:
         lines.append("")
         lines.append(contract)
+    grounding = work_grounding_note(profile)
+    if grounding:
+        lines.append("")
+        lines.append(grounding)
     if stale_new_captures:
         noun = "capture" if stale_new_captures == 1 else "captures"
         lines.append("")

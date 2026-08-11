@@ -211,7 +211,11 @@ Everything below is a sentence to Claude, not a command to remember:
   graph, cited as its own source.
 - **Your own values card** — "what do I actually value?" (`my_values`) —
   inferred from your Values/Mission-alignment interview answers, each axis
-  backed by the specific items that informed it.
+  backed by the specific items that informed it. The same captures also
+  read a second way: "how do I want to work?" (`my_values(view='work')`)
+  names them as working conditions rather than character traits — what you
+  want authority over, the standard you hold work to — and that reading is
+  what `assess_job` prints into a fit brief.
 - **Build an answer bank** — working through an application's questions?
   "save this answer for reuse" (`answer_bank`) keeps refined Q+A+context so
   you're not rewriting the same answer for every company.

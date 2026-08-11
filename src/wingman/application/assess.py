@@ -4,6 +4,12 @@ Two model steps, each bracketed by deterministic validation:
 read/hash/persist SourceRecord -> requirement extraction -> quote validation ->
 fit assessment -> evidence-ID validation (met/partial without resolvable
 profile evidence is downgraded to unknown) -> persist Opportunity -> fit brief.
+
+The brief also carries the stored WORK-view value profile when one exists
+(#356, RFC-066) — how this person wants to work, cited to their own
+captures. It is read after the assessment and never enters a prompt: see
+`reporting.fit_brief` for why an inferred axis must not become the evidence
+a requirement is judged on.
 """
 
 from __future__ import annotations
@@ -27,6 +33,8 @@ from wingman.agents.opportunity_analyst import (
 )
 from wingman.application.evidence import fold_whitespace
 from wingman.application.ingest import IngestError, RejectedItem
+from wingman.application.pov import CORPUS_PERSON_ID
+from wingman.application.values import new_captures_since
 from wingman.domain import SourceRecord
 from wingman.domain.opportunity import (
     FitVerdict,
@@ -36,6 +44,7 @@ from wingman.domain.opportunity import (
 )
 from wingman.domain.profile import EvidenceSpan, ItemStatus, ProfileItem
 from wingman.domain.source_record import derive_document_key
+from wingman.domain.values import ValueView
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -321,7 +330,23 @@ def assess_job(
         "synthesize_balanced": f"{response.provider}/{response.model}",
         "prompts": f"{REQUIREMENTS_PROMPT_VERSION}+{ASSESSMENT_PROMPT_VERSION}",
     }
-    brief_json, brief_md = render_fit_brief(opportunity, items, config, models)
+    # The work-view value profile, when the workspace has one (#356,
+    # RFC-066). Read AFTER the assessment, and never passed to a model:
+    # this is a rendering concern, so a missing profile can never change a
+    # verdict, and an inferred axis can never become the evidence a
+    # requirement was judged on. CORPUS_PERSON_ID because assessing a job
+    # is always about the owner — a coached persona's own work profile
+    # belongs to their coaching surfaces, not to the owner's fit brief.
+    work_profile = storage.get_value_profile(CORPUS_PERSON_ID, ValueView.WORK)
+    work_new_captures = new_captures_since(storage, work_profile) if work_profile is not None else 0
+    brief_json, brief_md = render_fit_brief(
+        opportunity,
+        items,
+        config,
+        models,
+        work_profile=work_profile,
+        work_new_captures=work_new_captures,
+    )
 
     verdict_counts: dict[str, int] = {}
     for assessment in assessments:

@@ -27,7 +27,7 @@ from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 from wingman.domain.relationship import RelationshipLogEntry, RelationshipObjective
 from wingman.domain.research import CompanySource, NewLinkEvent, ResearchSnapshot
 from wingman.domain.source_record import derive_document_key
-from wingman.domain.values import ValueProfile
+from wingman.domain.values import ValueProfile, ValueView
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_records (
@@ -92,9 +92,11 @@ CREATE TABLE IF NOT EXISTS pov_cards (
 );
 CREATE TABLE IF NOT EXISTS value_profiles (
     profile_id TEXT PRIMARY KEY,
-    subject_id TEXT NOT NULL UNIQUE,
+    subject_id TEXT NOT NULL,
+    profile_view TEXT NOT NULL DEFAULT 'character',
     payload TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    UNIQUE (subject_id, profile_view)
 );
 CREATE TABLE IF NOT EXISTS person_dossiers (
     dossier_id TEXT PRIMARY KEY,
@@ -240,6 +242,7 @@ class Storage:
         self._conn = sqlite3.connect(db_path)
         self._conn.executescript(_SCHEMA)
         self._migrate_document_key()
+        self._migrate_value_profile_view()
         self._conn.commit()
 
     def _migrate_document_key(self) -> None:
@@ -261,6 +264,47 @@ class Storage:
                 "UPDATE source_records SET document_key = ? WHERE record_id = ?",
                 (derive_document_key(locator), record_id),
             )
+
+    def _migrate_value_profile_view(self) -> None:
+        """Pre-#356 databases key a value profile on subject_id ALONE.
+
+        A second reading of the same captures (`domain.values.ValueView`)
+        has to live beside the first, so uniqueness moves from `subject_id`
+        to `(subject_id, profile_view)`. SQLite cannot drop the column-level
+        UNIQUE the old table declared, so the table is rebuilt and copied —
+        the standard SQLite recipe, not a clever one.
+
+        Existing rows are stamped `character`, which is what they are: the
+        only reading that existed. The payload needs no touching —
+        `ValueProfile.view` defaults to CHARACTER, so an old row
+        deserializes to exactly the profile it always was.
+
+        Without this, saving a work profile would hit the old UNIQUE and
+        REPLACE the character profile on the same subject: two views
+        silently overwriting each other, in a table whose whole lifecycle
+        is "one current artefact, rebuilt in place".
+        """
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(value_profiles)")}
+        if "profile_view" in columns:
+            return
+        self._conn.executescript(
+            """
+            CREATE TABLE value_profiles_migrated (
+                profile_id TEXT PRIMARY KEY,
+                subject_id TEXT NOT NULL,
+                profile_view TEXT NOT NULL DEFAULT 'character',
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (subject_id, profile_view)
+            );
+            INSERT INTO value_profiles_migrated
+                (profile_id, subject_id, profile_view, payload, created_at)
+                SELECT profile_id, subject_id, 'character', payload, created_at
+                FROM value_profiles;
+            DROP TABLE value_profiles;
+            ALTER TABLE value_profiles_migrated RENAME TO value_profiles;
+            """
+        )
 
     def __enter__(self) -> Self:
         return self
@@ -865,25 +909,38 @@ class Storage:
         return [PovCard.model_validate_json(row[0]) for row in cursor.fetchall()]
 
     def save_value_profile(self, profile: ValueProfile) -> None:
-        """Insert or replace the profile for its subject (rebuilt, not
-        versioned — same lifecycle as save_pov_card)."""
+        """Insert or replace the profile for its (subject, view) (rebuilt,
+        not versioned — same lifecycle as save_pov_card).
+
+        The view is a column as well as a payload field (#356) so the
+        database enforces one profile per reading. Keyed on subject_id
+        alone, a work-view rebuild would replace the character profile —
+        the two readings of the same captures deleting each other."""
         self._conn.execute(
-            "INSERT INTO value_profiles (profile_id, subject_id, payload, created_at)"
-            " VALUES (?, ?, ?, ?)"
-            " ON CONFLICT(subject_id) DO UPDATE SET profile_id = excluded.profile_id,"
+            "INSERT INTO value_profiles"
+            " (profile_id, subject_id, profile_view, payload, created_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(subject_id, profile_view) DO UPDATE SET"
+            " profile_id = excluded.profile_id,"
             " payload = excluded.payload, created_at = excluded.created_at",
             (
                 profile.profile_id,
                 profile.subject_id,
+                profile.view.value,
                 profile.model_dump_json(),
                 profile.generated_at.isoformat(),
             ),
         )
         self._conn.commit()
 
-    def get_value_profile(self, subject_id: str) -> ValueProfile | None:
+    def get_value_profile(
+        self, subject_id: str, view: ValueView = ValueView.CHARACTER
+    ) -> ValueProfile | None:
+        """The stored profile for one subject and reading. The default keeps
+        every caller that predates views asking the question it asked."""
         cursor = self._conn.execute(
-            "SELECT payload FROM value_profiles WHERE subject_id = ?", (subject_id,)
+            "SELECT payload FROM value_profiles WHERE subject_id = ? AND profile_view = ?",
+            (subject_id, view.value),
         )
         row: tuple[str] | None = cursor.fetchone()
         return ValueProfile.model_validate_json(row[0]) if row else None

@@ -30,6 +30,13 @@ judgment a reading of an explicit statement rather than an inference from
 a verdict. Captures predating the question have none, so `direction` is
 still what the sign comes from in every case.
 
+RFC-066 (issue #356) adds a second READING of the same captures rather
+than a second pipeline: `ValueView` names it, `ValueProfile.view` carries
+it, and everything below — the score, the sign, the buckets, the
+traceability — is identical for both. Only the prompt's naming
+instruction, the eligible-capture set, and the wording of what the
+artefact discloses about itself differ.
+
 **Why the contract versions live here** (issue #355, RFC-063). `SCORING_CONTRACT_VERSION`
 and `RADAR_CONTRACT_VERSION` name behaviour implemented elsewhere —
 `application.values` scores, `reporting.radar` draws. They are declared in
@@ -83,6 +90,34 @@ SCORING_CONTRACT_VERSION = "values-scoring-1"
 #: would mark every stored profile stale for a change that never touched a
 #: number.
 RADAR_CONTRACT_VERSION = "values-radar-1"
+
+
+class ValueView(StrEnum):
+    """Which READING of the same captures a profile is (issue #356, RFC-066).
+
+    The captures do not change; the register the axes are named in does.
+
+    CHARACTER — what this person cares about as a person: "compassion for
+    the marginalized", "accountability over power". This is what RFC-051
+    always built, and it is the point of the Values interview.
+    WORK — how this person wants to WORK: what they want authority over,
+    what conditions they need, what they will and will not ship. The same
+    capture that reads as *honesty* on the character view reads as
+    *verification and auditability as a precondition for shipping* here.
+
+    Two views rather than two axis sets: the scoring rule, the per-item
+    `direction` contract (RFC-056) and the storage lifecycle are identical,
+    and only the model's naming instruction differs. A parallel pipeline
+    would have meant two implementations of arithmetic that must never
+    disagree.
+
+    The character view exists so nothing that already reads a `ValueProfile`
+    has to know views exist: it is the default everywhere, including for a
+    profile stored before this enum did.
+    """
+
+    CHARACTER = "character"
+    WORK = "work"
 
 
 class AxisDirection(StrEnum):
@@ -167,6 +202,14 @@ class ValueProfile(BaseModel):
     the currently-eligible item set — no model call needed to detect it,
     only to recompute.
 
+    `view` (issue #356) says which READING these axes are — the character
+    one RFC-051 always built, or the work one a fit assessment can cite.
+    It is a discriminator on the same subject rather than a second key, so
+    a workspace holds at most one profile per (subject, view) and the two
+    views can never be confused for each other by a reader that forgot to
+    ask. It defaults to CHARACTER, which is what every profile stored
+    before the field existed actually is.
+
     `scoring_version` is the other half of that question (#355): inputs
     can sit still while the CODE that shaped them moves. It records the
     `SCORING_CONTRACT_VERSION` in force when this profile's numbers were
@@ -180,6 +223,7 @@ class ValueProfile(BaseModel):
     profile_id: str = Field(default_factory=lambda: str(uuid4()))
     subject_id: str
     subject_name: str
+    view: ValueView = ValueView.CHARACTER
     axes: list[ValueAxis] = Field(default_factory=list)
     items_used: int
     source_item_ids: list[str] = Field(default_factory=list)

@@ -19,6 +19,7 @@ from typer.testing import CliRunner
 from wingman.application.artifacts import remember_artifact
 from wingman.application.freshness import (
     CHECKED_KINDS,
+    ArtefactStaleness,
     current_fingerprint,
     render_staleness,
     stale_artefacts,
@@ -32,6 +33,7 @@ from wingman.domain.values import (
     ValueAxis,
     ValueAxisEvidence,
     ValueProfile,
+    ValueView,
 )
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.storage import Storage
@@ -84,10 +86,19 @@ def _profile(scoring_version: str = SCORING_CONTRACT_VERSION) -> ValueProfile:
     )
 
 
-def _only(config: Config, storage: Storage) -> object:
+def _only(config: Config, storage: Storage) -> ArtefactStaleness:
+    """The CHARACTER radar's report.
+
+    Since #356 there is one report per value VIEW, and every assertion in
+    this module is about the character one. Selected by kind rather than by
+    position so a future third view cannot silently repoint these tests at
+    a different artefact — and the kinds are checked against
+    `CHECKED_KINDS` here, once, so an unreported view fails loudly instead
+    of vanishing from a report that still reads as complete.
+    """
     reports = stale_artefacts(config, storage)
-    assert len(reports) == 1
-    return reports[0]
+    assert [report.kind for report in reports] == list(CHECKED_KINDS)
+    return next(report for report in reports if report.kind == "values_radar")
 
 
 # --- the code half, which nothing could answer before -------------------------
@@ -335,3 +346,77 @@ def test_nothing_here_refuses_anything(workspace: Config) -> None:
 
     assert export.path.exists()
     assert runner.invoke(app, ["artifacts", "stale"]).exit_code == 0
+
+
+# --- one report per value view (#356) ----------------------------------------
+
+
+def test_both_value_views_are_reported_even_when_one_was_never_built(
+    workspace: Config,
+) -> None:
+    """A staleness report that quietly omits a view reads as a clean bill of
+    health for it. 'Never built' is reported as unchecked — which is not the
+    same as current, and must not collapse into it."""
+    with Storage(workspace.db_path) as storage:
+        storage.save_value_profile(_profile())
+        reports = {report.kind: report for report in stale_artefacts(workspace, storage)}
+
+    assert set(reports) == {"values_radar", "values_radar_work"}
+    assert reports["values_radar"].checked
+    work = reports["values_radar_work"]
+    assert not work.checked
+    assert not work.stale
+    assert "no work profile has been built yet" in " ".join(work.reasons)
+
+
+def test_the_work_views_rebuild_instruction_names_the_work_view(workspace: Config) -> None:
+    """'wingman values --refresh' rebuilds the character reading. Printed
+    against a stale work radar it looks like the fix and is not."""
+    with Storage(workspace.db_path) as storage:
+        work = _profile(scoring_version="values-scoring-0").model_copy(
+            update={"view": ValueView.WORK}
+        )
+        storage.save_value_profile(work)
+        reports = {report.kind: report for report in stale_artefacts(workspace, storage)}
+        rendered = render_staleness(list(reports.values()))
+
+    assert reports["values_radar_work"].stale
+    assert "wingman values --refresh --view work" in rendered
+    assert "my_values(refresh=True, view='work')" in rendered
+
+
+def test_a_published_work_page_is_recorded_against_its_own_kind(workspace: Config) -> None:
+    """One current page per kind is what makes 'update my values page'
+    resolve. Fold the two views into one kind and publishing the work chart
+    silently replaces the record of where the character chart went."""
+    with Storage(workspace.db_path) as storage:
+        character = _profile()
+        work = _profile().model_copy(update={"view": ValueView.WORK})
+        storage.save_value_profile(character)
+        storage.save_value_profile(work)
+
+        assert current_fingerprint("values_radar", storage) == values_radar_fingerprint(character)
+        assert current_fingerprint("values_radar_work", storage) == values_radar_fingerprint(work)
+        assert current_fingerprint("values_radar", storage) != current_fingerprint(
+            "values_radar_work", storage
+        )
+
+
+def test_an_unstamped_legacy_chart_is_judged_once_not_under_both_views(
+    workspace: Config,
+) -> None:
+    """A chart exported before #356 predates views, so it is a character
+    chart. Judging it against the work radar too would flag one legacy file
+    under two headings — and the second is precisely the false alarm the
+    view marker exists to prevent."""
+    charts = workspace.reports_dir / "charts"
+    charts.mkdir(parents=True, exist_ok=True)
+    (charts / "you-corpus-values-radar.svg").write_text("<svg></svg>", encoding="utf-8")
+
+    with Storage(workspace.db_path) as storage:
+        storage.save_value_profile(_profile())
+        storage.save_value_profile(_profile().model_copy(update={"view": ValueView.WORK}))
+        reports = {report.kind: report for report in stale_artefacts(workspace, storage)}
+
+    assert any("carries no provenance stamp" in r for r in reports["values_radar"].reasons)
+    assert reports["values_radar_work"].reasons == []
