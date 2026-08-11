@@ -1443,9 +1443,7 @@ def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = 
         current_fingerprint,
         render_staleness,
         stale_artefacts,
-        unchecked_kinds,
     )
-    from wingman.domain.artifacts import ARTIFACT_KINDS
 
     config = _ready_config()
     if config is None:
@@ -1455,9 +1453,7 @@ def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = 
             if action == "list":
                 return render_artifacts(storage.list_published_artifacts())
             if action == "stale":
-                return render_staleness(
-                    stale_artefacts(config, storage), unchecked_kinds(ARTIFACT_KINDS)
-                )
+                return render_staleness(stale_artefacts(config, storage))
             if action == "remember":
                 artifact = remember_artifact(
                     kind,

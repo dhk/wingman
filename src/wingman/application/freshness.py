@@ -59,6 +59,7 @@ from pydantic import BaseModel, Field
 
 from wingman.application.pov import CORPUS_PERSON_ID
 from wingman.application.values import new_captures_since, scoring_is_current
+from wingman.domain.artifacts import ARTIFACT_KINDS
 from wingman.domain.values import RADAR_CONTRACT_VERSION, ValueProfile
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.storage import Storage
@@ -252,14 +253,16 @@ def stale_artefacts(config: Config, storage: Storage) -> list[ArtefactStaleness]
     return [_values_radar_staleness(config, storage)]
 
 
-def render_staleness(reports: list[ArtefactStaleness], unchecked_kinds: list[str]) -> str:
+def render_staleness(reports: list[ArtefactStaleness]) -> str:
     """The listing, including what was NOT examined.
 
-    `unchecked_kinds` is printed rather than dropped for the same reason
-    `reasons` is never silently empty: a staleness report that quietly
-    covers a third of the artefact kinds is the confident-freshness failure
-    this whole mechanism exists to prevent, arriving by a different route.
+    The unchecked kinds are worked out here rather than passed in, so a
+    caller cannot omit them: a staleness report that quietly covers a third
+    of the artefact kinds is the confident-freshness failure this whole
+    mechanism exists to prevent, arriving by a different route, and that is
+    not something to leave to a surface remembering to ask.
     """
+    not_checked = [kind for kind in ARTIFACT_KINDS if kind not in CHECKED_KINDS]
     lines = ["Artefact freshness — inputs AND the code that shaped them:"]
     for report in reports:
         if not report.checked:
@@ -275,20 +278,16 @@ def render_staleness(reports: list[ArtefactStaleness], unchecked_kinds: list[str
         lines.extend(f"    · {reason}" for reason in report.reasons)
         lines.append(f"    rebuild: {report.rebuild_command}")
         lines.append(f"    or, in a conversation: {report.rebuild_tool}")
-    if unchecked_kinds:
+    if not_checked:
         lines.append("")
         lines.append(
             "Not checked: "
-            + ", ".join(unchecked_kinds)
+            + ", ".join(not_checked)
             + ". These are rendered live from the workspace each time, so there is no stored "
             "derivation to compare against — a published one is a snapshot whose age is the "
             "only honest thing to say about it ('wingman artifacts list' prints it)."
         )
     return "\n".join(lines)
-
-
-def unchecked_kinds(kinds: tuple[str, ...]) -> list[str]:
-    return [kind for kind in kinds if kind not in CHECKED_KINDS]
 
 
 __all__ = [
@@ -300,6 +299,5 @@ __all__ = [
     "render_staleness",
     "stale_artefacts",
     "stamp_in",
-    "unchecked_kinds",
     "values_radar_fingerprint",
 ]

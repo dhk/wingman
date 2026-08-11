@@ -323,15 +323,12 @@ def artifacts_stale() -> None:
 
     Reports, never refuses. Every stale line carries its rebuild command.
     """
-    from wingman.application.freshness import render_staleness, stale_artefacts, unchecked_kinds
-    from wingman.domain.artifacts import ARTIFACT_KINDS
+    from wingman.application.freshness import render_staleness, stale_artefacts
 
     configure_logging()
     config = load_config()
     with Storage(config.db_path) as storage:
-        typer.echo(
-            render_staleness(stale_artefacts(config, storage), unchecked_kinds(ARTIFACT_KINDS))
-        )
+        typer.echo(render_staleness(stale_artefacts(config, storage)))
 
 
 @artifacts_app.command("forget")

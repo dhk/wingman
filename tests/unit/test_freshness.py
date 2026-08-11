@@ -22,7 +22,6 @@ from wingman.application.freshness import (
     current_fingerprint,
     render_staleness,
     stale_artefacts,
-    unchecked_kinds,
     values_radar_fingerprint,
 )
 from wingman.application.pov import CORPUS_PERSON_ID, CORPUS_PERSON_NAME
@@ -281,12 +280,11 @@ def test_nothing_built_yet_is_reported_as_unchecked_not_as_current(
 def test_the_report_names_the_kinds_it_did_not_examine(workspace: Config) -> None:
     """A staleness report quietly covering a third of the artefact kinds is
     the confident-freshness failure this mechanism exists to prevent,
-    arriving by a different route."""
+    arriving by a different route — so the renderer works the omissions out
+    itself rather than trusting a surface to pass them in."""
     with Storage(workspace.db_path) as storage:
         storage.save_value_profile(_profile())
-        rendered = render_staleness(
-            stale_artefacts(workspace, storage), unchecked_kinds(ARTIFACT_KINDS)
-        )
+        rendered = render_staleness(stale_artefacts(workspace, storage))
 
     assert "Not checked:" in rendered
     for kind in ARTIFACT_KINDS:
@@ -300,7 +298,7 @@ def test_every_stale_line_carries_the_command_that_rebuilds_it(workspace: Config
     running."""
     with Storage(workspace.db_path) as storage:
         storage.save_value_profile(_profile(scoring_version="values-scoring-0"))
-        rendered = render_staleness(stale_artefacts(workspace, storage), [])
+        rendered = render_staleness(stale_artefacts(workspace, storage))
 
     assert "STALE" in rendered
     assert "wingman values --refresh" in rendered
