@@ -13,6 +13,11 @@ configured (voyage), the query text is sent to that provider — the same
 trip document text makes during 'wingman embed'. With the local 'hashed'
 provider, or no embeddings at all, search stays fully on the machine, and
 the semantic pass degrades visibly, never silently.
+
+One store is deliberately excluded: the commentary corpus (RFC-058, #339), the
+assistant's readings of the user's material. See the note where the
+columns end for why, and for the note this report carries so the omission
+is visible rather than silent.
 """
 
 from __future__ import annotations
@@ -383,6 +388,20 @@ def search_workspace(query: str, storage: Storage, config: Config, limit: int = 
             )
     report.searched.append("answers")
     columns.append(answer_hits[:per_store])
+
+    # The commentary corpus (RFC-058, #339) is NOT one of the columns above, and never
+    # becomes one: what this function returns is read back by a model that may
+    # be about to persist a hit (resolve_requirement recalls here, then offers
+    # qa_capture), so a stray reading in this stream is one accepted suggestion
+    # away from being filed as the user's own answer. Said out loud rather than
+    # left as a silent omission, so nobody concludes the store is empty.
+    commentary_entries = storage.count_commentary_entries()
+    if commentary_entries:
+        report.notes.append(
+            f"commentary not searched ({commentary_entries} entries) — the assistant's "
+            "readings of your material are a separate store, outside every evidence path; "
+            "'wingman commentary find' searches it."
+        )
 
     # Interleave by per-store rank: every store's best answer surfaces before
     # any store's third-best. Deterministic tie-break by column order above.
