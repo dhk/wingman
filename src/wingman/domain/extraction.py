@@ -72,3 +72,24 @@ class ProposedAssessment(BaseModel):
 
 class AssessmentProposal(BaseModel):
     assessments: list[ProposedAssessment]
+
+
+class ProposedCompanyFinding(BaseModel):
+    """One company deep-dive finding as the model proposed it (#350).
+
+    Deliberately looser than `domain.company.CompanyFinding`: every field is
+    a plain string with no URL validation and no dimension enum, so a
+    malformed or unsourced proposal parses and is then REJECTED by name with
+    a reason the user can read — rather than failing the whole response and
+    hiding which claim was bad.
+    """
+
+    dimension: str = ""
+    claim: str = ""
+    quote: str = ""
+    source_url: str = ""
+    source_title: str = ""
+
+
+class CompanyFindingsProposal(BaseModel):
+    findings: list[ProposedCompanyFinding]

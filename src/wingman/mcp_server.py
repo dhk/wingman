@@ -51,6 +51,13 @@ from wingman.application.answers import (
 from wingman.application.assess import assess_job as assess_job_use_case
 from wingman.application.assess import fetch_job_posting
 from wingman.application.backup import create_backup
+from wingman.application.company_deep_dive import (
+    render_findings,
+    research_company_dossier,
+    review_findings,
+    save_company_dossier,
+    spend_warning,
+)
 from wingman.application.company_feeds import (
     attach_company_feed,
     fetch_company_feeds,
@@ -1920,6 +1927,98 @@ def company_dossier(name: str) -> str:
     except IngestError as exc:
         return f"company dossier failed: {exc}"
     return report.markdown + f"\n(written to {report.path})"
+
+
+@server.tool()
+def company_deep_dive(name: str, confirmed: bool = False) -> str:
+    """One-shot open-web research on a company (#350): market position,
+    stated values, culture — each finding with the source that backs it.
+
+    One of two wingman lookups that reach the open web (RESEARCH_WEBSEARCH,
+    via OpenRouter) and one of two that cost API usage per call — every
+    other lookup stays inside approved sources or stored data.
+
+    PROTOCOL:
+    1. Call with confirmed=false first (the default): makes NO network call
+       and costs nothing — just the search plan and the cost to show the
+       user. Ask them to confirm before proceeding.
+    2. Only after they explicitly agree, call again with confirmed=true —
+       THIS call is the paid one. It returns the findings, plus anything
+       rejected for citing a source the search did not actually return.
+       Nothing is stored yet.
+    3. Show the findings to the user. Only after they approve storing them,
+       call company_deep_dive_save(name, content=<the findings text from
+       step 2, unchanged>) — a separate tool, so nothing is written without
+       that second, explicit act. Editing the text before saving is allowed
+       (dropping a finding you distrust is the point); a finding whose
+       source line you remove is refused, not stored unsourced.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    if not name.strip():
+        return "company_deep_dive needs a company name."
+    if not confirmed:
+        return (
+            f"{spend_warning(name)}\n\n"
+            "Ask the user to confirm, then call again with confirmed=true."
+        )
+    try:
+        provider = get_provider(CapabilityClass.RESEARCH_WEBSEARCH, config)
+        response = research_company_dossier(name, provider)
+        review = review_findings(name, response)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        return f"company deep-dive failed: {exc}"
+    except ProposalParseError as exc:
+        return f"company deep-dive failed: {exc}. Nothing was stored; call again to retry."
+    warning = dossier_truncation_warning(response)
+    prefix = f"{warning}\n\n" if warning else ""
+    content = render_findings(review)
+    if not review.findings:
+        return (
+            f"{prefix}{content}\n"
+            "No finding survived the source gate, so there is nothing to store. "
+            "Every claim the model returned cited a page its own search did not "
+            "return — report that rather than storing it."
+        )
+    return (
+        f"{prefix}{content}\n"
+        "Not stored. Show the findings above to the user — call "
+        f"company_deep_dive_save({name!r}, content=<the findings text above, "
+        "unchanged>) only after they explicitly approve storing them."
+    )
+
+
+@server.tool()
+def company_deep_dive_save(name: str, content: str) -> str:
+    """Store deep-dive findings from a prior company_deep_dive call (#350).
+
+    Call only after showing that exact content to the user and getting
+    their explicit approval — this call is itself the storage approval gate
+    (no separate confirmed flag: the reviewed content in hand is the proof,
+    same shape as people_deep_dive_save). Every finding is re-checked for a
+    fetchable http(s) source on the way in; unsourced ones are refused.
+    Overwrites any previous deep-dive for this company (rebuilt, not
+    versioned — same as a POV card). Renders inside company_dossier.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        provider_name = getattr(
+            get_provider(CapabilityClass.RESEARCH_WEBSEARCH, config), "provider_name", ""
+        )
+    except (ModelConfigError, ProviderError):
+        provider_name = ""
+    with Storage(config.db_path) as storage:
+        try:
+            dossier = save_company_dossier(name, content, storage, provider=provider_name)
+        except IngestError as exc:
+            return f"company deep-dive save failed: {exc}"
+    return (
+        f"Stored deep-dive for {dossier.company_name} "
+        f"({len(dossier.findings)} sourced findings). It renders in company_dossier."
+    )
 
 
 @server.tool()

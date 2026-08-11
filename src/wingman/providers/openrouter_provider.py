@@ -38,7 +38,13 @@ from wingman.providers.base import ModelRequest, ModelResponse, ProviderError
 _ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 _ENV_KEY = "OPENROUTER_API_KEY"
 _TIMEOUT_SECONDS = 90
-_DEFAULT_MAX_RESULTS = 10
+# Public, because a caller has to be able to tell the user what a call will
+# cost BEFORE making it (#350's spend gate): the search fee is exactly
+# results x price, and neither number should be re-guessed at the call site.
+DEFAULT_MAX_RESULTS = 10
+# OpenRouter's published web-plugin price, $4 per 1000 results (2026-08).
+# Model tokens are charged on top and vary by the configured model.
+SEARCH_RESULT_PRICE_USD = 0.004
 
 
 def _format_sources(annotations: list[dict[str, Any]]) -> str:
@@ -78,7 +84,7 @@ class OpenRouterProvider:
         self,
         model: str,
         api_key: str | None = None,
-        max_results: int = _DEFAULT_MAX_RESULTS,
+        max_results: int = DEFAULT_MAX_RESULTS,
         strict: bool = False,
     ) -> None:
         self._model = model

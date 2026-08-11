@@ -198,6 +198,9 @@ def rename_company(old_name: str, new_name: str, storage: Storage) -> tuple[int,
         raise IngestError("new name normalizes to the same company — nothing to rename.")
     moved = storage.move_company_sources(old_key, new_key, new_name.strip())
     storage.move_pov_card(company_card_id(old_key), company_card_id(new_key))
+    # The open-web deep dive (#350) is keyed by company too — left behind, it
+    # would be unreachable under the new name and still returned under the old.
+    storage.move_company_dossier(old_key, new_key, new_name.strip())
     storage.watchlist_rename_member("company", old_name.strip(), new_name.strip())
     # The company feed anchor (RFC-029) is keyed by company: re-key it and
     # carry its documents/news along, before the general people loop.
@@ -224,13 +227,14 @@ def rename_company(old_name: str, new_name: str, storage: Storage) -> tuple[int,
 
 
 def delete_company(name: str, storage: Storage) -> tuple[bool, list[str]]:
-    """Delete a company's approved sources, research snapshots, POV card, and any
-    watchlist memberships under this exact name — and clear Person.company on
+    """Delete a company's approved sources, research snapshots, POV card, open-web
+    deep dive, and any watchlist memberships under this exact name — and clear Person.company on
     everyone attributed to it, so the delete is actually complete (#64).
     Returns (whether anything existed, names of people whose company was cleared)."""
     key = _resolve_company(name)
     removed_sources = storage.delete_company_sources(key) > 0
     removed_card = storage.delete_pov_card(company_card_id(key))
+    removed_dossier = storage.delete_company_dossier(key)
     removed_watchlist = storage.watchlist_delete_member("company", name.strip()) > 0
     # The feed anchor and everything keyed to it goes with the company (RFC-029).
     removed_anchor = storage.delete_person(company_card_id(key))
@@ -239,7 +243,9 @@ def delete_company(name: str, storage: Storage) -> tuple[bool, list[str]]:
         if person.company and company_key(person.company) == key:
             storage.update_person(person.model_copy(update={"company": None}))
             cleared.append(person.name)
-    existed = removed_sources or removed_card or removed_watchlist or removed_anchor
+    existed = (
+        removed_sources or removed_card or removed_dossier or removed_watchlist or removed_anchor
+    )
     return existed or bool(cleared), cleared
 
 

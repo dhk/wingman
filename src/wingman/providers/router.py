@@ -46,8 +46,8 @@ model = "claude-sonnet-5"
 provider = "voyage"
 model = "voyage-4"
 
-# Open-web research (#222's person deep-dive) — the only capability class
-# whose provider reaches the open web rather than staying inside
+# Open-web research (#222's person deep-dive, #350's company deep-dive) — the
+# only capability class whose provider reaches the open web rather than staying inside
 # approved/named sources (RFC-015) or user-dropped items (the heap,
 # #113). provider = "openrouter" calls OpenRouter's web-search plugin
 # (OPENROUTER_API_KEY required); nothing else in wingman calls this
