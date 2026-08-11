@@ -57,6 +57,38 @@ they survive:
 Nothing is built for the screenshot case beyond that first line. A picture
 that has been photographed is outside what any code here can reach, and
 pretending otherwise would mean designing for a promise that cannot be kept.
+
+**A label drawn outside the viewBox is a label nobody reads (issue #354).**
+Axis names were placed at a fixed radius and drawn at whatever length they
+happened to be, with no width budget anywhere in the geometry. Measured
+against a real profile, four of five labels ran past the canvas — the worst
+by 204px of a 640px viewBox, a third of the width — and `viewBox` clips, so
+that text was gone, not merely tight. It was never going to stay rare: the
+model names the axes and RFC-051 asks for DESCRIPTIVE names ("Compassion
+for the marginalized and downtrodden", 46 characters, is real output).
+
+So a label now knows how much room it has and takes no more. `_label_budget`
+derives the room from the anchor the label already had — a `start`-anchored
+label may run to the right edge, an `end`-anchored one to the left, a
+`middle`-anchored one symmetrically — and `_wrap_to_budget` breaks the name
+across `<tspan>` lines that fit it. Two consequences fall out of deriving
+the budget from the anchor: a block can never cross the chart's centre line,
+so left and right labels cannot collide with each other, and the wrapped
+height is known before anything is drawn, so `render_value_radar_svg` grows
+the canvas to contain the tallest one rather than discovering it too late.
+The canvas is also wider than it was (640 -> 800), which buys no correctness
+at all — wrapping is what guarantees that — but turns a name that would wrap
+into five 14-character slivers into one that wraps into two readable lines.
+
+Two things were rejected. Truncating with an ellipsis: an axis name IS the
+meaning of its spoke, and a silently cut one is worse than a wrapped one,
+because the reader cannot tell that anything was lost. Numbering the spokes
+and moving the names to the legend: that trades away the one thing a radar
+is for, reading the shape at a glance. Text width is estimated rather than
+measured (`_text_width`) — no font metrics without a rendering dependency
+AGENTS.md rules out — and the estimate leans deliberately WIDE, because
+being wrong toward "wrapped a line early" costs a reader nothing and being
+wrong the other way is the bug above, returning.
 """
 
 from __future__ import annotations
@@ -87,17 +119,55 @@ _logger = get_logger("reporting.radar")
 
 # Geometry. Axis count is bounded 3-6 by application.values (MIN_AXES_REQUIRED/
 # MAX_AXES) — this module trusts that bound rather than re-validating it.
-_CENTER_X = 320.0
+#
+# The width is 800 rather than the original 640 (#354). Widening buys no
+# correctness — `_wrap_to_budget` is what keeps a label on the canvas at any
+# width — it buys LEGIBILITY: at 640 the worst-placed label on a five-axis
+# chart has ~85px to work with, which wraps a descriptive axis name into five
+# slivers. 800 gives it ~165px, i.e. two ordinary lines. It stops there
+# because the chart is already ~740 tall; wider than this and the picture
+# stops being one a reader takes in at a glance, which is the whole point of
+# a radar.
+_WIDTH = 800.0
+_CENTER_X = _WIDTH / 2.0
 _CENTER_Y = 300.0
 _MAX_RADIUS = 190.0
 _LABEL_RADIUS = _MAX_RADIUS + 42.0
 _VERTEX_RADIUS = 4.5
 _RING_FRACTIONS = (0.25, 0.5, 0.75, 1.0)
 _NEUTRAL_FRACTION = 0.5  # score == 0
-_WIDTH = 640.0
 _CHART_BOTTOM = _CENTER_Y + _MAX_RADIUS + 60.0
 _LEGEND_ROW_HEIGHT = 30.0
 _LEGEND_TOP_PAD = 20.0
+
+# Axis-label typesetting (#354).
+_LABEL_FONT_SIZE = 13.0  # must match .radar-axis-label in _RULES_CSS
+_LABEL_LINE_HEIGHT = 16.0
+#: How far inside the viewBox edge a label must stop. It absorbs the error in
+#: `_text_width`'s estimate as well as being visual breathing room, so it is
+#: not merely cosmetic: a label measured a little narrow than it renders still
+#: lands on the canvas.
+_LABEL_MARGIN = 16.0
+#: No label line may sit above the 12 o'clock label's own row. That row is
+#: already the closest text to the header, and #248 is what happens when
+#: something else is drawn near it: the stale warning at y=72 and this label
+#: at y=68 obscured each other on every stale chart. Vertically centring a
+#: wrapped block would push the top label's first line up into exactly that
+#: gap, so the block is clamped here and grows downward instead.
+_LABEL_TOP_LIMIT = _CENTER_Y - _LABEL_RADIUS
+#: Clearance between the lowest label line and the legend below it.
+_LABEL_BOTTOM_PAD = 24.0
+
+# Legend columns, derived from the width so the extra room reaches the
+# legend too: at the original 640 the score column sat at x=220, which a
+# 46-character axis name overran. This is a column budget, not a wrap — the
+# legend is one fixed-height row per axis, and the notice rows and the
+# viewBox height are computed from that. A name longer than ~55 characters
+# still crowds the score column; the chart itself now spells such a name out
+# in full, which is where the fix that matters landed.
+_LEGEND_NAME_X = 24.0
+_LEGEND_SCORE_X = _WIDTH - 360.0
+_LEGEND_LABEL_X = _LEGEND_SCORE_X + 60.0
 
 _RULES_CSS = """\
 svg.wingman-radar { background: var(--bg); }
@@ -158,6 +228,156 @@ def _label_anchor(angle: float) -> str:
     return "middle"
 
 
+# Per-character advance widths, as a fraction of the font size, for the
+# label face. `--font-sans` resolves to system-ui, so the actual face is the
+# READER's — there is no metric this module could look up even if a font
+# library were allowed (AGENTS.md's minimal-dependency baseline), and the
+# reader's browser will re-measure everything anyway. What can be controlled
+# is the DIRECTION of the error, so these sit at the wide end of what those
+# faces do: ordinary prose measures ~7.5px per character at 13px, against the
+# ~6.2px/char a real chart was measured at. Over-estimating wraps a line
+# early, which costs a reader nothing. Under-estimating puts text past the
+# viewBox edge, which is #354.
+_EM_NARROW = 0.30
+_EM_SEMI = 0.42
+_EM_WIDE = 0.95
+_EM_CAP = 0.72
+_EM_DEFAULT = 0.58
+_NARROW_CHARS = frozenset(" il.,:;'\"!|()[]{}")
+_SEMI_CHARS = frozenset("ftrjI-/\\")
+_WIDE_CHARS = frozenset("mwMW@%")
+
+
+def _char_em(char: str) -> float:
+    if char in _NARROW_CHARS:
+        return _EM_NARROW
+    if char in _SEMI_CHARS:
+        return _EM_SEMI
+    if char in _WIDE_CHARS:
+        return _EM_WIDE
+    if char.isupper() or char.isdigit():
+        return _EM_CAP
+    return _EM_DEFAULT
+
+
+def _text_width(text: str, font_size: float = _LABEL_FONT_SIZE) -> float:
+    """An estimate of the rendered width of `text`, in px, leaning wide —
+    see `_EM_*` above for why the lean is the point."""
+    return font_size * sum(_char_em(char) for char in text)
+
+
+def _label_budget(x: float, anchor: str) -> float:
+    """How wide a label anchored at `x` may be drawn without leaving the
+    canvas. Derived from the anchor the label already had, which is why a
+    left-side and a right-side label can never grow into each other: each
+    one's room runs from its own anchor to its own edge, and neither crosses
+    the centre."""
+    if anchor == "start":
+        return _WIDTH - x - _LABEL_MARGIN
+    if anchor == "end":
+        return x - _LABEL_MARGIN
+    # Centred: the text grows both ways, so the budget is twice the shorter
+    # side — a top label pulled slightly off-centre still cannot overrun.
+    return 2.0 * (min(x, _WIDTH - x) - _LABEL_MARGIN)
+
+
+def _split_to_fit(word: str, budget: float) -> list[str]:
+    """A single word too wide for the budget, broken across lines.
+
+    The last resort, and rare — it takes a ~25-character unbroken run. Still
+    handled rather than left to overflow: a name that is one long token is
+    exactly the input a wrapper that only breaks on spaces gets wrong, and
+    the failure mode would be the original bug, back for one input class.
+    """
+    if _text_width(word) <= budget:
+        return [word]
+    pieces: list[str] = []
+    current = ""
+    for char in word:
+        if current and _text_width(current + char) > budget:
+            pieces.append(current)
+            current = char
+        else:
+            current += char
+    if current:
+        pieces.append(current)
+    return pieces
+
+
+def _wrap_to_budget(text: str, budget: float) -> list[str]:
+    """`text` as lines that each fit `budget`. Greedy, breaking on spaces.
+
+    Never returns an empty list, and never drops a character: everything the
+    axis was named is drawn somewhere. Runs of whitespace collapse, which is
+    what a reader wants of a model-produced name anyway.
+    """
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        pieces = _split_to_fit(word, budget)
+        if len(pieces) > 1:
+            # A hard-split word owns its lines outright: gluing the tail of
+            # one to the next word ("...trodde n and") reads as a typo.
+            if current:
+                lines.append(current)
+            lines.extend(pieces[:-1])
+            current = pieces[-1]
+        elif not current:
+            current = pieces[0]
+        elif _text_width(f"{current} {pieces[0]}") <= budget:
+            current = f"{current} {pieces[0]}"
+        else:
+            lines.append(current)
+            current = pieces[0]
+    if current:
+        lines.append(current)
+    return lines or [text]
+
+
+@dataclass(frozen=True)
+class _LabelBlock:
+    """One axis name, already wrapped and placed.
+
+    Computed for every axis BEFORE anything is drawn, because the wrapped
+    height decides where the legend starts and how tall the viewBox has to
+    be — the same "reserve the room you draw in" rule #248 established for
+    the notice rows.
+    """
+
+    lines: tuple[str, ...]
+    x: float
+    first_baseline: float
+    anchor: str
+
+    @property
+    def bottom(self) -> float:
+        return self.first_baseline + _LABEL_LINE_HEIGHT * (len(self.lines) - 1)
+
+
+def _label_blocks(names: list[str]) -> list[_LabelBlock]:
+    """Every axis label, wrapped to the room its own position leaves it."""
+    count = len(names)
+    blocks: list[_LabelBlock] = []
+    for index, name in enumerate(names):
+        angle = _axis_angle(index, count)
+        x, y = _polar(_LABEL_RADIUS, angle)
+        anchor = _label_anchor(angle)
+        lines = _wrap_to_budget(name, _label_budget(x, anchor))
+        # Centred on the spoke's own y, so a wrapped block stays visually
+        # attached to the axis it names — except at the top, where centring
+        # would push the first line into the header (see _LABEL_TOP_LIMIT).
+        centred = y - _LABEL_LINE_HEIGHT * (len(lines) - 1) / 2.0
+        blocks.append(
+            _LabelBlock(
+                lines=tuple(lines),
+                x=x,
+                first_baseline=max(_LABEL_TOP_LIMIT, centred),
+                anchor=anchor,
+            )
+        )
+    return blocks
+
+
 def _evidence_excerpt(axis: ValueAxis) -> str:
     if not axis.evidence:
         return ""
@@ -191,8 +411,8 @@ def _notices(profile: ValueProfile, stale_new_captures: int) -> list[_Notice]:
 
     The wording is this module's own rather than
     `application.values.scoring_note`'s, deliberately: that one is a
-    parenthetical sized for a terminal, and this one has to fit a 640px
-    canvas at 11px with no wrapping. Both surfaces warning for the same
+    parenthetical sized for a terminal, and this one has to fit the canvas
+    at 11px on one row, with no wrapping. Both surfaces warning for the same
     profile is what a test asserts; matching prose is not.
     """
     notices: list[_Notice] = []
@@ -233,7 +453,13 @@ def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -
     axes = profile.axes
     count = len(axes)
     notices = _notices(profile, stale_new_captures)
-    legend_bottom = _CHART_BOTTOM + _LEGEND_TOP_PAD + _LEGEND_ROW_HEIGHT * count
+    # The labels are laid out first because everything below them moves when
+    # one of them wraps: a two-line bottom label that the legend was not
+    # asked about lands on the legend's first row (#354).
+    blocks = _label_blocks([axis.name for axis in axes])
+    chart_bottom = max(_CHART_BOTTOM, max(block.bottom for block in blocks) + _LABEL_BOTTOM_PAD)
+    legend_top = chart_bottom + _LEGEND_TOP_PAD
+    legend_bottom = legend_top + _LEGEND_ROW_HEIGHT * count
     notice_top = legend_bottom + _LEGEND_ROW_HEIGHT * 0.5
     height = legend_bottom + _LEGEND_ROW_HEIGHT * len(notices) + 20.0
 
@@ -323,28 +549,40 @@ def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -
     parts.append("</g>")
 
     # Axis name labels, placed just outside the outer ring, anchored toward
-    # or away from the chart depending on which side they fall on.
+    # or away from the chart depending on which side they fall on, and
+    # wrapped to the room that leaves them (#354).
     parts.append('<g class="radar-labels">')
-    for index, axis in enumerate(axes):
-        angle = _axis_angle(index, count)
-        x, y = _polar(_LABEL_RADIUS, angle)
-        anchor = _label_anchor(angle)
-        parts.append(
+    for axis, block in zip(axes, blocks, strict=True):
+        opening = (
             f'<text class="radar-axis-label" data-axis="{_e(axis.name)}" '
-            f'x="{x:.2f}" y="{y:.2f}" text-anchor="{anchor}">{_e(axis.name)}</text>'
+            f'x="{block.x:.2f}" y="{block.first_baseline:.2f}" text-anchor="{block.anchor}">'
         )
+        if len(block.lines) == 1:
+            # A one-line label stays plain text — the ordinary case, and it
+            # keeps the name readable as a single node to anything parsing
+            # the SVG rather than rendering it.
+            parts.append(f"{opening}{_e(block.lines[0])}</text>")
+            continue
+        spans = "".join(
+            f'<tspan x="{block.x:.2f}" dy="{0.0 if number == 0 else _LABEL_LINE_HEIGHT:.2f}">'
+            f"{_e(line)}</tspan>"
+            for number, line in enumerate(block.lines)
+        )
+        parts.append(f"{opening}{spans}</text>")
     parts.append("</g>")
 
     # Legend: the raw signed score and deterministic label as plain text,
     # for the sign this chart's geometry alone can't fully convey.
     parts.append('<g class="radar-legend">')
-    legend_top = _CHART_BOTTOM + _LEGEND_TOP_PAD
     for index, axis in enumerate(axes):
         row_y = legend_top + _LEGEND_ROW_HEIGHT * index
         parts.append(
-            f'<text class="radar-legend-name" x="24" y="{row_y:.2f}">{_e(axis.name)}</text>'
-            f'<text class="radar-legend-score" x="220" y="{row_y:.2f}">{axis.score:+.2f}</text>'
-            f'<text class="radar-legend-label" x="280" y="{row_y:.2f}">{_e(axis.label)}</text>'
+            f'<text class="radar-legend-name" x="{_LEGEND_NAME_X:.0f}" '
+            f'y="{row_y:.2f}">{_e(axis.name)}</text>'
+            f'<text class="radar-legend-score" x="{_LEGEND_SCORE_X:.0f}" '
+            f'y="{row_y:.2f}">{axis.score:+.2f}</text>'
+            f'<text class="radar-legend-label" x="{_LEGEND_LABEL_X:.0f}" '
+            f'y="{row_y:.2f}">{_e(axis.label)}</text>'
         )
     parts.append("</g>")
 

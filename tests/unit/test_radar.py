@@ -693,3 +693,193 @@ def test_a_superseded_chart_still_renders_rather_than_refusing(workspace: Path) 
 
     assert export.path.exists()
     assert "<polygon" in export.path.read_text(encoding="utf-8")
+
+
+# --- a label drawn outside the viewBox is not drawn (#354) -------------------
+#
+# The bug arrived silently and was found by computing geometry, not by eye:
+# four of five labels on a real chart ran past the canvas, the worst by 204px
+# of 640. So the guard is a computation too, and the width model below is the
+# TEST's own — deliberately not `radar._text_width`. A test that measures with
+# the same function the renderer wraps with proves only that the renderer
+# agrees with itself, which is exactly the reassurance the original code could
+# also have offered.
+
+#: The mean advance the issue measured on a real 13px chart. The renderer's
+#: own estimate leans wider than this on purpose (see `_EM_*` in radar.py), so
+#: a layout that satisfies the renderer has room to spare against reality.
+_MEASURED_PX_PER_CHAR = 6.2
+
+#: Axis names of the kind RFC-051 asks the model for. Two are verbatim from
+#: real output; the rest are the same shape. Short ones are in the mix because
+#: a fix that only ever wraps is as wrong as one that never does.
+_REALISTIC_AXIS_NAMES = (
+    "Compassion for the marginalized and downtrodden",
+    "Intellectual openness and bridging opposing views",
+    "Craft",
+    "Institutional courage when speaking up costs something",
+    "Loyalty to people over systems and process",
+    "Directness",
+)
+
+
+def _measured_width(text: str) -> float:
+    return _MEASURED_PX_PER_CHAR * len(text)
+
+
+def _view_box(root: ET.Element) -> tuple[float, float]:
+    _, _, width, height = (float(part) for part in (root.get("viewBox") or "").split())
+    return width, height
+
+
+def _label_lines(label: ET.Element) -> list[tuple[str, float]]:
+    """Every drawn line of one axis label, with the baseline it lands on.
+
+    A one-line label stays plain `<text>`; a wrapped one is `<tspan>` rows
+    offset by `dy`. Both shapes have to be checked, because "it fits" must
+    hold for the label that did not need wrapping too.
+    """
+    baseline = float(label.get("y") or 0.0)
+    spans = label.findall(f"{SVG_NS}tspan")
+    if not spans:
+        return [(label.text or "", baseline)]
+    lines: list[tuple[str, float]] = []
+    for span in spans:
+        baseline += float(span.get("dy") or 0.0)
+        lines.append((span.text or "", baseline))
+    return lines
+
+
+def _horizontal_span(text: str, x: float, anchor: str) -> tuple[float, float]:
+    width = _measured_width(text)
+    if anchor == "start":
+        return (x, x + width)
+    if anchor == "end":
+        return (x - width, x)
+    return (x - width / 2.0, x + width / 2.0)
+
+
+def _axis_labels(root: ET.Element) -> list[ET.Element]:
+    return [t for t in _findall(root, "text") if t.get("class") == "radar-axis-label"]
+
+
+@pytest.mark.parametrize("count", [3, 4, 5, 6])
+def test_every_axis_label_stays_inside_the_viewbox(workspace: Path, count: int) -> None:
+    """The regression guard for #354, at every axis count application.values
+    allows (3-6). `viewBox` CLIPS: a label whose span leaves it is not merely
+    tight, it is gone, and the reader has no way to tell the spoke was ever
+    named."""
+    axes = [_axis(name, 0.4) for name in _REALISTIC_AXIS_NAMES[:count]]
+    root = _parse(render_value_radar_svg(_profile(axes)))
+    width, height = _view_box(root)
+
+    checked = 0
+    for label in _axis_labels(root):
+        x = _num(label, "x")
+        anchor = label.get("text-anchor") or "start"
+        for text, baseline in _label_lines(label):
+            left, right = _horizontal_span(text, x, anchor)
+            assert left >= 0.0, f"{text!r} runs {-left:.0f}px off the left edge"
+            assert right <= width, f"{text!r} runs {right - width:.0f}px off the right edge"
+            assert 0.0 < baseline < height, f"{text!r} is drawn outside the canvas vertically"
+            checked += 1
+    assert checked >= count  # the loop actually ran
+
+
+def test_the_exact_chart_the_bug_was_reported_from_now_wraps(workspace: Path) -> None:
+    """The reported case: five descriptive axis names, four of them clipped.
+    Widening the canvas alone would have fixed that ONE profile and left the
+    next longer name to overflow again, so the assertion is that the long
+    side labels actually wrapped — the mechanism, not just the outcome."""
+    axes = [_axis(name, 0.4) for name in _REALISTIC_AXIS_NAMES[:5]]
+    root = _parse(render_value_radar_svg(_profile(axes)))
+
+    wrapped = [label for label in _axis_labels(root) if len(_label_lines(label)) > 1]
+    assert wrapped, "no label wrapped — the width budget is not being applied"
+    assert any(label.get("text-anchor") == "start" for label in wrapped)
+    assert any(label.get("text-anchor") == "end" for label in wrapped)
+
+
+def test_a_wrapped_label_still_says_the_whole_axis_name(workspace: Path) -> None:
+    """Truncation was rejected outright: an axis name IS the meaning of its
+    spoke, and a silently cut one is worse than a wrapped one because the
+    reader cannot tell anything was lost. Wrapping must therefore be
+    lossless — every word, in order, no ellipsis."""
+    axes = [_axis(name, 0.4) for name in _REALISTIC_AXIS_NAMES[:5]]
+    svg = render_value_radar_svg(_profile(axes))
+    root = _parse(svg)
+
+    drawn = {
+        label.get("data-axis"): " ".join(text for text, _ in _label_lines(label))
+        for label in _axis_labels(root)
+    }
+    for axis in axes:
+        assert drawn[axis.name] == axis.name
+    assert "…" not in svg
+
+
+def test_an_unbreakable_name_is_split_rather_than_left_to_overflow(workspace: Path) -> None:
+    """A name with no space in it cannot be wrapped on one, which is exactly
+    the input a space-only wrapper gets wrong — and getting it wrong means
+    the original bug, back for one class of input."""
+    monster = "Compassion" * 20  # 200 characters, no break opportunity
+    axes = [_axis("A", 0.1), _axis(monster, 0.2), _axis("C", 0.3)]
+    root = _parse(render_value_radar_svg(_profile(axes)))
+    width, _ = _view_box(root)
+
+    label = next(t for t in _axis_labels(root) if t.get("data-axis") == monster)
+    lines = _label_lines(label)
+    assert len(lines) > 1
+    assert "".join(text for text, _ in lines) == monster  # nothing dropped
+    for text, _ in lines:
+        left, right = _horizontal_span(text, _num(label, "x"), label.get("text-anchor") or "start")
+        assert left >= 0.0
+        assert right <= width
+
+
+def test_the_width_estimate_never_falls_below_what_a_real_chart_measured(
+    workspace: Path,
+) -> None:
+    """There are no font metrics here — `--font-sans` is system-ui, so the
+    face is the reader's — which makes the DIRECTION of the estimate's error
+    the only thing under this module's control. Over-estimating wraps a line
+    early and costs a reader nothing; under-estimating is #354."""
+    from wingman.reporting.radar import _text_width
+
+    for name in _REALISTIC_AXIS_NAMES:
+        assert _text_width(name) >= _measured_width(name), f"{name!r} is measured too narrow"
+
+
+def test_no_label_line_is_drawn_above_the_top_axis_row(workspace: Path) -> None:
+    """#248's invariant, which vertical centring of a wrapped block would
+    otherwise have quietly broken: the 12 o'clock label is the closest text
+    to the header, and anything drawn above it lands on the meta line."""
+    from wingman.reporting.radar import _CENTER_Y, _LABEL_RADIUS
+
+    axes = [_axis(name, 0.4) for name in _REALISTIC_AXIS_NAMES[:4]]
+    root = _parse(render_value_radar_svg(_profile(axes)))
+
+    baselines = [baseline for label in _axis_labels(root) for _, baseline in _label_lines(label)]
+    assert min(baselines) >= _CENTER_Y - _LABEL_RADIUS
+
+
+def test_a_wrapped_bottom_label_pushes_the_legend_down_instead_of_landing_on_it(
+    workspace: Path,
+) -> None:
+    """A label block's height is known before anything is drawn, so the room
+    it needs is reserved — the same "reserve what you draw in" rule #248
+    established for the notice rows. Without it, a bottom label that wraps is
+    drawn straight through the legend's first line."""
+    # 6 o'clock on a four-axis chart, long enough to wrap even centred.
+    bottom = ("Institutional courage when speaking up costs something " * 3).strip()
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis(bottom, 0.3), _axis("D", 0.4)]
+    short = _parse(render_value_radar_svg(_profile([_axis(n, 0.2) for n in "ABCD"])))
+    root = _parse(render_value_radar_svg(_profile(axes)))
+
+    label = next(t for t in _axis_labels(root) if t.get("data-axis") == bottom)
+    lowest = max(baseline for _, baseline in _label_lines(label))
+    legend_rows = [t for t in _findall(root, "text") if t.get("class") == "radar-legend-name"]
+
+    assert len(_label_lines(label)) > 1
+    assert lowest < min(_num(row, "y") for row in legend_rows)
+    assert float(root.get("height") or 0.0) > float(short.get("height") or 0.0)
