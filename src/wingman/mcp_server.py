@@ -1361,6 +1361,75 @@ _PROFILE_HTML_MAX_BYTES = 250_000
 
 
 @server.tool()
+def briefing(
+    action: str = "show",
+    cadence: str = "",
+    time_of_day: str = "",
+    timezone: str = "",
+    day_of_week: str = "",
+    items: str = "",
+) -> str:
+    """A standing daily or weekly briefing — set one up, or read the current
+    one back (issue #359).
+
+    Wingman cannot install a scheduled task: the client owns its scheduler.
+    What this does is settle WHAT the briefing should say, then hand over
+    the exact prompt to schedule — the same move connector_urls makes with
+    a paste-ready command rather than a description of one.
+
+    action is 'review' (the questions to ask), 'save' (store the answers
+    and return the prompt), 'show' (the saved briefing), or 'prompt' (the
+    prompt again, unchanged).
+
+    Protocol: call action='review' FIRST and put its questions to the
+    person with AskUserQuestion — never guess a cadence, a time, or a
+    timezone. Ask the timezone rather than assuming: the briefing fires in
+    theirs while the overnight run happens on the host's, and one scheduled
+    too early quietly reports yesterday. Save only what they confirmed.
+
+    items is a comma-separated subset of: digest, next, changelog,
+    tracking, system.
+    """
+    from wingman.application.briefing import (
+        interview_packet,
+        render_prompt,
+        render_schedule,
+        validate,
+    )
+    from wingman.domain.briefing import BriefingSchedule
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "review":
+                return interview_packet()
+            if action == "save":
+                schedule = validate(
+                    BriefingSchedule(
+                        cadence=cadence.strip().lower(),
+                        time_of_day=time_of_day.strip(),
+                        timezone=timezone.strip(),
+                        day_of_week=day_of_week.strip(),
+                        items=[part.strip() for part in items.split(",") if part.strip()],
+                    )
+                )
+                storage.save_briefing_schedule(schedule)
+                return render_prompt(schedule, config)
+            saved = storage.get_briefing_schedule()
+            if action == "show":
+                return render_schedule(saved)
+            if action == "prompt":
+                if saved is None:
+                    return render_schedule(None)
+                return render_prompt(saved, config)
+    except IngestError as exc:
+        return f"briefing failed: {exc}"
+    return "briefing: action must be 'review', 'save', 'show', or 'prompt'."
+
+
+@server.tool()
 def setup_guide() -> str:
     """How to get started with wingman — call this whenever somebody asks how
     to set it up, what to do first, or what any of this is for (issue #360).
