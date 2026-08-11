@@ -142,7 +142,7 @@ def test_changelog_reports_curated_titles_without_a_workspace(
     )
     result = changelog()
     assert "1 new today, 1 in the last 7 days" in result
-    assert "Add a brand new feature (#200)" in result
+    assert "Add a brand new feature (https://github.com/dhk/wingman/pull/200)" in result
     assert "session snapshot" not in result
 
 

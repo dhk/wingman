@@ -187,3 +187,20 @@ def test_render_changelog_reports_internal_filtered_count_in_window(
     rendered = render_changelog(date(2026, 7, 23), version_string="0.4.0")
     assert "0 new today, 0 in the last 7 days" in rendered
     assert "2 internal-only filtered from the last 7 days" in rendered
+
+
+def test_every_pr_is_a_url_people_can_follow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare '#123' is only meaningful to somebody who already knows the
+    repository. The changelog is read by tenants who do not (#357)."""
+    import wingman.changelog_data as data_module
+    from wingman.domain.changelog import pr_url
+
+    monkeypatch.setattr(
+        data_module, "CHANGELOG_DATA", (("2026-07-10", 10, "Add company dossiers"),)
+    )
+    monkeypatch.setattr(data_module, "GENERATED_FROM_DISTANCE", -1)
+
+    rendered = render_changelog(date(2026, 7, 23))
+
+    assert pr_url(10) in rendered
+    assert "https://github.com/dhk/wingman/pull/10" in rendered

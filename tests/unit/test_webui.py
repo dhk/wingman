@@ -1098,3 +1098,14 @@ def test_the_progress_view_needs_the_token_like_everything_else(
     http, _token = client
 
     assert http.get("/ui/not-the-token/completeness").status_code == 404
+
+
+def test_the_changelog_tab_links_each_pr(client: tuple[TestClient, str]) -> None:
+    """Same reason as the text surface: a tenant reading the Changelog tab has
+    no way to turn '#123' into anything (#357)."""
+    http, token = client
+
+    page = http.get(f"/ui/{token}/?tab=changelog").text
+
+    assert 'href="https://github.com/dhk/wingman/pull/' in page
+    assert 'rel="noopener noreferrer"' in page
