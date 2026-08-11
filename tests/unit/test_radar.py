@@ -18,6 +18,7 @@ from wingman.domain.values import (
     ValueAxis,
     ValueAxisEvidence,
     ValueProfile,
+    ValueView,
 )
 from wingman.infrastructure.config import load_config
 from wingman.infrastructure.storage import Storage
@@ -650,8 +651,9 @@ def test_an_exported_file_can_be_judged_without_the_workspace(workspace: Path) -
         storage.save_value_profile(profile)
         export = export_value_radar(config, storage)
 
-    subject, fingerprint = stamp_in(export.path.read_text(encoding="utf-8"))
+    subject, view, fingerprint = stamp_in(export.path.read_text(encoding="utf-8"))
     assert subject == CORPUS_PERSON_ID
+    assert view is ValueView.CHARACTER
     assert fingerprint == values_radar_fingerprint(profile) == export.fingerprint
 
 
@@ -883,3 +885,112 @@ def test_a_wrapped_bottom_label_pushes_the_legend_down_instead_of_landing_on_it(
     assert len(_label_lines(label)) > 1
     assert lowest < min(_num(row, "y") for row in legend_rows)
     assert float(root.get("height") or 0.0) > float(short.get("height") or 0.0)
+
+
+# --- one chart per view (#356) ------------------------------------------------
+
+
+def _work_profile(axes: list[ValueAxis]) -> ValueProfile:
+    return _profile(axes).model_copy(update={"view": ValueView.WORK})
+
+
+def test_the_work_chart_is_its_own_file_and_never_overwrites_the_character_one(
+    workspace: Path,
+) -> None:
+    """Same geometry, two readings, two files. One filename for both means
+    the second export silently replaces the first, and whichever chart
+    somebody opens is the one they believe."""
+    config = load_config()
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_profile(axes))
+        storage.save_value_profile(_work_profile(axes))
+        character = export_value_radar(config, storage)
+        work = export_value_radar(config, storage, view=ValueView.WORK)
+
+    assert character.path != work.path
+    # The character view keeps its pre-#356 filename: renaming it would
+    # orphan every chart already on disk and every link to one.
+    assert character.path.name.endswith("-values-radar.svg")
+    assert "-work-" in work.path.name
+    assert character.path.exists() and work.path.exists()
+
+
+def test_the_chart_names_the_view_it_draws(workspace: Path) -> None:
+    """Two charts of the same person with differently-worded axes and only
+    one of them labelled is how the wrong one gets quoted."""
+    config = load_config()
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_work_profile(axes))
+        svg = render_value_radar_svg(storage.get_value_profile(CORPUS_PERSON_ID, ValueView.WORK))
+
+    assert "Work profile (how you want to work)" in svg
+    assert "Value profile (character view)" not in svg
+
+
+def test_a_work_chart_does_not_report_the_character_chart_stale(workspace: Path) -> None:
+    """The false alarm this would otherwise introduce. Both charts sit in
+    reports/charts/ under the same subject; without a view marker in the
+    stamp, each is judged against the other's profile and BOTH are reported
+    stale forever — which is how somebody learns to ignore the warning that
+    #340 needed them to read."""
+    from wingman.application.freshness import stale_artefacts
+
+    config = load_config()
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_profile(axes))
+        storage.save_value_profile(_work_profile(axes))
+        export_value_radar(config, storage)
+        export_value_radar(config, storage, view=ValueView.WORK)
+        reports = stale_artefacts(config, storage)
+
+    assert {report.kind for report in reports} == {"values_radar", "values_radar_work"}
+    for report in reports:
+        assert report.checked
+        assert not report.stale, report.reasons
+
+
+def test_a_nomination_only_work_chart_carries_its_caveat_on_the_picture(
+    workspace: Path,
+) -> None:
+    """An SVG gets emailed away from every surface that would otherwise say
+    the axes rest on character evidence — and a picture is the form most
+    likely to be quoted at a hiring conversation."""
+    config = load_config()
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_work_profile(axes))
+        export = export_value_radar(config, storage, view=ValueView.WORK)
+
+    svg = export.path.read_text(encoding="utf-8")
+    assert "no perspective reactions among the evidence" in svg
+    # And it reaches a screen reader too: a warning sighted readers alone
+    # can see is half a warning.
+    root = ET.fromstring(svg)
+    desc = root.find(f"{SVG_NS}desc")
+    assert desc is not None and "no perspective reactions" in (desc.text or "")
+
+
+def test_the_work_charts_rebuild_instruction_names_the_work_view(workspace: Path) -> None:
+    """'wingman values --refresh' rebuilds the OTHER reading. An instruction
+    that looks like it worked and rebuilt the wrong artefact is worse than
+    no instruction."""
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    stale_scoring = _work_profile(axes).model_copy(update={"scoring_version": "values-scoring-0"})
+    svg = render_value_radar_svg(stale_scoring)
+    assert "wingman values --refresh --view work" in svg
+
+
+def test_the_export_stamp_records_which_view_it_drew(workspace: Path) -> None:
+    from wingman.application.freshness import stamp_in
+
+    config = load_config()
+    axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_work_profile(axes))
+        export = export_value_radar(config, storage, view=ValueView.WORK)
+
+    _subject, view, _fingerprint = stamp_in(export.path.read_text(encoding="utf-8"))
+    assert view is ValueView.WORK

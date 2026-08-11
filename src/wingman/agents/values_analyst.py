@@ -29,6 +29,15 @@ that statement first where it exists. The version bump is because the
 prompt TEXT changed — `ValueProfile.prompt_version` is provenance, and a
 stored profile has to name the prompt that actually produced it. Nothing
 about the output schema moved, so a v2-era proposal still parses.
+
+**Two prompts, one schema (issue #356, RFC-066).** The work view names the
+same captures as ways of WORKING rather than as character traits. That is
+purely a naming instruction, so it is a second TEMPLATE selected by
+`ValueView` — not a second parser, a second proposal model, or a second
+scoring path. Two files rather than one file with a swapped paragraph
+because `prompt_version` is provenance: a stored profile has to name a
+prompt somebody can go and read, and a template assembled from fragments
+at call time has no such name.
 """
 
 from __future__ import annotations
@@ -38,10 +47,25 @@ from importlib.resources import files
 from pydantic import ValidationError
 
 from wingman.agents.profile_curator import ProposalParseError
-from wingman.domain.values import ValueAxisProposal
+from wingman.domain.values import ValueAxisProposal, ValueView
 
 PROMPT_VERSION = "value_axes_v3"
+WORK_PROMPT_VERSION = "value_axes_work_v1"
 
+#: Which template each view is named by. Bump an entry when that template's
+#: TEXT changes, exactly as RFC-057 bumped v2 -> v3: the version is what a
+#: stored profile points at to say how it was produced.
+PROMPT_VERSIONS: dict[ValueView, str] = {
+    ValueView.CHARACTER: PROMPT_VERSION,
+    ValueView.WORK: WORK_PROMPT_VERSION,
+}
+
+# Shared by both views on purpose (#356). It states the RULES — cite only
+# supplied item_ids, give a direction for each, never score — which are
+# identical for both. The register a view asks for lives in the template
+# `PROMPT_VERSIONS` names, so a stored profile's `prompt_version` points at
+# the whole of what made it different; splitting the difference across a
+# versioned file and an unversioned constant would make that untrue.
 SYSTEM_PROMPT = (
     "You identify the small set of underlying value dimensions that a person's "
     "own captured interview reactions reveal, for a local-first career "
@@ -53,10 +77,12 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_prompt(items_block: str) -> str:
-    template = (
-        files("wingman").joinpath("prompts", f"{PROMPT_VERSION}.md").read_text(encoding="utf-8")
-    )
+def build_prompt(items_block: str, view: ValueView = ValueView.CHARACTER) -> str:
+    """The filled-in template for `view`. Defaults to the character view, so
+    every caller that predates views keeps asking the question it always
+    asked."""
+    version = PROMPT_VERSIONS[view]
+    template = files("wingman").joinpath("prompts", f"{version}.md").read_text(encoding="utf-8")
     return template.replace("__ITEMS__", items_block)
 
 

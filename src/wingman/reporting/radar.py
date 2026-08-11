@@ -101,13 +101,22 @@ from pathlib import Path
 from wingman.application.freshness import artefact_stamp, values_radar_fingerprint
 from wingman.application.ingest import IngestError
 from wingman.application.pov import CORPUS_PERSON_ID, persona_card_id
-from wingman.application.values import new_captures_since, scoring_is_current
+from wingman.application.values import (
+    VIEW_NOUNS,
+    VIEW_TITLES,
+    new_captures_since,
+    refresh_command,
+    refresh_tool,
+    scoring_is_current,
+    work_grounding_note,
+)
 from wingman.domain.persona import Persona
 from wingman.domain.values import (
     RADAR_CONTRACT_VERSION,
     SCORING_CONTRACT_VERSION,
     ValueAxis,
     ValueProfile,
+    ValueView,
 )
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
@@ -179,6 +188,7 @@ svg.wingman-radar { background: var(--bg); }
   font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; fill: var(--text-dim);
 }
 .wingman-radar .radar-stale { font-size: 11px; fill: var(--accent-orange); }
+.wingman-radar .radar-caveat { font-size: 11px; fill: var(--accent-orange); }
 .wingman-radar .radar-superseded {
   font-size: 11px; font-weight: 700; fill: var(--accent-orange);
 }
@@ -416,6 +426,7 @@ def _notices(profile: ValueProfile, stale_new_captures: int) -> list[_Notice]:
     profile is what a test asserts; matching prose is not.
     """
     notices: list[_Notice] = []
+    rebuild = refresh_command(profile.view)
     if not scoring_is_current(profile):
         headline = (
             "⚠ built before per-item direction was recorded — an axis evidenced by a "
@@ -428,9 +439,26 @@ def _notices(profile: ValueProfile, stale_new_captures: int) -> list[_Notice]:
         )
         notices.append(_Notice(headline, "radar-superseded"))
         notices.append(
+            _Notice(f"rebuild with '{rebuild}', then re-export this chart", "radar-superseded")
+        )
+    # The work view's own caveat (#356), on the chart for the same reason
+    # the superseded warning is: an SVG gets emailed away from every
+    # surface that would otherwise say the axes rest on character evidence,
+    # and a picture is the form in which somebody is most likely to quote
+    # one at a hiring conversation. Shortened for a 640px canvas at 11px —
+    # `application.values.work_grounding_note` carries the full wording.
+    if work_grounding_note(profile):
+        notices.append(
             _Notice(
-                "rebuild with 'wingman values --refresh', then re-export this chart",
-                "radar-superseded",
+                "⚠ read off nominations about PEOPLE — no perspective reactions among the evidence",
+                "radar-caveat",
+            )
+        )
+        notices.append(
+            _Notice(
+                "capture alignment_of_perspective_agree/_disagree reactions and rebuild to "
+                "ground it",
+                "radar-caveat",
             )
         )
     if stale_new_captures:
@@ -438,7 +466,7 @@ def _notices(profile: ValueProfile, stale_new_captures: int) -> list[_Notice]:
         notices.append(
             _Notice(
                 f"{stale_new_captures} new {noun} since this was built — rebuild with "
-                "'wingman values --refresh' to include them",
+                f"'{rebuild}' to include them",
                 "radar-stale",
             )
         )
@@ -474,12 +502,17 @@ def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -
     for notice in notices:
         description += f"; {notice.text}"
     desc_id = "radar-desc"
+    # The view is named in the heading, not left to the axis wording (#356).
+    # Two charts of the same person with differently-worded axes, only one
+    # of them labelled, is how somebody quotes the wrong one at an
+    # interview — and a chart is the form most likely to be quoted.
+    heading = f"{VIEW_TITLES[profile.view]}: {profile.subject_name}"
 
     parts: list[str] = [
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {_WIDTH:.0f} {height:.0f}" '
             f'width="{_WIDTH:.0f}" height="{height:.0f}" class="wingman-radar" role="img" '
-            f'aria-label="Value profile radar chart for {_e(profile.subject_name)}" '
+            f'aria-label="{_e(heading)} radar chart" '
             f'aria-describedby="{desc_id}">'
         ),
         # The file's own provenance, machine-comparable, so 'wingman
@@ -487,11 +520,17 @@ def render_value_radar_svg(profile: ValueProfile, stale_new_captures: int = 0) -
         # re-deriving it. A comment because it must not draw: the visible
         # warning below is what a reader needs, and a fingerprint printed
         # on the picture is noise to everyone but a script.
-        f"<!-- {_e(artefact_stamp(profile.subject_id, values_radar_fingerprint(profile)))} -->",
-        f"<title>Value profile: {_e(profile.subject_name)}</title>",
+        (
+            "<!-- "
+            + _e(
+                artefact_stamp(profile.subject_id, values_radar_fingerprint(profile), profile.view)
+            )
+            + " -->"
+        ),
+        f"<title>{_e(heading)}</title>",
         f'<desc id="{desc_id}">{_e(description)}</desc>',
         f"<style>{RADAR_CSS}</style>",
-        f'<text class="radar-title" x="24" y="34">Value profile: {_e(profile.subject_name)}</text>',
+        f'<text class="radar-title" x="24" y="34">{_e(heading)}</text>',
         # The contract versions ride the meta line unconditionally, next to
         # the provider and model that were already there: a reader deciding
         # whether to trust a chart they were sent needs to know which
@@ -658,11 +697,16 @@ def export_value_radar(
     storage: Storage,
     persona: Persona | None = None,
     out_dir: Path | None = None,
+    view: ValueView = ValueView.CHARACTER,
 ) -> RadarExport:
     """Render the stored `ValueProfile` (own or, with `persona`, a coached
     Persona's — same scoping `application.values.build_value_profile` uses)
     as an SVG radar chart under `reports/charts/`, returning a `RadarExport`
     carrying both the path and the staleness count the callers report.
+
+    `view` (#356) picks which READING to draw. One chart per view, same
+    geometry — the geometry never knew what the axes were named, and
+    nothing here changes that, so `RADAR_CONTRACT_VERSION` does not move.
 
     No model call — this only reads whatever profile is already stored.
     Raises `IngestError`, same class of refusal `application.values` already
@@ -681,12 +725,13 @@ def export_value_radar(
     how suspect it is.
     """
     subject_id = persona_card_id(persona.persona_id) if persona is not None else CORPUS_PERSON_ID
-    profile = storage.get_value_profile(subject_id)
+    profile = storage.get_value_profile(subject_id, view)
     if profile is None:
         subject = persona.name if persona is not None else "you"
         raise IngestError(
-            f"no value profile built for {subject} yet — run 'wingman values --refresh' "
-            "(or my_values(refresh=True)) first, then try the chart again."
+            f"no {VIEW_NOUNS[view]} profile built for {subject} yet — run "
+            f"'{refresh_command(view)}' (or {refresh_tool(view)}) first, then try the "
+            "chart again."
         )
     persona_id = persona.persona_id if persona is not None else None
     stale = new_captures_since(storage, profile, persona_id=persona_id)
@@ -697,7 +742,14 @@ def export_value_radar(
     # the corpus chart's. Two subjects whose stored profiles are completely
     # isolated would then share a file, and the second export would silently
     # overwrite the first. The name still leads, so the file is recognizable.
-    filename = f"{_slug(profile.subject_name)[:60]}-{_slug(subject_id)[:24]}-values-radar.svg"
+    #
+    # The view joins it for the same reason (#356), and the character view
+    # keeps the pre-#356 filename: a rename would orphan every chart already
+    # on disk and every link anybody has to one, for no gain.
+    view_part = "" if view is ValueView.CHARACTER else f"-{view.value}"
+    filename = (
+        f"{_slug(profile.subject_name)[:60]}-{_slug(subject_id)[:24]}{view_part}-values-radar.svg"
+    )
     return RadarExport(
         path=_write_svg(directory, filename, svg),
         stale_new_captures=stale,

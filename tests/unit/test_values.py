@@ -8,12 +8,13 @@ model's per-item "supports"/"opposes" direction, not from the item's
 """
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from wingman.agents.profile_curator import ProposalParseError
-from wingman.agents.values_analyst import PROMPT_VERSION
+from wingman.agents.values_analyst import PROMPT_VERSION, WORK_PROMPT_VERSION
 from wingman.application.ingest import IngestError
 from wingman.application.interview import capture_interview_reaction
 from wingman.application.pov import CORPUS_PERSON_ID, CORPUS_PERSON_NAME, persona_card_id
@@ -24,10 +25,12 @@ from wingman.application.values import (
     MIN_SUBTYPES,
     build_value_profile,
     new_captures_since,
+    parse_value_view,
     render_value_profile,
+    work_grounding_note,
 )
 from wingman.domain.profile import SentimentIntensity
-from wingman.domain.values import AxisDirection
+from wingman.domain.values import AxisDirection, ValueProfile, ValueView
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.storage import Storage
 from wingman.providers.base import ModelRequest, ModelResponse
@@ -630,7 +633,7 @@ def test_render_value_profile_shows_axes_and_evidence(workspace: Path) -> None:
         )
         report = build_value_profile(storage, provider)
         rendered = render_value_profile(report.profile)
-        assert "Value profile: Your corpus" in rendered
+        assert "Value profile (character view): Your corpus" in rendered
         assert "Steadfastness" in rendered
         assert "Sticks with one cause." in rendered
         assert "Jane Goodall" in rendered
@@ -1189,3 +1192,360 @@ def test_a_cited_captures_value_statement_is_shown_with_its_evidence(workspace: 
     )
     rendered = render_value_profile(report.profile)
     assert 'values: "I value people having the information they need to choose."' in rendered
+
+
+# --- the work view: the same captures, read as ways of working (#356) --------
+
+
+def _seed_reactions(storage: Storage, config: Config, count: int = 3) -> list[str]:
+    """Perspective reactions — the captures that are about IDEAS rather than
+    about people, and the ones the character view cannot see at all."""
+    for index in range(count):
+        subtype = (
+            "alignment_of_perspective_agree"
+            if index % 2 == 0
+            else "alignment_of_perspective_disagree"
+        )
+        capture_interview_reaction(
+            subtype,
+            f"https://example.com/essay-{index}",
+            f"Shipping without a way to check it is how teams lose trust ({index}).",
+            config,
+            storage,
+            fetcher=lambda url: b"<html><title>An Essay</title><body>Argument.</body></html>",
+        )
+    ids = [
+        item.item_id
+        for item in storage.list_profile_items()
+        if (item.subtype or "").startswith("alignment_of_perspective")
+    ]
+    assert len(ids) == count
+    return ids
+
+
+def test_the_work_view_reads_perspective_reactions_the_character_view_cannot(
+    workspace: Path,
+) -> None:
+    """The evidence question #356 asks. Reactions are responses to ideas,
+    not verdicts about people, so they are the better raw material for an
+    axis about how somebody works — and the character view, which asks a
+    question about people, must not start reading them.
+    """
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        reaction_ids = _seed_reactions(storage, config)
+
+        character = ScriptedProvider(
+            {
+                "axes": [
+                    {"name": f"C{i}", "items": _cite(_all_item_ids(storage)[:1])} for i in range(3)
+                ]
+            }
+        )
+        build_value_profile(storage, character, view=ValueView.CHARACTER)
+        assert character.last_prompt is not None
+        for reaction_id in reaction_ids:
+            assert reaction_id not in character.last_prompt
+
+        work = ScriptedProvider(
+            {"axes": [{"name": f"W{i}", "items": _cite(reaction_ids)} for i in range(3)]}
+        )
+        report = build_value_profile(storage, work, view=ValueView.WORK)
+        assert work.last_prompt is not None
+        for reaction_id in reaction_ids:
+            assert reaction_id in work.last_prompt
+        cited = {span.item_id for axis in report.profile.axes for span in axis.evidence}
+        assert cited == set(reaction_ids)
+
+
+def test_the_work_view_is_named_by_its_own_prompt_and_stamps_that_version(
+    workspace: Path,
+) -> None:
+    """Two views, one pipeline: what differs is the naming instruction the
+    model is given, and `prompt_version` has to name the prompt that
+    actually produced the stored profile — otherwise provenance points at a
+    document that asked a different question."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        ids = _all_item_ids(storage)
+        provider = ScriptedProvider(
+            {"axes": [{"name": f"W{i}", "items": _cite(ids[:1])} for i in range(3)]}
+        )
+        report = build_value_profile(storage, provider, view=ValueView.WORK)
+
+    assert report.profile.view is ValueView.WORK
+    assert report.profile.prompt_version == WORK_PROMPT_VERSION != PROMPT_VERSION
+    assert provider.last_prompt is not None
+    # The register instruction is the whole difference, so assert on it
+    # rather than on the file name: a work prompt that stopped saying this
+    # would produce character axes under a work heading.
+    assert "how this person wants to work" in provider.last_prompt
+    assert "Name it as a way of working, not as a virtue." in provider.last_prompt
+
+
+def test_both_views_are_stored_side_by_side_and_neither_replaces_the_other(
+    workspace: Path,
+) -> None:
+    """The storage decision. Keyed on subject_id alone — as it was — the
+    second view's rebuild REPLACES the first, so a workspace that has both
+    silently has one."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        ids = _all_item_ids(storage)
+        build_value_profile(
+            storage,
+            ScriptedProvider(
+                {"axes": [{"name": f"Character {i}", "items": _cite(ids[:1])} for i in range(3)]}
+            ),
+        )
+        build_value_profile(
+            storage,
+            ScriptedProvider(
+                {"axes": [{"name": f"Work {i}", "items": _cite(ids[:1])} for i in range(3)]}
+            ),
+            view=ValueView.WORK,
+        )
+
+        character = storage.get_value_profile(CORPUS_PERSON_ID)
+        work = storage.get_value_profile(CORPUS_PERSON_ID, ValueView.WORK)
+        assert character is not None and work is not None
+        assert [axis.name for axis in character.axes] == [
+            "Character 0",
+            "Character 1",
+            "Character 2",
+        ]
+        assert [axis.name for axis in work.axes] == ["Work 0", "Work 1", "Work 2"]
+        assert character.profile_id != work.profile_id
+
+
+def test_a_work_profile_built_only_from_nominations_says_so(workspace: Path) -> None:
+    """The work view's characteristic failure is not thin evidence, it is a
+    leap of REGISTER: work axes read entirely off verdicts about people.
+    Disclosed rather than refused (see `work_grounding_note`) — but it must
+    be disclosed, or a fit brief cites axes whose grounding nobody can see.
+    """
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        ids = _all_item_ids(storage)
+        report = build_value_profile(
+            storage,
+            ScriptedProvider(
+                {"axes": [{"name": f"W{i}", "items": _cite(ids[:1])} for i in range(3)]}
+            ),
+            view=ValueView.WORK,
+        )
+
+    note = work_grounding_note(report.profile)
+    assert "read off nominations about PEOPLE" in note
+    assert "alignment_of_perspective" in note
+    assert note in render_value_profile(report.profile)
+
+
+def test_a_work_profile_grounded_in_reactions_carries_no_such_note(workspace: Path) -> None:
+    """The control. A caveat that never clears is a caveat people learn to
+    scroll past."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        reaction_ids = _seed_reactions(storage, config)
+        report = build_value_profile(
+            storage,
+            ScriptedProvider(
+                {"axes": [{"name": f"W{i}", "items": _cite(reaction_ids)} for i in range(3)]}
+            ),
+            view=ValueView.WORK,
+        )
+
+    assert work_grounding_note(report.profile) == ""
+    assert "read off nominations about PEOPLE" not in render_value_profile(report.profile)
+
+
+def test_the_character_view_never_carries_the_work_caveat(workspace: Path) -> None:
+    """It is not a claim about the character view, which is not making a
+    work claim at all."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        ids = _all_item_ids(storage)
+        report = build_value_profile(
+            storage,
+            ScriptedProvider(
+                {"axes": [{"name": f"C{i}", "items": _cite(ids[:1])} for i in range(3)]}
+            ),
+        )
+    assert work_grounding_note(report.profile) == ""
+
+
+def test_staleness_is_answered_against_the_profiles_own_view(workspace: Path) -> None:
+    """A new REACTION is new evidence for the work profile and no evidence
+    at all for the character one. Reading eligibility off the stored
+    profile's view rather than from a caller is what keeps the two answers
+    from being swapped."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        ids = _all_item_ids(storage)
+        proposal = {"axes": [{"name": f"A{i}", "items": _cite(ids[:1])} for i in range(3)]}
+        character = build_value_profile(storage, ScriptedProvider(proposal)).profile
+        work = build_value_profile(storage, ScriptedProvider(proposal), view=ValueView.WORK).profile
+
+        _seed_reactions(storage, config, count=1)
+
+        assert new_captures_since(storage, character) == 0
+        assert new_captures_since(storage, work) == 1
+
+
+def test_a_view_typo_refuses_instead_of_building_the_other_reading(workspace: Path) -> None:
+    """Silently falling back to the character view is how somebody quotes
+    character axes at a hiring conversation believing they are work ones."""
+    with pytest.raises(IngestError, match="unknown value view"):
+        parse_value_view("wrok")
+    assert parse_value_view("") is ValueView.CHARACTER
+    assert parse_value_view(" WORK ") is ValueView.WORK
+
+
+def test_the_work_views_refusal_names_the_evidence_that_would_help(workspace: Path) -> None:
+    """Below the floor, the character view's advice ('nominate more people')
+    is the wrong work to send somebody off to do for a work profile."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        capture_interview_reaction(
+            "values_pro", "Jane Goodall", "Steadfast dedication.", config, storage
+        )
+        with pytest.raises(IngestError, match="alignment_of_perspective") as excinfo:
+            build_value_profile(storage, ScriptedProvider({"axes": []}), view=ValueView.WORK)
+        assert "work dimensions" in str(excinfo.value)
+
+
+def test_a_pre_356_database_migrates_without_losing_its_profile(tmp_path: Path) -> None:
+    """An existing workspace's `value_profiles` table declares
+    `subject_id TEXT NOT NULL UNIQUE`, which SQLite cannot un-declare. Left
+    alone, the first work-view rebuild would hit that constraint and REPLACE
+    the character profile — two readings of the same captures deleting each
+    other, in a table whose whole lifecycle is "one current artefact".
+
+    Builds the old schema by hand rather than checking in a fixture
+    database: the point is the exact constraint that existed, and a
+    hand-written CREATE says which one that was.
+    """
+    db_path = tmp_path / "old.db"
+    connection = sqlite3.connect(db_path)
+    connection.executescript(
+        """
+        CREATE TABLE value_profiles (
+            profile_id TEXT PRIMARY KEY,
+            subject_id TEXT NOT NULL UNIQUE,
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    stored = ValueProfile(
+        subject_id=CORPUS_PERSON_ID,
+        subject_name=CORPUS_PERSON_NAME,
+        axes=[],
+        items_used=6,
+        provider="scripted",
+        model="scripted-1",
+        prompt_version=PROMPT_VERSION,
+    )
+    connection.execute(
+        "INSERT INTO value_profiles VALUES (?, ?, ?, ?)",
+        (
+            stored.profile_id,
+            stored.subject_id,
+            stored.model_dump_json(),
+            stored.generated_at.isoformat(),
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    with Storage(db_path) as storage:
+        migrated = storage.get_value_profile(CORPUS_PERSON_ID)
+        assert migrated is not None
+        assert migrated.profile_id == stored.profile_id
+        # A row written before the field existed IS the character view —
+        # the only reading there was.
+        assert migrated.view is ValueView.CHARACTER
+        assert storage.get_value_profile(CORPUS_PERSON_ID, ValueView.WORK) is None
+
+        work = stored.model_copy(update={"profile_id": "work-profile", "view": ValueView.WORK})
+        storage.save_value_profile(work)
+        assert storage.get_value_profile(CORPUS_PERSON_ID) is not None
+        assert storage.get_value_profile(CORPUS_PERSON_ID).profile_id == stored.profile_id
+
+
+def test_cli_values_view_work_builds_and_stores_the_work_reading(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The surface a person actually reaches for. Without --view there is no
+    way to ask for the reading a fit brief can cite."""
+    from typer.testing import CliRunner
+
+    import wingman.cli.main as cli_main
+    from wingman.infrastructure.config import ENV_DATA_DIR
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        item_ids = _all_item_ids(storage)
+
+    provider = ScriptedProvider(
+        {
+            "axes": [
+                {"name": "Verification before shipping", "items": _cite(item_ids)},
+                {"name": "Two", "items": _cite(item_ids[:1])},
+                {"name": "Three", "items": _cite(item_ids[:1])},
+            ]
+        }
+    )
+    monkeypatch.setattr(cli_main, "get_provider", lambda capability, config: provider)
+    monkeypatch.setenv(ENV_DATA_DIR, str(config.data_dir))
+    runner = CliRunner()
+    result = runner.invoke(cli_main.app, ["values", "--refresh", "--view", "work"])
+    assert result.exit_code == 0, result.output
+    assert "Work profile (how you want to work)" in result.output
+
+    with Storage(config.db_path) as storage:
+        assert storage.get_value_profile(CORPUS_PERSON_ID) is None
+        stored = storage.get_value_profile(CORPUS_PERSON_ID, ValueView.WORK)
+        assert stored is not None
+        assert stored.view is ValueView.WORK
+
+    bad = runner.invoke(cli_main.app, ["values", "--view", "wrok"])
+    assert bad.exit_code == 1
+    assert "unknown value view" in bad.output
+
+
+def test_mcp_my_values_view_work_returns_the_work_reading(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.mcp_server import my_values
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        item_ids = _all_item_ids(storage)
+        build_value_profile(
+            storage,
+            ScriptedProvider(
+                {
+                    "axes": [
+                        {"name": "Verification before shipping", "items": _cite(item_ids)},
+                        {"name": "Two", "items": _cite(item_ids[:1])},
+                        {"name": "Three", "items": _cite(item_ids[:1])},
+                    ]
+                }
+            ),
+            view=ValueView.WORK,
+        )
+
+    out = my_values(view="work")
+    assert "Work profile (how you want to work)" in out
+    assert "Verification before shipping" in out
+    assert "unknown value view" in my_values(view="wrok")

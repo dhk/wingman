@@ -25,7 +25,14 @@ from pydantic import BaseModel, Field
 #: The rendered views a workspace can publish. A closed set, because each
 #: one has to be regenerable on demand for an update to mean anything —
 #: an artifact nothing can rebuild is a dead end, not a record.
-ARTIFACT_KINDS = ("values_radar", "completeness", "profile")
+#:
+#: `values_radar` and `values_radar_work` are the two READINGS of the same
+#: captures (`domain.values.ValueView`, issue #356), and they are separate
+#: kinds rather than one because "one current page per kind" is what makes
+#: "update my values page" resolve without asking: fold them together and
+#: publishing the work chart silently replaces the record of where the
+#: character chart went, leaving a live page nothing can find again.
+ARTIFACT_KINDS = ("values_radar", "values_radar_work", "completeness", "profile")
 
 
 class PublishedArtifact(BaseModel):

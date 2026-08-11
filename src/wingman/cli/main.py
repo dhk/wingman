@@ -371,7 +371,9 @@ def artifacts_list() -> None:
 
 @artifacts_app.command("remember")
 def artifacts_remember(
-    kind: str = typer.Argument(..., help="values_radar, completeness, or profile."),
+    kind: str = typer.Argument(
+        ..., help="values_radar, values_radar_work, completeness, or profile."
+    ),
     url: str = typer.Argument(..., help="The https:// url the client published it at."),
     title: str = typer.Option("", "--title", help="Optional label for listings."),
 ) -> None:
@@ -424,7 +426,9 @@ def artifacts_stale() -> None:
 
 @artifacts_app.command("forget")
 def artifacts_forget(
-    kind: str = typer.Argument(..., help="values_radar, completeness, or profile."),
+    kind: str = typer.Argument(
+        ..., help="values_radar, values_radar_work, completeness, or profile."
+    ),
 ) -> None:
     """Drop a recorded url (the published page itself is untouched)."""
     from wingman.application.artifacts import forget_artifact
@@ -1984,10 +1988,23 @@ def values(
     refresh: bool = typer.Option(
         False, "--refresh", help="Rebuild the profile (a model call) even if one is stored."
     ),
+    view: str = typer.Option(
+        "character",
+        "--view",
+        help="'character' (what you care about) or 'work' (how you want to work).",
+    ),
 ) -> None:
     """Your inferred value dimensions (v2 of issue #240 — inference only,
     no chart; v3 is a separate, later PR that will render these axes as a
     radar chart).
+
+    --view work (issue #356) reads the SAME captures as ways of working —
+    what you want authority over, the conditions you need, the standard you
+    hold work to. Same scoring, same evidence citations, different naming;
+    it is the reading a fit brief can cite, and 'wingman assess' now prints
+    it alongside the requirement verdicts. It additionally reads your
+    alignment_of_perspective reactions, which are about ideas rather than
+    people. Each view is stored and rebuilt separately.
 
     Reads your own accumulated Values/Mission-alignment interview
     nominations (see 'wingman interview') and infers a small, named set of
@@ -2006,12 +2023,18 @@ def values(
     from wingman.application.values import (
         build_value_profile,
         new_captures_since,
+        parse_value_view,
         render_value_profile,
     )
 
     configure_logging()
     config = load_config()
     _require_workspace(config, "profiled")
+    try:
+        value_view = parse_value_view(view)
+    except IngestError as exc:
+        typer.echo(f"values failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     with Storage(config.db_path) as storage:
         active_persona = get_active_persona(storage, config)
         typer.echo(render_acting_as(active_persona))
@@ -2022,7 +2045,7 @@ def values(
         )
         persona_id = active_persona.persona_id if active_persona is not None else None
         if not refresh:
-            stored = storage.get_value_profile(subject_id)
+            stored = storage.get_value_profile(subject_id, value_view)
             if stored is not None:
                 stale = new_captures_since(storage, stored, persona_id=persona_id)
                 typer.echo(render_value_profile(stored, stale_new_captures=stale))
@@ -2030,7 +2053,7 @@ def values(
                 return
         try:
             provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
-            report = build_value_profile(storage, provider, persona=active_persona)
+            report = build_value_profile(storage, provider, persona=active_persona, view=value_view)
         except (IngestError, ModelConfigError, ProviderError) as exc:
             typer.echo(f"values failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
@@ -2047,6 +2070,11 @@ def values_chart(
     out: Path | None = typer.Option(
         None, "--out", help="Destination folder (default: the workspace's reports/charts/)."
     ),
+    view: str = typer.Option(
+        "character",
+        "--view",
+        help="'character' (what you care about) or 'work' (how you want to work).",
+    ),
 ) -> None:
     """Render your inferred value dimensions (see 'wingman values') as an SVG
     radar chart (v3 of issue #240 — presentation only; no model call, nothing
@@ -2058,20 +2086,31 @@ def values_chart(
     to this terminal, same as 'wingman values' already does for a stale
     stored profile.
 
+    --view work charts the work reading instead (issue #356): one chart per
+    view, same geometry, its own file — never overwriting the other.
+
     Coaching mode (docs/COACHING-MODE-DESIGN.md): if a persona is active
     ('wingman coach-persona set <name>'), this charts THEIR profile instead.
     """
     from wingman.application.coaching import get_active_persona, render_acting_as
+    from wingman.application.values import parse_value_view, refresh_command
     from wingman.reporting.radar import export_value_radar
 
     configure_logging()
     config = load_config()
     _require_workspace(config, "charted")
+    try:
+        value_view = parse_value_view(view)
+    except IngestError as exc:
+        typer.echo(f"values-chart failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     with Storage(config.db_path) as storage:
         active_persona = get_active_persona(storage, config)
         typer.echo(render_acting_as(active_persona))
         try:
-            export = export_value_radar(config, storage, persona=active_persona, out_dir=out)
+            export = export_value_radar(
+                config, storage, persona=active_persona, out_dir=out, view=value_view
+            )
         except IngestError as exc:
             typer.echo(f"values-chart failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
@@ -2083,14 +2122,14 @@ def values_chart(
         typer.echo(
             "This chart was drawn from a profile scored under a rule this version of "
             "wingman no longer runs — the shape may be superseded, and axes evidenced by "
-            "'con' nominations may be inverted. Rebuild with 'wingman values --refresh', "
-            "then re-export."
+            f"'con' nominations may be inverted. Rebuild with "
+            f"'{refresh_command(value_view)}', then re-export."
         )
     if export.stale_new_captures:
         noun = "capture" if export.stale_new_captures == 1 else "captures"
         typer.echo(
             f"{export.stale_new_captures} new {noun} since this profile was built — "
-            "'wingman values --refresh' to include them."
+            f"'{refresh_command(value_view)}' to include them."
         )
     typer.echo(f'Open it: open "{export.path}"')
 
