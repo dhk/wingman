@@ -2749,11 +2749,20 @@ def company_feed(action: str, name: str, url: str = "", index_page: bool = False
 
 
 @server.tool()
-def company_source(action: str, name: str, url: str = "", label: str = "") -> str:
+def company_source(
+    action: str, name: str, url: str = "", label: str = "", retain: bool | None = None
+) -> str:
     """Manage approved research URLs for a company: action is add, remove, or list.
 
     Adding a source IS the approval (RFC-015): 'company_research' will fetch
     exactly the pages approved here, nothing else. https:// only.
+
+    retain=True (RFC-060) additionally keeps that page's prose as a document
+    attributed to the company, so 'company_pov', 'search' and 'evidence' can
+    quote it — a values or about page becomes citable instead of only a hash
+    that says it changed. The fetch is identical either way. Off by default;
+    suits pages that change rarely, not a careers page. Pass it on an
+    already-approved source to change your mind (None leaves it alone).
     """
     config = _ready_config()
     if config is None:
@@ -2763,9 +2772,12 @@ def company_source(action: str, name: str, url: str = "", label: str = "") -> st
             if action == "add":
                 if not url.strip():
                     return "company_source add needs a url."
-                source, created = add_company_source(name, url, storage, label=label or None)
+                source, created = add_company_source(
+                    name, url, storage, label=label or None, retain=retain
+                )
                 state = "Approved" if created else "Already approved"
-                return f"{state} for {source.company_name}: {source.url}"
+                kept = " (text retained as a document)" if source.retain else ""
+                return f"{state} for {source.company_name}: {source.url}{kept}"
             if action == "remove":
                 removed = remove_company_source(name, url, storage)
                 return (
@@ -2790,7 +2802,8 @@ def company_source(action: str, name: str, url: str = "", label: str = "") -> st
                         else "no snapshot yet"
                     )
                     tag = f" ({entry.label})" if entry.label else ""
-                    lines.append(f"- {entry.url}{tag} — {state}")
+                    kept = ", text retained" if entry.retain else ""
+                    lines.append(f"- {entry.url}{tag} — {state}{kept}")
                 return "\n".join(lines)
     except IngestError as exc:
         return f"company_source failed: {exc}"
@@ -2850,7 +2863,7 @@ def company_research(name: str) -> str:
         return _NOT_INITIALIZED
     try:
         with Storage(config.db_path) as storage:
-            report = research_company(name, storage)
+            report = research_company(name, config, storage)
     except IngestError as exc:
         return f"research failed: {exc}"
     return render_research_report(report)

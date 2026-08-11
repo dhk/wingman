@@ -415,7 +415,7 @@ def _company_deep(
     titles = titles if titles is not None else _TitleBudget()
     target = OvernightTarget(name=name, kind="company", status="ok")
     try:
-        research = research_company(name, storage)
+        research = research_company(name, config, storage)
         for result in research.results:
             target.lines.append(f"research {result.url}: {result.detail}")
             target.lines.extend(f"  new: [link]({link})" for link in result.new_links)

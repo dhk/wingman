@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from array import array
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
@@ -774,6 +775,28 @@ class Storage:
         )
         self._conn.commit()
 
+    def delete_external_documents_for_records(self, source_record_ids: Iterable[str]) -> int:
+        """Drop the documents derived from these source records; return how many.
+
+        The records themselves stay — they are insert-only provenance. This is
+        the document-side of RFC-028 lineage: when a newer version of the same
+        document arrives, the older version's derived document is replaced
+        rather than left in the pool to be quoted alongside its own successor.
+        """
+        removed = 0
+        for record_id in source_record_ids:
+            document = self.find_external_document_by_source(record_id)
+            if document is None:
+                continue
+            self._conn.execute(
+                "DELETE FROM external_documents WHERE doc_id = ?", (document.doc_id,)
+            )
+            self._conn.execute("DELETE FROM external_fts WHERE doc_id = ?", (document.doc_id,))
+            self._conn.execute("DELETE FROM embeddings WHERE doc_id = ?", (document.doc_id,))
+            removed += 1
+        self._conn.commit()
+        return removed
+
     def find_external_document_by_source(self, source_record_id: str) -> ExternalDocument | None:
         cursor = self._conn.execute(
             "SELECT payload FROM external_documents WHERE source_record_id = ?",
@@ -1122,6 +1145,29 @@ class Storage:
             )
         except sqlite3.IntegrityError:
             return False
+        self._conn.commit()
+        return True
+
+    def set_company_source_retention(self, company_key: str, url: str, retain: bool) -> bool:
+        """Flip the retain flag on an already-approved source; False if unknown.
+
+        Approval is not re-litigated here — the page is already approved and
+        the fetch is unchanged. Only what is kept afterwards moves, which is
+        why this is an update rather than a remove-and-re-add (that would
+        throw away the snapshot the diff depends on).
+        """
+        cursor = self._conn.execute(
+            "SELECT payload FROM company_sources WHERE company_key = ? AND url = ?",
+            (company_key, url),
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        if row is None:
+            return False
+        updated = CompanySource.model_validate_json(row[0]).model_copy(update={"retain": retain})
+        self._conn.execute(
+            "UPDATE company_sources SET payload = ? WHERE company_key = ? AND url = ?",
+            (updated.model_dump_json(), company_key, url),
+        )
         self._conn.commit()
         return True
 

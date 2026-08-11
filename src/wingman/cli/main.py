@@ -2717,26 +2717,41 @@ def company_add_source(
     name: str = typer.Argument(..., help="Company the source belongs to."),
     url: str = typer.Argument(..., help="https:// page to watch (careers page, newsroom)."),
     label: str = typer.Option("", "--label", help="Optional short label, e.g. 'careers'."),
+    retain: bool | None = typer.Option(
+        None,
+        "--retain/--no-retain",
+        help="Also keep the page's text as a citable document for this company (RFC-060).",
+    ),
 ) -> None:
     """Approve one research URL for a company — adding it IS the approval (RFC-015).
 
     'wingman company research' will fetch exactly the pages approved here,
     nothing else.
+
+    --retain additionally KEEPS the fetched page's prose as a document
+    attributed to the company, so 'company pov' and 'evidence' can quote it.
+    Off by default: it suits a values or about page that changes twice a
+    year, not a careers page that would re-store on every run. It changes
+    nothing about the fetch — same page, same one GET. Re-run with
+    --retain/--no-retain on an already-approved source to change your mind.
     """
     configure_logging()
     config = load_config()
     _require_workspace(config, "added")
     try:
         with Storage(config.db_path) as storage:
-            source, created = add_company_source(name, url, storage, label=label or None)
+            source, created = add_company_source(
+                name, url, storage, label=label or None, retain=retain
+            )
     except IngestError as exc:
         typer.echo(f"add-source failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    kept = " (text retained as a document)" if source.retain else ""
     if created:
-        typer.echo(f"Approved for {source.company_name}: {source.url}")
+        typer.echo(f"Approved for {source.company_name}: {source.url}{kept}")
         typer.echo(f'Fetch it with: wingman company research "{source.company_name}"')
     else:
-        typer.echo(f"Already approved for {source.company_name}: {source.url}")
+        typer.echo(f"Already approved for {source.company_name}: {source.url}{kept}")
 
 
 @company_app.command("remove-source")
@@ -2793,7 +2808,8 @@ def company_sources_cmd(
             if snapshot
             else "no snapshot yet"
         )
-        typer.echo(f"- {source.url}{label} — {state}")
+        kept = ", text retained" if source.retain else ""
+        typer.echo(f"- {source.url}{label} — {state}{kept}")
 
 
 @company_app.command("add-feed")
@@ -2899,7 +2915,7 @@ def company_research_cmd(
     _require_workspace(config, "researched")
     try:
         with Storage(config.db_path) as storage:
-            report = research_company(name, storage)
+            report = research_company(name, config, storage)
     except IngestError as exc:
         typer.echo(f"research failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
