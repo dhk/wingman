@@ -19,16 +19,14 @@ from wingman.application.completeness import CompletenessReport, compute_complet
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.storage import Storage
 
-BLOCKED_SECTIONS = (
-    (
-        "Interview Bootstrap",
-        "no tool reads back interview_react captures yet — see issue #311",
-    ),
-    (
-        "Applications",
-        "status counts opportunities but nothing lists them by name yet — see issue #312",
-    ),
-)
+# Sections this report cannot honestly measure yet. Empty today: both
+# original entries shipped — #311 as `interview_status`, #312 as
+# `opportunities_list` — and this tuple went on declaring them impossible
+# long afterwards, so the one place somebody looks for progress told them
+# the data was unavailable while the tools sat right there. Kept as the
+# seam for the next genuinely unmeasurable section, and as a reminder that
+# an entry here is a claim with an expiry date.
+BLOCKED_SECTIONS: tuple[tuple[str, str], ...] = ()
 
 
 def _todo_markdown(report: CompletenessReport) -> list[str]:
@@ -86,6 +84,27 @@ def render_completeness_markdown(report: CompletenessReport) -> str:
             lines.append(f"- {person.name}{where} — {link}, {logged}")
     else:
         lines.append("_None yet._")
+    lines.extend(["", "## Interview", ""])
+    current = ""
+    for row in report.interview:
+        if row.category != current:
+            current = row.category
+            lines.append(f"**{current}**")
+        lines.append(
+            f"- {row.subtype}: {row.count}/{row.cap} ({'captured' if row.count else 'not yet'})"
+        )
+    assessed = report.opportunities.assessed
+    lines.extend(
+        [
+            "",
+            "## Applications",
+            "",
+            (
+                f"- {assessed} opportunit{'y' if assessed == 1 else 'ies'} assessed"
+                " — opportunities_list names them."
+            ),
+        ]
+    )
     lines.extend(["", f"## Companies ({len(report.companies)} attributable)", ""])
     if report.companies:
         for company in report.companies:
@@ -96,9 +115,10 @@ def render_completeness_markdown(report: CompletenessReport) -> str:
             )
     else:
         lines.append("_None yet — no watched person has a company set._")
-    lines.extend(["", "## Blocked", ""])
-    for name, reason in BLOCKED_SECTIONS:
-        lines.append(f"- {name}: {reason}")
+    if BLOCKED_SECTIONS:
+        lines.extend(["", "## Blocked", ""])
+        for name, reason in BLOCKED_SECTIONS:
+            lines.append(f"- {name}: {reason}")
     lines.append("")
     return "\n".join(lines)
 

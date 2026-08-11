@@ -141,9 +141,27 @@ def render_completeness_html(report: CompletenessReport) -> str:
             )
     else:
         body.append('<p class="dim">None yet — no watched person has a company set.</p>')
-    body.append('<div class="section-divider"><span>Blocked</span></div>')
-    for name, reason in BLOCKED_SECTIONS:
-        body.append(f'<div class="blocked">⛔ <b>{_e(name)}</b> — {_e(reason)}</div>')
+    # The interview is the one section with a denominator the code actually
+    # enforces — application.interview's per-subtype cap — so these meters
+    # show real progress rather than the full-or-empty bar every count
+    # without a target has to settle for (AGENTS.md invariant 9).
+    body.append('<div class="section-divider"><span>Interview</span></div>')
+    current = ""
+    for row in report.interview:
+        if row.category != current:
+            current = row.category
+            body.append(f"<h3>{_e(current)}</h3>")
+        body.append(_meter(row.subtype, row.count, target=row.cap))
+    assessed = report.opportunities.assessed
+    body.append('<div class="section-divider"><span>Applications</span></div>')
+    body.append(
+        f'<p class="dim">{assessed} opportunit{"y" if assessed == 1 else "ies"} assessed '
+        "— opportunities_list names them.</p>"
+    )
+    if BLOCKED_SECTIONS:
+        body.append('<div class="section-divider"><span>Blocked</span></div>')
+        for name, reason in BLOCKED_SECTIONS:
+            body.append(f'<div class="blocked">⛔ <b>{_e(name)}</b> — {_e(reason)}</div>')
     joined = "\n".join(body)
     return (
         "<!doctype html>\n"
