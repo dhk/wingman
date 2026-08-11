@@ -60,6 +60,19 @@ class ChangelogEntry:
 # neither surface has to render this repo's entire history.
 DEFAULT_DISPLAY_LIMIT = 60
 
+#: Where a merged PR can be read. An entry carries a bare number, which is
+#: only meaningful to somebody who already knows the repository — so every
+#: surface that shows one renders it as a link people can follow (#357).
+#: The repository being private is not a reason to withhold the URL: a
+#: reader without access gets a sign-in page, which at least tells them
+#: what they are missing, where a bare "#123" tells them nothing at all.
+PR_URL_BASE = "https://github.com/dhk/wingman/pull/"
+
+
+def pr_url(pr: int) -> str:
+    """The URL for one merged PR."""
+    return f"{PR_URL_BASE}{pr}"
+
 
 # Deliberately small and specific: each pattern targets a category the repo's
 # own history actually produces (see scripts/generate_changelog.py's sample),
@@ -206,7 +219,8 @@ def render_changelog(today: date_cls, version_string: str | None = None) -> str:
     lines = [note, ""] if note else []
     lines.extend([header, ""])
     lines.extend(
-        f"- {entry.date} {entry.title} (#{entry.pr})" for entry in entries[:DEFAULT_DISPLAY_LIMIT]
+        f"- {entry.date} {entry.title} ({pr_url(entry.pr)})"
+        for entry in entries[:DEFAULT_DISPLAY_LIMIT]
     )
     if len(entries) > DEFAULT_DISPLAY_LIMIT:
         lines.append("- …older entries omitted")

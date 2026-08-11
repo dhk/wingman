@@ -224,6 +224,8 @@ body { margin: 0; }
 .changelog-row:first-child { border-top: 0; }
 .changelog-row .when { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
 .changelog-row .pr { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+.changelog-row .pr a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--border); }
+.changelog-row .pr a:hover, .changelog-row .pr a:focus { color: var(--text); }
 /* Changelog filter (User Facing / System Features / All): same hidden-radio
    + :checked-sibling technique as the outer tabset above, but its own
    smaller classes rather than reusing .tabset/.tabbar/.tabpanel -- this is
@@ -492,6 +494,7 @@ def _changelog_panel(now: datetime) -> tuple[str, str]:
         counts_today_and_week,
         is_user_facing,
         load_entries,
+        pr_url,
         user_facing_entries,
     )
 
@@ -501,7 +504,8 @@ def _changelog_panel(now: datetime) -> tuple[str, str]:
         f'<div class="changelog-row {"cl-uf" if is_user_facing(entry.title) else "cl-sys"}">'
         f'<span class="when">{_e(_changelog_date_label(entry.date, now))}</span>'
         f"<span>{_e(entry.title)}</span>"
-        f'<span class="pr">#{entry.pr}</span></div>'
+        f'<span class="pr"><a href="{pr_url(entry.pr)}" target="_blank" '
+        f'rel="noopener noreferrer">#{entry.pr}</a></span></div>'
         for entry in all_entries[:DEFAULT_DISPLAY_LIMIT]
     )
     if len(all_entries) > DEFAULT_DISPLAY_LIMIT:
