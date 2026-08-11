@@ -318,9 +318,12 @@ def motd_set(
     ),
     why: str = typer.Option("", "--why", help="What the request costs if ignored."),
     how: str = typer.Option("", "--how", help="The exact sentence that does it."),
+    to: str = typer.Option(
+        "all", "--to", help="A tenant slug, or 'all'. A slug is checked against the registry."
+    ),
     path: Path | None = typer.Option(None, "--path", help="Write somewhere other than /etc."),
 ) -> None:
-    """Broadcast one action to every account on this box.
+    """Broadcast one action to every account on this box, or to one tenant.
 
     Needs write access to the shared file (root, or a member of a group the
     operator has granted). Writing by hand is still fine — this exists so
@@ -332,9 +335,10 @@ def motd_set(
     from wingman.infrastructure.broadcast import OperatorMessage, write_operator_message
 
     configure_logging()
+    addressee = _addressee_or_exit(to)
     resolved_id = message_id.strip() or datetime.now(UTC).date().isoformat()
     message = OperatorMessage(
-        id=resolved_id, action=action.strip(), why=why.strip(), how=how.strip()
+        id=resolved_id, action=action.strip(), why=why.strip(), how=how.strip(), to=addressee
     )
     if not message.action:
         typer.echo("The action is empty; nothing was written.")
@@ -344,11 +348,255 @@ def motd_set(
     except OSError as exc:
         typer.echo(f"Could not write the shared message file: {exc}")
         raise typer.Exit(code=1) from exc
-    typer.echo(f"Broadcast written to {written} (id {message.id}).")
+    who = "Every account" if addressee == "all" else f"Tenant {addressee!r}"
+    typer.echo(f"Broadcast written to {written} (id {message.id}), addressed to {addressee}.")
     typer.echo(
-        "Every account sees it once, the next time they ask what to do next. "
+        f"{who} sees it once, the next time they ask what to do next. "
         "Change --id to say something new; delete the file to stop saying anything."
     )
+
+
+qotd_app = typer.Typer(
+    help="The operator's question of the day — asked to one tenant or all, answered in "
+    "the answerer's OWN workspace, never in shared space (#224, RFC-067)."
+)
+app.add_typer(qotd_app, name="qotd")
+
+
+def _addressee_or_exit(to: str) -> str:
+    """A validated addressee for a broadcast: a real slug, or 'all'.
+
+    A mistyped slug reaches nobody, silently and forever — the same silence
+    a malformed file degrades to, but with no `show` command able to tell
+    it from a question nobody has answered yet. So the typo is caught at
+    write time, where the operator is standing. A registry that cannot be
+    read at all is a warning rather than a refusal: an operator setting up
+    a box before the registry exists is a legitimate order of work.
+
+    The registry named here is `tenant_registry_path()` — the box's
+    canonical one — and it is PRINTED, because delivery resolves against
+    that same file. A shared server started with an explicit
+    `--tenant-registry` while `WINGMAN_TENANT_REGISTRY` is unset would
+    address against a different file than it serves from, and seeing the
+    path is how an operator notices before wondering why nobody answered.
+    """
+    from wingman.infrastructure.broadcast import ALL_TENANTS
+    from wingman.infrastructure.tenants import load_registry, tenant_registry_path
+
+    wanted = to.strip() or ALL_TENANTS
+    if wanted.lower() == ALL_TENANTS:
+        return ALL_TENANTS
+    registry_path: Path | None = None
+    try:
+        registry_path = tenant_registry_path()
+        slugs = [tenant.slug for tenant in load_registry(registry_path)]
+    except Exception as exc:  # noqa: BLE001 — same total catch as broadcast.account_slug
+        # Everything the registry read can throw, for the reason
+        # `broadcast.account_slug` catches everything: a '~olduser' entry
+        # whose home is gone raises RuntimeError, a non-UTF-8 file raises
+        # UnicodeDecodeError, and a traceback here would be an operator
+        # unable to send a message because somebody else's line is stale.
+        typer.echo(f"warning: could not read the tenant registry ({registry_path}): {exc}")
+        typer.echo(
+            f"warning: writing it addressed to {wanted!r} unchecked — and note that "
+            "delivery reads the same registry, so nobody will receive it until that "
+            "file parses. 'wingman qotd show' on the addressee's account confirms."
+        )
+        return wanted
+    if wanted not in slugs:
+        known = ", ".join(sorted(slugs)) or "(none registered)"
+        typer.echo(
+            f"No tenant {wanted!r} in {registry_path} — it would reach nobody. Known: {known}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    # Deliberately phrased as a fact about THIS moment. Delivery re-reads
+    # the same file every time somebody asks what to do next, so a slug
+    # that is registered now can stop resolving later — a decommissioned
+    # account elsewhere in the file is enough. Saying "it will be
+    # delivered" would be a promise this read cannot make.
+    typer.echo(f"{wanted!r} is in {registry_path} as of now; delivery re-reads that file.")
+    return wanted
+
+
+@qotd_app.command("set")
+def qotd_set(
+    question: str = typer.Argument(..., help="The question, in your own words."),
+    to: str = typer.Option(
+        "all", "--to", help="A tenant slug, or 'all'. A slug is checked against the registry."
+    ),
+    question_id: str = typer.Option(
+        "", "--id", help="Opaque id. Changing it asks a NEW question. Defaults to today."
+    ),
+    why: str = typer.Option("", "--why", help="Why you are asking — optional, and shown."),
+    path: Path | None = typer.Option(None, "--path", help="Write somewhere other than /etc."),
+) -> None:
+    """Ask one tenant, or everybody, one question.
+
+    It arrives in their "what to do next" list, labelled as yours and
+    carrying the sentence that says you will be able to read the answer.
+    Each answer is stored in that person's own workspace — nothing here is
+    group-writable, and no account can see another's answer. Read them back
+    with 'wingman tenant answers'.
+
+    The question stands until it is answered, unlike a message, which is
+    shown once: change --id to ask something new, delete the file to stop
+    asking.
+    """
+    from datetime import UTC, datetime
+
+    from wingman.infrastructure.broadcast import OperatorQuestion, write_operator_question
+
+    configure_logging()
+    addressee = _addressee_or_exit(to)
+    resolved_id = question_id.strip() or datetime.now(UTC).date().isoformat()
+    asked = OperatorQuestion(
+        id=resolved_id, question=question.strip(), why=why.strip(), to=addressee
+    )
+    if not asked.question:
+        typer.echo("The question is empty; nothing was written.")
+        raise typer.Exit(code=1)
+    try:
+        written = write_operator_question(asked, path)
+    except OSError as exc:
+        typer.echo(f"Could not write the shared question file: {exc}")
+        raise typer.Exit(code=1) from exc
+    who = "every account on this box" if addressee == "all" else f"tenant {addressee!r}"
+    typer.echo(f"Question written to {written} (id {asked.id}), addressed to {who}.")
+    typer.echo("Answers land in each person's own workspace — read them: wingman tenant answers")
+
+
+def _why_no_slug() -> str:
+    """Why this account has no slug — the two cases, told apart.
+
+    `broadcast.account_slug` returns None for both "the registry could not
+    be read" and "this account is not in it", because delivery must fail
+    closed either way. But those are very different problems for a person
+    to have: one is a broken file that has silenced slug-addressed
+    broadcasts for EVERYBODY on the box, the other is an ordinary
+    unregistered account. Reporting them with one sentence would make the
+    first invisible, which is exactly what this command exists to prevent.
+    """
+    from wingman.infrastructure.broadcast import account_slug
+    from wingman.infrastructure.tenants import load_registry, tenant_registry_path
+
+    config = load_config()
+    slug = account_slug(config)
+    if slug:
+        return f"its slug is {slug!r}."
+    registry_path: Path | None = None
+    try:
+        registry_path = tenant_registry_path()
+        load_registry(registry_path)
+    except Exception as exc:  # noqa: BLE001 — reporting the failure IS the job here
+        return (
+            f"the tenant registry ({registry_path}) could not be read: {exc}. "
+            "Until that is fixed, NOBODY on this box receives a slug-addressed "
+            "message or question."
+        )
+    return f"it has no slug in the registry ({registry_path})."
+
+
+@qotd_app.command("show")
+def qotd_show() -> None:
+    """What is being asked, of whom, and whether THIS account has answered.
+
+    Read-only, and the one place a malformed question file is visible:
+    everywhere else it degrades to silence on purpose, because this sits on
+    the path of every account's status.
+    """
+    from wingman.infrastructure.broadcast import (
+        ALL_TENANTS,
+        OPERATOR_QUESTION_PATH,
+        is_addressed_to,
+        read_operator_question,
+    )
+
+    configure_logging()
+    config = load_config()
+    typer.echo(f"Shared file: {OPERATOR_QUESTION_PATH}")
+    if not OPERATOR_QUESTION_PATH.exists():
+        typer.echo("No question set — the file does not exist. Nobody is being asked anything.")
+        return
+    question = read_operator_question()
+    if question is None:
+        typer.echo(
+            "The file exists but could not be read as a question (unreadable, too large, "
+            "not JSON, or missing 'id'/'question'). Every account is silently getting "
+            "nothing — 'wingman qotd set' writes a file this reader accepts."
+        )
+        return
+    typer.echo(f"  id:       {question.id}")
+    typer.echo(f"  to:       {question.to}")
+    typer.echo(f"  question: {question.question}")
+    typer.echo(f"  why:      {question.why or '(none given)'}")
+    if not is_addressed_to(question.to, config):
+        typer.echo(f"This account ({config.data_dir}) is not the addressee — {_why_no_slug()}")
+        return
+    if not config.db_path.exists():
+        # Reading must never CREATE a workspace: Storage() would write a
+        # full schema here and leave a half-initialized data dir that every
+        # later db_path.exists() check reads as a real workspace.
+        typer.echo(f"No workspace here yet ({config.db_path} missing) — run 'wingman init'.")
+        return
+    with Storage(config.db_path) as storage:
+        answered = question.id in storage.answered_question_ids()
+    scope = "everyone" if question.to.lower() == ALL_TENANTS else f"tenant {question.to!r}"
+    typer.echo(f"Addressed to {scope}; this account: " + ("answered" if answered else "unanswered"))
+
+
+@qotd_app.command("answer")
+def qotd_answer(
+    answer: str = typer.Argument(..., help="Your answer, in your own words — stored verbatim."),
+    yes: bool = typer.Option(
+        False, "--yes", help="Skip the confirmation prompt (it shows exactly what will be stored)."
+    ),
+) -> None:
+    """Answer the current question, in your own words.
+
+    Stored in YOUR workspace, in your own words, and nowhere else — but
+    whoever runs this machine can read it, which is why the confirmation
+    shows you exactly what will be stored before anything is (BP-06).
+    """
+    from wingman.application.ingest import IngestError
+    from wingman.application.qotd import save_operator_answer
+    from wingman.domain.operator_answer import OPERATOR_ANSWER_DISCLOSURE
+    from wingman.infrastructure.broadcast import read_operator_question
+
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "saved")
+    question = read_operator_question()
+    if question is not None:
+        typer.echo(f"Question: {question.question}")
+    typer.echo("This is exactly what will be stored, word for word:")
+    typer.echo("")
+    for line in answer.strip().splitlines() or [""]:
+        typer.echo(f"  {line}")
+    typer.echo("")
+    typer.echo(OPERATOR_ANSWER_DISCLOSURE)
+    if not yes and not typer.confirm("Save it?", default=False):
+        typer.echo("Nothing was saved.")
+        raise typer.Exit(code=1)
+    try:
+        with Storage(config.db_path) as storage:
+            record = save_operator_answer(answer, config, storage)
+    except IngestError as exc:
+        typer.echo(f"qotd answer failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Saved [{record.answer_id[:8]}] against question {record.question_id}.")
+
+
+@qotd_app.command("answers")
+def qotd_answers() -> None:
+    """Every answer THIS workspace has given, oldest first."""
+    from wingman.application.qotd import list_operator_answers, render_answers
+
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "read")
+    with Storage(config.db_path) as storage:
+        typer.echo(render_answers(list_operator_answers(storage)))
 
 
 artifacts_app = typer.Typer(
@@ -3922,6 +4170,88 @@ def tenant_form_cmd(
     typer.echo("  6. Execution log prints the published URL — send that to them")
     typer.echo("")
     typer.echo(f"Paste the .gs file, NOT {Path(__file__).name} or any wingman source.")
+
+
+@tenant_app.command("answers")
+def tenant_answers_cmd(
+    slug: str | None = typer.Argument(
+        None, help="One tenant's slug, or omit for every tenant in the registry."
+    ),
+    registry: Path | None = typer.Option(
+        None,
+        "--registry",
+        help="Tenant registry path (default: WINGMAN_TENANT_REGISTRY host setting).",
+    ),
+    question_id: str = typer.Option(
+        "", "--id", help="Only answers to this question id (as passed to 'wingman qotd set')."
+    ),
+) -> None:
+    """Read back what people answered to the question of the day (#224).
+
+    This is the fan-in, and it is deliberately an OPERATOR act performed
+    with operator access — the same access that reads the registry and runs
+    'tenant urls' — rather than a wingman feature that hands answers over.
+    Each answer was written into that tenant's own workspace and stays
+    there; this command opens each database read-only and prints what it
+    finds. Nothing is group-writable, no account can read another's
+    answers, and RFC-048's share-nothing posture is untouched: the fan-in
+    is one operator reading N workspaces, not N accounts writing to one
+    place.
+
+    Every person who answered was told, before they answered, that whoever
+    runs this machine can read it. That disclosure is what makes running
+    this honest; the banner above the output repeats whose words these are.
+    """
+    from wingman.application.qotd import list_operator_answers, render_answers
+
+    configure_logging()
+    if slug is not None:
+        tenant, _registry_path = _load_tenant_or_exit(slug, registry)
+        tenants = [tenant]
+    else:
+        tenants, _registry_path = _load_registry_or_exit(registry)
+    if not tenants:
+        typer.echo(f"no tenants in the registry ({_registry_path}) — nobody to read.")
+        return
+    wanted = question_id.strip()
+    total = 0
+    read = 0
+    unreadable = 0
+    for tenant in tenants:
+        # The WHOLE per-tenant body is guarded, not just the query.
+        # Tenant.config() reads that tenant's own keys file, and rendering
+        # validates rows that tenant's workspace wrote — a failure in
+        # either is still one tenant's problem, and aborting here would
+        # hide every tenant AFTER it in the registry, silently, from the
+        # only command that can read them at all.
+        try:
+            config = tenant.config()
+            if not config.db_path.exists():
+                typer.echo(f"{tenant.slug}: no workspace yet ({config.db_path} missing).")
+                continue
+            with Storage(config.db_path) as storage:
+                answers = list_operator_answers(storage)
+            if wanted:
+                answers = [record for record in answers if record.question_id == wanted]
+            rendered = render_answers(answers, who=tenant.slug)
+        except Exception as exc:  # noqa: BLE001 — one bad workspace, not the whole roster
+            typer.echo(f"{tenant.slug}: could not be read — {exc}", err=True)
+            unreadable += 1
+            continue
+        total += len(answers)
+        read += 1
+        typer.echo(rendered)
+        typer.echo("")
+    # Counted over what was actually READ. "across N tenants" where N
+    # includes the ones that failed would report a complete picture of a
+    # roster this command only partly saw — the same reason 'tenant
+    # overnight' prints a completed-cleanly fraction rather than a total.
+    typer.echo(
+        f"{total} answer{'' if total == 1 else 's'} across {read} of {len(tenants)} tenants."
+    )
+    if unreadable:
+        typer.echo(f"{unreadable} workspace(s) could not be read — see the errors above.")
+        raise typer.Exit(code=1)
 
 
 @tenant_app.command("overnight")

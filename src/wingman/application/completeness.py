@@ -29,7 +29,11 @@ from wingman.application.company_feeds import is_company_anchor
 from wingman.application.job_scoring import load_criteria
 from wingman.application.similarity import company_key
 from wingman.domain.profile import ItemStatus, ProfileItemKind
-from wingman.infrastructure.broadcast import OperatorMessage, pending_operator_message
+from wingman.infrastructure.broadcast import (
+    OperatorMessage,
+    OperatorQuestion,
+    pending_operator_message,
+)
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.storage import Storage
 
@@ -108,6 +112,17 @@ OPERATOR_ATTRIBUTION = (
     "not something wingman measured in your workspace."
 )
 
+# The same sentence for a question, plus the one thing a question needs
+# that a message does not: who will read the reply. Said BEFORE the answer
+# exists, because consent that arrives after the words are stored is not
+# consent, and somebody who does not know their audience answers a
+# different question than the one they were asked (RFC-067).
+OPERATOR_QUESTION_ATTRIBUTION = (
+    "Asked by whoever runs this machine — a question, not something wingman "
+    "measured in your workspace. Your answer is stored in your own workspace, "
+    "in your own words, and they can read it."
+)
+
 
 class NextAction(BaseModel):
     """One thing worth doing next, and why it is worth doing.
@@ -133,12 +148,27 @@ class NextAction(BaseModel):
     title: str
     why: str
     how: str
-    origin: Literal["workspace", "operator"] = "workspace"
+    origin: Literal["workspace", "operator", "operator_question"] = "workspace"
+
+    @property
+    def from_the_operator(self) -> bool:
+        """Whether this came from a person rather than from the workspace.
+
+        The test every renderer needs, so adding a third operator-side
+        origin (the question, #224's second half) could not silently stop
+        one of them labelling the line — which comparing to the string
+        "operator" would have done.
+        """
+        return self.origin != "workspace"
 
     @property
     def attribution(self) -> str:
         """The provenance line a renderer must show, or '' when derived."""
-        return OPERATOR_ATTRIBUTION if self.origin == "operator" else ""
+        if self.origin == "operator":
+            return OPERATOR_ATTRIBUTION
+        if self.origin == "operator_question":
+            return OPERATOR_QUESTION_ATTRIBUTION
+        return ""
 
 
 class CompletenessReport(BaseModel):
@@ -158,6 +188,14 @@ class CompletenessReport(BaseModel):
     # everything else, so what an account was told is as inspectable as
     # what was counted.
     operator_action: OperatorMessage | None = None
+    # The operator's question this account has been asked and not yet
+    # answered (issue #224's second half, RFC-067). Same collapse-to-None
+    # rules as the message above, plus two of its own: a question addressed
+    # to another tenant is not this account's, and a question this workspace
+    # has already answered is finished. Unlike the message it is not
+    # "delivered once" — it stands until answered, like every computed
+    # action, because a question nobody saw is worse than one asked twice.
+    operator_question: OperatorQuestion | None = None
 
 
 def _interview_completeness(storage: Storage) -> list[InterviewCompleteness]:
@@ -218,10 +256,11 @@ def next_actions(report: CompletenessReport) -> list[NextAction]:
     minutes to write; a workspace can be full of everything else and still
     tell you nothing about which job to look at.
 
-    **An operator action outranks every computed one** (issue #224). This
-    is a written rule, not an accident of insertion order, and it costs
-    job criteria the lead it otherwise holds. Three reasons, in order of
-    weight:
+    **An operator action outranks every computed one** (issue #224), and
+    the operator's QUESTION comes second, still ahead of everything
+    computed. This is a written rule, not an accident of insertion order,
+    and it costs job criteria the lead it otherwise holds. Three reasons,
+    in order of weight:
 
     1. The operator knows something the workspace cannot. Every computed
        action is inferred from local state; an operator action exists
@@ -237,12 +276,19 @@ def next_actions(report: CompletenessReport) -> list[NextAction]:
        at your earliest convenience" was the phrasing that produced this
        feature.
 
+    A message outranks a question, because a message asks somebody to act
+    and a question only asks them to speak; and because a message is shown
+    ONCE while a question stands until it is answered, so ranking the
+    question first would be spending the message's single delivery on the
+    less urgent of the two.
+
     The cost, accepted deliberately: an operator can push the single most
     unblocking computed step down the list, for any account on the box, by
-    writing one file. That is a real power and the reason origin is
-    visible everywhere it renders — the person reading it can see that
-    line came from a human and weigh it accordingly, which they could not
-    do if it were dressed as a measurement.
+    writing one file — two files now, and the second one asks for the
+    person's words rather than their time. That is a real power and the
+    reason origin is visible everywhere it renders — the person reading it
+    can see that line came from a human and weigh it accordingly, which
+    they could not do if it were dressed as a measurement.
 
     Otherwise deterministic and derived from the report — no model, no
     guessing, and nothing here that the numbers above do not already say.
@@ -261,6 +307,20 @@ def next_actions(report: CompletenessReport) -> list[NextAction]:
                 why=broadcast.why or "No reason was given beyond the request itself.",
                 how=broadcast.how or "ask whoever runs this machine if this is not clear",
                 origin="operator",
+            )
+        )
+    if report.operator_question is not None:
+        question = report.operator_question
+        actions.append(
+            NextAction(
+                # The question itself is the line, not "answer a question" —
+                # a person decides whether to answer by reading what was
+                # asked, and a title that hides it behind a label costs the
+                # question the only chance it gets to be read.
+                title=question.question,
+                why=question.why or "No reason was given beyond the question itself.",
+                how="say: my answer to the question of the day is …",
+                origin="operator_question",
             )
         )
     if not report.job_criteria.exists:
@@ -425,7 +485,13 @@ def compute_completeness(storage: Storage, config: Config) -> CompletenessReport
     consuming a once-only message there would burn it unread. Whoever
     actually shows a next-actions list calls
     `broadcast.acknowledge_delivery` after rendering.
+
+    The operator's question needs no such care: it stands until this
+    workspace has stored an answer to it, so reading it here costs nothing
+    and there is no delivery act to forget.
     """
+    from wingman.application.qotd import pending_question
+
     return CompletenessReport(
         generated_at=datetime.now(UTC),
         career=_career_completeness(storage),
@@ -436,4 +502,5 @@ def compute_completeness(storage: Storage, config: Config) -> CompletenessReport
         interview=_interview_completeness(storage),
         opportunities=_opportunity_completeness(storage),
         operator_action=pending_operator_message(config),
+        operator_question=pending_question(config, storage),
     )

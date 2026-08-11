@@ -336,6 +336,15 @@ def completeness(as_html: bool = False) -> str:
     per account: reading it here is the delivery, so pass it on in this
     reply rather than assuming it will come round again.
 
+    A second entry may be marked '[a question from the operator of this
+    machine]'. That is a QUESTION, not a task: relay it as asked, keep its
+    attribution — which says their answer is stored in their own workspace
+    and that the operator can read it — and if they want to answer, use the
+    `qotd` tool and its echo-before-save protocol. Never answer on their
+    behalf, never press for an answer, and never paraphrase what they say.
+    It stands until answered rather than being shown once, so nothing is
+    lost by leaving it.
+
     'wingman status' answers a different question — what is in the
     workspace right now — and does not say what to do about it.
     """
@@ -1467,9 +1476,11 @@ def setup_guide() -> str:
     the ordering is deliberate (job criteria first, because every scored
     opening depends on a document that takes ten minutes, unless the
     operator of this machine has broadcast something, which leads). A step
-    carrying an attribution line is that operator's instruction, not a
-    reading of this workspace; relay it with the attribution attached
-    (issue #224).
+    carrying an attribution line is that operator's instruction — or their
+    question — not a reading of this workspace; relay it with the
+    attribution attached (issue #224). A question is answered with the
+    `qotd` tool, echoing the words verbatim before saving, and only if the
+    person wants to answer it.
 
     For the standing daily or weekly briefing it mentions at the end, walk
     them through the scheduling choices rather than inventing a cadence for
@@ -1489,6 +1500,90 @@ def setup_guide() -> str:
     guide = render_setup_guide(config, report)
     acknowledge_delivery(config, report.operator_action)
     return guide
+
+
+@server.tool()
+def qotd(action: str = "show", answer: str = "") -> str:
+    """The question whoever runs this machine has asked you, and your answer
+    to it (issue #224, RFC-067).
+
+    action is 'show' (the current question, or nothing if none is
+    outstanding), 'answer' (store `answer` — the user's OWN words), or
+    'list' (every answer this workspace has given).
+
+    Two things about an answer, and both must be said to the user rather
+    than assumed:
+
+    1. **It is stored in THEIR workspace** — their own database, like every
+       other capture. Wingman sends it nowhere, and no other account on
+       this machine can see it; it travels only where the rest of their
+       workspace travels (a backup they take, an export they ask for).
+    2. **Whoever runs this machine can read it.** They asked, and reading
+       the answers is how they get them. Say so BEFORE the answer is
+       stored, not after — somebody who did not know their audience
+       answered a different question than the one they were asked.
+
+    Protocol — BP-06, echo verbatim before you commit, the same gate as
+    interview_react, qa_capture and commentary: show the EXACT text you are
+    about to store, in a quote block, with the sentence about who can read
+    it, and offer Save / Reword / Discard. Call this tool with
+    action='answer' only after they say save. Never tidy, summarise,
+    expand or re-punctuate their words between the echo and the call —
+    their answer is stored verbatim and read by a third party, so a
+    paraphrase filed under their name is worse here than anywhere else.
+
+    An answer is NOT evidence and must never be offered as one: it does not
+    reach POV cards, briefs, fit assessment, `evidence` or workspace
+    `search`, because the question that shaped it was written by the person
+    who will read the reply. If what they said is genuinely worth keeping
+    as career evidence, that is a separate, explicit act — offer
+    `qa_capture` and let them say it as their own material, in their own
+    frame.
+
+    Nothing forces an answer. Silence is a legitimate response to a
+    question from somebody who runs your machine, and the question standing
+    unanswered in the next-actions list is not a reason to press.
+    """
+    from wingman.application.qotd import (
+        list_operator_answers,
+        pending_question,
+        render_answers,
+        render_question,
+        save_operator_answer,
+    )
+    from wingman.infrastructure.broadcast import read_operator_question
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "show":
+                outstanding = pending_question(config, storage)
+                if outstanding is None:
+                    current = read_operator_question()
+                    if current is not None:
+                        return (
+                            "Nothing outstanding — either this question is addressed to "
+                            "somebody else on this machine, or you have already answered it "
+                            "(qotd(action='list') shows what you said)."
+                        )
+                    return "Nobody has asked a question of the day."
+                return render_question(outstanding)
+            if action == "answer":
+                record = save_operator_answer(answer, config, storage)
+                return (
+                    f"Saved [{record.answer_id[:8]}] against question "
+                    f"{record.question_id}, word for word.\n"
+                    "It is in your workspace and nowhere else; whoever runs this machine "
+                    "can read it. It is not evidence and will not be cited in briefs, POV "
+                    "cards or fit assessments."
+                )
+            if action == "list":
+                return render_answers(list_operator_answers(storage))
+    except IngestError as exc:
+        return f"qotd {action} failed: {exc}"
+    return f"unknown action {action!r}; use show, answer, or list."
 
 
 @server.tool()
