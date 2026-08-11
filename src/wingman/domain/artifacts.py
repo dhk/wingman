@@ -5,19 +5,11 @@ the completeness report, the profile with its evidence. A Claude client can
 publish one of those as an artifact: a page with a stable URL, rendered
 in-app rather than behind a browser link.
 
-Nothing here publishes anything. Wingman cannot: MCP runs one way, so a
-server has no route back into the client that would let it create or update
-a page. The client's assistant does the publishing; this records WHERE it
-put it, so the next conversation can update that page instead of minting a
-second one.
-
-That is the whole point. Updating an artifact in place requires its URL,
-and a conversation that did not publish it has no way to know it — so
-without somewhere durable to keep the URL, every regeneration produces
-another orphan page and the person accumulates a graveyard of
-half-truthful snapshots. Keeping it here also means a SCHEDULED
-conversation, which by definition never published the original, can still
-refresh the canonical one.
+The client publishes; wingman records where it went. Updating a page in
+place needs its URL, and a conversation that did not publish it has no way
+to know one — so without this, every regeneration mints another page and
+leaves the last one quietly wrong. It is also how a scheduled conversation
+refreshes the canonical page rather than adding to the pile.
 
 The workspace stays the system of record. An artifact is a rendering of it,
 and this table says nothing about whether that rendering is still true —

@@ -1369,17 +1369,11 @@ def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = 
     can publish one as an artifact: a page with a stable url, rendered
     in-app rather than behind a browser link.
 
-    THIS TOOL PUBLISHES NOTHING, and cannot. MCP runs one way, so a server
-    has no route back into the client to create or update a page. You do
-    the publishing; this records where you put it.
-
-    Why that record matters: updating an artifact in place requires its
+    You publish; this records where. Updating a page in place needs its
     url, and a conversation that did not publish it has no way to know one
-    — it would mint a second page instead. So without this, every refresh
-    leaves another orphan, and the person collects a graveyard of
-    half-true snapshots. It is also what lets a SCHEDULED conversation,
-    which by definition never published the original, refresh the
-    canonical page.
+    — so without this, each refresh mints another page and leaves the last
+    one quietly wrong. It is also how a scheduled conversation refreshes
+    the canonical page.
 
     action is 'list', 'remember' (store `kind` + `url`, replacing any
     earlier record for that kind), 'show' (`kind`), or 'forget' (`kind`).
