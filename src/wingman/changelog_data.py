@@ -10,6 +10,41 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-08-11", 349, "feat: an approved research page can be KEPT as citable prose"),
+    (
+        "2026-08-10",
+        352,
+        "feat: company deep-dive — sourced open-web research on an organisation (#350)",
+    ),
+    ("2026-08-10", 351, "fix: two spellings of one page are one research source (#348)"),
+    ("2026-08-10", 347, "fix: completeness stops claiming that shipped features are impossible"),
+    (
+        "2026-08-10",
+        346,
+        "feat: a commentary corpus — the assistant's reading, never the user's evidence (#339)",
+    ),
+    ("2026-08-10", 345, "feat: ask what a nomination tells you that you VALUE (#343)"),
+    ("2026-08-10", 344, "feat: say when a citation opposes the axis it was cited under (#342)"),
+    (
+        "2026-08-10",
+        341,
+        "fix: a value axis's sign comes from the evidence's direction, not its subtype (#340)",
+    ),
+    (
+        "2026-08-10",
+        338,
+        "feat: 'Things to do' — what to do next, on every surface that reports status",
+    ),
+    ("2026-08-10", 337, "feat: the completeness report is a page on the web UI"),
+    (
+        "2026-08-10",
+        336,
+        "fix: a document never conflicts with itself, and never corroborates itself",
+    ),
+    ("2026-08-10", 335, "fix: link the profile page from the home page"),
+    ("2026-08-10", 334, "fix: a carve-off stays inside the caller's own tenancy (#333)"),
+    ("2026-08-10", 332, "fix: a section heading is not a skill (#317)"),
+    ("2026-08-10", 331, "release: v0.5.0 — notes, and the changelog data regenerated at the tag"),
     ("2026-08-10", 330, "fix: three isolation defects in the shared multi-tenant process"),
     ("2026-08-10", 326, "fix: /health names itself, so the registry can verify it (#288)"),
     ("2026-08-10", 325, "fix: the lockfile check compares package names per PEP 503"),
@@ -558,7 +593,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "c6cfcad535bf7065a29b0759c8b69969a84252a6"
+GENERATED_FROM_COMMIT = "ee2f277372e2bfc6d3ddbeb5c778c4bdc6ee0dcb"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -568,4 +603,4 @@ GENERATED_FROM_COMMIT = "c6cfcad535bf7065a29b0759c8b69969a84252a6"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 160
+GENERATED_FROM_DISTANCE = 14

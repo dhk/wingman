@@ -15,12 +15,19 @@ from pydantic import BaseModel, Field
 
 
 class CompanySource(BaseModel):
-    """One user-approved research URL for a company."""
+    """One user-approved research URL for a company.
+
+    retain opts this one page into keeping its prose as a document (RFC-060):
+    off by default, because a careers page re-stored on every run is churn,
+    while an about/values page changes twice a year and is the only thing a
+    stance can quote. The fetch itself is identical either way.
+    """
 
     company_key: str
     company_name: str
     url: str
     label: str | None = None
+    retain: bool = False
     added_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

@@ -16,7 +16,7 @@ from wingman.application.research import (
     render_research_report,
     research_company,
 )
-from wingman.infrastructure.config import load_config
+from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.fetch import FetchError
 from wingman.infrastructure.storage import Storage
 
@@ -37,10 +37,15 @@ PAGE_V2 = b"""<html><body><h1>Open roles</h1>
 
 
 @pytest.fixture
-def storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Storage:
+def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
     monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
-    config = load_config()
-    config.data_dir.mkdir(parents=True)
+    resolved = load_config()
+    resolved.data_dir.mkdir(parents=True)
+    return resolved
+
+
+@pytest.fixture
+def storage(config: Config) -> Storage:
     with Storage(config.db_path) as handle:
         yield handle
 
@@ -78,23 +83,23 @@ def test_add_source_rejects_non_https(storage: Storage) -> None:
         add_company_source("   ", "https://acme.example.com/careers", storage)
 
 
-def test_research_requires_approved_sources(storage: Storage) -> None:
+def test_research_requires_approved_sources(config: Config, storage: Storage) -> None:
     with pytest.raises(IngestError, match="add-source"):
-        research_company("Acme", storage)
+        research_company("Acme", config, storage)
 
 
-def test_research_diffs_snapshots(storage: Storage) -> None:
+def test_research_diffs_snapshots(config: Config, storage: Storage) -> None:
     add_company_source("Acme", "https://acme.example.com/careers", storage, label="careers")
 
-    first = research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+    first = research_company("Acme", config, storage, fetcher=lambda url: PAGE_V1)
     assert first.fetched == 1 and first.failed == 0
     assert "first snapshot: 2 links" in first.results[0].detail
     assert first.results[0].new_links == []
 
-    unchanged = research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+    unchanged = research_company("Acme", config, storage, fetcher=lambda url: PAGE_V1)
     assert unchanged.results[0].detail.startswith("unchanged since ")
 
-    changed = research_company("Acme", storage, fetcher=lambda url: PAGE_V2)
+    changed = research_company("Acme", config, storage, fetcher=lambda url: PAGE_V2)
     assert "1 new link since" in changed.results[0].detail
     assert changed.results[0].new_links == ["https://acme.example.com/jobs/staff-mle"]
     rendered = render_research_report(changed)
@@ -102,18 +107,18 @@ def test_research_diffs_snapshots(storage: Storage) -> None:
     assert "+ https://acme.example.com/jobs/staff-mle" in rendered
 
 
-def test_research_failure_keeps_previous_snapshot(storage: Storage) -> None:
+def test_research_failure_keeps_previous_snapshot(config: Config, storage: Storage) -> None:
     add_company_source("Acme", "https://acme.example.com/careers", storage)
-    research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+    research_company("Acme", config, storage, fetcher=lambda url: PAGE_V1)
 
     def boom(url: str) -> bytes:
         raise FetchError("HTTP Error 429")
 
-    report = research_company("Acme", storage, fetcher=boom)
+    report = research_company("Acme", config, storage, fetcher=boom)
     assert report.failed == 1 and report.results[0].status == "failed"
     assert "previous snapshot was kept" in report.results[0].detail
     # the kept snapshot still diffs correctly on the next good fetch
-    recovered = research_company("Acme", storage, fetcher=lambda url: PAGE_V2)
+    recovered = research_company("Acme", config, storage, fetcher=lambda url: PAGE_V2)
     assert "1 new link since" in recovered.results[0].detail
 
 
@@ -131,7 +136,7 @@ def test_dossier_renders_research_section(tmp_path: Path, monkeypatch: pytest.Mo
         before = build_company_dossier("Acme", config, storage).markdown
         assert "## Research (approved sources)" in before
         assert "no snapshot yet" in before
-        research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+        research_company("Acme", config, storage, fetcher=lambda url: PAGE_V1)
         after = build_company_dossier("Acme", config, storage).markdown
         assert "2 links, snapshot" in after
         assert "no approved research sources" not in after  # gap line gone
@@ -152,13 +157,13 @@ def test_dossier_accumulates_new_links_across_research_runs(
         add_company_source("Acme", "https://acme.example.com/careers", storage, label="careers")
 
         # first fetch is a baseline, not "new" — nothing to accumulate yet
-        research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+        research_company("Acme", config, storage, fetcher=lambda url: PAGE_V1)
         first = build_company_dossier("Acme", config, storage).markdown
         assert "## New since last dossier (0)" in first
         assert "none recorded yet" in first
 
         # a run between dossiers surfaces a new link…
-        research_company("Acme", storage, fetcher=lambda url: PAGE_V2)
+        research_company("Acme", config, storage, fetcher=lambda url: PAGE_V2)
         second = build_company_dossier("Acme", config, storage).markdown
         assert "## New since last dossier (1)" in second
         assert (
@@ -187,7 +192,7 @@ def test_dossier_new_links_section_caps_and_orders_by_recency(
         add_company_source("Acme", "https://acme.example.com/careers", storage)
         key = "acme"
         base_page = b"<html><body></body></html>"
-        research_company("Acme", storage, fetcher=lambda url: base_page)
+        research_company("Acme", config, storage, fetcher=lambda url: base_page)
 
         total = MAX_NEW_LINKS_SHOWN + 3
         for index in range(total):
@@ -218,10 +223,12 @@ def test_rename_company_moves_sources_and_watchlist(storage: Storage) -> None:
     assert storage.watchlist_members("overnight") == [("company", "Synctera Inc.")]
 
 
-def test_rename_company_moves_new_link_history_and_dossier_cursor(storage: Storage) -> None:
+def test_rename_company_moves_new_link_history_and_dossier_cursor(
+    config: Config, storage: Storage
+) -> None:
     add_company_source("Synctera", "https://synctera.com/careers", storage)
-    research_company("Synctera", storage, fetcher=lambda url: PAGE_V1)
-    research_company("Synctera", storage, fetcher=lambda url: PAGE_V2)  # 1 new link
+    research_company("Synctera", config, storage, fetcher=lambda url: PAGE_V1)
+    research_company("Synctera", config, storage, fetcher=lambda url: PAGE_V2)  # 1 new link
     storage.mark_dossier_generated("synctera", datetime(2020, 1, 1, tzinfo=UTC))
 
     rename_company("Synctera", "Synctera Inc.", storage)
@@ -237,10 +244,12 @@ def test_rename_company_moves_new_link_history_and_dossier_cursor(storage: Stora
     assert storage.get_dossier_generated_at("synctera inc.") == datetime(2020, 1, 1, tzinfo=UTC)
 
 
-def test_delete_company_purges_new_link_history_and_dossier_cursor(storage: Storage) -> None:
+def test_delete_company_purges_new_link_history_and_dossier_cursor(
+    config: Config, storage: Storage
+) -> None:
     add_company_source("Acme", "https://acme.example.com/careers", storage)
-    research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
-    research_company("Acme", storage, fetcher=lambda url: PAGE_V2)  # 1 new link
+    research_company("Acme", config, storage, fetcher=lambda url: PAGE_V1)
+    research_company("Acme", config, storage, fetcher=lambda url: PAGE_V2)  # 1 new link
     storage.mark_dossier_generated("acme", datetime.now(UTC))
 
     delete_company("Acme", storage)
@@ -255,9 +264,11 @@ def test_rename_company_same_key_is_rejected(storage: Storage) -> None:
         rename_company("Acme", "  ACME  ", storage)
 
 
-def test_delete_company_removes_sources_snapshots_and_watchlist(storage: Storage) -> None:
+def test_delete_company_removes_sources_snapshots_and_watchlist(
+    config: Config, storage: Storage
+) -> None:
     add_company_source("Acme", "https://acme.example.com/careers", storage)
-    research_company("Acme", storage, fetcher=lambda url: PAGE_V1)
+    research_company("Acme", config, storage, fetcher=lambda url: PAGE_V1)
     storage.watchlist_add("AI Target Companies", "company", "Acme")
     removed = delete_company("Acme", storage)
     assert removed

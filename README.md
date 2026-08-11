@@ -72,7 +72,9 @@ people and blogs: similarity, deterministic dossiers with
 `[fact]`/`[inference]` labels, model-synthesized themes validated
 quote-by-quote (RFC-016), and approved-source research — you name the
 careers page or newsroom, `wingman company research` diffs it, and new
-links are the hiring signal (RFC-015).
+links are the hiring signal (RFC-015). Add `--retain` to a source and that
+page's prose is kept as citable evidence too, so a values page can be
+quoted rather than only hashed (RFC-060) — same page, same one GET.
 
 **Outreach support.** `wingman people brief` builds purpose-shaped talking
 points (introduction / reconnection / job / advice) that must cite a POV

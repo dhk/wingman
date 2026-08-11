@@ -1,4 +1,4 @@
-"""Company research over user-approved sources (RFC-015).
+"""Company research over user-approved sources (RFC-015, amended by RFC-060).
 
 The network-scope decision RFC-012 deferred, resolved: the user names the
 exact pages they trust for a company (a careers page, a newsroom), and
@@ -9,23 +9,37 @@ links — and the finding is the diff against the previous snapshot: new
 links are the hiring/announcement signal, a changed hash the weaker "page
 changed" signal. No model reads the page; nothing is claimed that a diff
 cannot show.
+
+RFC-060 adds one opt-in per source: `retain` also KEEPS the page's prose as
+an org-attributed document, the same shape a company feed post gets, so a
+values page becomes something a stance can quote verbatim instead of only
+a hash that says it changed. Egress is untouched — same approved pages,
+one GET each; only what survives the fetch differs.
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import ClassVar
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel, Field
 
+from wingman.application.company_feeds import ensure_company_anchor
+from wingman.application.corpus import extract_document
 from wingman.application.ingest import IngestError
 from wingman.application.pov import COMPANY_POV_PREFIX, company_card_id
 from wingman.application.similarity import company_key
+from wingman.domain import SourceRecord
+from wingman.domain.person import ExternalDocument
 from wingman.domain.research import CompanySource, ResearchSnapshot
+from wingman.domain.source_record import derive_document_key
+from wingman.infrastructure.config import Config
 from wingman.infrastructure.fetch import FetchError, fetch_url
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -36,6 +50,8 @@ _logger = get_logger("application.research")
 MAX_NEW_LINKS_SHOWN = 10
 # A research snapshot older than this is flagged in the dossier, not hidden.
 RESEARCH_STALE_AFTER_DAYS = 30
+# source_type on records and documents kept from an approved research page.
+RETAINED_SOURCE_TYPE = "research_page"
 
 
 class _PageParser(HTMLParser):
@@ -153,9 +169,20 @@ def _existing_source(key: str, url: str, storage: Storage) -> CompanySource | No
 
 
 def add_company_source(
-    name: str, url: str, storage: Storage, label: str | None = None
+    name: str,
+    url: str,
+    storage: Storage,
+    label: str | None = None,
+    retain: bool | None = None,
 ) -> tuple[CompanySource, bool]:
-    """Approve one research URL for a company. Adding it IS the approval."""
+    """Approve one research URL for a company. Adding it IS the approval.
+
+    retain is deliberately tri-state (RFC-060): None means "leave retention as
+    it is", so re-running add on an already-approved source can never silently
+    switch off the retention the user turned on. True/False set it — on a
+    source already approved, that is the supported way to change your mind
+    without a remove-and-re-add that would throw the snapshot away.
+    """
     key = _resolve_company(name)
     url = url.strip()
     if not url.startswith("https://"):
@@ -163,25 +190,41 @@ def add_company_source(
     already = _existing_source(key, url, storage)
     if already is not None:
         # Same page, different spelling — report it as already approved
-        # rather than approving it twice (#348).
+        # rather than approving it twice (#348). Retention is the one thing
+        # a repeat add may still change, and only when asked to.
+        if retain is not None and retain != already.retain:
+            storage.set_company_source_retention(key, already.url, retain)
+            already = already.model_copy(update={"retain": retain})
         return already, False
     source = CompanySource(
-        company_key=key, company_name=name.strip(), url=url, label=(label or "").strip() or None
+        company_key=key,
+        company_name=name.strip(),
+        url=url,
+        label=(label or "").strip() or None,
+        retain=bool(retain),
     )
-    created = storage.add_company_source(source)
-    return source, created
+    return source, storage.add_company_source(source)
 
 
 def remove_company_source(name: str, url: str, storage: Storage) -> bool:
-    """Withdraw an approved source (and its stored snapshot).
+    """Withdraw an approved source: its snapshot AND any retained text go with it.
 
     Matches the same way approval does (#348): a source approved as
     'https://www.example.com/about' is withdrawn by either spelling, so
     removal is never harder than the addition that created it.
+
+    Withdrawal means the page stops being evidence, not just stops being
+    fetched (RFC-060) — leaving its retained prose behind would let a stance
+    keep quoting a source the user has revoked.
     """
     key = _resolve_company(name)
     existing = _existing_source(key, url, storage)
-    return storage.remove_company_source(key, existing.url if existing else url.strip())
+    removed = storage.remove_company_source(key, existing.url if existing else url.strip())
+    if existing is not None:
+        storage.delete_external_documents_for_records(
+            storage.record_ids_for_document(derive_document_key(_retained_document_name(existing)))
+        )
+    return removed
 
 
 def list_company_sources(name: str, storage: Storage) -> list[CompanySource]:
@@ -249,6 +292,96 @@ def delete_company(name: str, storage: Storage) -> tuple[bool, list[str]]:
     return existed or bool(cleared), cleared
 
 
+def _retained_document_name(source: CompanySource) -> str:
+    """The archive filename whose basename IS this source's document key.
+
+    RFC-028 lineage keys a document by its archive basename, so the name must
+    be stable across fetches of the same page and distinct between pages. It
+    is derived from the URL alone — never the company — so that renaming a
+    company (which re-keys its sources) cannot orphan the lineage and make
+    the next fetch pile up a second copy instead of superseding the first.
+    The URL is canonicalized first (#348), so the same page under two
+    spellings is one document. The readable stem is for humans browsing the
+    inbox; the digest is what guarantees two pages never collide.
+    """
+    canonical = canonical_source_url(source.url)
+    parts = urlsplit(canonical)
+    stem = re.sub(r"[^a-z0-9]+", "-", f"{parts.netloc}{parts.path}".lower()).strip("-")
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+    return f"research-{stem[:60] or 'page'}-{digest}.html"
+
+
+def _archive_locator(path: Path, config: Config) -> str:
+    resolved = config.data_dir.resolve()
+    return str(path.relative_to(resolved)) if path.is_relative_to(resolved) else str(path)
+
+
+def _retain_page(
+    source: CompanySource,
+    data: bytes,
+    text_unchanged: bool,
+    config: Config,
+    storage: Storage,
+) -> str:
+    """Keep this page's prose as a company-attributed document (RFC-060).
+
+    Returns a one-word status for the report. The body is extracted with the
+    same extractor feed posts use, NOT the snapshot pipeline's visible text:
+    that text is joined across every tag boundary, so '<a>Anthro</a>pic'
+    becomes 'Anthro pic' and the verbatim-quote gate rejects the sentence the
+    page actually contains. Hashing does not care; quoting does.
+    """
+    if text_unchanged and storage.has_external_url(source.url):
+        return "unchanged"
+    raw = data.decode("utf-8", errors="replace")
+    fallback = source.label or source.url
+    title, body = extract_document(raw, fallback, ".html")
+    if not body.strip():
+        return "no text"
+    name = _retained_document_name(source)
+    document_key = derive_document_key(name)
+    content_hash = hashlib.sha256(data).hexdigest()
+    record = storage.get_source_record_by_hash(content_hash)
+    # Reuse only a record of THIS document: a byte-identical page archived by
+    # some other path is not a version of this source's lineage.
+    if record is not None and record.document_key != document_key:
+        record = None
+    if record is not None and storage.find_external_document_by_source(record.record_id):
+        return "unchanged"
+    if record is None:
+        config.inbox_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+        archived = config.inbox_dir / f"{stamp}-{name}"
+        archived.write_text(raw, encoding="utf-8")
+        record = SourceRecord(
+            source_type=RETAINED_SOURCE_TYPE,
+            source_locator=_archive_locator(archived, config),
+            content_hash=content_hash,
+            document_key=document_key,
+        )
+        storage.add_source_record(record)
+    superseded = storage.record_ids_for_document(document_key, exclude_record_id=record.record_id)
+    anchor = ensure_company_anchor(source.company_name, storage)
+    storage.add_external_document(
+        ExternalDocument(
+            source_record_id=record.record_id,
+            person_id=anchor.person_id,
+            source_type=RETAINED_SOURCE_TYPE,
+            title=title,
+            url=source.url,
+            organization=anchor.company or source.company_name,
+            # Deliberately undated: a fetch tells us when we LOOKED, never
+            # when the page was written, and stamping the fetch time onto
+            # published_at would be an invented fact (AGENTS.md invariant 8).
+            published_at=None,
+            word_count=len(body.split()),
+        ),
+        body,
+    )
+    replaced = storage.delete_external_documents_for_records(superseded)
+    return "replaced" if replaced else "stored"
+
+
 class SourceResult(BaseModel):
     url: str
     label: str | None = None
@@ -256,6 +389,8 @@ class SourceResult(BaseModel):
     detail: str
     new_links: list[str] = Field(default_factory=list)
     total_links: int = 0
+    # '' when the source is not retained; else stored | replaced | unchanged | no text.
+    retained: str = ""
 
 
 class ResearchReport(BaseModel):
@@ -267,6 +402,7 @@ class ResearchReport(BaseModel):
 
 def research_company(
     name: str,
+    config: Config,
     storage: Storage,
     fetcher: Callable[[str], bytes] | None = None,
 ) -> ResearchReport:
@@ -274,6 +410,10 @@ def research_company(
 
     One GET per approved URL — the approval happened at add-source time. A
     failed source keeps its previous snapshot and is reported, never fatal.
+
+    A source marked `retain` (RFC-060) additionally keeps the page's prose as
+    an org-attributed document. That changes nothing about the fetch: same
+    pages, same one GET each, same snapshot and diff.
     """
     key = _resolve_company(name)
     sources = storage.list_company_sources(key)
@@ -285,6 +425,7 @@ def research_company(
     fetch = fetcher if fetcher is not None else fetch_url
     results: list[SourceResult] = []
     failed = 0
+    kept = 0
     for source in sources:
         try:
             data = fetch(source.url)
@@ -327,6 +468,17 @@ def research_company(
             )
         )
         storage.record_new_links(key, source.url, new_links, fetched_at)
+        retained = ""
+        if source.retain:
+            retained = _retain_page(
+                source,
+                data,
+                text_unchanged=previous is not None and text_hash == previous.text_hash,
+                config=config,
+                storage=storage,
+            )
+            if retained in {"stored", "replaced"}:
+                kept += 1
         results.append(
             SourceResult(
                 url=source.url,
@@ -335,12 +487,23 @@ def research_company(
                 detail=detail,
                 new_links=new_links[:MAX_NEW_LINKS_SHOWN],
                 total_links=len(links),
+                retained=retained,
             )
         )
-    _logger.info("research company=%s sources=%d failed=%d", name, len(sources), failed)
+    _logger.info(
+        "research company=%s sources=%d failed=%d retained=%d", name, len(sources), failed, kept
+    )
     return ResearchReport(
         company=name.strip(), results=results, fetched=len(sources) - failed, failed=failed
     )
+
+
+_RETAINED_DETAIL = {
+    "stored": "kept as a document attributed to the company — quotable now",
+    "replaced": "kept as a document, superseding the previous version (RFC-028)",
+    "unchanged": "already kept; the page text has not changed",
+    "no text": "nothing extractable to keep from this page",
+}
 
 
 def render_research_report(report: ResearchReport) -> str:
@@ -351,4 +514,6 @@ def render_research_report(report: ResearchReport) -> str:
         lines.append(f"{marker} {result.url}{label}")
         lines.append(f"  {result.detail}")
         lines.extend(f"  + {link}" for link in result.new_links)
+        if result.retained:
+            lines.append(f"  retained text: {_RETAINED_DETAIL[result.retained]}")
     return "\n".join(lines)

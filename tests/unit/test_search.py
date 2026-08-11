@@ -77,7 +77,7 @@ def loaded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Storage:
             ],
         )
         add_company_source("Acme", "https://acme.example.com/careers", storage)
-        research_company("Acme", storage, fetcher=lambda url: CAREERS)
+        research_company("Acme", config, storage, fetcher=lambda url: CAREERS)
         storage.save_outreach_brief(
             OutreachBrief(
                 person_id=person.person_id,
