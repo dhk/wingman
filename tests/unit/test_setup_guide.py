@@ -99,3 +99,33 @@ def test_it_names_the_three_places_to_look(workspace: Path) -> None:
 
     for surface in ("Profile", "Progress", "what's my status"):
         assert surface in guide
+
+
+def test_the_title_follows_the_workspace(workspace: Path) -> None:
+    """Nobody with an established workspace asks how to set up, so a
+    first-run heading is how this tool stops being called by the people it
+    still has answers for (#365)."""
+    from wingman.application.job_scoring import criteria_path
+
+    assert _guide().startswith("Getting set up with wingman")
+
+    config = load_config()
+    criteria_path(config).write_text("# Job criteria\n\nSet.\n", encoding="utf-8")
+
+    assert _guide(config).startswith("Where you are with wingman")
+
+
+def test_criteria_are_shown_as_revisitable_not_finished_forever(workspace: Path) -> None:
+    """Criteria age — the digest already nags at a month old — and every
+    opening is scored against them until somebody revisits."""
+    from wingman.application.job_scoring import criteria_path
+
+    guide = _guide()
+    assert "review my job criteria" not in guide  # nothing to revisit yet
+
+    config = load_config()
+    criteria_path(config).write_text("# Job criteria\n\nSet.\n", encoding="utf-8")
+    guide = _guide(config)
+
+    assert "review my job criteria" in guide
+    assert "They age" in guide
