@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Refuse to push to a branch whose pull request has already merged (#182).
+#
+# What this prevents, concretely (2026-07-28): PR #179 squash-merged a
+# branch's first commit while four more commits were still being pushed to
+# that same branch. The push succeeded silently. A squash merge gives the
+# merged work a NEW sha, so git no longer recognises the branch's first
+# commit as already applied — and the mistake surfaced much later, as
+# '405 Pull Request has merge conflicts' on the next merge attempt, which
+# names neither the cause nor the branch that caused it.
+#
+# 'Automatically delete head branches' is the first line of defence and is
+# now on for this repo. This hook closes what that leaves: a local ref that
+# outlived the remote deletion and gets pushed back into existence.
+#
+# Deliberately permissive about its OWN preconditions. A hook that blocks
+# work when gh is missing, unauthenticated, or the network is down would be
+# a worse failure than the one it prevents, so every one of those cases
+# exits 0. It only ever refuses on a positive answer: this branch has a
+# merged PR.
+#
+# Escape hatch: WINGMAN_ALLOW_MERGED_BRANCH_PUSH=1 git push
+
+set -uo pipefail
+
+[ "${WINGMAN_ALLOW_MERGED_BRANCH_PUSH:-}" = "1" ] && exit 0
+command -v gh >/dev/null 2>&1 || exit 0
+
+status=0
+while read -r _local_ref local_sha remote_ref _remote_sha; do
+  [ -z "${remote_ref:-}" ] && continue
+  # An all-zero local sha is a branch DELETION — always fine, and in fact
+  # exactly the cleanup this hook wants people to do.
+  case "$local_sha" in *[!0]*) ;; *) continue ;; esac
+
+  branch="${remote_ref#refs/heads/}"
+  [ "$branch" = "$remote_ref" ] && continue   # a tag or other ref, not a branch
+  case "$branch" in main | master) continue ;; esac
+
+  merged="$(gh pr list --head "$branch" --state merged --limit 1 \
+    --json number --jq '.[0].number' 2>/dev/null || true)"
+  [ -z "$merged" ] && continue
+
+  cat >&2 <<EOF
+
+  REFUSED: '$branch' already had its pull request merged (#$merged).
+
+  A squash merge rewrote that work under a new sha, so anything you push
+  here now is stranded: git will not recognise the merged commit as
+  already applied, and this surfaces later as an unexplained
+  '405 Pull Request has merge conflicts' on your NEXT merge.
+
+  Start a fresh branch from current main instead:
+
+      git fetch origin
+      git checkout -b <new-branch> origin/main
+      git cherry-pick <the commits you meant to push>
+
+  If the commits are already on this branch, replay them onto main and
+  drop the one that merged:
+
+      git rebase --onto origin/main <the commit PR #$merged merged> $branch
+
+  To push anyway: WINGMAN_ALLOW_MERGED_BRANCH_PUSH=1 git push
+
+EOF
+  status=1
+done
+
+exit "$status"
