@@ -70,6 +70,50 @@ def test_load_registry_rejects_malformed_toml(tmp_path: Path) -> None:
         load_registry(registry)
 
 
+def test_load_registry_defaults_privileged_to_false_and_reads_an_explicit_true(
+    tmp_path: Path,
+) -> None:
+    """RFC-068 (#271): an entry that says nothing is unprivileged. The
+    default is what makes every registry written before this flag existed
+    keep meaning what it meant."""
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(
+        f'[[tenant]]\nslug = "dhk"\ndata_dir = "{tmp_path / "dhk"}"\nprivileged = true\n\n'
+        f'[[tenant]]\nslug = "trent"\ndata_dir = "{tmp_path / "trent"}"\n',
+        encoding="utf-8",
+    )
+    by_slug = {tenant.slug: tenant for tenant in load_registry(registry)}
+    assert by_slug["dhk"].privileged is True
+    assert by_slug["trent"].privileged is False
+
+
+def test_load_registry_rejects_a_privileged_value_that_is_not_a_boolean(tmp_path: Path) -> None:
+    """Refused, not coerced: truthiness would grant the flag to the string
+    "false", and silent strictness would DENY an operator who wrote the
+    quoted form and walked away believing they had granted it."""
+    registry = tmp_path / "tenants.toml"
+    for bad in ('"true"', "1", '"yes"'):
+        registry.write_text(
+            f'[[tenant]]\nslug = "dhk"\ndata_dir = "{tmp_path / "dhk"}"\nprivileged = {bad}\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(TenantRegistryError, match="malformed 'privileged'"):
+            load_registry(registry)
+
+
+def test_load_registry_refuses_a_box_wide_privileged_default(tmp_path: Path) -> None:
+    """'[defaults] privileged = true' is the fail-open this flag exists to
+    prevent, so it is not supported — and it is refused rather than ignored,
+    because an operator who wrote it would otherwise believe a grant (or a
+    revocation) had taken effect. Same for the bare top-level form."""
+    registry = tmp_path / "tenants.toml"
+    entry = f'[[tenant]]\nslug = "dhk"\ndata_dir = "{tmp_path / "dhk"}"\n'
+    for header in ("[defaults]\nprivileged = true\n\n", "privileged = false\n\n"):
+        registry.write_text(header + entry, encoding="utf-8")
+        with pytest.raises(TenantRegistryError, match="one tenant at a time"):
+            load_registry(registry)
+
+
 def test_tenant_read_token_none_when_absent(tmp_path: Path) -> None:
     tenant = Tenant(slug="jason", data_dir=tmp_path / "jason")
     assert tenant.read_token() is None

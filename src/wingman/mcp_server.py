@@ -169,6 +169,7 @@ from wingman.infrastructure.mcp_process import (
     read_server_pid,
     write_pidfile,
 )
+from wingman.infrastructure.privilege import operator_only_refusal
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.infrastructure.telemetry import (
     count_events as telemetry_count,
@@ -958,6 +959,11 @@ def coach_persona(action: str, name: str = "") -> str:
     covers — pass persona_authored=False (the default) so it's stored as
     your own inference about them, not mistaken later for their verified
     words.
+
+    Operator-only (docs/RFC.md RFC-068): coaching acts on another
+    person's behalf, so on a shared box it is available only to a tenant
+    the registry marks 'privileged'. Every other workspace gets a plain
+    refusal from every action, including the read-only ones.
     """
     from wingman.application.coaching import (
         clear_active_persona_and_report,
@@ -969,6 +975,9 @@ def coach_persona(action: str, name: str = "") -> str:
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
+    refusal = operator_only_refusal(config, "coach_persona")
+    if refusal is not None:
+        return refusal
     action = action.strip().lower()
     try:
         with Storage(config.db_path) as storage:
@@ -1020,6 +1029,13 @@ def carve_off_persona(persona: str, target_dir: str) -> str:
     as a CONFLICT for the person to resolve themselves (profile_manage
     action='list' / 'resolve', run against target_dir). The returned
     report says how many items landed which way.
+
+    Operator-only (docs/RFC.md RFC-068), like coach_persona: this writes
+    a profile into a workspace that is not the caller's, so on a shared
+    box only a tenant the registry marks 'privileged' may run it. The
+    separate containment rule — a target may never be, contain, or sit
+    inside another REGISTERED tenant's data_dir (RFC-049) — is unchanged
+    and still applies to a privileged caller.
     """
     from wingman.application.persona_carveoff import carve_off_persona as _carve_off_persona
     from wingman.application.persona_carveoff import render_carveoff_report
@@ -1027,6 +1043,9 @@ def carve_off_persona(persona: str, target_dir: str) -> str:
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
+    refusal = operator_only_refusal(config, "carve_off_persona")
+    if refusal is not None:
+        return refusal
     try:
         with Storage(config.db_path) as storage:
             report = _carve_off_persona(persona, config, storage, Path(target_dir).expanduser())

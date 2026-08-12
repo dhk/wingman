@@ -929,6 +929,32 @@ their default from the registry instead. Full order, most specific first:
 the tenant's own `feature_repo`; a workspace's own `wingman feature repo`
 choice; `[defaults] feature_repo`; `WINGMAN_FEATURE_REPO`.
 
+**Operator-only tools** (#271, RFC-068). A tenant is unprivileged unless
+their own registry entry says otherwise:
+
+```toml
+[[tenant]]
+slug = "dhk"
+data_dir = "/home/wingman-shared/tenants/dhk"
+privileged = true          # may run the operator-only tools; everyone else may not
+```
+
+Today that means `coach_persona` (acting as coach for somebody else) and
+`carve_off_persona` (writing a profile into another workspace). Absent
+means false, so every registry written before this keeps meaning exactly
+what it meant, and a solo shape-B install — one person, their own machine
+— is always privileged. An unprivileged caller gets a short refusal that
+names no file and changes nothing; nothing else about their session
+differs.
+
+`privileged` is **per tenant only**. It is not allowed in `[defaults]`
+(or bare at the top level) and the registry is refused at load if it
+appears there: a box-wide "everyone is privileged" is the exact
+fail-open the flag exists to prevent, and silently ignoring the key
+would leave you believing you had granted — or revoked — something you
+had not. Write the bare boolean `true`/`false`, unquoted; `"true"` is
+refused rather than guessed at.
+
 Filing itself already runs through the shared credential
 (`GITHUB_API_ISSUES_KEY`, RFC-047) with attribution-by-body-stamp, so no
 tenant needs their own `gh auth login`. RFC-025's confirmation gate is
