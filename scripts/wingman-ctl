@@ -221,6 +221,13 @@ cmd_upgrade() {
   # resolves fresh and silently deploys versions nothing tested (#302).
   ( "$REPO/scripts/wingman-tool-install.sh" "$REPO" ) \
     || { say "reinstall failed — nothing was killed"; return 1; }
+  # The new build may expect a host surface this box does not have yet
+  # (RFC-072, #212). Checked right after the install, so the answer is about
+  # the version now on disk, and printed rather than enforced — an upgrade
+  # that refused to finish over a missing systemd timer would strand the box
+  # mid-way for something nobody was waiting on.
+  say "→ checking the host against this build's manifest…"
+  wingman host-check || say "  (operational drift above — 'wingman host-check --apply' for the safe ones)"
   say "→ stopping everything on the old build…"
   cmd_stop_all -y
   if [ "$was_running" = 1 ]; then
