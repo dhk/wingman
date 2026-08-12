@@ -118,7 +118,8 @@ def get_feature_repo(config: Config) -> str | None:
     2. The per-workspace file — somebody who ran `wingman feature repo`
        chose explicitly, and an explicit choice outranks any default
        below. A tenant has no such file, so this step is invisible to
-       them and the defaults below are what they get.
+       them and the defaults below are what they get; an unreadable one
+       is skipped rather than raised, same as step 4.
     3. The registry's '[defaults] feature_repo' — one destination for
        every tenant the shared process serves, set once by the operator
        in the same file that lists them.
@@ -136,14 +137,36 @@ def get_feature_repo(config: Config) -> str | None:
     """
     if config.feature_repo:
         return config.feature_repo
-    path = config.data_dir / _REPO_FILE
-    if path.exists():
-        value = path.read_text(encoding="utf-8").strip()
-        if value:
-            return value
+    workspace = _workspace_feature_repo(config)
+    if workspace:
+        return workspace
     if config.default_feature_repo:
         return config.default_feature_repo
     return _host_feature_repo()
+
+
+def _workspace_feature_repo(config: Config) -> str | None:
+    """The workspace's own `wingman feature repo` choice, or None.
+
+    An unreadable workspace is treated as absent rather than fatal, the
+    same posture _host_feature_repo takes below. This step is a *more
+    specific* answer than the defaults under it, so failing to read it
+    should cost the caller that specificity and nothing else — raising
+    here would take out a tenant's feature request entirely, in favour of
+    a file they never wrote and cannot write, when a perfectly good
+    box-wide default was sitting one rung down.
+    """
+    try:
+        path = config.data_dir / _REPO_FILE
+        if path.exists():
+            return path.read_text(encoding="utf-8").strip() or None
+    except OSError as exc:
+        _logger.warning(
+            "cannot read %s (%s) — falling back to the configured default",
+            config.data_dir / _REPO_FILE,
+            exc,
+        )
+    return None
 
 
 def _host_feature_repo() -> str | None:

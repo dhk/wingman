@@ -217,6 +217,30 @@ def test_a_malformed_default_feature_repo_is_refused_loudly(tmp_path: Path) -> N
         load_registry(registry)
 
 
+def test_an_unreadable_workspace_falls_through_to_the_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A data dir the process cannot stat costs the caller the specificity
+    of that rung and nothing else. Raising would take out the tenant's
+    feature request over a file they never wrote and cannot write, with a
+    perfectly good default sitting one rung down."""
+    data_dir = _tenant_dir(tmp_path, "jason")
+    registry = _registry(
+        tmp_path / "tenants.toml",
+        f'[defaults]\nfeature_repo = "dhk/wingman"\n\n[[tenant]]\nslug = "jason"\ndata_dir = "{data_dir}"\n',
+    )
+    real_exists = Path.exists
+
+    def denied(self: Path, **kwargs: object) -> bool:
+        if self.name == "feature-repo":
+            raise PermissionError(13, "Permission denied")
+        return real_exists(self, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "exists", denied)
+
+    assert get_feature_repo(load_registry(registry)[0].config()) == "dhk/wingman"
+
+
 def test_a_malformed_registry_feature_repo_is_refused_loudly(tmp_path: Path) -> None:
     """The registry is hand-edited by an operator; a typo there should name
     itself rather than silently filing somewhere unexpected."""
