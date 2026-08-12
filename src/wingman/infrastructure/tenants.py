@@ -80,6 +80,12 @@ class Tenant:
     #: choice (this tenant's own 'feature_repo', or a workspace file) and
     #: above the host setting; see application.feature_request.
     default_feature_repo: str | None = None
+    #: May this tenant run operator-only tools (RFC-068, issue #271)?
+    #: False unless the registry entry says otherwise, and deliberately
+    #: NOT settable in '[defaults]': a box-wide "everyone is privileged"
+    #: is the fail-open this flag exists to prevent. Named per tenant, by
+    #: the one person who can edit a root-owned file, or not at all.
+    privileged: bool = False
 
     def token_path(self) -> Path:
         return self.data_dir / _TOKEN_FILENAME
@@ -111,6 +117,13 @@ class Tenant:
         particular tenant's own credential. Same isolation guarantee either
         way: a tenant with none of their own fails loud rather than filing
         under a key they never configured.
+
+        'privileged' is passed through explicitly from this entry's own
+        flag (RFC-068) — never omitted and left to Config's class default.
+        Both say False for an ordinary tenant, but writing it here is what
+        makes the ONE registry line the whole answer: a reader comparing
+        the registry against what a tenant can do never has to know which
+        of two files won.
         """
         workspace_keys = read_workspace_keys(self.data_dir)
         return Config(
@@ -123,6 +136,7 @@ class Tenant:
             openrouter_api_key=workspace_keys.get(KNOWN_KEYS["openrouter"]),
             github_api_issues_key=workspace_keys.get(KNOWN_KEYS["github"]),
             strict_provider_keys=True,
+            privileged=self.privileged,
         )
 
 
@@ -139,6 +153,52 @@ def _feature_repo(value: object, whose: str, path: Path) -> str | None:
             f"{whose} in {path} has a malformed 'feature_repo' — it must look like owner/name."
         )
     return value
+
+
+def _privileged(value: object, slug: str, path: Path) -> bool:
+    """This entry's 'privileged' flag: absent means False (RFC-068).
+
+    Only a real TOML boolean counts. 'privileged = "true"' and
+    'privileged = 1' are refused rather than coerced, because both
+    plausible coercions are wrong in a way nobody would see: truthiness
+    would grant the flag to the string "false", and a strict-equality
+    check would silently DENY an operator who wrote the quoted form and
+    walked away believing they had granted it. A hand-edited root-owned
+    file gets told about its typo, like every other field here.
+    """
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise TenantRegistryError(
+            f"tenant {slug!r} in {path} has a malformed 'privileged' — "
+            "it must be the bare TOML boolean true or false, unquoted."
+        )
+    return value
+
+
+def _refuse_privileged_default(data: dict[str, object], path: Path) -> None:
+    """'privileged' is per tenant only — never '[defaults]', never bare.
+
+    A box-wide default of "everyone is privileged" is precisely the
+    fail-open this flag exists to prevent, so there is nothing to read
+    here. But IGNORING the key would be worse than not supporting it: an
+    operator who wrote '[defaults] privileged = true' would be told
+    nothing and would believe the grant had happened, and one who wrote
+    'privileged = false' there would believe they had revoked something
+    they had not. Refusing at load names the mistake while its author is
+    still standing in front of the file.
+    """
+    defaults = data.get("defaults")
+    tables: list[tuple[str, dict[str, object]]] = [("the top level", data)]
+    if isinstance(defaults, dict):
+        tables.insert(0, ("[defaults]", defaults))
+    for scope, table in tables:
+        if "privileged" in table:
+            raise TenantRegistryError(
+                f"tenant registry {path} sets 'privileged' at {scope} — privilege is granted "
+                "one tenant at a time, on that tenant's own [[tenant]] entry, never to "
+                "everybody at once."
+            )
 
 
 def _registry_default_feature_repo(data: dict[str, object], path: Path) -> str | None:
@@ -176,7 +236,8 @@ def load_registry(path: Path) -> list[Tenant]:
     An optional '[defaults]' table carries settings every tenant in the
     file shares — today just 'feature_repo', the one destination for
     everybody's feature requests, which a per-tenant 'feature_repo' still
-    overrides.
+    overrides. 'privileged' (RFC-068) is deliberately NOT one of them and
+    is refused there; it is granted per tenant or not at all.
     """
     if not path.exists():
         return []
@@ -188,6 +249,7 @@ def load_registry(path: Path) -> list[Tenant]:
     if not isinstance(entries, list):
         raise TenantRegistryError(f"tenant registry {path} needs a [[tenant]] array of tables.")
     default_feature_repo = _registry_default_feature_repo(data, path)
+    _refuse_privileged_default(data, path)
     tenants: list[Tenant] = []
     seen_slugs: set[str] = set()
     for entry in entries:
@@ -209,6 +271,7 @@ def load_registry(path: Path) -> list[Tenant]:
                 data_dir=Path(data_dir).expanduser(),
                 feature_repo=feature_repo,
                 default_feature_repo=default_feature_repo,
+                privileged=_privileged(entry.get("privileged"), slug, path),
             )
         )
     return tenants

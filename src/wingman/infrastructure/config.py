@@ -53,6 +53,20 @@ class Config(BaseModel):
     #: feature_repo'), which an explicit per-tenant or per-workspace choice
     #: still outranks — see application.feature_request.
     default_feature_repo: str | None = None
+    # Whether this workspace may run operator-only tools (docs/RFC.md
+    # RFC-068, issue #271): coaching somebody else, carving their profile
+    # off into another workspace, and — when it exists — writing a
+    # broadcast every other tenant is shown.
+    #
+    # False at the class level, deliberately, exactly like
+    # 'strict_provider_keys' above: every Config a future code path builds
+    # without thinking about privilege is UNprivileged, so forgetting to
+    # set it costs a refusal rather than silently handing an operator tool
+    # to a tenant. The two paths that are genuinely privileged say so
+    # explicitly — 'load_config()' below for a solo install (their own
+    # machine, their own workspace), and 'Tenant.config()' from the
+    # registry's own 'privileged' flag.
+    privileged: bool = False
 
     @property
     def db_path(self) -> Path:
@@ -113,6 +127,15 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     by any caller that wants env-based resolution regardless of context.
     Never defaults to a path relative to the invoking directory — an
     installed CLI must not scatter data wherever it happens to be run.
+
+    Both non-tenant branches set 'privileged=True' EXPLICITLY rather than
+    leaning on a permissive default (RFC-068): whoever resolved a
+    workspace from their own environment is running on their own machine,
+    with a shell, and can already do anything an operator tool does. The
+    explicitness is the point — 'Config.privileged' is False at the class
+    level so that a path which never thought about privilege is
+    unprivileged, and that only holds if the privileged paths name
+    themselves.
     """
     if env is None:
         tenant_config = _tenant_config.get()
@@ -124,8 +147,10 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         return Config(
             data_dir=Path(override).expanduser(),
             data_dir_source=f"{ENV_DATA_DIR} environment variable",
+            privileged=True,
         )
     return Config(
         data_dir=Path(user_data_dir(APP_NAME)),
         data_dir_source="platform user data directory",
+        privileged=True,
     )
