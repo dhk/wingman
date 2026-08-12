@@ -272,23 +272,58 @@ cmd_redeploy_shared() {
 }
 
 cmd_upgrade_all() {
-  # Cross-account, root-scheduled (#125/#167/#168) — NOT the same as
-  # 'upgrade'/'cycle' above, which only ever touch YOUR OWN instance. This
-  # triggers the shared 'wingman-upgrade-all.service' systemd unit, which
-  # updates every configured shape-B user (you, Trent, ...) via 'sudo -u',
-  # on whatever WINGMAN_UPGRADE_USERS list is set on this box (see
-  # docs/SERVER.md §7). Requires sudo rights on THIS box; on-demand only —
-  # the nightly timer keeps running on its own schedule regardless.
-  if ! systemctl list-unit-files wingman-upgrade-all.service >/dev/null 2>&1; then
-    say "wingman-upgrade-all.service isn't installed on this box — see docs/SERVER.md §7."
-    return 1
+  # Everything on this box that runs wingman code (#375) — which is TWO
+  # things, and naming only one of them was the bug. There is the
+  # per-account CLI install, which is what an operator actually types
+  # ('motd', 'qotd', 'tenant urls', 'tenant answers'), and there is the
+  # RFC-048 shared multi-tenant process, which is what every tenant talks
+  # to. They live in different checkouts under different accounts and
+  # neither upgrades the other.
+  #
+  # This used to trigger the cross-account unit and stop. That unit's
+  # WINGMAN_UPGRADE_USERS list describes shape B, which is RETIRED — so
+  # "upgrade all" upgraded the accounts that serve nobody and skipped the
+  # one that serves everybody. The symptom is silent and confusing: the
+  # shared process ships a command hours before the operator's own CLI can
+  # run it, and all you see is "No such command".
+  #
+  # Order is deliberate. The per-account installs are cheap and interrupt
+  # nothing, so they go FIRST and prove the tree builds. The shared
+  # process restart briefly cuts every tenant off, so it goes LAST.
+  local accounts_ok=1 shared_ok=1
+
+  if systemctl list-unit-files wingman-upgrade-all.service >/dev/null 2>&1; then
+    say "→ [1/2] upgrading each account's own CLI (nothing is interrupted)…"
+    if sudo systemctl start wingman-upgrade-all.service; then
+      sudo journalctl -u wingman-upgrade-all.service --no-pager -n 10
+    else
+      accounts_ok=0
+      say "  per-account upgrade FAILED — check: sudo systemctl status wingman-upgrade-all.service"
+    fi
+  else
+    accounts_ok=0
+    say "→ [1/2] wingman-upgrade-all.service isn't installed on this box — see docs/SERVER.md §7."
   fi
-  say "→ triggering the cross-account upgrade (every user configured in the unit)…"
-  sudo systemctl start wingman-upgrade-all.service || {
-    say "trigger failed — check: sudo systemctl status wingman-upgrade-all.service"
-    return 1
-  }
-  sudo journalctl -u wingman-upgrade-all.service --no-pager -n 10
+
+  # Attempted even when the accounts half failed: the two are independent,
+  # and refusing to update the process that serves every tenant because
+  # somebody's personal CLI could not be reinstalled is the wrong trade.
+  say "→ [2/2] redeploying the shared multi-tenant process…"
+  cmd_redeploy_shared || shared_ok=0
+
+  # Never silent about a partial run: say which half did not happen, and
+  # exit non-zero so a caller can tell. The redeploy script's own failures
+  # leave the running process alone ("nothing was killed"), so a partial
+  # result here means stale, not broken.
+  if [ "$accounts_ok" = 1 ] && [ "$shared_ok" = 1 ]; then
+    say "Done — per-account CLIs and the shared process are both current."
+    return 0
+  fi
+  say ""
+  [ "$accounts_ok" = 1 ] || say "INCOMPLETE: the per-account CLI upgrade did not run."
+  [ "$shared_ok" = 1 ] || say "INCOMPLETE: the shared multi-tenant process was NOT redeployed."
+  say "Anything already running was left alone. Re-run once the cause is fixed."
+  return 1
 }
 
 cmd_hosts() {
@@ -354,9 +389,9 @@ case "${1:-}" in
     say "  stop-all     HTTP + client-owned stdio servers (asks first; -y skips)"
     say "  upgrade      pull → reinstall → stop-all → restart HTTP if it was running (YOU only)"
     say "  cycle        stop / upgrade / start — always ends with the server running (YOU only)"
-    say "  upgrade-all  trigger the cross-account scheduled upgrade (you + every other"
-    say "               configured user, e.g. Trent) — needs sudo, needs the systemd"
-    say "               unit installed (docs/SERVER.md §7)"
+    say "  upgrade-all  EVERYTHING on this box: each account's own CLI first (nothing is"
+    say "               interrupted), then the shared multi-tenant process every tenant"
+    say "               talks to. Needs sudo; says which half did not happen (#375)"
     say "  redeploy-shared  pull, then redeploy the RFC-048 shared multi-tenant process"
     say "               (needs sudo; briefly interrupts every tenant on it)"
     say "  tenant url <slug>           print a tenant's connector URLs (RFC-048, #209)"

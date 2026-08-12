@@ -83,8 +83,11 @@ correctness one — your spend should be yours.
 
 ### Operability, and checks that can fail honestly
 
-- **`wingman-ctl`** (`wg`): status, start/stop, upgrade, `upgrade-all`
-  across accounts (RFC-042), and `redeploy-shared` for the shared process.
+- **`wingman-ctl`** (`wg`): status, start/stop, upgrade, `redeploy-shared`
+  for the shared process, and `upgrade-all` — which means everything on
+  the box (RFC-042, #375): each account's own CLI first, since that
+  interrupts nobody and proves the tree builds, then the shared
+  multi-tenant process, whose restart briefly cuts every tenant off.
 - **`wingman doctor --deep`** (RFC-039) walks a guided diagnostic ladder
   instead of printing a wall of state.
 - **Installs are pinned to `uv.lock` and verified** (#302, #319) — passing
