@@ -225,6 +225,82 @@ def test_a_bulleted_line_and_a_url_survive_the_split() -> None:
     assert plan.captures[0].why == "she told me the unwelcome thing, in private"
 
 
+ADMIRED = FormQuestion(
+    key="network_admired",
+    title="Which people you actually know do you admire, and why?",
+    destination="profile",
+    subtype="network_admired",
+)
+
+
+def _admired(answer: str) -> IngestPlan:
+    return plan_ingest(
+        "jason",
+        [FormResponse(answers={ADMIRED.title: answer})],
+        source="responses.csv",
+        questions=[ADMIRED],
+    )
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Karla Martin: https://www.linkedin.com/in/km/ - she told me the unwelcome thing",
+        "Karla Martin — https://www.linkedin.com/in/km/ — she told me the unwelcome thing",
+        "https://www.linkedin.com/in/km/ Karla Martin — she told me the unwelcome thing",
+    ],
+)
+def test_a_name_and_a_url_are_separated_not_glued_together(answer: str) -> None:
+    """The form offers "Name (or their LinkedIn URL)" and the natural answer
+    gives BOTH (#385). A nomination's target becomes the item's own name, so
+    a composite is neither a followable URL nor a displayable person."""
+    capture = _admired(answer).captures[0]
+    assert capture.target == "Karla Martin"
+    assert capture.identifier_url == "https://www.linkedin.com/in/km/"
+    assert capture.why == "she told me the unwelcome thing"
+
+
+def test_the_identifier_never_ends_up_inside_the_evidence_quote() -> None:
+    """'why' is stored verbatim as the evidence span. A URL glued to its
+    front is a quote the person never wrote."""
+    for answer in (
+        "Karla Martin: https://www.linkedin.com/in/km/ - she is honest",
+        "Karla Martin — https://www.linkedin.com/in/km/ — she is honest",
+    ):
+        assert "http" not in _admired(answer).captures[0].why
+
+
+def test_a_url_only_nomination_keeps_the_url_as_its_target() -> None:
+    """The form offers a URL INSTEAD of a name. Lifting it out of that answer
+    would leave the nomination with no name at all."""
+    capture = _admired("https://www.linkedin.com/in/rk — she told me in private").captures[0]
+    assert capture.target == "https://www.linkedin.com/in/rk"
+    assert capture.identifier_url == ""
+
+
+def test_an_identifier_is_shown_in_the_preview_before_anything_is_written() -> None:
+    """The operator applies what the preview showed. A split they cannot see
+    is one they cannot check."""
+    plan = _admired("Karla Martin: https://www.linkedin.com/in/km/ - she is honest")
+    rendered = render_plan(plan, Path("/tmp/ws"), criteria_exists=False)
+    assert "identifier: https://www.linkedin.com/in/km/" in rendered
+
+
+def test_an_identifier_survives_into_the_stored_capture(workspace: Config) -> None:
+    """Kept out of the target and out of the evidence — so it has to be kept
+    SOMEWHERE, or the answer was silently dropped."""
+    plan = _admired("Karla Martin: https://www.linkedin.com/in/km/ - she is honest")
+    with Storage(workspace.db_path) as storage:
+        apply_plan(plan, workspace, storage)
+    karla = next(item for item in _items(workspace) if item.name == "network_admired: Karla Martin")
+    assert karla.detail == "she is honest"
+    with Storage(workspace.db_path) as storage:
+        record = storage.get_source_record(karla.evidence[0].source_record_id)
+    assert record is not None
+    note = (workspace.data_dir / record.source_locator).read_text(encoding="utf-8")
+    assert "https://www.linkedin.com/in/km/" in note
+
+
 def test_the_mission_alignment_purpose_is_kept_out_of_the_evidence(workspace: Config) -> None:
     """The organization's purpose is context, never the quote — interview.py's
     own rule. The 'why' is the part that says something about the person."""

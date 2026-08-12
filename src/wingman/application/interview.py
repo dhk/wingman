@@ -332,6 +332,7 @@ def capture_interview_reaction(
     storage: Storage,
     fetcher: Callable[[str], bytes] | None = None,
     primary_purpose: str | None = None,
+    identifier_url: str | None = None,
     intensity: str | None = None,
     company_reason: str | None = None,
     value_statement: str | None = None,
@@ -351,6 +352,15 @@ def capture_interview_reaction(
     ("Pepsi sells cola"); it is written to the inbox note alongside the
     capture (like qa_capture's own note file) so it stays retrievable, but
     it never becomes the evidence quote itself.
+
+    'identifier_url' (#385) is a dereferenceable identifier given ALONGSIDE
+    a nomination's name — a LinkedIn URL for a network_admired answer —
+    rather than instead of it. It is kept out of 'target' because a
+    nomination's target becomes the item's own name, and a name with a URL
+    glued to it is neither followable nor displayable; it is kept out of
+    'why' because that is verbatim evidence and nothing may be appended to
+    it. Like primary_purpose it lives in the hashed record content, so it
+    stays retrievable and a changed identifier supersedes cleanly.
 
     'intensity' (RFC-049, issue #240 v1) is one of SentimentIntensity's
     values ('mild', 'moderate', 'strong') — a strength dimension layered
@@ -472,6 +482,8 @@ def capture_interview_reaction(
     # record, excluding it from its own lineage check and forcing a
     # spurious conflict instead of a clean update.
     content = f"# Interview capture\n\nSubtype: {subtype}\n\nTarget: {target}\n\nWhy: {why}\n"
+    if identifier_url:
+        content += f"\nIdentifier: {identifier_url}\n"
     if primary_purpose is not None:
         content += f"\nUnderstood primary purpose: {primary_purpose}\n"
     if value_statement:
