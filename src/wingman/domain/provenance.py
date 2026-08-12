@@ -8,6 +8,21 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+# How an answer reached the workspace when it did NOT arrive in a
+# conversation (#287): the person answered wingman's own interview
+# questions in a form, offline, and an operator ingested the export into
+# their workspace. One sentence, defined once, because a reader can meet it
+# in three different places — an inbox note, an answer-bank entry's
+# context, and the assembled job-criteria document — and three hand-written
+# variants would read as three different mechanisms.
+FORM_ARRIVAL = "the wingman interview form, ingested by the operator"
+
+#: What `ProfileItem.extracted_by` says for a capture that arrived that
+#: way — one value shared by every capture path a form can reach
+#: (nominations and Q&A alike), so a surface that wants to label form
+#: answers matches one constant rather than a list that can fall behind.
+FORM_EXTRACTOR = "form"
+
 
 class ClaimClassification(StrEnum):
     """How strongly a value is supported by its sources."""

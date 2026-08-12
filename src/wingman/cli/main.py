@@ -4168,8 +4168,131 @@ def tenant_form_cmd(
     typer.echo("  4. Choose createWingmanInterviewForm in the dropdown (not myFunction)")
     typer.echo("  5. Run, approve the permission prompt (a form in YOUR Drive)")
     typer.echo("  6. Execution log prints the published URL — send that to them")
+    typer.echo("  7. When they say they're done, download the responses as CSV and:")
+    typer.echo(f"       wingman tenant ingest-form {label} <responses.csv>")
+    typer.echo("     which previews, and writes only when you add --apply.")
     typer.echo("")
     typer.echo(f"Paste the .gs file, NOT {Path(__file__).name} or any wingman source.")
+
+
+@tenant_app.command("ingest-form")
+def tenant_ingest_form_cmd(
+    slug: str = typer.Argument(..., help="The tenant whose workspace these answers go into."),
+    responses: Path = typer.Argument(
+        ..., help="The form's response export, downloaded from Google Forms (.csv or .json)."
+    ),
+    registry: Path | None = typer.Option(
+        None,
+        "--registry",
+        help="Tenant registry path (default: WINGMAN_TENANT_REGISTRY host setting).",
+    ),
+    manifest: Path | None = typer.Option(
+        None,
+        "--manifest",
+        help="The routing table 'wingman tenant form' wrote, for a form built from an "
+        "older or edited question set. Default: this build's own questions.",
+    ),
+    submission: int | None = typer.Option(
+        None,
+        "--submission",
+        help="Which submission in the file to ingest, 1 (oldest) upwards. Default: the "
+        "most recent, which is the person's current answer.",
+    ),
+    apply_changes: bool = typer.Option(
+        False,
+        "--apply",
+        help="Actually write. Without it this previews and writes nothing.",
+    ),
+    replace_criteria: bool = typer.Option(
+        False,
+        "--replace-criteria",
+        help="Overwrite an existing job-criteria.md (the current text is kept alongside "
+        "it first). Without it, an existing document is left alone.",
+    ),
+) -> None:
+    """Ingest a completed interview form into ONE named tenant's workspace (#287).
+
+    The other half of 'wingman tenant form': you sent somebody the form,
+    they filled it in, you downloaded the responses. This routes each
+    answer where that question's answer belongs — the five RFC-035 areas
+    into one job-criteria.md, nominations into interview captures, anything
+    the manifest routes to the answer bank into the bank — through the same
+    functions the conversational path uses, so the validation and evidence
+    rules are identical. Only the provenance differs: every capture records
+    that it arrived in a form you ingested, and says so wherever it is
+    shown.
+
+    It PREVIEWS by default and writes only on --apply (or a yes at the
+    prompt). You are writing into somebody else's career record, and the
+    tenant is named on the command line rather than read out of the file:
+    a form link is a bearer URL, so the file cannot say whose answers these
+    are — only you can.
+
+    Deliberately a CLI command and not an MCP tool, like 'tenant urls' and
+    'tenant answers': the gate is shell access to this box. Run it as the
+    account that owns the workspace (e.g. 'sudo -u jason -H wingman tenant
+    ingest-form jason ...') so the files it writes belong to them.
+    """
+    from wingman.application.form_ingest import (
+        apply_plan,
+        parse_responses,
+        plan_ingest,
+        questions_from_manifest,
+        render_outcome,
+        render_plan,
+    )
+    from wingman.application.job_scoring import criteria_path
+
+    configure_logging()
+    tenant, _registry_path = _load_tenant_or_exit(slug, registry)
+    config = tenant.config()
+    if not config.db_path.exists():
+        typer.echo(
+            f"tenant ingest-form failed: {slug} has no workspace yet ({config.db_path} "
+            "missing). Nothing was read.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        questions = (
+            questions_from_manifest(manifest.read_text(encoding="utf-8"))
+            if manifest is not None
+            else None
+        )
+        parsed = parse_responses(responses)
+        plan = plan_ingest(
+            slug,
+            parsed,
+            source=str(responses),
+            questions=questions,
+            submission=submission,
+        )
+    except (IngestError, OSError) as exc:
+        typer.echo(f"tenant ingest-form failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_plan(plan, config.data_dir, criteria_path(config).exists()))
+    if not plan.writes_anything:
+        typer.echo("")
+        typer.echo("Nothing in this file routes anywhere — nothing was written.")
+        return
+    typer.echo("")
+    if apply_changes:
+        write = True
+    elif sys.stdin.isatty():
+        # The interactive equivalent of --apply, never a default: the
+        # question is whether to write into somebody else's workspace, and
+        # a bare Enter must mean no.
+        write = typer.confirm(f"Write all of this into {slug}'s workspace?", default=False)
+    else:
+        write = False
+    if not write:
+        typer.echo(f"Nothing was written. Re-run with --apply to write into {slug}'s workspace.")
+        return
+    with Storage(config.db_path) as storage:
+        outcome = apply_plan(plan, config, storage, replace_criteria=replace_criteria)
+    typer.echo(render_outcome(outcome, slug))
+    typer.echo("")
+    typer.echo(f"Tell {slug} their answers are in, and that the conversation can pick up there.")
 
 
 @tenant_app.command("answers")

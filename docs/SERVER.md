@@ -195,6 +195,44 @@ because the question that shaped it was written by whoever reads the
 reply. If somebody wants what they said kept as career evidence, they say
 it to wingman as an ordinary capture, in their own frame.
 
+**The interview, as a form somebody fills in offline** (RFC-069, issue
+#287). The interview is conversational, which suits some people and not
+others. For anyone who would rather sit down once and answer everything in
+their own time, wingman emits a form for one named person and ingests
+their responses back into that person's own workspace.
+
+```bash
+wingman tenant form jason --out ~/forms     # writes the Apps Script + the manifest
+# paste the .gs into script.google.com, run it once, send them the published URL
+# they fill it in; download the responses as CSV
+
+sudo -u jason -H wingman tenant ingest-form jason ~/jason-responses.csv
+sudo -u jason -H wingman tenant ingest-form jason ~/jason-responses.csv --apply
+```
+
+**The first run writes nothing.** It prints the assembled job-criteria
+document in full, every nomination it would capture with its 'why', and
+everything it will NOT capture and why not — a blank answer, a line with
+no reason in it, a column whose title no question matches. `--apply` is
+what writes. You are writing into somebody else's career record, and the
+person whose slug you type is the only workspace touched: the export
+cannot say whose answers it holds (a form link is a bearer URL, anyone
+holding it can submit), so attribution is yours to state.
+
+Run it as the account that owns the workspace, as above, so the files it
+writes belong to them. An existing `job-criteria.md` is left alone unless
+you pass `--replace-criteria`, which keeps the old text alongside it. Two
+submissions in one file means the person filled the form twice, so the
+last one is taken as their current answer and the earlier one is named in
+the report — `--submission N` picks a specific one.
+
+Unlike a question-of-the-day answer, these answers **are** evidence: they
+answer wingman's own interview questions, not yours. Every one of them
+records that it arrived in a form you ingested, and says so wherever it is
+shown — `wingman profile list` marks them `(answered in a form)` — so
+months later they are still distinguishable from what somebody said in
+conversation.
+
 ## 3. Migrate the workspace from a Mac (optional)
 
 The workspace is fully self-contained, so migration is one backup:

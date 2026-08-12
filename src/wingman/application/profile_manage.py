@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 
 from wingman.application.ingest import IngestError
 from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
+from wingman.domain.provenance import FORM_EXTRACTOR
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -225,6 +226,21 @@ def _value_note(item: ProfileItem) -> str:
     return f' — values: "{item.value_statement}"' if item.value_statement else ""
 
 
+def _arrival_note(item: ProfileItem) -> str:
+    """' (answered in a form)' for a capture ingested from the interview
+    form (#287) — empty for everything else.
+
+    Provenance that only exists in the database is provenance nobody
+    reads. A form answer is the person's own words, but it was written
+    months earlier, offline, without the assistant's follow-up questions,
+    and an operator put it here — so somebody reviewing their own profile
+    should be able to see which lines those are without querying source
+    records. Keyed off `domain.provenance.FORM_EXTRACTOR`, the one value
+    every form-arrival capture path sets.
+    """
+    return " (answered in a form)" if item.extracted_by == FORM_EXTRACTOR else ""
+
+
 def render_profile_listing(items: list[ProfileItem]) -> str:
     """The 'wingman profile list' body: active by kind, then conflicts."""
     if not items:
@@ -243,7 +259,8 @@ def render_profile_listing(items: list[ProfileItem]) -> str:
         for item in (i for i in active if i.kind is kind):
             detail = f" — {item.detail}" if item.detail else ""
             lines.append(
-                f"  {item.item_id[:8]}  {item.name}{detail}{_scale_tags(item)}{_value_note(item)}"
+                f"  {item.item_id[:8]}  {item.name}{detail}{_scale_tags(item)}"
+                f"{_value_note(item)}{_arrival_note(item)}"
             )
     if conflicts:
         lines.append("Conflicts (resolve with 'wingman profile resolve <id>'):")
@@ -252,7 +269,7 @@ def render_profile_listing(items: list[ProfileItem]) -> str:
             detail = f" — {item.detail}" if item.detail else ""
             lines.append(
                 f"  {item.item_id[:8]}  {item.name}{detail}{_scale_tags(item)}"
-                f"{_value_note(item)}  (conflicts with {rival})"
+                f"{_value_note(item)}{_arrival_note(item)}  (conflicts with {rival})"
             )
     summary = f"{len(active)} active, {len(conflicts)} in conflict"
     if superseded:

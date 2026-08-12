@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from wingman.application.ingest import IngestError
 from wingman.application.profile_store import ItemCounts, persist_items
 from wingman.domain.profile import EvidenceSpan, ProfileItem, ProfileItemKind
-from wingman.domain.provenance import ClaimClassification
+from wingman.domain.provenance import FORM_ARRIVAL, FORM_EXTRACTOR, ClaimClassification
 from wingman.domain.source_record import SourceRecord
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
@@ -35,6 +35,12 @@ _logger = get_logger("application.qa_capture")
 QA_SOURCE_TYPE = "qa_note"
 QA_PROMPT_VERSION = "qa_capture_v1"
 QA_EXTRACTOR = "user"  # the user's own words — no model proposed anything
+
+# The same pair, answered in the interview form an operator ingested (#287)
+# rather than in a conversation. Their own words either way — what changes
+# is the arrival route, kept on the source record's type and the item's
+# extracted_by so a reader of their own profile can tell the two apart.
+QA_FORM_SOURCE_TYPE = "qa_form_note"
 
 
 def qa_document_key(question: str) -> str:
@@ -76,6 +82,7 @@ def capture_qa(
     kind: str = "achievement",
     classification: str = "fact",
     destination: str = "profile",
+    via_form: bool = False,
 ) -> QaCaptureReport:
     """Persist one Q&A pair — as citable profile evidence, or in the answer bank.
 
@@ -87,6 +94,14 @@ def capture_qa(
     claim about the person's career; it is a question an employer asked,
     whose refined answer gets reused across applications. Storing it in the
     profile made a question the *name* of an achievement (#283).
+
+    via_form (#287) says the pair arrived through the interview form an
+    operator ingested rather than through a conversation. Provenance only:
+    the source record's type, the inbox note, the item's extracted_by and
+    an answer-bank entry's context all say so, and nothing else about the
+    capture changes — which is why application/form_ingest.py calls this
+    function instead of writing a second path that could drift from these
+    rules.
     """
     question = " ".join(question.split())
     answer = answer.strip()
@@ -101,7 +116,35 @@ def capture_qa(
     if target == "answers":
         from wingman.application.answers import save_answer
 
-        entry, created = save_answer(question, answer, storage)
+        existing_id = ""
+        if via_form:
+            # A form ingest can legitimately be re-run — after a
+            # --replace-criteria, or because the operator is not sure the
+            # first run worked — and the same export must not deposit a
+            # second copy of every answer (#287's own acceptance criteria:
+            # ingesting twice supersedes rather than duplicates). Profile
+            # items get that from RFC-028 lineage; the answer bank has no
+            # lineage, so the question itself is the key and the entry is
+            # revised in place. Scoped to via_form deliberately: a person
+            # capturing the same question twice in conversation is making a
+            # second, deliberate act, and deciding for them that it replaces
+            # the first is a separate call from this one.
+            match = next(
+                (
+                    record
+                    for record in storage.list_answers()
+                    if qa_document_key(record.question) == qa_document_key(question)
+                ),
+                None,
+            )
+            existing_id = match.answer_id if match is not None else ""
+        entry, created = save_answer(
+            question,
+            answer,
+            storage,
+            answer_id=existing_id,
+            source=FORM_ARRIVAL if via_form else "",
+        )
         return QaCaptureReport(
             question=question,
             kind="answer",
@@ -123,17 +166,23 @@ def capture_qa(
         ) from exc
 
     content = f"# Q&A note\n\nQ: {question}\n\nA: {answer}\n"
+    if via_form:
+        # Hashed, like every other part of the note: the same answer given
+        # in a form and later in conversation are two arrivals, and must be
+        # two source records for the second to supersede the first through
+        # the ordinary RFC-028 lineage rather than collide with it.
+        content += f"\nAnswered in: {FORM_ARRIVAL}\n"
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     record = storage.get_source_record_by_hash(content_hash)
     if record is None:
         config.inbox_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
-        path = config.inbox_dir / f"{stamp}-qa-note.md"
+        path = config.inbox_dir / f"{stamp}-{'qa-form-note' if via_form else 'qa-note'}.md"
         path.write_text(content, encoding="utf-8")
         data_root = config.data_dir.resolve()
         resolved = path.resolve()
         record = SourceRecord(
-            source_type=QA_SOURCE_TYPE,
+            source_type=QA_FORM_SOURCE_TYPE if via_form else QA_SOURCE_TYPE,
             source_locator=str(resolved.relative_to(data_root))
             if resolved.is_relative_to(data_root)
             else str(resolved),
@@ -150,7 +199,7 @@ def capture_qa(
         confidence=1.0,  # first-person statement; there is no better source
         evidence=[EvidenceSpan(source_record_id=record.record_id, quote=answer)],
         prompt_version=QA_PROMPT_VERSION,
-        extracted_by=QA_EXTRACTOR,
+        extracted_by=FORM_EXTRACTOR if via_form else QA_EXTRACTOR,
     )
     earlier = storage.record_ids_for_document(
         qa_document_key(question), exclude_record_id=record.record_id
