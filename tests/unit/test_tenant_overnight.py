@@ -89,6 +89,79 @@ def test_tenant_missing_workspace_is_skipped_not_crashed(tmp_path: Path) -> None
     assert "ghost: no workspace yet" in result.output
 
 
+def _corrupt_tenant(tmp_path: Path, slug: str) -> Path:
+    """A workspace whose database is unreadable — the failure the docstring
+    always named and the code never actually caught (#387)."""
+    data_dir = _make_tenant(tmp_path, slug, f"tok-{slug}")
+    (data_dir / "wingman.db").write_bytes(b"this is not a database, it is a pile of bytes" * 64)
+    return data_dir
+
+
+def test_a_corrupt_workspace_does_not_abort_the_tenants_after_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The bug this command's own docstring promised was fixed (#387): only
+    IngestError was caught, so a corrupt SQLite file — sqlite3.DatabaseError —
+    escaped the loop and silently cost EVERY tenant after it in registry
+    order their entire night's work. Nobody finds that out, because the thing
+    that would have told them is the run that never happened."""
+    import wingman.application.research as research_module
+
+    monkeypatch.setattr(research_module, "fetch_url", lambda url: _CAREERS_PAGE)
+
+    broken_dir = _corrupt_tenant(tmp_path, "broken")
+    jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
+    with Storage(jason_dir / "wingman.db") as storage:
+        add_person("Jane Author", storage, company="Acme")
+        follow_company(
+            "Acme", storage, url="https://acme.example.com", fetcher=lambda url: _CAREERS_PAGE
+        )
+
+    # broken is FIRST, so an escaping exception takes jason down with it.
+    registry = _write_registry(tmp_path, ("broken", broken_dir), ("jason", jason_dir))
+    result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
+
+    assert "broken: failed" in result.output
+    assert "jason: 1 targets" in result.output
+    assert (jason_dir / "reports" / "digests").exists()
+    assert "1/2 tenants completed cleanly" in result.output
+    assert result.exit_code == 1
+
+
+def test_a_failing_tenant_is_named_with_the_reason_never_swallowed(tmp_path: Path) -> None:
+    """This runs unattended on other people's behalf. A tenant who got
+    nothing has to be nameable in the morning, with why."""
+    broken_dir = _corrupt_tenant(tmp_path, "broken")
+    registry = _write_registry(tmp_path, ("broken", broken_dir))
+    result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
+    assert "broken: failed" in result.output
+    # The exception's own type and message, not a generic 'something failed'.
+    assert "DatabaseError" in result.output or "not a database" in result.output
+
+
+def test_a_bad_registry_entry_fails_only_its_own_tenant(tmp_path: Path, monkeypatch) -> None:
+    """Tenant.config() was outside the guarded region, so a registry entry
+    that fails to resolve took the whole roster with it."""
+    import wingman.infrastructure.tenants as tenants_module
+
+    jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
+    original = tenants_module.Tenant.config
+
+    def explode(self):  # noqa: ANN001, ANN202 — test double
+        if self.slug == "cursed":
+            raise RuntimeError("this tenant's config cannot be resolved")
+        return original(self)
+
+    monkeypatch.setattr(tenants_module.Tenant, "config", explode)
+
+    registry = _write_registry(tmp_path, ("cursed", tmp_path / "cursed"), ("jason", jason_dir))
+    result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
+
+    assert "cursed: failed" in result.output
+    assert "jason: failed" in result.output  # reached at all — nothing enrolled
+    assert "0/2 tenants completed cleanly" in result.output
+
+
 def test_tenant_with_enrolled_target_produces_a_real_digest(tmp_path: Path, monkeypatch) -> None:
     """End-to-end: a tenant with a real followed company gets a real
     overnight run through the exact same overnight_run() the

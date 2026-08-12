@@ -4422,12 +4422,14 @@ def tenant_overnight_cmd(
     shared tier) — never a shell-out with WINGMAN_DATA_DIR set, which
     would use the full ladder and risk one tenant's run spending a key
     that isn't theirs. One tenant's failure (nothing enrolled, a fetch
-    error, whatever) is reported and never blocks the rest — mirrors
-    'upgrade_all.py's same per-user isolation.
+    error, a corrupt or locked database, a bad registry entry, whatever)
+    is reported by slug and never blocks the rest — mirrors
+    'upgrade_all.py's same per-user isolation, and catches as broadly as
+    that does, because a roster this command abandons half way through is
+    a night's work silently missing for everyone after the break.
     """
     configure_logging()
     from wingman.application.focus import overnight_run
-    from wingman.application.ingest import IngestError
     from wingman.infrastructure.storage import Storage
     from wingman.infrastructure.tenants import (
         TenantRegistryError,
@@ -4447,16 +4449,28 @@ def tenant_overnight_cmd(
 
     failures = 0
     for tenant in tenants:
-        config = tenant.config()
-        if not config.db_path.exists():
-            typer.echo(f"{tenant.slug}: no workspace yet ({config.db_path} missing) — skipped.")
-            failures += 1
-            continue
+        # Everything from config resolution onwards is guarded, not just the
+        # run itself (#387). The isolation this docstring promises is only
+        # worth having if it covers the failures it names: a corrupt or
+        # locked SQLite file raises sqlite3.DatabaseError, a bad registry
+        # entry fails in Tenant.config(), a malformed row raises
+        # ValidationError — and NONE of them is an IngestError, which is all
+        # this used to catch. Tenants are processed in registry order, so an
+        # escaping exception silently cost every tenant positioned after the
+        # broken one their whole night's work.
         try:
+            config = tenant.config()
+            if not config.db_path.exists():
+                typer.echo(f"{tenant.slug}: no workspace yet ({config.db_path} missing) — skipped.")
+                failures += 1
+                continue
             with Storage(config.db_path) as storage:
                 report = overnight_run(config, storage)
-        except IngestError as exc:
-            typer.echo(f"{tenant.slug}: failed — {exc}")
+        except Exception as exc:  # noqa: BLE001 — must never abort the whole roster
+            # Reported by slug with the reason, never swallowed: this runs
+            # unattended on other people's behalf, so a tenant who got
+            # nothing has to be nameable in the morning.
+            typer.echo(f"{tenant.slug}: failed — {type(exc).__name__}: {exc}")
             failures += 1
             continue
         typer.echo(
