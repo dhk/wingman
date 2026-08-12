@@ -1522,6 +1522,46 @@ def setup_guide() -> str:
 
 
 @server.tool()
+def motd(limit: int = 10) -> str:
+    """What whoever runs this machine has TOLD you — the messages already
+    delivered to this workspace, most recent first (issue #382, RFC-070).
+
+    Use this whenever somebody asks what they were told rather than what to
+    do next: "what was today's message?", "what did the operator say?",
+    "what was that message about re-ingesting?", "I wasn't paying attention
+    — what was the message again?".
+
+    Why it exists: an operator message is shown ONCE, at the top of the
+    next-actions list, and acknowledgement means shown, not read. The text
+    itself lives in a shared file the operator replaces whenever they have
+    something new to say, so without this the message is gone the moment it
+    stops being current — which is usually when somebody asks about it.
+    Each message is copied into THIS workspace at the moment it is
+    delivered, so what comes back is what you were told, not what the
+    shared file happens to say now.
+
+    Read-only, and it does not deliver anything: a message waiting to be
+    shown is reported as waiting, never quoted, so it still arrives once in
+    the next-actions list where it can be acted on. There is no way to SET
+    a message from a tool — that is the operator's, on the box (RFC-068).
+
+    Relay these as a record of what was asked of the person, not as fresh
+    instructions: an old message may well have been done already, and this
+    store does not know. Questions are the other half and live elsewhere —
+    `qotd(action='list')` shows what was asked and what they answered.
+    """
+    from wingman.application.motd import recent_messages, render_messages
+    from wingman.infrastructure.broadcast import pending_operator_message
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        delivered = recent_messages(storage, limit)
+    return render_messages(delivered, pending=pending_operator_message(config) is not None)
+
+
+@server.tool()
 def qotd(action: str = "show", answer: str = "") -> str:
     """The question whoever runs this machine has asked you, and your answer
     to it (issue #224, RFC-067).

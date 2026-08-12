@@ -137,7 +137,8 @@ sudo wingman motd set "Re-ingest your CV" \
   --why "The resume parser changed on the 10th and older ingests lost job titles." \
   --how "say: here's my resume"
 sudo wingman motd set "Rotate your API key" --to trent   # one tenant, by slug
-wingman motd show    # what it says, and whether THIS account has seen it
+wingman motd show    # what it says NOW, and whether THIS account has seen it
+wingman motd history # what this account was TOLD — kept when each was delivered
 sudo rm /etc/wingman/motd.json   # stop saying anything
 ```
 
@@ -154,8 +155,12 @@ The file is root-owned and world-readable; what actually gates it is the
 announcement rather than a credential and locking the file to
 `640 root:root` would shut out exactly the accounts it is written for.
 
-Each account records the id it was shown in its own data directory, so
-nothing here is group-writable and no account can affect another's. A
+Each account records the id it was shown in its own data directory —
+together with a copy of the message itself, so that what you told somebody
+survives you replacing the file (RFC-070, issue #382). They read it back
+with `wingman motd history`, or by asking their assistant "what was
+today's message?" (the `motd` tool); you read your own the same way.
+Nothing here is group-writable and no account can affect another's. A
 message with an unchanged `--id` is a correction, not a new instruction,
 and is not re-delivered; changing the id (it defaults to today's date)
 re-delivers to everybody. **A malformed file degrades to silence rather

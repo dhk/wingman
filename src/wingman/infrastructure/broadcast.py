@@ -41,7 +41,10 @@ broadcast is one root-provisioned file under `/etc/wingman/` — the same
 box-wide, group-readable tier `global-secrets.env` already established.
 Nothing here ever writes to that directory as part of a normal read; the
 per-account "I have seen this" marker lives in that account's OWN data
-dir. **Nor does the answer half need shared state**: a tenant's answer is
+dir, and so does the copy of the message it was shown (`delivered_messages`,
+RFC-070 — the marker says which id, the copy says what it SAID, because the
+operator's file has moved on by the time anybody asks). **Nor does the
+answer half need shared state**: a tenant's answer is
 stored in that tenant's own SQLite database like every other capture, and
 the operator reads answers back with the operator access they already have
 (the same access that reads the registry and runs `tenant urls`). The
@@ -376,6 +379,56 @@ def pending_operator_message(config: Config, path: Path | None = None) -> Operat
     return message
 
 
+def _keep_delivered_copy(config: Config, message: OperatorMessage) -> None:
+    """Freeze the operator's words in this account's own database (#382).
+
+    The seen-marker records an id; this records what the id MEANT. Without
+    it a delivered message is unrecoverable the moment the operator edits
+    the shared file, and "what was today's message?" has no answer on
+    precisely the day it is asked.
+
+    Never raises, for the same reason the marker write doesn't, and it runs
+    BEFORE the marker on purpose: if only one of the two writes can succeed,
+    the better failure is a message shown twice with a copy kept than a
+    message shown once and lost.
+    """
+    from wingman.domain.delivered_message import DeliveredMessage
+    from wingman.infrastructure.storage import Storage
+
+    if not config.db_path.exists():
+        # Reading or showing a message must never CREATE a workspace:
+        # Storage() would write a full schema here and leave a
+        # half-initialized data dir that every later db_path.exists() check
+        # reads as a real workspace. No workspace, no history — the message
+        # was still delivered, and the marker below still says so.
+        _logger.warning("no workspace to keep the operator message in path=%s", config.db_path)
+        return
+    record = DeliveredMessage(
+        message_id=message.id,
+        action=message.action,
+        why=message.why,
+        how=message.how,
+        to=message.to,
+    )
+    try:
+        with Storage(config.db_path) as storage:
+            storage.record_delivered_message(record)
+    except Exception as exc:  # noqa: BLE001 — this runs AFTER the message was shown
+        # Deliberately total. By the time this is reached the person has
+        # already been told; a locked database, a read-only data dir (which
+        # raises sqlite3.OperationalError, not OSError) or anything else
+        # this store can throw must cost the copy, never the tool that just
+        # successfully delivered the message. The TYPE is in the line so a
+        # refactor's AttributeError does not read like a permissions
+        # problem, matching `account_slug`'s catch above.
+        _logger.warning(
+            "could not keep a copy of the operator message id=%s error=%s: %s",
+            message.id,
+            type(exc).__name__,
+            exc,
+        )
+
+
 def acknowledge_delivery(config: Config, message: OperatorMessage | None) -> None:
     """Record that this account has now been shown 'message'.
 
@@ -383,9 +436,20 @@ def acknowledge_delivery(config: Config, message: OperatorMessage | None) -> Non
     unconditionally. Failure to write is logged and swallowed: a read-only
     data dir must degrade to showing the message again, never to breaking
     the tool that just showed it.
+
+    Two writes, both here and neither at the call sites (#382): the
+    seen-marker that stops the message repeating, and a copy of the message
+    itself so it can be read back later. Keeping the second write inside
+    this function is the whole reason it is safe to add — the four surfaces
+    that acknowledge are unchanged, so which surfaces deliver a message
+    cannot drift from which surfaces remember one, and the profile page
+    still does neither. RFC-065 named those four call sites as a drift
+    hazard; adding a fifth thing to remember at each of them would have made
+    it worse.
     """
     if message is None:
         return
+    _keep_delivered_copy(config, message)
     path = seen_marker_path(config)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

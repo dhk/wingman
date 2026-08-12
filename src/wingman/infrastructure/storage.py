@@ -17,6 +17,7 @@ from wingman.domain.briefing import BriefingSchedule
 from wingman.domain.commentary import CommentaryEntry
 from wingman.domain.company import CompanyDossier
 from wingman.domain.corpus import CorpusDocument
+from wingman.domain.delivered_message import DeliveredMessage
 from wingman.domain.heap import HeapItem
 from wingman.domain.operator_answer import OperatorAnswer
 from wingman.domain.opportunity import Opportunity
@@ -236,6 +237,18 @@ CREATE TABLE IF NOT EXISTS operator_answers (
     question_id TEXT NOT NULL,
     payload TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+-- Every operator message this account was actually shown (RFC-070, #382).
+-- The seen-marker file records only the last id, and the text lives in a
+-- shared file the operator replaces, so without this row a delivered
+-- message is unrecoverable the moment it stops being current — which is
+-- usually exactly when somebody asks what it said. Keyed by the broadcast
+-- id so a re-delivery (the seen-marker could not be written, so the message
+-- was shown again) records nothing new.
+CREATE TABLE IF NOT EXISTS delivered_messages (
+    message_id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    delivered_at TEXT NOT NULL
 );
 """
 
@@ -1663,6 +1676,45 @@ class Storage:
         )
         self._conn.commit()
         return cursor.rowcount > 0
+
+    def record_delivered_message(self, message: DeliveredMessage) -> bool:
+        """Keep the operator's words as this account was shown them (#382).
+
+        Returns False when this message was already recorded. `INSERT OR
+        IGNORE` rather than an upsert, keyed by the broadcast id: delivery
+        is best-effort and can genuinely happen twice — a seen-marker that
+        could not be written means the message is shown again — and the
+        FIRST delivery is the honest answer to "when were you told". An
+        upsert would quietly re-date it, and a plain INSERT would raise on
+        a path whose whole contract is that it never breaks the surface
+        that just showed the message.
+        """
+        cursor = self._conn.execute(
+            "INSERT OR IGNORE INTO delivered_messages (message_id, payload, delivered_at)"
+            " VALUES (?, ?, ?)",
+            (
+                message.message_id,
+                message.model_dump_json(),
+                message.delivered_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def list_delivered_messages(self, limit: int = 20) -> list[DeliveredMessage]:
+        """Messages this account was shown, most recent delivery first.
+
+        Ordered by delivery rather than by the operator's id, because the id
+        is opaque by design (RFC-065) and sorting on it would impose an
+        order the operator never promised. `rowid` breaks ties so two
+        messages delivered inside the same clock tick still come back in the
+        order they arrived.
+        """
+        cursor = self._conn.execute(
+            "SELECT payload FROM delivered_messages ORDER BY delivered_at DESC, rowid DESC LIMIT ?",
+            (limit,),
+        )
+        return [DeliveredMessage.model_validate_json(row[0]) for row in cursor.fetchall()]
 
     def count_commentary_entries(self) -> int:
         cursor = self._conn.execute("SELECT COUNT(*) FROM commentary_entries")
