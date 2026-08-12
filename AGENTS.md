@@ -219,6 +219,13 @@ Do not claim a capability is supported until implemented and tested.
 - Never commit generated private data.
 - Do not discard user changes.
 - Inspect the final diff for secrets and unrelated files.
+- Never push to a branch whose PR already merged. A squash merge rewrites
+  the work under a new sha, so further commits are stranded and the first
+  symptom is an unexplained `405 Pull Request has merge conflicts` on the
+  NEXT merge, far from the mistake (#182). Start a fresh branch from
+  `origin/main` instead. Merged branches are now deleted automatically,
+  and `scripts/install-git-hooks.sh` installs a pre-push hook that refuses
+  the push outright — run it once per checkout.
 
 ## Definition of Done
 
