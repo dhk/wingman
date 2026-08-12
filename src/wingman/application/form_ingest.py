@@ -669,7 +669,8 @@ def render_plan(plan: IngestPlan, workspace: Path, criteria_exists: bool) -> str
     lines.append("The form does not ask for, and nothing here sets: " + UNASKED_FIELDS[0] + ",")
     lines.append(f"{UNASKED_FIELDS[1]}, {UNASKED_FIELDS[2]}.")
     lines.append("They stay unset — the fields are optional by design — and can be added")
-    lines.append("later in conversation.")
+    lines.append("later in conversation, or with 'wingman profile amend <id> --intensity …',")
+    lines.append("which keeps the capture's id, source record and form provenance (RFC-071).")
     return "\n".join(lines)
 
 

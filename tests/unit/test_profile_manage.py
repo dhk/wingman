@@ -1,4 +1,4 @@
-"""Career-profile management (RFC-027): list, rm, resolve, clear."""
+"""Career-profile management (RFC-027): list, rm, resolve, amend, clear."""
 
 import json
 from pathlib import Path
@@ -6,9 +6,17 @@ from pathlib import Path
 import pytest
 
 from wingman.agents.profile_curator import ProposalParseError, parse_proposal
+from wingman.application.evidence import locate_quote
 from wingman.application.ingest import IngestError, ingest_resume
+from wingman.application.interview import (
+    AMENDMENT_SOURCE_TYPE,
+    FORM_SOURCE_TYPE,
+    capture_interview_reaction,
+)
 from wingman.application.profile_manage import (
+    amend_item,
     clear_profile,
+    describe_amendment,
     find_item,
     rekind_item,
     remove_item,
@@ -16,7 +24,8 @@ from wingman.application.profile_manage import (
     render_profile_listing,
     resolve_item,
 )
-from wingman.domain.profile import ItemStatus, ProfileItemKind
+from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind, SentimentIntensity
+from wingman.domain.provenance import FORM_EXTRACTOR
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.storage import Storage
 from wingman.providers.recorded import RecordedProvider
@@ -509,3 +518,269 @@ def test_rename_refuses_a_collision_an_empty_name_and_a_no_op(
         with pytest.raises(IngestError, match="already named"):
             rename_item(target.item_id[:8], "search   REWRITE", workspace, storage)
         assert storage.get_profile_item(target.item_id).name == "Search rewrite"
+
+
+# --- amend: the author revising their own answer (RFC-071, issue #381) ------
+
+
+def _form_capture(config: Config, storage: Storage, why: str) -> ProfileItem:
+    """One interview capture that arrived through the interview form (#287):
+    the person's own words, no intensity, and the provenance the ingest
+    stamps on it — the exact shape #381 says cannot currently be fixed."""
+    capture_interview_reaction("values_pro", "Ada Lovelace", why, config, storage, via_form=True)
+    return next(
+        item
+        for item in storage.list_profile_items()
+        if item.kind is ProfileItemKind.INTERVIEW and item.status is ItemStatus.ACTIVE
+    )
+
+
+def test_amend_keeps_the_id_the_source_record_and_the_form_provenance(workspace: Config) -> None:
+    """What delete-and-recapture costs, and what amend must therefore keep:
+    the item id anything citing it points at, the source record the answer
+    arrived on, and #287's (answered in a form) provenance."""
+    with Storage(workspace.db_path) as storage:
+        before = _form_capture(workspace, storage, "She saw the machine could do more than sums.")
+        original_record_id = before.evidence[0].source_record_id
+
+        amended, was = amend_item(
+            before.item_id[:8],
+            workspace,
+            storage,
+            why="She saw that the machine could do more than arithmetic.",
+        )
+
+        assert was.detail == before.detail
+        assert amended.item_id == before.item_id
+        assert amended.name == before.name and amended.subtype == before.subtype
+        # Provenance: still a form answer, on the form's own source record.
+        assert amended.extracted_by == FORM_EXTRACTOR
+        assert amended.classification is before.classification
+        record = storage.get_source_record(original_record_id)
+        assert record is not None and record.source_type == FORM_SOURCE_TYPE
+        # The superseded answer keeps naming that record, so the item still
+        # traces to where it came from rather than orphaning it.
+        assert amended.revisions[-1].evidence[0].source_record_id == original_record_id
+        assert amended.revisions[-1].detail == before.detail
+        # And the item the storage layer holds is the amended one.
+        stored = storage.get_profile_item(before.item_id)
+        assert stored is not None
+        assert stored.detail == "She saw that the machine could do more than arithmetic."
+
+
+def test_an_amended_why_resolves_against_a_note_somebody_can_read(workspace: Config) -> None:
+    """Evidence before assertion, on the one path that rewrites a quote.
+
+    The original note is immutable — its content hash IS the source
+    record's identity — so an amended sentence needs a note of its own, or
+    the profile asserts a quote appearing in no document. The amendment
+    record also joins the ORIGINAL's document lineage (RFC-028), so a later
+    conversational re-capture of the same target supersedes it cleanly
+    instead of landing as a cross-source conflict.
+    """
+    with Storage(workspace.db_path) as storage:
+        before = _form_capture(workspace, storage, "She saw the machine could do more than sums.")
+        original = storage.get_source_record(before.evidence[0].source_record_id)
+        assert original is not None
+
+        amended, _was = amend_item(
+            before.item_id[:8], workspace, storage, why="Ada saw a general-purpose machine."
+        )
+
+        record = storage.get_source_record(amended.evidence[0].source_record_id)
+        assert record is not None
+        assert record.record_id != original.record_id
+        assert record.source_type == AMENDMENT_SOURCE_TYPE
+        assert record.document_key == original.document_key
+        note = (workspace.data_dir / record.source_locator).read_text(encoding="utf-8")
+        assert locate_quote("Ada saw a general-purpose machine.", note) is not None
+        # The trail is on disk as well as in the row: the note names the
+        # record it amends and the words it replaced.
+        assert original.record_id in note
+        assert "She saw the machine could do more than sums." in note
+        # The original note is untouched — that is the point of not rewriting it.
+        original_note = (workspace.data_dir / original.source_locator).read_text(encoding="utf-8")
+        assert "She saw the machine could do more than sums." in original_note
+        assert "Ada saw a general-purpose machine." not in original_note
+
+
+def test_the_revision_is_not_a_second_evidence_span(workspace: Config) -> None:
+    """A person restating themselves is not a second voucher (#336's rule).
+
+    Keeping the superseded wording in `evidence` would make everything
+    that counts spans — the profile page's 'one quote' flag, persist_items'
+    merge arithmetic — read the person's own earlier sentence as
+    corroboration by a second source.
+    """
+    with Storage(workspace.db_path) as storage:
+        before = _form_capture(workspace, storage, "First wording.")
+        amended, _was = amend_item(before.item_id[:8], workspace, storage, why="Second wording.")
+
+        assert len(amended.evidence) == 1
+        assert amended.evidence[0].quote == "Second wording."
+        assert len(amended.revisions) == 1
+        # Amending twice appends; the trail is oldest first.
+        again, _was = amend_item(before.item_id[:8], workspace, storage, why="Third wording.")
+        assert len(again.evidence) == 1
+        assert [revision.detail for revision in again.revisions] == [
+            "First wording.",
+            "Second wording.",
+        ]
+
+
+def test_an_amended_form_capture_still_says_it_was_answered_in_a_form(workspace: Config) -> None:
+    """Both facts are load-bearing: the sentence was reworded, and it still
+    arrived in a form months earlier, offline, with no follow-up asked."""
+    with Storage(workspace.db_path) as storage:
+        before = _form_capture(workspace, storage, "Machines can do more than sums.")
+        listing = render_profile_listing(storage.list_profile_items())
+        assert "(answered in a form)" in listing and "(revised)" not in listing
+
+        amend_item(before.item_id[:8], workspace, storage, why="Machines can do more than that.")
+
+        listing = render_profile_listing(storage.list_profile_items())
+        assert "(answered in a form) (revised)" in listing
+        assert "Machines can do more than that." in listing
+
+
+def test_amend_adds_the_intensity_a_form_never_collected(workspace: Config) -> None:
+    """A form collects no intensity (RFC-069), and intensity is the
+    magnitude the whole values score rests on — so a form capture is
+    weightless until somebody can add one without destroying the capture."""
+    with Storage(workspace.db_path) as storage:
+        before = _form_capture(workspace, storage, "She saw further than the machine's builders.")
+        assert before.intensity is None
+
+        amended, _was = amend_item(
+            before.item_id[:8],
+            workspace,
+            storage,
+            intensity="strong",
+            value_statement="I value people who see past the tool in front of them.",
+        )
+
+        assert amended.intensity is SentimentIntensity.STRONG
+        assert amended.value_statement.startswith("I value people")
+        # A field-only amendment leaves the answer and its evidence alone:
+        # nothing was rewritten, so no new source record was needed.
+        assert amended.detail == before.detail
+        assert amended.evidence == before.evidence
+        assert amended.revisions[-1].intensity is None
+        assert amended.revisions[-1].value_statement == ""
+
+
+def test_amend_refuses_a_document_sourced_item_and_says_what_to_do_instead(
+    workspace: Config, tmp_path: Path
+) -> None:
+    """The line RFC-071 holds. Letting the author of an interview answer
+    revise it does not weaken evidence discipline; letting anybody edit a
+    sentence lifted out of a resume guts it."""
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        achievement = next(
+            item
+            for item in storage.list_profile_items()
+            if item.name == "Search rewrite" and item.status is ItemStatus.ACTIVE
+        )
+
+        with pytest.raises(IngestError) as excinfo:
+            amend_item(achievement.item_id[:8], workspace, storage, why="Something else.")
+
+        message = str(excinfo.value)
+        assert "not an interview answer of your own" in message
+        assert "resume.md" in message  # names the document the quote came from
+        assert "re-ingest" in message  # and the path that does work
+        untouched = storage.get_profile_item(achievement.item_id)
+        assert untouched is not None and untouched.revisions == []
+        assert untouched.detail == achievement.detail
+
+
+def test_amend_refuses_nothing_to_change_an_empty_why_and_a_garbled_scale(
+    workspace: Config,
+) -> None:
+    with Storage(workspace.db_path) as storage:
+        item = _form_capture(workspace, storage, "The original answer.")
+
+        with pytest.raises(IngestError, match="nothing to amend"):
+            amend_item(item.item_id[:8], workspace, storage)
+        with pytest.raises(IngestError, match="has to say why"):
+            amend_item(item.item_id[:8], workspace, storage, why="   ")
+        with pytest.raises(IngestError, match="already reads exactly that"):
+            amend_item(item.item_id[:8], workspace, storage, why="The original answer.")
+        with pytest.raises(IngestError, match="unknown intensity"):
+            amend_item(item.item_id[:8], workspace, storage, intensity="volcanic")
+        with pytest.raises(IngestError, match="unknown company_reason"):
+            amend_item(item.item_id[:8], workspace, storage, company_reason="vibes")
+        # Nothing was written on any of those paths.
+        stored = storage.get_profile_item(item.item_id)
+        assert stored is not None and stored.detail == "The original answer."
+        assert stored.revisions == []
+
+
+def test_amend_echoes_exactly_what_it_stored(workspace: Config) -> None:
+    """The CLI and the MCP tool both report the change through this, because
+    'Amended.' cannot tell somebody whether the field they meant to change
+    is the field that changed."""
+    with Storage(workspace.db_path) as storage:
+        before = _form_capture(workspace, storage, "First wording.")
+        amended, was = amend_item(
+            before.item_id[:8], workspace, storage, why="Second wording.", intensity="mild"
+        )
+    summary = describe_amendment(amended, was)
+    assert 'why is now "Second wording." (was "First wording.")' in summary
+    assert "intensity unset -> mild" in summary
+
+
+def test_mcp_profile_manage_amend_roundtrip(workspace: Config) -> None:
+    from wingman.mcp_server import profile_manage
+
+    with Storage(workspace.db_path) as storage:
+        item = _form_capture(workspace, storage, "The first answer.")
+
+    response = profile_manage("amend", item.item_id[:8], why="The answer, said better.")
+    assert "Amended" in response and "said better" in response
+    assert "(revised)" in profile_manage("list")
+    assert "failed" in profile_manage("amend", item.item_id[:8])
+    assert "amend" in profile_manage("nope")
+
+
+def test_the_amend_docstring_carries_the_echo_before_save_protocol() -> None:
+    """BP-06, the same gate interview_react and qa_capture carry: the model
+    shows the exact text it will store and saves only on confirmation. This
+    tool can rewrite an evidence quote, so it is the last place a silent
+    paraphrase should be possible."""
+    from wingman.mcp_server import profile_manage as profile_manage_tool
+
+    doc = (profile_manage_tool.__doc__ or "").lower()
+    assert "echo verbatim" in doc
+    assert "only after they confirm" in doc
+    assert "never save your own tidied" in doc
+    assert "these are the person's own" in doc
+
+
+def test_cli_profile_amend(workspace: Config) -> None:
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+
+    with Storage(workspace.db_path) as storage:
+        item = _form_capture(workspace, storage, "The first answer.")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "profile",
+            "amend",
+            item.item_id[:8],
+            "--why",
+            "The answer, said better.",
+            "--intensity",
+            "strong",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "said better" in result.output
+    assert "intensity unset -> strong" in result.output
+
+    failed = CliRunner().invoke(app, ["profile", "amend", "zzzzzzzz", "--why", "Nope."])
+    assert failed.exit_code == 1

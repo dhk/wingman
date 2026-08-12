@@ -91,7 +91,9 @@ from wingman.application.pov import (
     render_pov_card,
 )
 from wingman.application.profile_manage import (
+    amend_item,
     clear_profile,
+    describe_amendment,
     rekind_item,
     remove_item,
     rename_item,
@@ -5320,6 +5322,60 @@ def profile_rename(
         typer.echo(f"profile rename failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Renamed {was!r} to {renamed.name!r} ({renamed.item_id[:8]}).")
+
+
+@profile_app.command("amend")
+def profile_amend(
+    item_id: str = typer.Argument(..., help="Interview capture id (any unambiguous prefix)."),
+    why: str = typer.Option("", "--why", help="The revised answer, in your own words."),
+    intensity: str = typer.Option(
+        "", "--intensity", help="mild, moderate or strong (RFC-050 sentiment scale)."
+    ),
+    company_reason: str = typer.Option(
+        "", "--company-reason", help="company, product or industry."
+    ),
+    value_statement: str = typer.Option(
+        "", "--value-statement", help="What this nomination tells you that you value."
+    ),
+) -> None:
+    """Revise an interview capture's own answer, keeping its id and lineage.
+
+    For "that came out wrong": the person IS the source of an interview
+    answer, so revising it is theirs to do — and for adding the intensity
+    a capture ingested from the interview form never collected, without
+    which it carries no weight in 'wingman values'. The previous answer is
+    kept as a revision rather than erased, the item id, source record and
+    provenance are untouched, and the item then reads '(revised)' in
+    'wingman profile list'.
+
+    Only interview captures. An achievement, skill, role or testimonial
+    quotes a document somebody wrote — fix the document and re-ingest it
+    under the same filename, which supersedes the old claim by itself.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "amended")
+    try:
+        with Storage(config.db_path) as storage:
+            amended, before = amend_item(
+                item_id,
+                config,
+                storage,
+                why=why,
+                intensity=intensity,
+                company_reason=company_reason,
+                value_statement=value_statement,
+            )
+    except IngestError as exc:
+        typer.echo(f"profile amend failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Amended {amended.name!r} ({amended.item_id[:8]}).")
+    typer.echo(f"  {describe_amendment(amended, before)}")
+    typer.echo(
+        f"  The previous answer is kept as revision {len(amended.revisions)}; the item id, "
+        "source record and provenance are unchanged."
+    )
+    typer.echo("  Re-run 'wingman values --refresh' if this changes your value profile.")
 
 
 @profile_app.command("clear")
