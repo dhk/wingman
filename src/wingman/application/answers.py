@@ -54,12 +54,20 @@ def save_answer(
     role_title: str = "",
     asked_on: str = "",
     answer_id: str = "",
+    source: str = "",
 ) -> tuple[AnswerRecord, bool]:
     """Store a refined answer; with answer_id, revise that record in place.
 
     Returns (record, created). Revision keeps created_at and the original
     context unless new context is given — a re-refined answer is still the
     same bank entry, just better.
+
+    'source' records how the answer arrived when it was not settled in
+    conversation — an interview form an operator ingested (#287). It reads
+    back in the entry's context line, so somebody reviewing the bank can
+    tell a form answer from one they refined with the assistant, which are
+    different levels of polish and deserve different amounts of trust when
+    pasted into an application.
     """
     if not question.strip():
         raise IngestError("the question is empty; nothing to save.")
@@ -74,6 +82,7 @@ def save_answer(
                 "company": company.strip() or existing.company,
                 "role_title": role_title.strip() or existing.role_title,
                 "asked_on": asked_on.strip() or existing.asked_on,
+                "source": source.strip() or existing.source,
                 "updated_at": datetime.now(UTC),
             }
         )
@@ -86,6 +95,7 @@ def save_answer(
         company=company.strip(),
         role_title=role_title.strip(),
         asked_on=asked_on.strip(),
+        source=source.strip(),
     )
     storage.save_answer(record)
     _logger.info("answer saved id=%s company=%s", record.answer_id, record.company or "-")

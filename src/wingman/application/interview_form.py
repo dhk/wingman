@@ -34,7 +34,17 @@ to any one person.
 Every question carries its DESTINATION, because the kinds of answer go
 to different places — the distinction #283 had to make for qa_capture.
 The manifest emitted alongside the script is what a later ingest reads
-to route each response; the form itself is just a form.
+to route each response (application/form_ingest.py); the form itself is
+just a form.
+
+The help text on each nomination question names the SHAPE of a line —
+"Name — why", and "Organization — its purpose — why" where a purpose is
+also asked for — because the ingest splits those lines deterministically
+and refuses to guess. A model could read "Ada Lovelace, because she saw
+what a machine could be" and pull the name out of it, and that is
+precisely the parsing AGENTS.md keeps models away from. Asking in the
+shape the ingest reads costs the person nothing and means the answer
+they wrote is the answer that lands.
 """
 
 from __future__ import annotations
@@ -91,7 +101,7 @@ _NOMINATIONS = [
     FormQuestion(
         key="values_pro",
         title="Name three people, living or dead, you would have dinner with — and why.",
-        help="One per line, with a sentence on why for each. Anyone at all: they "
+        help="One per line, in the shape: Name — why. Anyone at all: they "
         "do not have to be famous, in your field, or still alive.",
         destination="profile",
         subtype="values_pro",
@@ -100,29 +110,30 @@ _NOMINATIONS = [
         key="values_con",
         title="Name three people you would be horrified to see your name printed "
         "alongside — and why.",
-        help="One per line, with why. Not Hitler — too easy an answer to tell us "
-        "anything about you.",
+        help="One per line, in the shape: Name — why. Not Hitler; too easy an answer "
+        "to tell us anything about you.",
         destination="profile",
         subtype="values_con",
     ),
     FormQuestion(
         key="network_admired",
         title="Which people you actually know do you admire, and why?",
-        help="People you have worked with or met, not public figures. Paste their "
-        "LinkedIn URLs if you have them — one per line, with why for each.",
+        help="People you have worked with or met, not public figures. One per line, "
+        "in the shape: Name (or their LinkedIn URL) — why.",
         destination="profile",
         subtype="network_admired",
     ),
     FormQuestion(
         key="values_fallback_pro",
         title="Whose products or services are you proud to buy — and why?",
-        help="Companies, if naming people is hard. One per line, with why.",
+        help="Companies, if naming people is hard. One per line, in the shape: Company — why.",
         destination="profile",
         subtype="values_fallback_pro",
     ),
     FormQuestion(
         key="values_fallback_con",
         title="Whose products or services would you never buy — and why?",
+        help="One per line, in the shape: Company — why.",
         destination="profile",
         subtype="values_fallback_con",
     ),
@@ -130,8 +141,10 @@ _NOMINATIONS = [
         key="mission_alignment_pro",
         title="Name an organization you would be proud to be associated with, and "
         "say what you understand its primary purpose to be.",
-        help="A company, a club, any group of people aligned for a purpose. The "
-        "purpose in your own words — 'Pepsi sells cola' is the right level.",
+        help="A company, a club, any group of people aligned for a purpose. One per "
+        "line, in the shape: Organization — its purpose — why you would be proud. "
+        "The purpose in your own words: 'Pepsi sells cola' is the right level. The "
+        "'why' is the part that is about you, and it is the part wingman keeps.",
         destination="profile",
         subtype="mission_alignment_pro",
     ),
@@ -139,6 +152,7 @@ _NOMINATIONS = [
         key="mission_alignment_con",
         title="Name an organization you would be horrified to be associated with, "
         "and what you understand its primary purpose to be.",
+        help="One per line, in the shape: Organization — its purpose — why you would be horrified.",
         destination="profile",
         subtype="mission_alignment_con",
     ),

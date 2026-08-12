@@ -21,10 +21,19 @@ class AnswerRecord(BaseModel):
     company: str = ""
     role_title: str = ""
     asked_on: str = ""  # the application/interview date as the user stated it
+    # How the answer reached the bank, when it was not refined in
+    # conversation (#287) — e.g. domain.provenance.FORM_ARRIVAL. Empty for
+    # every entry saved before this existed and for every ordinary
+    # conversational save, which is the same thing said twice: silence
+    # means "the assistant and the user settled this together", and that
+    # is what the bank has always held.
+    source: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def context(self) -> str:
-        parts = [part for part in (self.company, self.role_title, self.asked_on) if part]
+        parts = [
+            part for part in (self.company, self.role_title, self.asked_on, self.source) if part
+        ]
         return ", ".join(parts) if parts else "(no context)"

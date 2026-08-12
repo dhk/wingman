@@ -86,7 +86,7 @@ from wingman.domain.profile import (
     ProfileItemKind,
     SentimentIntensity,
 )
-from wingman.domain.provenance import ClaimClassification
+from wingman.domain.provenance import FORM_ARRIVAL, FORM_EXTRACTOR, ClaimClassification
 from wingman.domain.source_record import SourceRecord
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.fetch import FetchError, fetch_url
@@ -98,6 +98,17 @@ _logger = get_logger("application.interview")
 INTERVIEW_SOURCE_TYPE = "interview_stimulus"
 INTERVIEW_PROMPT_VERSION = "interview_capture_v0"
 INTERVIEW_EXTRACTOR = "user"  # the user's own words — no model proposed anything
+
+# A capture that arrived through the interview FORM (#287) rather than
+# through a conversation: the person answered wingman's own questions
+# offline, and an operator ingested the export into their workspace. Still
+# their own words, still first-person, still FACT — the difference is HOW
+# it arrived, and it is recorded in two places so it cannot be lost: the
+# source record's type (the durable provenance row) and the item's
+# extracted_by (what every profile surface reads). Somebody looking at
+# their own profile a year later can then tell the answers they wrote in a
+# form months ago from the ones they said out loud.
+FORM_SOURCE_TYPE = "interview_form"
 
 # Alignment of perspective (v0): react to fetched content.
 REACTION_SUBTYPES = {
@@ -274,7 +285,7 @@ def _item_name(subtype: str, target: str, persona_id: str | None) -> str:
 
 
 def _provenance_for(
-    persona_id: str | None, persona_authored: bool
+    persona_id: str | None, persona_authored: bool, via_form: bool = False
 ) -> tuple[ClaimClassification, float, str]:
     """(classification, confidence, extracted_by) for one capture
     (docs/COACHING-MODE-DESIGN.md).
@@ -289,9 +300,17 @@ def _provenance_for(
     would Mike answer this") — never a verified statement, so
     HYPOTHESIS/0.6/"coach", distinguishable from either FACT case forever,
     not just at capture time.
+
+    via_form (#287) is the same first person answering wingman's own
+    questions in a form instead of a conversation — FACT/1.0 like any
+    other answer of their own, marked "form" so the arrival route survives
+    on the item itself. It is only honoured for the coach's own scope: a
+    form is completed by the tenant, never on somebody else's behalf, so
+    combining it with a persona would assert a first-person form answer
+    for a person who never saw the form.
     """
     if persona_id is None:
-        return ClaimClassification.FACT, 1.0, INTERVIEW_EXTRACTOR
+        return ClaimClassification.FACT, 1.0, FORM_EXTRACTOR if via_form else INTERVIEW_EXTRACTOR
     if persona_authored:
         return ClaimClassification.FACT, 1.0, "persona"
     return ClaimClassification.HYPOTHESIS, 0.6, "coach"
@@ -310,6 +329,7 @@ def capture_interview_reaction(
     value_statement: str | None = None,
     persona_id: str | None = None,
     persona_authored: bool = False,
+    via_form: bool = False,
 ) -> InterviewReactionReport:
     """Persist one interview capture — a reaction to fetched content
     (Alignment of perspective), or a nomination by name (Values, Mission
@@ -367,6 +387,15 @@ def capture_interview_reaction(
     unchanged, existing behavior. persona_authored distinguishes the
     persona's own verified words (True) from the coach's speculation on
     their behalf (False, the default) — see _provenance_for.
+
+    via_form (#287) says this answer arrived through the interview form an
+    operator ingested, rather than through a conversation. It changes
+    provenance and nothing else: the same validation, the same 'why is the
+    only evidence' rule, the same RFC-028 supersession — which is exactly
+    why application/form_ingest.py calls THIS function instead of writing
+    its own path that could drift from these rules. The route is recorded
+    on the source record's type, in the inbox note, and on the item's
+    extracted_by; see FORM_SOURCE_TYPE.
     """
     subtype = subtype.strip().lower()
     if subtype not in VALID_SUBTYPES:
@@ -445,8 +474,15 @@ def capture_interview_reaction(
         content += f"\nCompany reason: {company_reason_value.value}\n"
     if persona_id is not None:
         content += f"\nPersona: {persona_id}\n"
+    if via_form:
+        # Part of the hashed content, not decoration: a form answer and the
+        # same sentence typed in conversation are different arrivals and
+        # must be different source records, so the later one supersedes the
+        # earlier through the ordinary lineage instead of colliding with it.
+        content += f"\nAnswered in: {FORM_ARRIVAL}\n"
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     record = storage.get_source_record_by_hash(content_hash)
+    source_type = FORM_SOURCE_TYPE if via_form else INTERVIEW_SOURCE_TYPE
 
     if subtype in NOMINATION_SUBTYPES:
         if subtype == "values_con" and " ".join(target.lower().split()) in (
@@ -466,7 +502,8 @@ def capture_interview_reaction(
             # just baked into an opaque hash.
             config.inbox_dir.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
-            path = config.inbox_dir / f"{stamp}-interview-note.md"
+            kind = "interview-form-note" if via_form else "interview-note"
+            path = config.inbox_dir / f"{stamp}-{kind}.md"
             path.write_text(content, encoding="utf-8")
             data_root = config.data_dir.resolve()
             resolved = path.resolve()
@@ -476,7 +513,7 @@ def capture_interview_reaction(
                 else str(resolved)
             )
             record = SourceRecord(
-                source_type=INTERVIEW_SOURCE_TYPE,
+                source_type=source_type,
                 source_locator=locator,
                 content_hash=content_hash,
                 document_key=interview_document_key(subtype, target, persona_id),
@@ -486,14 +523,16 @@ def capture_interview_reaction(
         _text, title = _fetch_stimulus(target, fetcher)
         if record is None:
             record = SourceRecord(
-                source_type=INTERVIEW_SOURCE_TYPE,
+                source_type=source_type,
                 source_locator=target,
                 content_hash=content_hash,
                 document_key=interview_document_key(subtype, target, persona_id),
             )
             storage.add_source_record(record)
 
-    classification, confidence, extracted_by = _provenance_for(persona_id, persona_authored)
+    classification, confidence, extracted_by = _provenance_for(
+        persona_id, persona_authored, via_form
+    )
     item = ProfileItem(
         kind=ProfileItemKind.INTERVIEW,
         subtype=subtype,
