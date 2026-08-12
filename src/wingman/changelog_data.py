@@ -10,6 +10,23 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-08-12", 386, "Form ingest: split a nomination's name from its LinkedIn URL (#385)"),
+    (
+        "2026-08-12",
+        384,
+        "feat: an interview answer can be amended by the person who gave it (#381)",
+    ),
+    (
+        "2026-08-12",
+        383,
+        "feat: what the operator told you is readable after the file has moved on (#382)",
+    ),
+    (
+        "2026-08-12",
+        380,
+        "feat: a completed interview form, ingested into the named tenant's workspace (#287)",
+    ),
+    ("2026-08-12", 379, "chore: regenerate changelog_data.py — main was sitting at the ceiling"),
     ("2026-08-12", 378, "feat: a tenant is unprivileged unless the registry says otherwise (#271)"),
     ("2026-08-12", 377, "fix: root never leaves bytecode in somebody's tool store (#376)"),
     (
@@ -641,7 +658,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "e91c18d8e3c61e3a5c736c31c60825c71325b7df"
+GENERATED_FROM_COMMIT = "9c743695b62b4094b85a27cb9457e093aaac4c14"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -651,4 +668,4 @@ GENERATED_FROM_COMMIT = "e91c18d8e3c61e3a5c736c31c60825c71325b7df"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 30
+GENERATED_FROM_DISTANCE = 35
