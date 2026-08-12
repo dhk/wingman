@@ -894,23 +894,40 @@ A one-off run any time: `sudo -iu wingman-shared bash -c 'export PATH="$HOME/.lo
 **Where tenants' feature requests go** (#371). A tenant has no terminal,
 so they cannot run `wingman feature repo` and must never be shown a
 repository chooser — the operator sets the destination once and it is
-invisible thereafter. One line in the host settings file covers every
-account on the box:
+invisible thereafter. One line in the registry covers every tenant it
+lists, and a tenant whose requests belong elsewhere carries their own:
+
+```toml
+# /etc/wingman/tenants.toml
+[defaults]
+feature_repo = "dhk/wingman"        # every tenant, unless they say otherwise
+
+[[tenant]]
+slug = "trent"
+data_dir = "/home/wingman-shared/tenants/trent"
+feature_repo = "dhk/adventures-in-ai"   # this one tenant, instead
+```
+
+Write the default as a `[defaults]` table, not a bare top-level
+`feature_repo = …`. Both are read the same way, but TOML gives a bare key
+appended at the *bottom* of the file to the last table above it — which
+would silently make the box-wide default one tenant's repo. A table
+header can't be captured that way. Two defaults that disagree (bare and
+`[defaults]`) are refused at load rather than ranked.
+
+The host settings file carries the same default for accounts that aren't
+tenants — a solo shape-B install reads it and no registry at all:
 
 ```
 # ~/.config/wingman/wingman.env  (RFC-046)
 WINGMAN_FEATURE_REPO=dhk/wingman
 ```
 
-A single tenant whose requests belong elsewhere can carry their own in the
-registry, which wins over the host setting:
-
-```toml
-[[tenant]]
-slug = "trent"
-data_dir = "/home/wingman-shared/tenants/trent"
-feature_repo = "dhk/wingman"
-```
+It is the weakest of the four, and under the shared process it belongs to
+the *service* account rather than to any tenant, which is why tenants get
+their default from the registry instead. Full order, most specific first:
+the tenant's own `feature_repo`; a workspace's own `wingman feature repo`
+choice; `[defaults] feature_repo`; `WINGMAN_FEATURE_REPO`.
 
 Filing itself already runs through the shared credential
 (`GITHUB_API_ISSUES_KEY`, RFC-047) with attribution-by-body-stamp, so no

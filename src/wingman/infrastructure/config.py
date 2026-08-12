@@ -49,6 +49,10 @@ class Config(BaseModel):
     #: registry says so. None means fall back to the host setting and then
     #: the per-workspace file — see application.feature_request (#371).
     feature_repo: str | None = None
+    #: The registry's all-tenant default destination ('[defaults]
+    #: feature_repo'), which an explicit per-tenant or per-workspace choice
+    #: still outranks — see application.feature_request.
+    default_feature_repo: str | None = None
 
     @property
     def db_path(self) -> Path:
