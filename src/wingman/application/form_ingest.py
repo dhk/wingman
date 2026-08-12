@@ -206,6 +206,11 @@ class PlannedCapture(BaseModel):
     subtype: str = ""
     #: Nomination captures only: the person/organization named.
     target: str = ""
+    #: Nomination captures only: a dereferenceable identifier (a LinkedIn
+    #: URL) given ALONGSIDE the name, lifted out of the target (#385).
+    #: Empty when the answer gave one or the other, which is the shape the
+    #: form actually asks for.
+    identifier_url: str = ""
     #: The evidence quote — the person's own 'why', verbatim.
     why: str = ""
     #: mission_alignment_* only: what they understand the org's purpose to be.
@@ -258,6 +263,49 @@ _BULLET = re.compile(r"^\s*(?:[-*•·]|\(?\d+[.)])\s+")
 # "https://..." contains a colon that would otherwise win by position and
 # split the line inside the scheme.
 _SEPARATORS = ("—", "–", " -- ", " - ", ": ")
+
+# A nomination target can carry a dereferenceable identifier as well as a
+# name: network_admired asks for "Name (or their LinkedIn URL)", and the
+# natural answer gives BOTH (#385). They have to be separated, because the
+# target becomes ProfileItem.name — "Karla Martin: https://..." is neither
+# a usable name nor a URL anything can follow.
+_TARGET_URL = re.compile(r"https?://\S+")
+
+# Punctuation left stranded at either end of the name once the URL is
+# lifted out of the middle of it ("Karla Martin: " -> "Karla Martin").
+_STRANDED = " \t:,;-–—|/"
+
+
+def _split_identifier(target: str) -> tuple[str, str]:
+    """A nomination target split into (name, identifier URL).
+
+    A target that is ONLY a URL keeps it as the target and reports no
+    separate identifier: the form offers a URL *instead of* a name, so
+    that answer is already in its intended shape, and rewriting it would
+    leave the nomination with no name at all.
+    """
+    match = _TARGET_URL.search(target)
+    if not match:
+        return target.strip(), ""
+    name = (target[: match.start()] + target[match.end() :]).strip(_STRANDED)
+    if not name:
+        return target.strip(), ""
+    return name, match.group().strip()
+
+
+#: A URL written as its OWN segment, between the name and the reason
+#: ("Karla Martin — https://... — she told me the unwelcome thing"). The
+#: line splits into two, so the URL arrives at the head of the 'why' —
+#: and 'why' is verbatim evidence, which nothing may be glued onto.
+_LEADING_URL = re.compile(r"^(https?://\S+)\s*(?:—|–|--|-|:|\|)\s+(.+)$", re.DOTALL)
+
+
+def _lift_leading_identifier(why: str) -> tuple[str, str]:
+    """(reason, identifier URL) for a 'why' that opens with the URL segment."""
+    match = _LEADING_URL.match(why.strip())
+    if not match:
+        return why, ""
+    return match.group(2).strip(), match.group(1)
 
 
 def _split_nomination(line: str, parts: int) -> list[str]:
@@ -475,14 +523,19 @@ def _plan_nominations(plan: IngestPlan, question: FormQuestion, answer: str) -> 
                 )
             )
             continue
+        target, identifier_url = _split_identifier(segments[0])
+        why = segments[2] if wants_purpose else segments[1]
+        if not identifier_url:
+            why, identifier_url = _lift_leading_identifier(why)
         plan.captures.append(
             PlannedCapture(
                 title=question.title,
                 destination=question.destination,
                 subtype=question.subtype,
-                target=segments[0],
+                target=target,
+                identifier_url=identifier_url,
                 primary_purpose=segments[1] if wants_purpose else "",
-                why=segments[2] if wants_purpose else segments[1],
+                why=why,
             )
         )
 
@@ -532,6 +585,7 @@ def apply_plan(
                     config,
                     storage,
                     primary_purpose=capture.primary_purpose or None,
+                    identifier_url=capture.identifier_url or None,
                     via_form=True,
                 )
                 outcome.written.append(f"{capture.subtype}: {capture.target} — {report.outcome}")
@@ -639,6 +693,8 @@ def render_plan(plan: IngestPlan, workspace: Path, criteria_exists: bool) -> str
         lines.append("Profile captures (interview nominations — 'why' is the evidence quote):")
         for capture in nominations:
             lines.append(f"  {capture.subtype}: {capture.target}")
+            if capture.identifier_url:
+                lines.append(f"      identifier: {capture.identifier_url}")
             lines.append(f'      why: "{capture.why}"')
             if capture.primary_purpose:
                 lines.append(f'      understood purpose: "{capture.primary_purpose}"')
