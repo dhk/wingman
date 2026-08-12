@@ -658,7 +658,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "9c743695b62b4094b85a27cb9457e093aaac4c14"
+GENERATED_FROM_COMMIT = "a781e1c10c5cb0cac3fae5c750b98d12ef237c10"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -668,4 +668,4 @@ GENERATED_FROM_COMMIT = "9c743695b62b4094b85a27cb9457e093aaac4c14"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 35
+GENERATED_FROM_DISTANCE = 36
