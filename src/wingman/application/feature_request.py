@@ -116,12 +116,21 @@ def get_feature_repo(config: Config) -> str | None:
     1. The tenant's own registry entry, for the rare case one tenant's
        requests belong somewhere else.
     2. The per-workspace file — somebody who ran `wingman feature repo`
-       chose explicitly, and an explicit choice outranks a box-wide
-       default. A tenant has no such file, so this step is invisible to
-       them and the host setting below is what they get.
-    3. WINGMAN_FEATURE_REPO in the host settings file (RFC-046) — one
-       destination for every account on the box, which is the normal case
-       and the one that makes this usable for tenants at all.
+       chose explicitly, and an explicit choice outranks any default
+       below. A tenant has no such file, so this step is invisible to
+       them and the defaults below are what they get.
+    3. The registry's '[defaults] feature_repo' — one destination for
+       every tenant the shared process serves, set once by the operator
+       in the same file that lists them.
+    4. WINGMAN_FEATURE_REPO in the host settings file (RFC-046) — the
+       same box-wide default for accounts that aren't tenants at all
+       (a solo shape-B install reads this and no registry).
+
+    Both defaults exist because they cover different populations: the
+    registry is the only file a hosted tenant is listed in, and the host
+    settings file belongs to whichever account runs the process — under a
+    shared process that account is the service account, not any tenant,
+    so a tenant's destination cannot live there alone.
 
     Unset stays unset and is reported honestly, as before.
     """
@@ -132,6 +141,8 @@ def get_feature_repo(config: Config) -> str | None:
         value = path.read_text(encoding="utf-8").strip()
         if value:
             return value
+    if config.default_feature_repo:
+        return config.default_feature_repo
     return _host_feature_repo()
 
 

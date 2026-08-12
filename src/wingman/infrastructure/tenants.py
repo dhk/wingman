@@ -74,6 +74,12 @@ class Tenant:
     #: box's. Normally unset: one destination per box is the common case,
     #: and a tenant is never asked to choose one (#371).
     feature_repo: str | None = None
+    #: The registry's '[defaults] feature_repo' — one destination for every
+    #: tenant in this file, copied onto each of them at load time so a
+    #: Tenant still answers the question alone. Ranks BELOW an explicit
+    #: choice (this tenant's own 'feature_repo', or a workspace file) and
+    #: above the host setting; see application.feature_request.
+    default_feature_repo: str | None = None
 
     def token_path(self) -> Path:
         return self.data_dir / _TOKEN_FILENAME
@@ -110,6 +116,7 @@ class Tenant:
         return Config(
             data_dir=self.data_dir,
             feature_repo=self.feature_repo,
+            default_feature_repo=self.default_feature_repo,
             data_dir_source=f"{TENANT_CONFIG_SOURCE} ({self.slug})",
             anthropic_api_key=workspace_keys.get(KNOWN_KEYS["anthropic"]),
             voyage_api_key=workspace_keys.get(KNOWN_KEYS["voyage"]),
@@ -119,6 +126,45 @@ class Tenant:
         )
 
 
+def _feature_repo(value: object, whose: str, path: Path) -> str | None:
+    """An owner/name repository from the registry, or None when unset.
+
+    The registry is hand-edited by an operator, so a typo names itself
+    here rather than filing somewhere unexpected later.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or value.count("/") != 1:
+        raise TenantRegistryError(
+            f"{whose} in {path} has a malformed 'feature_repo' — it must look like owner/name."
+        )
+    return value
+
+
+def _registry_default_feature_repo(data: dict[str, object], path: Path) -> str | None:
+    """The all-tenant destination: '[defaults] feature_repo'.
+
+    A bare top-level 'feature_repo = ...' is accepted as the same thing,
+    because an operator will reasonably write it that way — but only when
+    it sits ABOVE the first '[[tenant]]'. TOML gives a key appended at the
+    bottom of the file to the last table it follows, so a bare key written
+    after the tenants silently becomes that one tenant's repo; '[defaults]'
+    is a table and cannot be captured that way, which is why it's the form
+    the docs give.
+    """
+    defaults = data.get("defaults", {})
+    if not isinstance(defaults, dict):
+        raise TenantRegistryError(f"tenant registry {path} needs a [defaults] table.")
+    table = _feature_repo(defaults.get("feature_repo"), "[defaults]", path)
+    bare = _feature_repo(data.get("feature_repo"), "tenant registry", path)
+    if table and bare and table != bare:
+        raise TenantRegistryError(
+            f"tenant registry {path} sets two different default feature repos "
+            f"({bare!r} at the top level, {table!r} under [defaults]) — keep the [defaults] one."
+        )
+    return table or bare
+
+
 def load_registry(path: Path) -> list[Tenant]:
     """Parse the tenant registry TOML file: a '[[tenant]]' array of tables,
     each with 'slug' and 'data_dir'. An absent file returns an empty list —
@@ -126,6 +172,11 @@ def load_registry(path: Path) -> list[Tenant]:
     valid (if useless) startup state, not an error; a malformed one
     raises, since silently serving zero tenants when the file exists but
     is broken would be a confusing way to fail.
+
+    An optional '[defaults]' table carries settings every tenant in the
+    file shares — today just 'feature_repo', the one destination for
+    everybody's feature requests, which a per-tenant 'feature_repo' still
+    overrides.
     """
     if not path.exists():
         return []
@@ -136,6 +187,7 @@ def load_registry(path: Path) -> list[Tenant]:
     entries = data.get("tenant", [])
     if not isinstance(entries, list):
         raise TenantRegistryError(f"tenant registry {path} needs a [[tenant]] array of tables.")
+    default_feature_repo = _registry_default_feature_repo(data, path)
     tenants: list[Tenant] = []
     seen_slugs: set[str] = set()
     for entry in entries:
@@ -150,19 +202,13 @@ def load_registry(path: Path) -> list[Tenant]:
         if slug in seen_slugs:
             raise TenantRegistryError(f"tenant registry {path} lists {slug!r} more than once.")
         seen_slugs.add(slug)
-        feature_repo = entry.get("feature_repo")
-        if feature_repo is not None and (
-            not isinstance(feature_repo, str) or feature_repo.count("/") != 1
-        ):
-            raise TenantRegistryError(
-                f"tenant {slug!r} in {path} has a malformed 'feature_repo' — "
-                "it must look like owner/name."
-            )
+        feature_repo = _feature_repo(entry.get("feature_repo"), f"tenant {slug!r}", path)
         tenants.append(
             Tenant(
                 slug=slug,
                 data_dir=Path(data_dir).expanduser(),
                 feature_repo=feature_repo,
+                default_feature_repo=default_feature_repo,
             )
         )
     return tenants
