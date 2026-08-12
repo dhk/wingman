@@ -10,6 +10,51 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    (
+        "2026-08-12",
+        374,
+        "One registry line points every tenant's feature requests at the same repo",
+    ),
+    (
+        "2026-08-11",
+        373,
+        "feat: the operator's question of the day, answered in the tenant's own workspace (#224)",
+    ),
+    (
+        "2026-08-11",
+        372,
+        "fix: a tenant's feature request has a destination, and is never asked for one (#371)",
+    ),
+    ("2026-08-11", 370, "feat: the same captures, read a second time as work (#356)"),
+    (
+        "2026-08-11",
+        369,
+        "feat: the operator's message of the day is an action, not a banner (#224)",
+    ),
+    ("2026-08-11", 368, "fix: an axis name that runs off the canvas is not a label (#354)"),
+    (
+        "2026-08-11",
+        367,
+        "fix: the setup guide's title follows the workspace, and criteria stay revisitable (#365)",
+    ),
+    ("2026-08-11", 366, "feat: interview the standing briefing, then hand over the prompt (#359)"),
+    (
+        "2026-08-11",
+        364,
+        "feat: an artefact records the code contract that shaped it, and a test enforces it (#355)",
+    ),
+    (
+        "2026-08-11",
+        363,
+        "feat: a 'how do I set this up' tool that answers from this workspace (#360)",
+    ),
+    ("2026-08-11", 362, "docs: say how publishing works once, and frame it per tenant"),
+    (
+        "2026-08-11",
+        361,
+        "feat: wingman records where an artifact was published, and never publishes one",
+    ),
+    ("2026-08-11", 358, "fix: stamp changelog_data.py at a commit that exists in main's history"),
     ("2026-08-11", 357, "feat: every PR in the changelog is a URL people can follow (#357)"),
     ("2026-08-10", 353, "feat: an approved research page can be KEPT as citable prose (#349)"),
     (
@@ -594,7 +639,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "dc958f708bca98824931e4c28085082136b59739"
+GENERATED_FROM_COMMIT = "68dc0f21566467fdf23152e1b2e3a50bbe418608"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -604,4 +649,4 @@ GENERATED_FROM_COMMIT = "dc958f708bca98824931e4c28085082136b59739"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 15
+GENERATED_FROM_DISTANCE = 28
