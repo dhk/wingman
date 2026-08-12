@@ -8,6 +8,11 @@ without the change:
 - an account sees a message once and never again until the id changes;
 - a missing, unreadable or malformed shared file costs everyone the
   message and nobody their status.
+
+A fourth, added by #382: what was delivered stays readable afterwards. The
+seen-marker records an id, the shared file is the operator's to replace, so
+without a copy in this account's own workspace "what was today's message?"
+is unanswerable exactly when it is asked.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from wingman.application.completeness import (
     compute_completeness,
     next_actions,
 )
+from wingman.domain.delivered_message import DeliveredMessage
 from wingman.infrastructure.broadcast import (
     OperatorMessage,
     acknowledge_delivery,
@@ -440,6 +446,210 @@ def test_acknowledging_nothing_is_a_no_op(workspace: Path, motd: Path) -> None:
     config = load_config()
     acknowledge_delivery(config, None)
     assert not (config.data_dir / "operator-message-seen").exists()
+
+
+# --------------------------------------------------------------------------
+# What was delivered is recoverable afterwards (#382).
+# --------------------------------------------------------------------------
+
+
+def _delivered(config: Config) -> list[DeliveredMessage]:
+    with Storage(config.db_path) as storage:
+        return storage.list_delivered_messages()
+
+
+def test_a_delivered_message_survives_the_operator_replacing_the_file(
+    workspace: Path, motd: Path
+) -> None:
+    """The whole of #382. A message is shown once, acknowledgement means
+    *shown* and not *read*, and the text lives in a file the operator
+    replaces the moment they have something newer to say — so 'what was
+    today's message?' has to be answerable from a copy this account kept,
+    or it is not answerable at all on the day it is asked."""
+    from wingman.application.motd import recent_messages, render_messages
+
+    _broadcast(motd, why="The parser changed.", how="say: here's my resume")
+    config = load_config()
+
+    acknowledge_delivery(config, pending_operator_message(config))
+
+    _broadcast(motd, id="m2", action="The box moves on Friday")
+    assert read_operator_message() is not None
+    assert read_operator_message().action == "The box moves on Friday"  # type: ignore[union-attr]
+
+    with Storage(config.db_path) as storage:
+        kept = recent_messages(storage)
+    assert [record.action for record in kept] == ["Re-ingest your CV"]
+    assert kept[0].why == "The parser changed."
+    assert kept[0].how == "say: here's my resume"
+    assert kept[0].message_id == "m1"
+    assert "Re-ingest your CV" in render_messages(kept)
+
+
+def test_the_copy_is_kept_even_when_the_shared_file_is_deleted(workspace: Path, motd: Path) -> None:
+    """Deleting the file is how an operator stops saying anything (RFC-065),
+    and it must not also erase what everybody was already told."""
+    _broadcast(motd)
+    config = load_config()
+
+    acknowledge_delivery(config, pending_operator_message(config))
+    motd.unlink()
+
+    assert read_operator_message() is None
+    assert [record.action for record in _delivered(config)] == ["Re-ingest your CV"]
+
+
+def test_the_same_message_delivered_twice_is_recorded_once(workspace: Path, motd: Path) -> None:
+    """Delivery is best-effort, so it genuinely happens twice: a seen-marker
+    that could not be written means the message is shown again. One row per
+    message, keyed by the operator's id, and the FIRST delivery time is
+    kept — an upsert would quietly re-date "when were you told"."""
+    _broadcast(motd)
+    config = load_config()
+    message = pending_operator_message(config)
+
+    acknowledge_delivery(config, message)
+    first = _delivered(config)[0].delivered_at
+    acknowledge_delivery(config, message)
+
+    kept = _delivered(config)
+    assert len(kept) == 1
+    assert kept[0].delivered_at == first
+
+
+def test_a_new_message_is_a_second_row_most_recent_first(workspace: Path, motd: Path) -> None:
+    """Recent messages, most recent first — the id decides novelty here
+    exactly as it decides delivery, so the two can never disagree about how
+    many distinct things the operator has said."""
+    _broadcast(motd)
+    config = load_config()
+    acknowledge_delivery(config, pending_operator_message(config))
+
+    _broadcast(motd, id="m2", action="The box moves on Friday")
+    acknowledge_delivery(config, pending_operator_message(config))
+
+    assert [record.message_id for record in _delivered(config)] == ["m2", "m1"]
+
+
+def test_a_failed_history_write_does_not_break_the_surface_that_showed_it(
+    workspace: Path, motd: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same posture as the seen-marker write, and for the same reason one
+    step further on: by the time this runs the person has ALREADY been told,
+    so a locked or unwritable database must cost the copy and never the tool
+    that just successfully delivered the message. The marker must still be
+    written too — otherwise a broken history store would turn a once-only
+    message into one that repeats forever."""
+    from wingman import mcp_server
+
+    def explode(self: Storage, message: DeliveredMessage) -> bool:
+        raise RuntimeError("no room left on device")
+
+    monkeypatch.setattr(Storage, "record_delivered_message", explode)
+    _broadcast(motd, why="The parser changed.")
+    config = load_config()
+
+    rendered = mcp_server.completeness()
+
+    assert "Re-ingest your CV" in rendered
+    assert "The parser changed." in rendered
+    assert last_seen_id(config) == "m1"
+    assert _delivered(config) == []
+
+
+def test_no_workspace_means_no_history_and_no_workspace_is_created(
+    workspace: Path, motd: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Showing a message must never CREATE a workspace: writing a schema
+    into an empty data dir leaves a half-initialized one that every later
+    `db_path.exists()` check reads as real. The message is still delivered
+    and still marked seen."""
+    monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "empty"))
+    _broadcast(motd)
+    config = load_config()
+    config.data_dir.mkdir(parents=True)
+
+    acknowledge_delivery(config, pending_operator_message(config))
+
+    assert not config.db_path.exists()
+    assert last_seen_id(config) == "m1"
+
+
+def test_the_profile_page_neither_delivers_nor_records(workspace: Path, motd: Path) -> None:
+    """The fourth surface that computes a report and does NOT render the
+    next-actions list. Adding a second write at acknowledge time must not
+    have changed WHICH surfaces acknowledge — the copy is written inside
+    `acknowledge_delivery`, so remembering and delivering cannot drift
+    apart, and a page that renders nothing does neither."""
+    from starlette.testclient import TestClient
+
+    from wingman.mcp_server import _http_token, server
+    from wingman.webui import register_ui
+
+    _broadcast(motd)
+    config = load_config()
+    token = _http_token(config)
+    register_ui(server)
+    http = TestClient(server.streamable_http_app())
+
+    assert http.get(f"/ui/{token}/profile").status_code == 200
+    assert pending_operator_message(config) is not None
+    assert _delivered(config) == []
+
+    assert http.get(f"/ui/{token}/completeness").status_code == 200
+    assert [record.message_id for record in _delivered(config)] == ["m1"]
+
+
+def test_the_history_tool_reads_it_back_without_delivering_anything(
+    workspace: Path, motd: Path
+) -> None:
+    """The tool a person's 'what was today's message?' reaches. It reports a
+    waiting message as waiting and never quotes it: quoting would make this
+    a fifth delivery surface that does not acknowledge, and the message
+    would then arrive again later — 'shown once' quietly stops being true."""
+    from wingman import mcp_server
+
+    _broadcast(motd)
+    config = load_config()
+    mcp_server.completeness()
+    _broadcast(motd, id="m2", action="The box moves on Friday")
+
+    rendered = mcp_server.motd()
+
+    assert "Re-ingest your CV" in rendered
+    assert "The box moves on Friday" not in rendered
+    assert "not been shown yet" in rendered
+    assert pending_operator_message(config) is not None, "reading history delivers nothing"
+
+
+def test_motd_history_prints_what_this_account_was_told(workspace: Path, motd: Path) -> None:
+    """The CLI half of the same question, for whoever is on the box."""
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+
+    _broadcast(motd, why="The parser changed.")
+    config = load_config()
+    acknowledge_delivery(config, pending_operator_message(config))
+    motd.unlink()
+
+    result = CliRunner().invoke(app, ["motd", "history"])
+
+    assert result.exit_code == 0
+    assert "Re-ingest your CV" in result.output
+    assert "The parser changed." in result.output
+
+
+def test_an_account_with_no_history_is_told_so_rather_than_shown_nothing(
+    workspace: Path, motd: Path
+) -> None:
+    """An empty answer to 'what was today's message?' must say that nothing
+    has been delivered — a blank reply reads like a failure."""
+    from wingman import mcp_server
+
+    rendered = mcp_server.motd()
+
+    assert "has not sent you a message yet" in rendered
 
 
 # --------------------------------------------------------------------------

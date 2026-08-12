@@ -411,6 +411,30 @@ def test_an_answer_carries_the_question_that_produced_it(workspace: Path, qotd: 
     assert stored.question_id == record.question_id == "q1"
 
 
+def test_the_answer_surface_still_shows_the_question_after_the_file_is_gone(
+    workspace: Path, qotd: Path
+) -> None:
+    """The other half of #382's shape, at the surface a person actually
+    reads. Freezing the question onto the row is only worth anything if the
+    read-back uses it rather than consulting the shared file — which by then
+    says something else, or nothing at all, because the operator deleted it
+    to stop asking."""
+    from wingman.application.qotd import render_answers
+
+    _ask(qotd)
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        save_operator_answer("The admin.", config, storage)
+    qotd.unlink()
+
+    with Storage(config.db_path) as storage:
+        rendered = render_answers(list_operator_answers(storage))
+
+    assert read_operator_question() is None
+    assert "What is slowing you down this week?" in rendered
+    assert "The admin." in rendered
+
+
 def test_answering_a_question_addressed_to_somebody_else_is_refused(
     workspace: Path, qotd: Path, registry: Path, tmp_path: Path
 ) -> None:

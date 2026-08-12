@@ -310,6 +310,29 @@ def motd_show() -> None:
     )
 
 
+@motd_app.command("history")
+def motd_history(
+    limit: int = typer.Option(10, "--limit", help="How many to show, most recent first."),
+) -> None:
+    """What this account was TOLD — the messages already delivered to it.
+
+    "What was today's message?" has no answer from the shared file: a
+    message is shown once, and the operator replaces the file whenever they
+    have something new to say. Each delivery keeps a copy in THIS
+    workspace, so this reports what you were told rather than what is
+    currently being said — `wingman motd show` is the other question.
+    """
+    from wingman.application.motd import recent_messages, render_messages
+    from wingman.infrastructure.broadcast import pending_operator_message
+
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "read")
+    with Storage(config.db_path) as storage:
+        delivered = recent_messages(storage, limit)
+    typer.echo(render_messages(delivered, pending=pending_operator_message(config) is not None))
+
+
 @motd_app.command("set")
 def motd_set(
     action: str = typer.Argument(..., help="The imperative, e.g. 'Re-ingest your CV'."),
