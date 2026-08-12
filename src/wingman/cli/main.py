@@ -950,6 +950,21 @@ def doctor(
             f"{secrets_env.name} for secrets)",
         )
 
+    # The operational surface, not this workspace (RFC-072, #212). Reported
+    # as one line here — 'wingman host-check' is the full picture — because
+    # doctor's job is "is anything wrong", and host drift is the class of
+    # wrong that otherwise waits to be found in production.
+    from wingman.infrastructure.host_manifest import check_host, host_context
+
+    host_drift = check_host(host_context())
+    report(
+        "host manifest",
+        not host_drift,
+        "matches this build"
+        if not host_drift
+        else f"{len(host_drift)} difference(s) — run 'wingman host-check' for the detail",
+    )
+
     for source in resolve_key_sources(_pre_hydration_env, data_dir=config.data_dir):
         detail = source.winning_source
         if source.shadowed_by:
@@ -963,6 +978,59 @@ def doctor(
         typer.echo(f"{failures} check(s) failed.", err=True)
         raise typer.Exit(code=1)
     typer.echo("All checks passed.")
+
+
+@app.command("host-check")
+def host_check(
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply the auto-fixable drift (reversible file writes in your own config "
+        "directory). Never touches systemd, sudo, or another account.",
+    ),
+) -> None:
+    """Compare this host's operational surface against what this build expects
+    (RFC-072, #212).
+
+    Host-level state — the RFC-046 config layout, the systemd units behind
+    the shared process and the cross-account upgrade, the 'wg' wrapper an
+    operator types — has shipped as one-off migrations and prose somebody had
+    to notice. Drift was therefore found when something broke (#197, #198),
+    usually by somebody else. This answers the question directly.
+
+    Two tiers, and the line between them is deliberate. Reversible file
+    writes inside your own config directory apply with --apply, printing what
+    moved — the precedent 'migrate_legacy_host_file' already set. Anything
+    touching systemd, sudo, or another account is REPORTED with the command
+    that fixes it and never applied, because those are external actions on
+    shared state and AGENTS.md requires a human before one.
+
+    Exits non-zero when there is drift, so a deploy script can gate on it.
+    """
+    configure_logging()
+    from wingman.infrastructure.host_manifest import (
+        apply_auto,
+        check_host,
+        host_context,
+        render_drift,
+    )
+
+    context = host_context()
+    drifts = check_host(context)
+    typer.echo(render_drift(drifts))
+    if apply and drifts:
+        changes = apply_auto(drifts, context)
+        if changes:
+            typer.echo("Applied:")
+            for change in changes:
+                typer.echo(f"  {change}")
+            drifts = check_host(context)
+            typer.echo("")
+            typer.echo(render_drift(drifts))
+        else:
+            typer.echo("Nothing was auto-fixable — every difference above needs a human.")
+    if drifts:
+        raise typer.Exit(code=1)
 
 
 @app.command()
