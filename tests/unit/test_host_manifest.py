@@ -222,3 +222,21 @@ def test_the_cli_is_clean_when_the_host_matches(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "no operational drift" in result.output
+
+
+def test_doctor_never_fails_over_an_operators_systemd_units(monkeypatch, tmp_path: Path) -> None:
+    """Most of the manifest describes an OPERATOR's box. Somebody running
+    wingman on their laptop will never have wingman-upgrade-all.service, and
+    correctly so — failing doctor over it would teach every ordinary user to
+    ignore a red line. Caught by CI, which has no systemd at all."""
+    from wingman.infrastructure import host_manifest
+
+    monkeypatch.setattr(host_manifest, "installed_units", frozenset)
+    monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
+    CliRunner().invoke(app, ["init"])
+
+    result = CliRunner().invoke(app, ["doctor"])
+
+    assert "host manifest" in result.output
+    assert "[FAIL] host manifest" not in result.output
+    assert result.exit_code == 0, result.output

@@ -956,14 +956,20 @@ def doctor(
     # wrong that otherwise waits to be found in production.
     from wingman.infrastructure.host_manifest import check_host, host_context
 
+    # Informational, never a failure. Most of the manifest is about an
+    # OPERATOR's box — the systemd units behind the cross-account upgrade,
+    # the shared process's wrapper — and somebody running wingman on their
+    # own laptop will never have those, correctly. Failing doctor over them
+    # would teach every ordinary user to ignore a red line. 'wingman
+    # host-check' is where the non-zero exit lives, because that is the
+    # surface a deploy script gates on.
     host_drift = check_host(host_context())
-    report(
-        "host manifest",
-        not host_drift,
+    host_detail = (
         "matches this build"
         if not host_drift
-        else f"{len(host_drift)} difference(s) — run 'wingman host-check' for the detail",
+        else f"{len(host_drift)} difference(s) — run 'wingman host-check' for the detail"
     )
+    typer.echo(f"[info] host manifest: {host_detail}")
 
     for source in resolve_key_sources(_pre_hydration_env, data_dir=config.data_dir):
         detail = source.winning_source
