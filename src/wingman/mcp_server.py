@@ -113,7 +113,9 @@ from wingman.application.pov import (
     render_pov_card,
 )
 from wingman.application.profile_manage import (
+    amend_item,
     clear_profile,
+    describe_amendment,
     rekind_item,
     remove_item,
     rename_item,
@@ -1788,11 +1790,21 @@ def profile_html() -> str:
 
 
 @server.tool()
-def profile_manage(action: str, item_id: str = "", kind: str = "", name: str = "") -> str:
-    """List, remove, resolve, re-kind, rename, or clear career-profile items (RFC-027).
+def profile_manage(
+    action: str,
+    item_id: str = "",
+    kind: str = "",
+    name: str = "",
+    why: str = "",
+    intensity: str = "",
+    company_reason: str = "",
+    value_statement: str = "",
+) -> str:
+    """List, remove, resolve, re-kind, rename, amend, or clear career-profile items (RFC-027).
 
-    action is 'list', 'rm', 'resolve', 'rekind', 'rename', or 'clear'. 'list' shows
-    every item with its id — active by kind, then unresolved conflicts.
+    action is 'list', 'rm', 'resolve', 'rekind', 'rename', 'amend', or
+    'clear'. 'list' shows every item with its id — active by kind, then
+    unresolved conflicts.
     'rm' deletes the one item whose id starts with item_id (any unambiguous
     prefix). 'resolve' settles a duplicate/conflict: the item_id item is
     kept and promoted to active, every rival with the same kind and name is
@@ -1804,6 +1816,28 @@ def profile_manage(action: str, item_id: str = "", kind: str = "", name: str = "
     reversible except via 'wingman restore', so suggest a backup first.
     Mutations re-render career.md/career.json; stored job assessments cite
     item ids that stop existing, so re-run assess_job afterwards.
+
+    'amend' revises an INTERVIEW capture's own answer in place (RFC-071):
+    `why` (the evidence sentence itself) and/or `intensity`
+    ('mild'/'moderate'/'strong'), `company_reason`
+    ('company'/'product'/'industry'), `value_statement`. The id, the
+    provenance and the earlier answer all survive — the previous wording is
+    kept as a revision and the item reads '(revised)' in the listing — so
+    this is the tool for "that came out wrong", and for adding the
+    intensity a capture ingested from the interview form never collected
+    (without one it is weightless in my_values). An omitted field is left
+    alone; amend never blanks a field. Amending an achievement, skill, role
+    or testimonial is REFUSED: their evidence is quoted from a document,
+    and the fix there is to correct the document and re-ingest it under the
+    same filename.
+
+    PROTOCOL for `why` and `value_statement` — these are the person's own
+    words and this tool is not a licence to rewrite them (BP-06, exactly as
+    interview_react and qa_capture require): echo verbatim the exact text
+    you are about to store, in a quote block, ask "shall I store this?",
+    and call amend only after they confirm it. Never save your own tidied,
+    shortened or reworded version of what they said. If they dictate a
+    replacement sentence, store their sentence.
     """
     config = _ready_config()
     if config is None:
@@ -1831,6 +1865,22 @@ def profile_manage(action: str, item_id: str = "", kind: str = "", name: str = "
             if action == "rename":
                 renamed, previous_name = rename_item(item_id, name, config, storage)
                 return f"Renamed {previous_name!r} to {renamed.name!r} ({renamed.item_id[:8]})."
+            if action == "amend":
+                amended, before = amend_item(
+                    item_id,
+                    config,
+                    storage,
+                    why=why,
+                    intensity=intensity,
+                    company_reason=company_reason,
+                    value_statement=value_statement,
+                )
+                changed = describe_amendment(amended, before)
+                return (
+                    f"Amended {amended.name!r} ({amended.item_id[:8]}): {changed}. "
+                    f"The previous answer is kept as revision {len(amended.revisions)}; "
+                    "the item id, source record and provenance are unchanged."
+                )
             if action == "clear":
                 removed = clear_profile(config, storage)
                 return (
@@ -1839,7 +1889,7 @@ def profile_manage(action: str, item_id: str = "", kind: str = "", name: str = "
                 )
     except IngestError as exc:
         return f"profile {action} failed: {exc}"
-    return f"unknown action {action!r}; use list, rm, resolve, rekind, rename, or clear."
+    return f"unknown action {action!r}; use list, rm, resolve, rekind, rename, amend, or clear."
 
 
 @server.tool()

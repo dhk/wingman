@@ -110,6 +110,14 @@ INTERVIEW_EXTRACTOR = "user"  # the user's own words — no model proposed anyth
 # form months ago from the ones they said out loud.
 FORM_SOURCE_TYPE = "interview_form"
 
+# The author revising their own answer (RFC-071, issue #381): a third
+# arrival route for the same first-person words, recorded on its own
+# source record so the amended sentence resolves against a note somebody
+# can actually read — the original note is immutable and still holds the
+# original wording. Lives here, beside the two routes it joins, so the
+# complete set of ways an interview capture can arrive is in one place.
+AMENDMENT_SOURCE_TYPE = "interview_amendment"
+
 # Alignment of perspective (v0): react to fetched content.
 REACTION_SUBTYPES = {
     "alignment_of_perspective_agree",

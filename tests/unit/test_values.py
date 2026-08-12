@@ -18,6 +18,7 @@ from wingman.agents.values_analyst import PROMPT_VERSION, WORK_PROMPT_VERSION
 from wingman.application.ingest import IngestError
 from wingman.application.interview import capture_interview_reaction
 from wingman.application.pov import CORPUS_PERSON_ID, CORPUS_PERSON_NAME, persona_card_id
+from wingman.application.profile_manage import amend_item
 from wingman.application.values import (
     MAX_AXES,
     MIN_AXES_REQUIRED,
@@ -208,6 +209,53 @@ def test_score_pro_only_axis_is_strongly_positive(workspace: Path) -> None:
         # (1/3 + 2/3 + 1.0) / 3 == 2/3
         assert axis.score == pytest.approx(2 / 3)
         assert axis.label == "strongly drawn to"
+
+
+def test_amending_a_form_capture_gives_it_the_weight_it_never_had(workspace: Path) -> None:
+    """RFC-071 (issue #381) closing RFC-069's gap: a capture ingested from
+    the interview form collects no intensity, and intensity is the
+    magnitude every axis score is averaged from — so a form answer scores
+    at the intensity-less default and there was no way to say how strongly
+    the person actually feels short of deleting the capture. Amending it
+    changes the arithmetic, which is the whole point of the field.
+    """
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_min_floor(storage, config)
+        capture_interview_reaction(
+            "values_pro",
+            "Grace Hopper",
+            "She made the machine speak a language people could read.",
+            config,
+            storage,
+            via_form=True,
+        )
+        from_form = next(
+            item for item in storage.list_profile_items() if "Grace Hopper" in item.name
+        )
+        assert from_form.intensity is None
+
+        def weight_of(item_id: str) -> float:
+            provider = ScriptedProvider(
+                {
+                    "axes": [
+                        {"name": "Clarity", "items": _cite([item_id])},
+                        {"name": "filler two", "items": _cite([item_id])},
+                        {"name": "filler three", "items": _cite([item_id])},
+                    ]
+                }
+            )
+            report = build_value_profile(storage, provider)
+            return report.profile.axes[0].evidence[0].signed_weight
+
+        # Scored as a moderate signal — the honest weight for a strength
+        # nobody was asked for, not the strength she actually reported.
+        assert weight_of(from_form.item_id) == pytest.approx(2 / 3)
+
+        amended, _was = amend_item(from_form.item_id, config, storage, intensity="strong")
+        assert amended.intensity is SentimentIntensity.STRONG
+        assert amended.item_id == from_form.item_id  # same capture, not a new one
+        assert weight_of(from_form.item_id) == pytest.approx(1.0)
 
 
 def test_evidence_traces_back_to_subtype_target_and_quote(workspace: Path) -> None:

@@ -69,6 +69,34 @@ class EvidenceSpan(BaseModel):
     quote: str
 
 
+class ItemRevision(BaseModel):
+    """One superseded answer, kept whole, after its author amended it (RFC-071).
+
+    Evidence stays append-only for documents; an interview capture is the
+    one place the person IS the source, and "that came out wrong" is
+    ordinary. Amending records the previous answer here rather than
+    deleting it — the trail is what tells a reader six months later that
+    a sentence was rewritten, and by keeping the superseded evidence spans
+    the original source record is still named by the item that moved on
+    from it.
+
+    Deliberately NOT a second span on `ProfileItem.evidence`: evidence is
+    a set of independent vouchers, and everything that counts spans (the
+    profile page's "one quote" flag, `persist_items`' merge arithmetic)
+    would read the person's own earlier wording as a second source
+    corroborating them. That is #336's rule — a source never corroborates
+    itself — applied to the one path that can restate a claim without a
+    second voice behind it.
+    """
+
+    revised_at: datetime
+    detail: str
+    evidence: list[EvidenceSpan] = Field(min_length=1)
+    intensity: SentimentIntensity | None = None
+    company_reason: CompanyReasonCategory | None = None
+    value_statement: str = ""
+
+
 class ProfileItem(BaseModel):
     """One item in the canonical profile: an achievement, skill, role, or testimonial.
 
@@ -117,6 +145,12 @@ class ProfileItem(BaseModel):
     started: str = ""  # 'YYYY' or 'YYYY-MM'; sorts lexicographically
     ended: str = ""
     evidence: list[EvidenceSpan] = Field(min_length=1)
+    # Every superseded answer this capture has had, oldest first (RFC-071,
+    # issue #381) — empty for every item that was never amended, which is
+    # every item that predates the feature. Only an interview capture can
+    # ever have one: amending a claim extracted from a document is refused,
+    # because there the person is not the source.
+    revisions: list[ItemRevision] = Field(default_factory=list)
     status: ItemStatus = ItemStatus.ACTIVE
     conflicts_with: str | None = None
     prompt_version: str
