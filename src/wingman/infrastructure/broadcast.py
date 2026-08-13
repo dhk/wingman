@@ -222,6 +222,45 @@ def _read_broadcast_fields(
     return fields
 
 
+def permission_problem(path: Path) -> str | None:
+    """Why an operator cannot examine a broadcast file, in words they can act on.
+
+    None when the file can be examined — including when it simply is not
+    there, which is a different problem with a different fix and must not
+    be collapsed into this one.
+
+    This exists because `Path.exists()` RAISES on EACCES rather than
+    returning False, so the operator-facing 'show' commands turned a
+    permissions problem into a traceback naming nothing actionable (#401).
+    The delivery path never had the bug — `_read_broadcast_fields` catches
+    OSError and degrades to silence — but silence is exactly wrong for the
+    person who can fix the permissions.
+
+    The second cause below is the one that actually costs people an hour:
+    supplementary groups are fixed at login, so an account added to the
+    group keeps failing in every session that predates the change, and
+    `id -nG` and `id -nG <user>` disagree while it does.
+    """
+    try:
+        path.stat()
+    except PermissionError:
+        return (
+            f"Cannot read {path} — permission denied, so nothing here can say what is "
+            "set.\n"
+            "Two usual causes:\n"
+            "  - this account is not in the group that owns /etc/wingman; or\n"
+            "  - this SESSION predates being added to it. Supplementary groups are "
+            "fixed at login, so 'id -nG' and 'id -nG <user>' disagree until you log "
+            "out and back in.\n"
+            "Check with: id -nG   and   id -nG $USER"
+        )
+    except OSError:
+        # Missing, a broken symlink, anything else: not this function's
+        # question. The caller reports absence in its own words.
+        return None
+    return None
+
+
 def read_operator_message(path: Path | None = None) -> OperatorMessage | None:
     """The current message, or None when there isn't a usable one.
 
@@ -502,6 +541,7 @@ __all__ = [
     "is_addressed_to",
     "last_seen_id",
     "pending_operator_message",
+    "permission_problem",
     "read_operator_message",
     "read_operator_question",
     "seen_marker_path",

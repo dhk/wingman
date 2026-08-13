@@ -284,12 +284,17 @@ def motd_show() -> None:
     from wingman.infrastructure.broadcast import (
         OPERATOR_MESSAGE_PATH,
         last_seen_id,
+        permission_problem,
         read_operator_message,
     )
 
     configure_logging()
     config = load_config()
     typer.echo(f"Shared file: {OPERATOR_MESSAGE_PATH}")
+    denied = permission_problem(OPERATOR_MESSAGE_PATH)
+    if denied:
+        typer.echo(denied, err=True)
+        raise typer.Exit(code=1)
     if not OPERATOR_MESSAGE_PATH.exists():
         typer.echo("No message set — the file does not exist. Nobody is being told anything.")
         return
@@ -534,12 +539,17 @@ def qotd_show() -> None:
         ALL_TENANTS,
         OPERATOR_QUESTION_PATH,
         is_addressed_to,
+        permission_problem,
         read_operator_question,
     )
 
     configure_logging()
     config = load_config()
     typer.echo(f"Shared file: {OPERATOR_QUESTION_PATH}")
+    denied = permission_problem(OPERATOR_QUESTION_PATH)
+    if denied:
+        typer.echo(denied, err=True)
+        raise typer.Exit(code=1)
     if not OPERATOR_QUESTION_PATH.exists():
         typer.echo("No question set — the file does not exist. Nobody is being asked anything.")
         return
