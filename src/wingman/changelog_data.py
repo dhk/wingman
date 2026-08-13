@@ -10,6 +10,7 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-08-13", 419, "Enshrine the findings: one guard, three rules, one honest read_token"),
     ("2026-08-13", 418, "my_urls: read the live funnel, never guess the prefix (#417)"),
     ("2026-08-13", 416, "redeploy-shared: wait for the port instead of racing it (#415)"),
     ("2026-08-13", 414, "A tenant can be told their own URLs, and upload their own files (#412)"),
@@ -688,7 +689,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "41b293151a7d572e8b2f76dcdeca33af76db88d5"
+GENERATED_FROM_COMMIT = "197a35ea10b7c5821294ddf10e7b1c26c0dbd9a5"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -698,4 +699,4 @@ GENERATED_FROM_COMMIT = "41b293151a7d572e8b2f76dcdeca33af76db88d5"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 21
+GENERATED_FROM_DISTANCE = 23
