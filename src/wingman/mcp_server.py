@@ -211,6 +211,56 @@ def _ready_config() -> Config | None:
 
 
 @server.tool()
+def my_urls() -> str:
+    """Where to reach THIS workspace: the connector URL, and the web UI you
+    can upload a CV or a LinkedIn export to (#412).
+
+    Your own tenancy only — never anybody else's, and never a roster. It
+    needs no operator privilege because it discloses nothing you do not
+    already have: the token in these URLs is the token this very request
+    arrived with, and it already sits in your client's connector settings.
+    Gating it would put your own address behind your own address.
+
+    The two URLs differ by one path segment ('/mcp' vs '/ui') and that is
+    not something anyone should have to guess, which is why both are
+    printed. The web UI is the upload surface — without it, getting a CV
+    or a LinkedIn export into a workspace means handing the file to whoever
+    runs the machine, so the gate that hid this address was making somebody
+    ELSE handle private data.
+
+    Relay both to the user, and relay the warning with them: a URL here
+    carries a bearer token, so it belongs in a password manager rather than
+    an email. If one leaks, whoever runs this Wingman can rotate it.
+    """
+    from wingman.infrastructure.tenant_asgi import current_request_origin
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+
+    origin = current_request_origin()
+    if origin is None:
+        # No HTTP request behind this call — stdio, or the CLI. There is no
+        # public address to report, and guessing one prints something that
+        # does not work.
+        return (
+            "This session did not arrive over HTTP, so there is no connector URL to "
+            "report. On a single-workspace install, 'wingman mcp url' prints them; on "
+            "a shared process, ask whoever runs the machine."
+        )
+    return (
+        "Your URLs for this workspace — both carry a bearer token, so treat them "
+        "like a password (a password manager, not an email):\n"
+        f"  MCP connector:        {origin.mcp_url()}\n"
+        f"  Web UI (read+upload): {origin.ui_url()}\n"
+        "\n"
+        "They are the same address with one path segment changed. The web UI is where "
+        "you upload a CV or a LinkedIn export yourself. If a URL leaks, whoever runs "
+        "this Wingman can rotate the token."
+    )
+
+
+@server.tool()
 def status() -> str:
     """Workspace status: counts of source records, profile items, opportunities, and corpus documents."""
     config = _ready_config()
