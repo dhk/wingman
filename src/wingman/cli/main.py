@@ -1020,6 +1020,17 @@ def doctor(
     )
     typer.echo(f"[info] host manifest: {host_detail}")
 
+    # The box, not this workspace (#403). Reported, never graded: most of
+    # it describes an OPERATOR's surface — a registry, a shared process,
+    # another account's install — and somebody on their own laptop has
+    # none of those, correctly. A red line every ordinary user learns to
+    # ignore is worse than no line, which is the call #212 already made.
+    from wingman.infrastructure.host_report import host_facts
+
+    for fact in host_facts(config, wingman_version()):
+        marker = " ← worth a look" if fact.notable else ""
+        typer.echo(f"[info] {fact.name}: {fact.detail}{marker}")
+
     for source in resolve_key_sources(_pre_hydration_env, data_dir=config.data_dir):
         detail = source.winning_source
         if source.shadowed_by:
