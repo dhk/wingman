@@ -356,9 +356,23 @@ cmd_upgrade_all() {
     return 0
   fi
   say ""
-  [ "$accounts_ok" = 1 ] || say "INCOMPLETE: the per-account CLI upgrade did not run."
-  [ "$shared_ok" = 1 ] || say "INCOMPLETE: the shared multi-tenant process was NOT redeployed."
-  say "Anything already running was left alone. Re-run once the cause is fixed."
+  # Two failures, two different truths — and saying the wrong one is worse
+  # than saying nothing (#415). A per-account CLI that failed to install
+  # leaves the previous one working: stale, nobody is down. A shared-process
+  # redeploy that failed may have stopped the old process already, in which
+  # case every tenant is DOWN. The old wording ("anything already running
+  # was left alone") was written for the first case and printed for both.
+  if [ "$accounts_ok" != 1 ]; then
+    say "INCOMPLETE: the per-account CLI upgrade did not run."
+    say "  Those accounts keep the build they already had — stale, not broken."
+  fi
+  if [ "$shared_ok" != 1 ]; then
+    say "INCOMPLETE: the shared multi-tenant process did not come up cleanly."
+    say "  It may have been stopped already, in which case NO TENANT IS SERVED"
+    say "  right now. Read the redeploy output above — it says which. Treat an"
+    say "  unconfirmed shared process as an outage, not as a stale build."
+  fi
+  say "Re-run once the cause is fixed."
   return 1
 }
 

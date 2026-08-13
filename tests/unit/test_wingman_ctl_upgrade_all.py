@@ -145,16 +145,22 @@ def test_a_failed_account_upgrade_is_reported_never_silent(rig: dict[str, Path])
     assert result.returncode != 0
 
 
-def test_a_failed_shared_redeploy_says_so_and_leaves_it_running(rig: dict[str, Path]) -> None:
-    """The redeploy script's own failures leave the running process alone,
-    so a partial result here means stale, not broken — and the message has
-    to say which."""
+def test_a_failed_shared_redeploy_is_reported_as_a_possible_outage(rig: dict[str, Path]) -> None:
+    """This assertion used to demand the OPPOSITE, and it was wrong (#415).
+
+    It required the wording "anything already running was left alone",
+    which is true of a failed per-account install and false of a failed
+    shared redeploy: by then the old process may already have been
+    stopped, so every tenant is DOWN rather than stale. That sentence is
+    the one an operator acts on at 3am, and it sent them back to bed.
+    """
     _exe(rig["redeploy"], "#!/usr/bin/env bash\nexit 1\n")
 
     result = _run(rig, "upgrade-all")
 
-    assert "shared multi-tenant process was NOT redeployed" in result.stdout
-    assert "left alone" in result.stdout
+    assert "did not come up cleanly" in result.stdout
+    assert "NO TENANT IS SERVED" in result.stdout
+    assert "left alone" not in result.stdout
     assert result.returncode != 0
 
 
