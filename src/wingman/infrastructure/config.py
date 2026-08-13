@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextvars
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -93,24 +93,40 @@ class Config(BaseModel):
 # duration of one incoming request, via 'tenant_config_scope' below. CLI
 # and stdio-mode MCP (single-workspace-per-invocation) never touch this —
 # their calls always fall through to the env-var resolution unchanged.
-_tenant_config: contextvars.ContextVar[Config | None] = contextvars.ContextVar(
+#
+# It holds a RESOLVER, not a Config, and that is the fix for #404. A
+# ContextVar is copied when a task is created, and under streamable HTTP
+# a tool call does not run in the task of the POST that carried it — the
+# transport creates a long-lived session task at initialize and delivers
+# later messages into it. A bound Config therefore froze at whatever the
+# registry said when the session opened, permanently: 'privileged = true'
+# plus a SIGHUP changed nothing across two client reconnects, and only a
+# process restart fixed it. A resolver re-reads the live TenantIndex on
+# every call, so a stale ContextVar still yields a current Config.
+_tenant_config: contextvars.ContextVar[Callable[[], Config] | None] = contextvars.ContextVar(
     "wingman_tenant_config", default=None
 )
 
 
 @contextmanager
-def tenant_config_scope(config: Config) -> Iterator[None]:
-    """Bind 'config' as the Config every 'load_config()' call returns for
-    the duration of this block (and anything awaited within it — safe
-    under asyncio, since a ContextVar is copied per task, not shared
-    process-wide like 'os.environ').
+def tenant_config_scope(config: Config | Callable[[], Config]) -> Iterator[None]:
+    """Bind the Config every 'load_config()' call returns for the duration
+    of this block (and anything awaited within it).
+
+    Accepts either a Config or a zero-argument callable returning one.
+    Prefer the CALLABLE from anything long-lived: a Config binds the value
+    as it was at bind time, and a ContextVar is copied per task, so a
+    session that outlives a registry reload keeps serving the old one
+    (#404). A plain Config stays supported because it is the right thing
+    for a scope that lives and dies inside one request, and for tests.
 
     The shared multi-tenant HTTP server uses this to scope one incoming
     request to its resolved tenant, instead of threading a tenant
     parameter through every tool function and 'load_config()' call site
     individually.
     """
-    token = _tenant_config.set(config)
+    resolve = config if callable(config) else (lambda: config)
+    token = _tenant_config.set(resolve)
     try:
         yield
     finally:
@@ -138,9 +154,12 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     themselves.
     """
     if env is None:
-        tenant_config = _tenant_config.get()
-        if tenant_config is not None:
-            return tenant_config
+        bound = _tenant_config.get()
+        if bound is not None:
+            # Called, not cached: the whole point of #404 is that this
+            # answers with the registry as it stands NOW, not as it stood
+            # when whatever task we are running in was created.
+            return bound()
     environment = os.environ if env is None else env
     override = environment.get(ENV_DATA_DIR, "").strip()
     if override:
