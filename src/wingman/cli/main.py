@@ -5101,7 +5101,7 @@ def heap_add(
     _require_workspace(config, "captured")
     try:
         with Storage(config.db_path) as storage:
-            saved = add_to_heap(items, storage, heat=heat, note=note)
+            saved = add_to_heap(items, storage, heat=heat, note=note, config=config)
     except IngestError as exc:
         typer.echo(f"heap add failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -5137,9 +5137,10 @@ def heap_sort_cmd() -> None:
     are flagged and neither is routed — merging two people is the one
     mistake here that corrupts a record instead of mislabelling it.
 
-    Screenshots are recognised and reported, not read: extracting them
-    needs a vision path the model layer does not have yet, and they stay in
-    the heap rather than being silently dropped.
+    Screenshots are listed, not read. Reading an image belongs to a client
+    that has vision — this terminal does not — so the report names them and
+    an MCP session fetches them with 'heap_read'. Said plainly rather than
+    pretended away: this is one capability the CLI genuinely lacks.
     """
     configure_logging()
     from wingman.application.heap_sort import render_sort, sort_heap

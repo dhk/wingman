@@ -12,15 +12,16 @@ This module is the capture half: `heap add`, `heap show`, `heap remove`,
 and the digest nudge. The sort half — classification, company clustering,
 near-namesake handling and confirmation-gated routing — lives in
 `application/heap_sort.py`, which reads what this writes and mutates
-nothing. Screenshot extraction remains outstanding: it needs a vision
-path `ModelRequest` does not have, so a dropped image is recognised and
-reported rather than read.
+nothing. A dropped local image is archived into the inbox at capture
+time, which is what lets a client read it later (#392) without wingman
+opening a path outside the workspace.
 """
 
 from __future__ import annotations
 
 from wingman.application.ingest import IngestError
 from wingman.domain.heap import HeapHeat, HeapItem
+from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
 
@@ -30,11 +31,30 @@ _HEAT_ORDER = {HeapHeat.HOT: 0, HeapHeat.WARM: 1, HeapHeat.COLD: 2}
 
 
 def add_to_heap(
-    items: list[str], storage: Storage, heat: str = "warm", note: str = ""
+    items: list[str],
+    storage: Storage,
+    heat: str = "warm",
+    note: str = "",
+    config: Config | None = None,
 ) -> list[HeapItem]:
     """Capture one or more items into the heap. Unconditional: never
     fetches, never fails on a weird reference — only an empty list or an
-    unknown heat value is refused."""
+    unknown heat value is refused.
+
+    A dropped LOCAL IMAGE is copied into the workspace inbox and the
+    archived path is what gets stored (#392). Two reasons, and neither is
+    tidiness. A screenshot on a phone or a Desktop folder is the most
+    deletable file a person owns, and the heap's promise is that nothing
+    dropped into it vanishes — a stored path to a file somebody cleared out
+    last Tuesday keeps the promise in name only. And it is what makes
+    reading one safe: `read_screenshots` will only open a file inside this
+    workspace, so a tenant cannot name a path belonging to somebody else on
+    a shared process.
+
+    Copying is best-effort. It happens at capture time, and capture is the
+    one thing here that must never fail: if the copy does not work the raw
+    string is stored exactly as given and the item behaves as it always did.
+    """
     try:
         heat_value = HeapHeat(heat.strip().lower())
     except ValueError as exc:
@@ -45,11 +65,33 @@ def add_to_heap(
         raise IngestError("at least one item is required — nothing was captured.")
     saved: list[HeapItem] = []
     for entry in cleaned:
-        item = HeapItem(item=entry, heat=heat_value, note=note.strip())
+        stored = _archive_if_local_image(entry, config)
+        item = HeapItem(item=stored, heat=heat_value, note=note.strip())
         storage.add_heap_item(item)
         saved.append(item)
     _logger.info("heap captured count=%d heat=%s", len(saved), heat_value.value)
     return saved
+
+
+def _archive_if_local_image(entry: str, config: Config | None) -> str:
+    """The archived path for a local image, or the entry unchanged."""
+    if config is None:
+        return entry
+    from wingman.application.heap_sort import archive_name, is_local_image
+
+    source = is_local_image(entry)
+    if source is None:
+        return entry
+    try:
+        config.inbox_dir.mkdir(parents=True, exist_ok=True)
+        destination = config.inbox_dir / archive_name(source)
+        destination.write_bytes(source.read_bytes())
+    except OSError as exc:
+        # Capture never fails. The original reference is kept, and the item
+        # simply is not readable later — which read_screenshots explains.
+        _logger.warning("heap could not archive %s (%s) — storing the path as given", entry, exc)
+        return entry
+    return str(destination)
 
 
 def list_heap(storage: Storage) -> list[HeapItem]:

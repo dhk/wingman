@@ -27,13 +27,16 @@ differ by a character (the `ishanagupta`/`ishangupta` case #113 names) are
 two different people until somebody says otherwise. The sort reports the
 collision and routes neither.
 
-**Screenshots are recognised but not yet extracted.** #113 asks for an
-extraction pass over dropped images, and that needs a vision path
-`ModelRequest` does not have — it carries `system` and `prompt`, both text.
-Rather than fake it, a screenshot is classified as a screenshot, reported
-as awaiting extraction, and left in the heap. Sorting the other four kinds
-is most of the value and none of the guessing; see the issue filed against
-this module for the vision half.
+**Screenshots are read by the CLIENT, not by wingman (#392).** #113 asks
+for an extraction pass over dropped images. Wingman does not need one: the
+connected MCP client already reads images natively, so `read_screenshots`
+finds the file, proves it is safe to open, and hands the bytes over as
+image content. No vision provider, no token spend here, and the user is
+present while their own screenshot is read — which is the condition
+evidence-before-assertion actually wants. Two steps on purpose: `sort`
+lists the screenshots and `read` returns the ones asked for, so a heap
+holding ten images does not put all ten into context every time somebody
+sorts. The CLI has no reader and says so.
 
 Routing itself goes through the existing application functions and their
 existing consent gates — `assess` is still the archival act, `follow_company`
@@ -43,6 +46,7 @@ path into storage.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -50,7 +54,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from wingman.application.heap import list_heap
+from wingman.application.ingest import IngestError
 from wingman.domain.heap import HeapItem
+from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
 
@@ -201,6 +207,32 @@ def _is_image_path(raw: str) -> bool:
     if raw.lower().startswith(("http://", "https://")):
         return False
     return Path(raw).suffix.lower() in _IMAGE_SUFFIXES
+
+
+def is_local_image(raw: str) -> Path | None:
+    """The expanded path of an existing local image file, or None.
+
+    Used at capture time to decide what to archive, so it checks the file
+    actually exists — unlike `_is_image_path`, which classifies a string
+    whether or not anything is behind it.
+    """
+    if not _is_image_path(raw):
+        return None
+    path = Path(raw).expanduser()
+    try:
+        return path if path.is_file() else None
+    except OSError:  # pragma: no cover - defensive
+        return None
+
+
+def archive_name(source: Path) -> str:
+    """A stable, collision-resistant inbox name for a dropped image.
+
+    Content-hashed rather than timestamped: dropping the same screenshot
+    twice should not leave the workspace holding two copies of it.
+    """
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
+    return f"heap-{digest}{source.suffix.lower()}"
 
 
 def classify(item: HeapItem) -> Classification:
@@ -421,11 +453,146 @@ def render_sort(report: SortReport) -> str:
         lines.append("")
 
     if report.awaiting_extraction:
+        ids = ", ".join(c.item.item_id[:8] for c in report.awaiting_extraction)
         lines.append(
-            f"{len(report.awaiting_extraction)} screenshot(s) recognised but NOT read — "
-            "extracting them needs a vision path the model layer does not have yet. "
-            "They stay in the heap rather than being silently dropped."
+            f"{len(report.awaiting_extraction)} screenshot(s) here, unread: {ids}. "
+            "Wingman has no vision model and does not need one — ask a client that "
+            "reads images to fetch them (MCP: heap_read). Listed rather than returned "
+            "so sorting stays cheap enough to re-run."
         )
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+# --------------------------------------------------------------------------
+# Reading a screenshot (#392)
+# --------------------------------------------------------------------------
+
+#: What a vision-capable client can actually decode. HEIC is what an iPhone
+#: produces by default and is NOT in this set — refusing it by name beats
+#: handing over bytes that come back as an error the user cannot place.
+_READABLE_FORMATS = {".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".gif": "gif", ".webp": "webp"}
+
+
+@dataclass(frozen=True)
+class Screenshot:
+    """One dropped image, ready to hand to a client that can read it."""
+
+    item_id: str
+    path: Path
+    data: bytes
+    #: 'png' / 'jpeg' / 'gif' / 'webp' — what the client is told it is.
+    image_format: str
+    note: str = ""
+
+
+def read_screenshots(
+    item_ids: list[str], storage: Storage, config: Config
+) -> tuple[list[Screenshot], list[str]]:
+    """Load dropped screenshots so the CLIENT can read them (#392).
+
+    Wingman does not look at these. The connected client already reads
+    images, so the honest division is that wingman finds the file, proves
+    it is safe to open, and hands the bytes over — no vision provider, no
+    token spend here, and the user present while their own screenshot is
+    read.
+
+    Returns (loaded, refusals). A refusal is never silent: every id that
+    could not be read comes back with the reason, because a screenshot the
+    user believes was read and was not is the failure the heap exists to
+    prevent.
+
+    **Only files inside this workspace are opened.** The path comes from a
+    heap item, and a heap item is user-typed text; on the RFC-048 shared
+    process every tenant's server runs as the same Unix user, so an
+    unconstrained read would let one tenant name another tenant's file.
+    `add_to_heap` archives dropped images into the inbox precisely so this
+    constraint costs nothing in normal use.
+    """
+    loaded: list[Screenshot] = []
+    refused: list[str] = []
+    wanted = [prefix.strip() for prefix in item_ids if prefix.strip()]
+    if not wanted:
+        raise IngestError("give at least one heap item id; 'heap show' lists them.")
+
+    items = storage.list_heap_items()
+    root = config.data_dir.resolve()
+    for prefix in wanted:
+        matches = [item for item in items if item.item_id.startswith(prefix)]
+        if not matches:
+            refused.append(f"{prefix}: no heap item with this id")
+            continue
+        if len(matches) > 1:
+            shorts = ", ".join(item.item_id[:8] for item in matches)
+            refused.append(f"{prefix}: ambiguous ({shorts}) — use more characters")
+            continue
+        item = matches[0]
+        if classify(item).kind is not DropKind.SCREENSHOT:
+            refused.append(f"{item.item_id[:8]}: not an image — {item.item}")
+            continue
+
+        path = Path(item.item).expanduser()
+        try:
+            resolved = path.resolve()
+        except OSError as exc:  # pragma: no cover - defensive
+            refused.append(f"{item.item_id[:8]}: path could not be resolved ({exc})")
+            continue
+        if not resolved.is_relative_to(root):
+            refused.append(
+                f"{item.item_id[:8]}: {resolved} is outside this workspace and will not be "
+                "opened. Re-drop it so it is archived into the inbox first"
+            )
+            continue
+        image_format = _READABLE_FORMATS.get(resolved.suffix.lower())
+        if image_format is None:
+            refused.append(
+                f"{item.item_id[:8]}: {resolved.suffix} is not a format a client can read "
+                "(png, jpeg, gif, webp) — convert it and re-drop it"
+            )
+            continue
+        try:
+            data = resolved.read_bytes()
+        except OSError as exc:
+            refused.append(f"{item.item_id[:8]}: could not be read ({exc})")
+            continue
+        if not data:
+            refused.append(f"{item.item_id[:8]}: the file is empty")
+            continue
+        loaded.append(
+            Screenshot(
+                item_id=item.item_id,
+                path=resolved,
+                data=data,
+                image_format=image_format,
+                note=item.note,
+            )
+        )
+
+    _logger.info("heap screenshots loaded=%d refused=%d", len(loaded), len(refused))
+    return loaded, refused
+
+
+def render_screenshot_header(screenshots: list[Screenshot], refused: list[str]) -> str:
+    """The text that travels with the images.
+
+    Names each id so the reader can attribute what they see, and carries
+    the user's own note, which is often the only thing saying why the
+    screenshot was worth keeping.
+    """
+    lines: list[str] = []
+    if screenshots:
+        lines.append(
+            f"{len(screenshots)} screenshot(s) follow, in this order. Wingman has not read "
+            "them — you are the reader."
+        )
+        for shot in screenshots:
+            note = f" — your note: {shot.note}" if shot.note else ""
+            lines.append(f"   {shot.item_id[:8]}  {shot.path.name}{note}")
+    if refused:
+        lines.append("")
+        lines.append("NOT read:")
+        lines.extend(f"   {reason}" for reason in refused)
+    if not screenshots and not refused:
+        lines.append("Nothing to read.")
+    return "\n".join(lines)

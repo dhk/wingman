@@ -188,16 +188,17 @@ def test_unrelated_slugs_are_not_flagged_as_namesakes(tmp_path: Path) -> None:
         assert report.namesakes == []
 
 
-def test_a_screenshot_is_reported_as_unread_not_silently_dropped(tmp_path: Path) -> None:
-    """Extraction needs a vision path ModelRequest does not have. Saying so
-    is the honest answer; pretending to have read it is not."""
+def test_a_screenshot_is_listed_for_a_client_to_read_not_returned(tmp_path: Path) -> None:
+    """Wingman has no vision model and needs none — the client reads it
+    (#392). Sort LISTS the ids; heap_read returns the bytes, so a heap of
+    ten images does not enter context every time somebody sorts."""
     storage, report = _sorted(tmp_path, ("/home/dhk/Pictures/lead.png", "hot"))
     with storage:
         rendered = render_sort(report)
 
     assert len(report.awaiting_extraction) == 1
-    assert "NOT read" in rendered
-    assert "stay in the heap" in rendered
+    assert "unread" in rendered
+    assert "heap_read" in rendered
 
 
 def test_a_note_mentioning_a_date_is_surfaced_at_the_top(tmp_path: Path) -> None:
