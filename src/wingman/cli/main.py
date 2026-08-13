@@ -642,6 +642,45 @@ def artifacts_list() -> None:
         typer.echo(render_artifacts(storage.list_published_artifacts()))
 
 
+@artifacts_app.command("show")
+def artifacts_show(
+    kind: str = typer.Argument(
+        ..., help="values_radar, values_radar_work, completeness, or profile."
+    ),
+) -> None:
+    """The recorded url for ONE view, or nothing — the question asked before
+    publishing (#399).
+
+    This is the call the update flow turns on. Publishing a second page for
+    a kind that already has one leaves the first quietly wrong while it is
+    still shared and still being read, which is the failure RFC-061 exists
+    to prevent — so ask here first, and update THAT page.
+
+    Exits non-zero when no url is recorded, so a refresh script can branch
+    on it without parsing prose. 'artifacts list' prints every kind and is
+    for reading, not for scripting one.
+    """
+    from wingman.application.artifacts import _valid_kind, published_artifact, render_artifacts
+
+    configure_logging()
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        try:
+            checked = _valid_kind(kind)
+        except IngestError as exc:
+            typer.echo(f"artifacts show failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        found = published_artifact(checked, storage)
+    if found is None:
+        typer.echo(
+            f"No {checked!r} artifact recorded. Publishing one now creates a new page; "
+            "record its url with 'wingman artifacts remember' afterwards so later "
+            "runs can update it."
+        )
+        raise typer.Exit(code=1)
+    typer.echo(render_artifacts([found]))
+
+
 @artifacts_app.command("remember")
 def artifacts_remember(
     kind: str = typer.Argument(

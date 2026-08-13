@@ -125,3 +125,74 @@ def test_the_cli_and_the_tool_reach_the_same_record(
 
     assert URL in artifacts_tool(action="show", kind="values_radar")
     assert URL in runner.invoke(app, ["artifacts", "list"]).output
+
+
+def _workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ENV_DATA_DIR, str(tmp_path / "ws"))
+    config = load_config()
+    for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    Storage(config.db_path).close()
+
+
+def test_cli_show_reports_the_url_for_one_kind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The call the update flow turns on (#399): ask before publishing, then
+    update THAT page rather than minting a second one."""
+    _workspace(tmp_path, monkeypatch)
+    runner.invoke(app, ["artifacts", "remember", "values_radar", URL])
+
+    result = runner.invoke(app, ["artifacts", "show", "values_radar"])
+
+    assert result.exit_code == 0
+    assert URL in result.output
+
+
+def test_cli_show_exits_nonzero_when_nothing_is_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """So a refresh script can branch on it without parsing prose."""
+    _workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["artifacts", "show", "values_radar"])
+
+    assert result.exit_code == 1
+    assert "No 'values_radar' artifact recorded" in result.output
+    assert "remember" in result.output  # says how to fix it, not just that it failed
+
+
+def test_cli_show_refuses_an_unknown_kind_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _workspace(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["artifacts", "show", "nonsense"])
+
+    assert result.exit_code == 1
+    assert "values_radar" in result.output  # lists the valid ones
+
+
+def test_cli_show_reports_only_the_kind_asked_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'list' is for reading; 'show' is for scripting one kind. A show that
+    printed the whole table would be list under another name."""
+    _workspace(tmp_path, monkeypatch)
+    other = "https://claude.ai/code/artifact/bbbbbbbb-1fb2-4a34-8b76-421565dc29cc"
+    runner.invoke(app, ["artifacts", "remember", "values_radar", URL])
+    runner.invoke(app, ["artifacts", "remember", "completeness", other])
+
+    result = runner.invoke(app, ["artifacts", "show", "completeness"])
+
+    assert other in result.output
+    assert URL not in result.output
+
+
+def test_every_mcp_artifacts_action_has_a_cli_command() -> None:
+    """RFC-008 parity, asserted rather than remembered — 'show' was missing
+    for the whole life of this tool and nothing caught it (#399)."""
+    from wingman.cli.main import artifacts_app
+
+    commands = {command.name for command in artifacts_app.registered_commands}
+    assert {"list", "remember", "show", "forget", "stale"} <= commands
