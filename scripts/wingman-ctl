@@ -299,6 +299,35 @@ cmd_upgrade_all() {
   # process restart briefly cuts every tenant off, so it goes LAST.
   local accounts_ok=1 shared_ok=1
 
+  # [0/2] The orchestrator itself, first (#407).
+  #
+  # The unit's ExecStart is '/root/.local/bin/wingman-upgrade-all', and root
+  # is NOT one of the accounts it upgrades — so the component whose whole job
+  # is preventing version skew was the one component frozen at whenever it
+  # was installed. A reinstall failure was reported as "Resolved 44 packages
+  # in 873ms" because the diagnosis for it, shipped in #308, was not in the
+  # copy that was running.
+  #
+  # Refreshed HERE, by the caller, rather than by the unit refreshing itself:
+  # replacing site-packages under a running Python process that imports
+  # lazily is a genuinely nasty failure, and it would appear once a month at
+  # 3am. Doing it before the trigger means the unit that runs next is already
+  # the new one, with no self-modification anywhere.
+  #
+  # Best-effort. A stale orchestrator still upgrades everybody — it just
+  # explains itself less well — so this must never be the thing that stops
+  # the run. The nightly timer path is not covered by this; it announces its
+  # own version instead, which is what makes that gap visible.
+  # Through the pinned installer, never a raw 'uv tool install': an
+  # unconstrained resolve silently deploys versions nothing tested (#302,
+  # #319), and a test in this repo asserts no install path skips it.
+  if [ -x "$REPO/scripts/wingman-tool-install.sh" ]; then
+    say "→ [0/2] refreshing the upgrade orchestrator itself (root's own install)…"
+    sudo env PYTHONDONTWRITEBYTECODE=1 "$REPO/scripts/wingman-tool-install.sh" "$REPO" \
+      >/dev/null 2>&1 \
+      || say "  (could not refresh it — continuing; it may report an older diagnosis)"
+  fi
+
   if systemctl list-unit-files wingman-upgrade-all.service >/dev/null 2>&1; then
     say "→ [1/2] upgrading each account's own CLI (nothing is interrupted)…"
     if sudo systemctl start wingman-upgrade-all.service; then
