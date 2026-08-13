@@ -703,3 +703,82 @@ def test_motd_show_does_not_spend_the_operators_own_copy(
 
     assert "not yet shown" in capsys.readouterr().out
     assert pending_operator_message(config) is not None
+
+
+# --------------------------------------------------------------------------
+# A permissions problem is a diagnosis, not a traceback (#401)
+# --------------------------------------------------------------------------
+
+
+def test_an_unreadable_file_is_diagnosed_rather_than_raising(tmp_path: Path) -> None:
+    """Path.exists() RAISES on EACCES rather than returning False, so the
+    operator-facing 'show' commands turned a permissions problem into a
+    stack trace naming nothing actionable."""
+    from wingman.infrastructure.broadcast import permission_problem
+
+    directory = tmp_path / "etc"
+    directory.mkdir()
+    path = directory / "motd.json"
+    path.write_text("{}", encoding="utf-8")
+    directory.chmod(0o000)
+    try:
+        problem = permission_problem(path)
+    finally:
+        directory.chmod(0o755)
+
+    assert problem is not None
+    assert "permission denied" in problem
+
+
+def test_the_diagnosis_names_the_session_predates_the_group_case(tmp_path: Path) -> None:
+    """The cause that actually costs an hour: supplementary groups are fixed
+    at login, so an account added to the group keeps failing in every
+    session that predates the change."""
+    from wingman.infrastructure.broadcast import permission_problem
+
+    directory = tmp_path / "etc"
+    directory.mkdir()
+    path = directory / "motd.json"
+    path.write_text("{}", encoding="utf-8")
+    directory.chmod(0o000)
+    try:
+        problem = permission_problem(path) or ""
+    finally:
+        directory.chmod(0o755)
+
+    assert "predates" in problem
+    assert "log out and back in" in problem.lower()
+    assert "id -nG" in problem
+
+
+def test_a_missing_file_is_not_a_permissions_problem(tmp_path: Path) -> None:
+    """Absent and unreadable are different problems with different fixes.
+    Collapsing them sends an operator to fix the wrong one."""
+    from wingman.infrastructure.broadcast import permission_problem
+
+    assert permission_problem(tmp_path / "nothing-here.json") is None
+
+
+def test_a_readable_file_reports_no_problem(tmp_path: Path) -> None:
+    from wingman.infrastructure.broadcast import permission_problem
+
+    path = tmp_path / "motd.json"
+    path.write_text("{}", encoding="utf-8")
+
+    assert permission_problem(path) is None
+
+
+def test_delivery_still_degrades_to_silence_rather_than_failing(tmp_path: Path) -> None:
+    """The delivery path never had this bug and must not acquire it: a
+    tenant who cannot read the file gets their status, minus the message."""
+    from wingman.infrastructure.broadcast import read_operator_message
+
+    directory = tmp_path / "etc"
+    directory.mkdir()
+    path = directory / "motd.json"
+    path.write_text('{"id": "x", "action": "do the thing"}', encoding="utf-8")
+    directory.chmod(0o000)
+    try:
+        assert read_operator_message(path) is None
+    finally:
+        directory.chmod(0o755)
