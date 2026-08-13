@@ -10,6 +10,16 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-08-12", 395, "Ingest a Gemini call transcript: parse, attribute, preview (#134)"),
+    ("2026-08-12", 393, "heap sort: classify, cluster, propose — route nothing (#113)"),
+    (
+        "2026-08-12",
+        391,
+        "Host manifest: what a build expects of the box it runs on (RFC-072, #212)",
+    ),
+    ("2026-08-12", 390, "Refuse a push to a branch whose PR already merged (#182)"),
+    ("2026-08-12", 389, "wg upgrade-all: upgrade everything on the box, not half of it (#375)"),
+    ("2026-08-12", 388, "tenant overnight: isolate a tenant's failure for real (#387)"),
     ("2026-08-12", 386, "Form ingest: split a nomination's name from its LinkedIn URL (#385)"),
     (
         "2026-08-12",
@@ -658,7 +668,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "a781e1c10c5cb0cac3fae5c750b98d12ef237c10"
+GENERATED_FROM_COMMIT = "4a070c52edd84e3017494343c5f53b5186d6db7c"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -668,4 +678,4 @@ GENERATED_FROM_COMMIT = "a781e1c10c5cb0cac3fae5c750b98d12ef237c10"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 36
+GENERATED_FROM_DISTANCE = 42
