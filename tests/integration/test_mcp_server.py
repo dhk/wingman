@@ -86,6 +86,7 @@ def test_all_tools_are_registered() -> None:
         "company_deep_dive_save",
         "export_pdf",
         "my_pov",
+        "my_urls",
         "my_values",
         "values_chart",
         "people_docs",

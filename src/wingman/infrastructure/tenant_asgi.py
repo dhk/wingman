@@ -22,6 +22,10 @@ app's public route shape is touched.
 
 from __future__ import annotations
 
+import contextvars
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 from starlette.applications import Starlette
@@ -31,6 +35,79 @@ from starlette.types import Receive, Scope, Send
 
 from wingman.infrastructure.config import Config, tenant_config_scope
 from wingman.infrastructure.tenants import Tenant, TenantIndex
+
+
+@dataclass(frozen=True)
+class RequestOrigin:
+    """Where this tenant actually reached us (#412).
+
+    Derived from the request rather than from configuration, because the
+    process does not know its own public address. It runs with no
+    '--prefix'; '/shared' is a Tailscale funnel path nobody ever told it
+    about, and the CLI's 'tenant url' only knows it because an operator
+    types --tunnel-prefix. The tenant, however, arrived AT the real URL —
+    so the request is the one authority that cannot drift from the
+    deployment.
+    """
+
+    scheme: str
+    authority: str
+    #: Everything before '/mcp/<token>' — the front's mount point, if any.
+    prefix: str
+    token: str
+
+    def mcp_url(self) -> str:
+        return f"{self.scheme}://{self.authority}{self.prefix}/mcp/{self.token}"
+
+    def ui_url(self) -> str:
+        return f"{self.scheme}://{self.authority}{self.prefix}/ui/{self.token}/"
+
+
+def request_origin(scope: Scope, token: str) -> RequestOrigin | None:
+    """The public base this request arrived on, or None if unreconstructable.
+
+    Trusts the forwarded headers a reverse proxy sets, because the only
+    front here is one the operator configured — and getting this wrong
+    prints a URL that does not work, never one that grants anything. The
+    token in the resulting URL is the same token the request already
+    carried.
+    """
+    headers = {
+        key.decode("latin-1").lower(): value.decode("latin-1")
+        for key, value in scope.get("headers", [])
+    }
+    authority = headers.get("x-forwarded-host") or headers.get("host")
+    if not authority:
+        return None
+    scheme = headers.get("x-forwarded-proto") or scope.get("scheme") or "http"
+    # The mount point is whatever precedes this route: a stripping front
+    # (tailscale funnel --set-path /shared) leaves it in the raw path while
+    # the app itself never sees a prefix.
+    raw = scope.get("raw_path") or b""
+    path = raw.decode("latin-1") if raw else scope.get("path", "")
+    marker = f"/mcp/{token}"
+    prefix = path.split(marker)[0] if marker in path else ""
+    return RequestOrigin(scheme=scheme, authority=authority, prefix=prefix, token=token)
+
+
+_request_origin: contextvars.ContextVar[RequestOrigin | None] = contextvars.ContextVar(
+    "wingman_request_origin", default=None
+)
+
+
+@contextmanager
+def request_origin_scope(origin: RequestOrigin | None) -> Iterator[None]:
+    """Bind where this request came from, for the length of the request."""
+    marker = _request_origin.set(origin)
+    try:
+        yield
+    finally:
+        _request_origin.reset(marker)
+
+
+def current_request_origin() -> RequestOrigin | None:
+    """Where the caller reached us, or None outside an HTTP request."""
+    return _request_origin.get()
 
 
 class TenantRoutingASGIApp:
@@ -68,7 +145,10 @@ class TenantRoutingASGIApp:
         # reload never reached an open one: 'privileged = true' plus a
         # SIGHUP changed nothing until the process restarted. Looking the
         # slug up per call reads the index that 'reload' mutates in place.
-        with tenant_config_scope(lambda: self._config_for(tenant)):
+        with (
+            tenant_config_scope(lambda: self._config_for(tenant)),
+            request_origin_scope(request_origin(scope, token)),
+        ):
             await self._inner(scope, receive, send)
 
     def _config_for(self, resolved: Tenant) -> Config:
