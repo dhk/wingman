@@ -56,6 +56,7 @@ def test_all_tools_are_registered() -> None:
         "relationship_objective",
         "relationship_log",
         "heap",
+        "heap_read",
         "commentary",
         "resolve_requirement",
         "assess_job",

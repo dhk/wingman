@@ -121,4 +121,5 @@ def test_mcp_heap_tool_add_show_remove(workspace: Config) -> None:
     # 'sort' now exists, and the docstring has to say what it still cannot
     # do — screenshots are recognised, not read (no vision path yet).
     assert "routes nothing" in (heap_tool.__doc__ or "")
-    assert "vision path" in (heap_tool.__doc__ or "")
+    # Screenshots are LISTED by sort and read by the client via heap_read (#392).
+    assert "heap_read" in (heap_tool.__doc__ or "")
