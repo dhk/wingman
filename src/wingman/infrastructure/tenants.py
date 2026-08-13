@@ -362,6 +362,14 @@ class TenantIndex:
         restarting it — a restart would drop every other tenant's
         in-flight connections, which RFC-048 treats as unacceptable
         (see the removed per-tenant self-restart button, RFC-041).
+
+        This mutates the index IN PLACE, which is what lets a reload reach
+        sessions that are already open: 'TenantRoutingASGIApp' binds a
+        resolver that looks a tenant up here on every 'load_config()',
+        rather than a Config snapshot. That indirection is load-bearing —
+        binding the Config itself froze it for the life of a streamable-HTTP
+        session, because a ContextVar is copied when a task is created and
+        the session task outlives the request that bound it (#404).
         """
         self._load(load_registry(path))
 

@@ -29,8 +29,8 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.types import Receive, Scope, Send
 
-from wingman.infrastructure.config import tenant_config_scope
-from wingman.infrastructure.tenants import TenantIndex
+from wingman.infrastructure.config import Config, tenant_config_scope
+from wingman.infrastructure.tenants import Tenant, TenantIndex
 
 
 class TenantRoutingASGIApp:
@@ -60,8 +60,28 @@ class TenantRoutingASGIApp:
             response = PlainTextResponse("Not Found", status_code=401)
             await response(scope, receive, send)
             return
-        with tenant_config_scope(tenant.config()):
+        # A RESOLVER, not tenant.config() (#404). Under streamable HTTP the
+        # tool body does not run in this request's task — the transport
+        # creates a session task at initialize and delivers later messages
+        # into it — and a ContextVar is copied at task creation. Binding a
+        # Config here froze it for the life of the session, so a registry
+        # reload never reached an open one: 'privileged = true' plus a
+        # SIGHUP changed nothing until the process restarted. Looking the
+        # slug up per call reads the index that 'reload' mutates in place.
+        with tenant_config_scope(lambda: self._config_for(tenant)):
             await self._inner(scope, receive, send)
+
+    def _config_for(self, resolved: Tenant) -> Config:
+        """This tenant's Config as the registry stands right now.
+
+        Falls back to the tenant resolved for this request if the slug has
+        since left the registry — unreachable in practice, because the
+        token check above is the access authority and already refuses a
+        tenant that no longer exists. Falling back rather than raising
+        keeps a mid-flight request from failing on a registry edit.
+        """
+        current = self._index.by_slug(resolved.slug)
+        return (current or resolved).config()
 
 
 def bind_tenant_routing(app: Starlette, path: str, index: TenantIndex) -> None:
