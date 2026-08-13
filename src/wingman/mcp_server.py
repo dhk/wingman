@@ -4473,12 +4473,23 @@ def _run_tenant_server(args: argparse.Namespace, prefix: str) -> None:
         register_reload_handler,
         write_tenant_pidfile,
     )
-    from wingman.infrastructure.tenants import TenantIndex, TenantRegistryError
+    from wingman.infrastructure.tenants import (
+        TenantIndex,
+        TenantRegistryError,
+        TenantRegistryUnreadable,
+    )
     from wingman.webui import configure_tenant_index, register_ui
 
     registry_path = Path(args.tenant_registry).expanduser()
     try:
         index = TenantIndex.from_registry_path(registry_path)
+    except TenantRegistryUnreadable as exc:
+        # Not "malformed": the account starting the shared process cannot
+        # open the file, which is a different fix (#411). Refusing to start
+        # is the only safe answer — an unreadable registry read as an empty
+        # one would come up serving nobody and call it normal.
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
     except TenantRegistryError as exc:
         print(f"ERROR: tenant registry {registry_path} is malformed: {exc}", file=sys.stderr)
         sys.exit(1)
