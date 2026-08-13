@@ -4,6 +4,123 @@ Newest first. Versions are git tags; `wingman --version` reports the build
 you are running (hatch-vcs). Full decision history lives in
 [`RFC.md`](RFC.md).
 
+## v0.6.0 — 2026-08-13
+
+If v0.5.0 was about running wingman *for* other people, v0.6.0 is about
+taking **other people's material in** — and being much stricter about what
+counts as evidence once it arrives. 42 PRs, RFC-056 through RFC-072, 80 MCP
+tools, 1583 tests.
+
+### Three ways in, because material does not arrive one way
+
+- **The interview form, ingested (RFC-069).** Someone fills in a Google Form
+  offline, weeks before they ever open a chat window; an operator ingests
+  the export into that named tenant's workspace. Routing is by question
+  title, because a Forms export carries nothing else back. Nothing is
+  written before it is shown: `plan_ingest` is pure and `apply_plan` is the
+  only writer, so the thing previewed and the thing applied are computed
+  once, by the same code, and cannot disagree. A line that carries a name
+  but no reason is **reported, never invented** — 'why' is the only thing
+  an interview capture stores as evidence.
+- **Call transcripts (#134).** Google Meet's Gemini notetaker produces a
+  two-tab export; wingman parses it, resolves participants against the
+  calendar invite, and previews. Built against a real transcript, which
+  taught us the thing the design most needed: **the speaker labels are
+  generated and wrong.** In the first export used, invitee `Chuck Patel`
+  is transcribed throughout as "Chuck Norris", and the summary repeats the
+  invented surname. So attribution comes from the `Invited` header, a
+  speaker who does not match is flagged rather than reconciled, and only
+  the Transcript tab is ever quotable — the Notes tab is Gemini's
+  paraphrase, and Google's own footer says to check it.
+- **The heap, sorted (#113).** Leads arrive in bursts from a phone,
+  mid-scroll — a role, the person who posted it, their company. Capture
+  stays unconditional; `heap sort` then classifies each drop by URL shape
+  (deterministic, because routing has a correct answer), clusters on the
+  company, flags near-namesake LinkedIn slugs **without merging them**, and
+  routes nothing without confirmation. Screenshots are handed to the client
+  to read — see below.
+
+### People can correct their own record (RFC-071)
+
+`wingman profile amend` revises an interview capture in place: the evidence
+sentence itself, plus intensity, company reason and value statement. The
+item keeps its id, its provenance and its form stamp, and **the previous
+wording is retained rather than overwritten**.
+
+The load-bearing detail is what the retained wording is *not*. Keeping it in
+`evidence` was the obvious implementation and is wrong: evidence is a set of
+independent vouchers, so the person's own earlier sentence would be counted
+as a second source corroborating them. It lives in `revisions` precisely so
+nothing counting evidence can mistake a revision for support.
+
+### Values that say what is actually true
+
+- **The sign fix (RFC-056).** A value axis took its sign from the
+  nomination's `_pro`/`_con` suffix, which produced profiles asserting
+  things like *"strongly repelled by honesty"* — the exact opposite of what
+  the person said. Sign now comes from a per-item `direction` the model
+  states about the evidence it is citing. This was found by reading real
+  output, not by a test.
+- **What a nomination says you VALUE (RFC-057).** A nomination records a
+  verdict about somebody else, and half of them are condemnations by design.
+  The interview now asks the positive statement behind it, so axis inference
+  reads evidence that is positive *by construction* instead of guessing
+  which way a condemnation cuts.
+- **A document never corroborates itself (#336)**, and a citation that
+  opposes the axis it was filed under now says so.
+- **The same captures, read as work (RFC-066)** — a second view of the same
+  evidence indexed on how someone operates, not only what they believe.
+
+### The operator channel
+
+- **Message of the day (RFC-065)** is an action ranked above every computed
+  one and labelled as an instruction, not a banner — and since RFC-070 it
+  stays readable after the shared file has moved on.
+- **Question of the day (RFC-067)** is asked to one tenant or all, answered
+  in the answerer's own workspace, and is **never evidence**: the operator
+  wrote the question, so a citable answer would let a leading question write
+  sentences into somebody's career record.
+- **Privilege is explicit (RFC-068).** A tenant is unprivileged unless the
+  registry says otherwise.
+
+### Research that reaches the open web, and stays gated
+
+The person and company deep-dives (RFC-059) use a narrowly-scoped provider
+that is the *only* thing here touching open search; every other research
+path still stays inside approved, user-named sources. An approved page can
+now be kept as citable prose (RFC-060), opt-in per source.
+
+### The assistant's reading, quarantined (RFC-058)
+
+A commentary corpus for the assistant's analysis of your material — in a
+store **no evidence path can reach**. An observation about you is not
+something you said, and the two must never be citable from the same place.
+
+### Artifacts, recorded but never published (RFC-061)
+
+The client publishes; wingman records the URL. One row per kind,
+replace-not-append. Ordinary systems behaviour, stated once.
+
+### Operational honesty
+
+- **The host manifest (RFC-072).** `wingman host-check` compares a box
+  against what the build expects. Reversible file writes apply; anything
+  touching systemd, sudo or another account is **reported with its fix
+  command and never applied**, and that boundary is structural — a
+  report-tier expectation carries no apply callable at all.
+- **`upgrade-all` upgrades everything** (#375) — every account's CLI first,
+  then the shared process, with partial runs named rather than silent.
+- **`tenant overnight` isolates for real** (#387). It caught only
+  `IngestError` while promising to survive "a corrupt workspace, a network
+  error, whatever", so one bad database silently cost every tenant after it
+  in registry order their whole night's work.
+- **Screenshots are read by the client** (#392), not by a vision model
+  wingman does not have. Reads are confined to the workspace, because a
+  heap item is user-typed text and every tenant's server runs as the same
+  Unix user.
+- **Root leaves no bytecode** in somebody's tool store (#377), and pushing
+  to a branch whose PR already merged is now refused outright (#182).
+
 ## v0.5.0 — 2026-08-10
 
 Wingman became something you can run *for other people*. 152 PRs, RFC-032
