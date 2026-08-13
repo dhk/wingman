@@ -5021,6 +5021,36 @@ def heap_show() -> None:
         typer.echo(render_heap(list_heap(storage)))
 
 
+@heap_app.command("sort")
+def heap_sort_cmd() -> None:
+    """Work out what is in the heap and where it should go — hottest first,
+    clustered by company, routed only on your confirmation (#113).
+
+    Explicitly invoked, never automatic. It reads the heap, classifies each
+    drop by URL shape (deterministic — AGENTS.md forbids a model for
+    routing, and "is this a LinkedIn profile or a careers page" has a
+    correct answer a model can only get wrong more expensively), groups the
+    drops that share a company, and prints what it would do.
+
+    It writes nothing. Every proposal names the command it would run and
+    the evidence it keyed on, so the report is something you can disagree
+    with rather than a decision already taken. Near-namesake LinkedIn slugs
+    are flagged and neither is routed — merging two people is the one
+    mistake here that corrupts a record instead of mislabelling it.
+
+    Screenshots are recognised and reported, not read: extracting them
+    needs a vision path the model layer does not have yet, and they stay in
+    the heap rather than being silently dropped.
+    """
+    configure_logging()
+    from wingman.application.heap_sort import render_sort, sort_heap
+
+    config = load_config()
+    _require_workspace(config, "sorted")
+    with Storage(config.db_path) as storage:
+        typer.echo(render_sort(sort_heap(storage)))
+
+
 @heap_app.command("remove")
 def heap_remove(
     item_id: str = typer.Argument(..., help="Item id (or a prefix), shown by 'wingman heap show'."),

@@ -1172,14 +1172,25 @@ def heap(
 
     action is 'add' (capture `items` — one or more URLs or short
     references — at `heat`: hot/warm/cold, default warm), 'show' (list
-    everything, hottest first), or 'remove' (drop `item_id`, a prefix of
-    the id shown by 'show'). Capture is unconditional: never fetches,
-    never spends a token, never fails on a weird reference. Hot items
-    sitting unsorted earn a digest nudge; cold ones never do.
+    everything, hottest first), 'sort' (work out what each drop is and
+    where it would go), or 'remove' (drop `item_id`, a prefix of the id
+    shown by 'show'). Capture is unconditional: never fetches, never
+    spends a token, never fails on a weird reference. Hot items sitting
+    unsorted earn a digest nudge; cold ones never do.
 
-    This ships the capture surface only — classification, screenshot
-    extraction, company clustering, and confirmation-gated routing
-    ('heap sort' in the fuller spec) are not implemented yet.
+    'sort' reads the heap hottest-first, classifies each drop by URL
+    shape (deterministic — never a model, because routing has a correct
+    answer), clusters the drops that share a company, and reports what it
+    WOULD do. It writes nothing and routes nothing. Every proposal names
+    its command and the evidence behind the classification, so the report
+    is something the user can disagree with. Near-namesake LinkedIn slugs
+    are flagged and neither is routed. Screenshots are recognised but not
+    read — extraction needs a vision path the model layer does not have.
+
+    Protocol for 'sort': show the report, then act on the clusters the
+    user confirms, one at a time, through the ordinary tools (assess,
+    people_add, company_follow) with their own consent gates intact.
+    Never route a cluster the user has not named.
 
     Protocol: when the user drops a burst of links (or describes several
     leads at once), offer to capture them here rather than routing each
@@ -1187,6 +1198,7 @@ def heap(
     default to warm rather than blocking capture on the question.
     """
     from wingman.application.heap import add_to_heap, list_heap, remove_from_heap, render_heap
+    from wingman.application.heap_sort import render_sort, sort_heap
 
     config = _ready_config()
     if config is None:
@@ -1198,12 +1210,14 @@ def heap(
                 return f"Captured {len(saved)} item(s) at heat={heat}."
             if action == "show":
                 return render_heap(list_heap(storage))
+            if action == "sort":
+                return render_sort(sort_heap(storage))
             if action == "remove":
                 removed = remove_from_heap(item_id, storage)
                 return f"Removed: {removed.item}"
     except IngestError as exc:
         return f"heap {action} failed: {exc}"
-    return f"unknown action {action!r}; use add, show, or remove."
+    return f"unknown action {action!r}; use add, show, sort, or remove."
 
 
 @server.tool()

@@ -8,13 +8,13 @@ and never fails on a weird string — capture always succeeds, and heat
 orders everything downstream. Hot items sitting unsorted earn a digest
 nudge (RFC-031 triageable); cold ones never do.
 
-This ships the capture half of #113's spec only: `heap add`, `heap show`,
-`heap remove`, and the digest nudge. Classification, screenshot
-extraction, company clustering, and confirmation-gated routing (`heap
-sort`) are deliberately out of scope here — that is a real extraction
-pipeline (model calls, image handling, identity disambiguation) that
-deserves its own design pass rather than a rushed first cut riding along
-with the capture surface. See issue #113 for the fuller spec.
+This module is the capture half: `heap add`, `heap show`, `heap remove`,
+and the digest nudge. The sort half — classification, company clustering,
+near-namesake handling and confirmation-gated routing — lives in
+`application/heap_sort.py`, which reads what this writes and mutates
+nothing. Screenshot extraction remains outstanding: it needs a vision
+path `ModelRequest` does not have, so a dropped image is recognised and
+reported rather than read.
 """
 
 from __future__ import annotations

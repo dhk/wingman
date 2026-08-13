@@ -1,4 +1,8 @@
-"""The heap (#113): capture-first inbox, heat-ordered — capture surface only."""
+"""The heap (#113): capture-first inbox, heat-ordered.
+
+The sort half lives in test_heap_sort.py; what matters here is that capture
+stays unconditional and that the tool still names its own limits honestly.
+"""
 
 from pathlib import Path
 
@@ -114,4 +118,7 @@ def test_mcp_heap_tool_add_show_remove(workspace: Config) -> None:
     assert "unknown action" in heap_tool(action="bogus")
     # capture-first protocol rides the docstring
     assert "unconditional" in (heap_tool.__doc__ or "")
-    assert "capture surface only" in (heap_tool.__doc__ or "")
+    # 'sort' now exists, and the docstring has to say what it still cannot
+    # do — screenshots are recognised, not read (no vision path yet).
+    assert "routes nothing" in (heap_tool.__doc__ or "")
+    assert "vision path" in (heap_tool.__doc__ or "")
