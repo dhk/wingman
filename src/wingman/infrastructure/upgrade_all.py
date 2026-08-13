@@ -58,6 +58,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from wingman.version import wingman_version
+
 SYSTEMD_UNIT = "wingman-mcp.service"
 REPO_SUBPATH = "src/wingman"
 # What an account should be tracking. A checkout parked anywhere else
@@ -394,6 +396,31 @@ def main(argv: list[str] | None = None) -> None:
         )
         raise SystemExit(1)
 
+    # The orchestrator's own build, ahead of everything it reports (#407).
+    #
+    # This is the line that was missing when a reinstall failed and the
+    # operator was told the reason was "Resolved 44 packages in 873ms".
+    # 'diagnose_reinstall' had handled that exact failure since #308 — the
+    # copy that was RUNNING simply predated it, because the unit's
+    # ExecStart is '/root/.local/bin/wingman-upgrade-all' and root is not
+    # one of the accounts this upgrades. Nothing said so: the run reports
+    # on every account except the one doing the reporting.
+    #
+    # It cannot fix that itself — replacing site-packages under a running
+    # Python process that imports lazily is a worse failure than the one it
+    # would solve, and 'wg upgrade-all' refreshes root's install before
+    # triggering the unit for exactly that reason. What this can do is stop
+    # hiding it, which matters most on the nightly timer path, where no
+    # wrapper is involved at all.
+    # flush: failures go to unbuffered stderr while this goes to
+    # block-buffered stdout, so without it the banner is overtaken by the
+    # very lines it is meant to give context to — in a terminal and in the
+    # journal, which orders by write time.
+    print(
+        f"wingman-upgrade-all {wingman_version()} (this orchestrator's own build)",
+        flush=True,
+    )
+
     targets: list[UpgradeTarget] = []
     unresolved: list[str] = []
     for username in usernames:
@@ -406,6 +433,19 @@ def main(argv: list[str] | None = None) -> None:
     for username in unresolved:
         print(f"[FAILED] {username}: no such Unix account — skipped", file=sys.stderr)
 
+    # The orchestrator's own build, before anything it does (#407).
+    #
+    # This is the line that was missing when a reinstall failed and the
+    # operator was told the reason was "Resolved 44 packages in 873ms".
+    # 'diagnose_reinstall' had handled that exact failure since #308 — the
+    # copy of the code that was RUNNING simply predated it, because the
+    # unit's ExecStart is '/root/.local/bin/wingman-upgrade-all' and root
+    # is not one of the accounts this upgrades. Nothing anywhere said so:
+    # the run reports on every account except the one doing the reporting.
+    #
+    # It cannot fix that on its own — replacing site-packages under a
+    # running Python process that imports lazily is a worse failure than
+    # the one it would solve. What it can do is stop hiding it.
     results = upgrade_all(targets, run=_default_runner, resolve_uid=_default_uid)
     failures = len(unresolved)
     for result in results:

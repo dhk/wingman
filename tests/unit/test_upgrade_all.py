@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from wingman.infrastructure.upgrade_all import (
     UpgradeTarget,
     _parse_usernames,
@@ -506,3 +508,25 @@ def test_the_tool_store_path_is_derived_from_the_accounts_home() -> None:
 
     assert tool_store("/home/dhk") == Path("/home/dhk/.local/share/uv/tools/wingman")
     assert tool_store("/home/dhk/") == Path("/home/dhk/.local/share/uv/tools/wingman")
+
+
+def test_the_orchestrator_announces_its_own_build(capsys, monkeypatch) -> None:
+    """The line that was missing when a reinstall failed and the operator
+    was told the reason was 'Resolved 44 packages in 873ms' (#407).
+
+    'diagnose_reinstall' had handled that exact failure since #308; the
+    copy that was RUNNING predated it, because the unit's ExecStart is
+    root's own install and root is not one of the accounts upgraded. The
+    run reported on every account except the one doing the reporting.
+    """
+    from wingman.infrastructure import upgrade_all as module
+
+    monkeypatch.setenv("WINGMAN_UPGRADE_USERS", "nobody-at-all")
+    monkeypatch.setattr(module, "_default_home", lambda _user: None)
+
+    with pytest.raises(SystemExit):
+        module.main([])
+
+    printed = capsys.readouterr()
+    assert "wingman-upgrade-all" in printed.out
+    assert "this orchestrator's own build" in printed.out

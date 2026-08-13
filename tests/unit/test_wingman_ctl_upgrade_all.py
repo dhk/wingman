@@ -39,6 +39,10 @@ def rig(tmp_path: Path) -> dict[str, Path]:
     log = tmp_path / "calls.log"
     redeploy = repo / "scripts" / "wingman-redeploy-shared.sh"
     _exe(redeploy, f"#!/usr/bin/env bash\necho redeployed >> {log}\n")
+    _exe(
+        repo / "scripts" / "wingman-tool-install.sh",
+        f'#!/usr/bin/env bash\necho "wingman-tool-install.sh $*" >> {log}\nexit 0\n',
+    )
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -54,6 +58,7 @@ def rig(tmp_path: Path) -> dict[str, Path]:
         f'#!/usr/bin/env bash\necho "systemctl $*" >> {log}\nexit 0\n',
     )
     _exe(bin_dir / "journalctl", "#!/usr/bin/env bash\nexit 0\n")
+    _exe(bin_dir / "uv", f'#!/usr/bin/env bash\necho "uv $*" >> {log}\nexit 0\n')
 
     return {
         "repo": repo,
@@ -169,3 +174,34 @@ def test_the_usage_text_no_longer_describes_only_the_cross_account_unit(
 
     assert "EVERYTHING on this box" in result.stdout
     assert "shared multi-tenant process" in result.stdout
+
+
+def test_the_orchestrator_itself_is_refreshed_before_the_unit_runs(rig: dict[str, Path]) -> None:
+    """The unit's ExecStart is root's own install, and root is not one of
+    the accounts it upgrades — so the component whose job is preventing
+    version skew was the one frozen at whenever it was installed (#407).
+
+    Refreshed by the CALLER, before the trigger, rather than by the unit
+    refreshing itself: replacing site-packages under a running Python
+    process that imports lazily is a worse failure than the one it solves.
+    """
+    _run(rig, "upgrade-all")
+
+    calls = _calls(rig)
+    refreshed = next((i for i, c in enumerate(calls) if "wingman-tool-install.sh" in c), None)
+    started = next((i for i, c in enumerate(calls) if "systemctl start" in c), None)
+
+    assert refreshed is not None, "root's own install was never refreshed"
+    assert started is not None
+    assert refreshed < started, "it must be current BEFORE it is triggered"
+
+
+def test_refreshing_the_orchestrator_never_blocks_the_run(rig: dict[str, Path]) -> None:
+    """A stale orchestrator still upgrades everybody — it just explains
+    itself less well. So this must never be the thing that stops the run."""
+    _exe(rig["repo"] / "scripts" / "wingman-tool-install.sh", "#!/usr/bin/env bash\nexit 1\n")
+
+    result = _run(rig, "upgrade-all")
+
+    assert "redeployed" in _calls(rig)
+    assert result.returncode == 0, result.stdout
