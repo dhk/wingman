@@ -277,3 +277,25 @@ def test_tenant_urls_tunnel_prefix_reaches_every_tenant(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "http://127.0.0.1:8789/mcp/tok-jason" in result.output  # loopback: no prefix
     assert "https://lobster.tail.ts.net/shared/mcp/tok-jason" in result.output  # tunnel: has it
+
+
+def test_tenant_urls_unreadable_registry_diagnoses_rather_than_says_malformed(
+    tmp_path: Path,
+) -> None:
+    """The operator-facing half of #411. These commands belong to the person
+    who can fix the permissions; telling them a file they cannot open is
+    'malformed' sends them to edit it instead."""
+    directory = tmp_path / "etc"
+    directory.mkdir()
+    registry = directory / "tenants.toml"
+    registry.write_text("", encoding="utf-8")
+    directory.chmod(0o000)
+    try:
+        result = cli.invoke(app, ["tenant", "urls", "--registry", str(registry)])
+    finally:
+        directory.chmod(0o755)
+
+    assert result.exit_code == 1
+    assert "permission denied" in result.output
+    assert "predates" in result.output
+    assert "malformed" not in result.output

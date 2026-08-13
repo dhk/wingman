@@ -64,6 +64,18 @@ class TenantRegistryError(Exception):
     """The tenant registry file is missing, malformed, or names a bad tenant."""
 
 
+class TenantRegistryUnreadable(TenantRegistryError):
+    """The registry is there, but this account cannot read it (#411).
+
+    A subclass so that every existing 'except TenantRegistryError' keeps
+    catching it — the failure IS a registry failure — while the handful of
+    operator-facing call sites that say "is malformed" can tell the two
+    apart. Telling somebody a file they cannot even open is malformed sends
+    them to edit it, which is the wrong hour to spend; '/etc/wingman' is
+    750 root:wingman precisely so most accounts cannot.
+    """
+
+
 @dataclass(frozen=True)
 class Tenant:
     """One tenant's identity in the registry — no secrets attached."""
@@ -238,11 +250,37 @@ def load_registry(path: Path) -> list[Tenant]:
     everybody's feature requests, which a per-tenant 'feature_repo' still
     overrides. 'privileged' (RFC-068) is deliberately NOT one of them and
     is refused there; it is granted per tenant or not at all.
+
+    A registry that is THERE but unreadable raises
+    'TenantRegistryUnreadable' with the diagnosis (#411). Two reasons it
+    cannot share the absent file's empty list. The loud one: 'Path.exists()'
+    RAISES on EACCES rather than returning False, so this used to throw a
+    bare PermissionError out of every 'wingman tenant' command an operator
+    outside the wingman group typed — #401's bug, in the library every one
+    of those commands goes through. The quiet one, which would be worse:
+    were an unreadable file ever to read as an empty one, a shared process
+    would start and serve ZERO tenants while calling that normal — nobody
+    locked out with an error, everybody quietly non-existent. Unreadable is
+    never empty.
     """
-    if not path.exists():
-        return []
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, NotADirectoryError):
+        # Genuinely absent — the deliberate empty-list case above. Read
+        # first and catch, rather than ask 'exists()' and then read: one
+        # syscall answers both questions, and no window exists in which the
+        # file's answer changes between the two.
+        return []
+    except PermissionError as exc:
+        # The diagnosis lives in broadcast.permission_problem, written once
+        # for #401 and reused here rather than copied. Imported lazily to
+        # keep this module's import graph as it is (broadcast reaches for
+        # tenants the same way, from inside its functions).
+        from wingman.infrastructure.broadcast import permission_problem
+
+        raise TenantRegistryUnreadable(permission_problem(path) or str(exc)) from exc
+    try:
+        data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise TenantRegistryError(f"tenant registry {path} could not be parsed: {exc}") from exc
     entries = data.get("tenant", [])

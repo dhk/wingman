@@ -265,3 +265,78 @@ def test_one_duplicated_token_does_not_disable_everybody_else(tmp_path: Path) ->
     resolved = index.resolve("morgans-own-token")
     assert resolved is not None
     assert resolved.slug == "morgan"
+
+
+# --------------------------------------------------------------------------
+# An unreadable registry is a diagnosis, never a traceback and never empty
+# (#411 — #401's bug, in the library every 'wingman tenant' command uses)
+# --------------------------------------------------------------------------
+
+
+def test_an_unreadable_registry_raises_a_registry_error_not_a_permission_error(
+    tmp_path: Path,
+) -> None:
+    """'Path.exists()' RAISES on EACCES rather than returning False, so this
+    threw a bare PermissionError at every operator outside the wingman
+    group — a traceback naming nothing they can act on."""
+    directory = tmp_path / "etc"
+    directory.mkdir()
+    registry = directory / "tenants.toml"
+    _write_registry(registry, ("jason", tmp_path / "jason"))
+    directory.chmod(0o000)
+    try:
+        with pytest.raises(TenantRegistryError) as caught:
+            load_registry(registry)
+    finally:
+        directory.chmod(0o755)
+
+    assert not isinstance(caught.value, PermissionError)
+
+
+def test_the_unreadable_diagnosis_is_the_one_written_for_motd(tmp_path: Path) -> None:
+    """The same 'permission_problem' text #401 left behind — reused, not
+    copied — so both real causes stay named in one place: not in the group
+    that owns /etc/wingman, or a session that predates being added to it."""
+    directory = tmp_path / "etc"
+    directory.mkdir()
+    registry = directory / "tenants.toml"
+    _write_registry(registry, ("jason", tmp_path / "jason"))
+    directory.chmod(0o000)
+    try:
+        with pytest.raises(TenantRegistryError) as caught:
+            load_registry(registry)
+    finally:
+        directory.chmod(0o755)
+
+    message = str(caught.value)
+    assert "permission denied" in message
+    assert "predates" in message
+    assert "id -nG" in message
+
+
+def test_an_unreadable_registry_is_never_read_as_an_empty_one(tmp_path: Path) -> None:
+    """The quiet half of the bug. An absent registry means zero tenants, a
+    valid startup state — so had 'exists()' returned False here instead of
+    raising, the shared process would have come up serving NOBODY and
+    called it normal. Unreadable and absent are different answers."""
+    directory = tmp_path / "etc"
+    directory.mkdir()
+    registry = directory / "tenants.toml"
+    _write_registry(registry, ("jason", tmp_path / "jason"))
+    directory.chmod(0o000)
+    try:
+        with pytest.raises(TenantRegistryError):
+            loaded = load_registry(registry)
+            assert loaded != [], "an unreadable registry was reported as no tenants"
+    finally:
+        directory.chmod(0o755)
+
+
+def test_an_absent_registry_still_returns_no_tenants(tmp_path: Path) -> None:
+    """Deliberate and unchanged: a shared process with nobody configured yet
+    is a valid (if useless) startup state, not an error."""
+    directory = tmp_path / "etc"
+    directory.mkdir()
+
+    assert load_registry(directory / "tenants.toml") == []
+    assert load_registry(tmp_path / "no" / "such" / "dir" / "tenants.toml") == []

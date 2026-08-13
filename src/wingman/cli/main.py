@@ -4096,9 +4096,16 @@ def _load_registry_or_exit(registry: Path | None) -> tuple[list[Tenant], Path]:
     """Shared registry load for the 'tenant' commands below: resolves the
     registry (explicit --registry, else WINGMAN_TENANT_REGISTRY, else the
     RFC-047-style default) and exits(1) with a clear message if it's
-    malformed — never a bare traceback for an operator-facing command."""
+    malformed — never a bare traceback for an operator-facing command.
+
+    A registry this account cannot READ is reported in its own words
+    (#411), not as "malformed": these commands belong to the operator, and
+    an operator told the file is malformed goes to edit a file that will
+    not open for them either.
+    """
     from wingman.infrastructure.tenants import (
         TenantRegistryError,
+        TenantRegistryUnreadable,
         load_registry,
         tenant_registry_path,
     )
@@ -4106,6 +4113,9 @@ def _load_registry_or_exit(registry: Path | None) -> tuple[list[Tenant], Path]:
     registry_path = registry or tenant_registry_path()
     try:
         tenants = load_registry(registry_path)
+    except TenantRegistryUnreadable as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
     except TenantRegistryError as exc:
         typer.echo(f"tenant registry {registry_path} is malformed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -4664,18 +4674,11 @@ def tenant_overnight_cmd(
     configure_logging()
     from wingman.application.focus import overnight_run
     from wingman.infrastructure.storage import Storage
-    from wingman.infrastructure.tenants import (
-        TenantRegistryError,
-        load_registry,
-        tenant_registry_path,
-    )
 
-    registry_path = registry or tenant_registry_path()
-    try:
-        tenants = load_registry(registry_path)
-    except TenantRegistryError as exc:
-        typer.echo(f"tenant registry {registry_path} is malformed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+    # The same load, refusal and exit as every other 'tenant' command —
+    # shared rather than repeated, so an unreadable registry is diagnosed
+    # here too (#411) instead of only where the helper is already called.
+    tenants, registry_path = _load_registry_or_exit(registry)
     if not tenants:
         typer.echo(f"no tenants in the registry ({registry_path}) — nothing to do.")
         return
