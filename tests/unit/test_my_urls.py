@@ -13,6 +13,7 @@ somebody else handle their private data.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -26,39 +27,129 @@ from wingman.infrastructure.config import ENV_DATA_DIR
 from wingman.infrastructure.tenant_asgi import (
     TenantRoutingASGIApp,
     current_request_origin,
+    funnel_prefix,
     request_origin,
+    resolve_prefix,
 )
 from wingman.infrastructure.tenants import Tenant, TenantIndex
 
 TOKEN = "tok-dhk"
 
 
-def _scope(*, host: str, path: str, proto: str | None = None) -> Scope:
+def _scope(*, host: str, path: str, proto: str | None = None, port: int = 8789) -> Scope:
     headers = [(b"host", host.encode())]
     if proto:
         headers.append((b"x-forwarded-proto", proto.encode()))
-    return {"headers": headers, "raw_path": path.encode(), "path": path, "scheme": "http"}
+    return {
+        "headers": headers,
+        "raw_path": path.encode(),
+        "path": path,
+        "scheme": "http",
+        "server": ("127.0.0.1", port),
+    }
 
 
-def test_the_real_tunnel_url_is_reconstructed_from_the_request() -> None:
-    """Config cannot answer this: the process runs with no '--prefix', and
-    '/shared' is a Tailscale funnel path nobody ever told it about. The
-    tenant arrived AT the real address, so the request is the one authority
-    that cannot drift from the deployment."""
+#: What 'tailscale serve status --json' actually returns on this box.
+FUNNEL = json.dumps(
+    {
+        "Web": {
+            "lobster.tail08dfce.ts.net:443": {
+                "Handlers": {
+                    "/shared": {"Proxy": "http://127.0.0.1:8789"},
+                    "/alexandria": {"Proxy": "http://127.0.0.1:8797"},
+                }
+            }
+        }
+    }
+)
+
+
+def test_a_stripping_funnel_leaves_no_prefix_in_the_request() -> None:
+    """The assumption that shipped a 404 (#417).
+
+    A Tailscale funnel mounted with '--set-path /shared' REMOVES the prefix
+    before proxying, so the process is handed '/mcp/<token>' and the
+    request cannot report where the public address begins. The previous
+    test here fed '/shared/mcp/<token>' into the scope and asserted the
+    prefix survived — it encoded my assumption instead of the funnel's
+    behaviour, and passed against code that 404s in production.
+    """
     origin = request_origin(
-        _scope(host="lobster.tail08dfce.ts.net", path=f"/shared/mcp/{TOKEN}", proto="https"), TOKEN
+        _scope(host="lobster.tail08dfce.ts.net", path=f"/mcp/{TOKEN}", proto="https"), TOKEN
     )
 
     assert origin is not None
-    assert origin.mcp_url() == f"https://lobster.tail08dfce.ts.net/shared/mcp/{TOKEN}"
-    assert origin.ui_url() == f"https://lobster.tail08dfce.ts.net/shared/ui/{TOKEN}/"
+    assert origin.prefix == "", "a stripping front leaves nothing to derive"
 
 
-def test_a_front_with_no_prefix_produces_no_prefix() -> None:
-    origin = request_origin(_scope(host="127.0.0.1:8789", path=f"/mcp/{TOKEN}"), TOKEN)
-
+def test_the_live_funnel_supplies_what_the_request_cannot() -> None:
+    """Ground truth, and the same discovery wingman-register-service.sh has
+    done since #288 for the same reason."""
+    origin = request_origin(
+        _scope(host="lobster.tail08dfce.ts.net", path=f"/mcp/{TOKEN}", proto="https", port=8789),
+        TOKEN,
+    )
     assert origin is not None
-    assert origin.mcp_url() == f"http://127.0.0.1:8789/mcp/{TOKEN}"
+
+    prefix = resolve_prefix(origin, capture=lambda _argv: FUNNEL)
+
+    assert prefix == "/shared"
+    assert origin.ui_url(prefix) == f"https://lobster.tail08dfce.ts.net/shared/ui/{TOKEN}/"
+
+
+def test_an_unreadable_funnel_means_no_public_url_is_offered() -> None:
+    """Silence beats a URL that 404s — the property #412 promised and then
+    broke."""
+    origin = request_origin(
+        _scope(host="lobster.tail08dfce.ts.net", path=f"/mcp/{TOKEN}", proto="https", port=8789),
+        TOKEN,
+    )
+    assert origin is not None
+
+    assert resolve_prefix(origin, capture=lambda _argv: None) is None
+
+
+def test_two_mounts_for_one_port_is_ambiguous_not_a_guess() -> None:
+    """Guessing which mount a given tenant came through is exactly the
+    wrong-URL failure this exists to prevent."""
+    ambiguous = json.dumps(
+        {
+            "Web": {
+                "h:443": {
+                    "Handlers": {
+                        "/shared": {"Proxy": "http://127.0.0.1:8789"},
+                        "/also": {"Proxy": "http://127.0.0.1:8789"},
+                    }
+                }
+            }
+        }
+    )
+    assert funnel_prefix(8789, capture=lambda _argv: ambiguous) is None
+
+
+def test_a_front_that_announces_its_prefix_is_believed_first() -> None:
+    scope = _scope(host="public.example", path=f"/mcp/{TOKEN}", proto="https", port=8789)
+    scope["headers"].append((b"x-forwarded-prefix", b"/wingman"))
+    origin = request_origin(scope, TOKEN)
+    assert origin is not None
+
+    prefix = resolve_prefix(
+        origin, headers={"x-forwarded-prefix": "/wingman"}, capture=lambda _argv: FUNNEL
+    )
+
+    assert prefix == "/wingman", "an explicit announcement beats discovery"
+
+
+def test_loopback_needs_no_prefix_and_never_shells_out() -> None:
+    """A request that arrived on 127.0.0.1 is already the complete address."""
+    origin = request_origin(_scope(host="127.0.0.1:8789", path=f"/mcp/{TOKEN}", port=8789), TOKEN)
+    assert origin is not None
+
+    def explode(_argv: list[str]) -> str | None:
+        raise AssertionError("must not run tailscale for a loopback request")
+
+    assert resolve_prefix(origin, capture=explode) == ""
+    assert origin.mcp_url("") == f"http://127.0.0.1:8789/mcp/{TOKEN}"
 
 
 def test_a_forwarded_host_wins_over_the_host_header() -> None:

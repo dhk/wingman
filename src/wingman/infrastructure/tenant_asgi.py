@@ -23,7 +23,9 @@ app's public route shape is touched.
 from __future__ import annotations
 
 import contextvars
-from collections.abc import Iterator
+import json
+import subprocess
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -35,6 +37,80 @@ from starlette.types import Receive, Scope, Send
 
 from wingman.infrastructure.config import Config, tenant_config_scope
 from wingman.infrastructure.tenants import Tenant, TenantIndex
+
+#: (argv) -> stdout, or None if the command could not be run.
+Capture = Callable[[list[str]], str | None]
+
+
+def _default_capture(argv: list[str]) -> str | None:
+    try:
+        result = subprocess.run(  # fixed argv, no shell, hard timeout
+            argv, capture_output=True, text=True, timeout=10.0, check=False
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - defensive
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def funnel_prefix(port: int, capture: Capture = _default_capture) -> str | None:
+    """The path a Tailscale funnel mounts this port under, read from the
+    LIVE funnel — or None if it cannot be determined.
+
+    Ground truth rather than assumption, and the same discovery
+    'wingman-register-service.sh' has done since #288 for the same reason:
+    a route added or moved since provisioning is picked up instead of
+    drifting silently. Ported here because a stripping front removes the
+    prefix before this process sees it, so the request cannot report it and
+    a derived URL 404s (#417).
+
+    Never raises: no tailscale, daemon down, odd output, nothing mounted on
+    this port — all mean None, and None makes the caller say it does not
+    know rather than emit a wrong address.
+    """
+    raw = capture(["tailscale", "serve", "status", "--json"])
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return None
+    target = f"http://127.0.0.1:{port}"
+    paths = sorted(
+        path
+        for host in (payload.get("Web") or {}).values()
+        for path, handler in ((host or {}).get("Handlers") or {}).items()
+        if (handler or {}).get("Proxy") == target
+    )
+    # '/' is a mount with no prefix; anything else is the prefix itself.
+    # Several mounts for one port is ambiguous, and guessing which one a
+    # given tenant came through would be exactly the wrong-URL failure.
+    if len(paths) != 1:
+        return None
+    return "" if paths[0] == "/" else paths[0].rstrip("/")
+
+
+def resolve_prefix(
+    origin: RequestOrigin,
+    headers: Mapping[str, str] | None = None,
+    capture: Capture = _default_capture,
+) -> str | None:
+    """The path prefix this tenant's public URL needs, or None if unknown.
+
+    Order: a front that announces itself, then the path we were given, then
+    loopback (which needs none), then the live funnel. None means say so —
+    a URL that 404s sends somebody hunting for a page that is not there,
+    which is the failure this whole surface promised to avoid.
+    """
+    announced = (headers or {}).get("x-forwarded-prefix", "").strip()
+    if announced:
+        return "/" + announced.strip("/")
+    if origin.prefix:
+        return origin.prefix
+    if origin.is_loopback:
+        return ""
+    if origin.local_port is None:
+        return None
+    return funnel_prefix(origin.local_port, capture=capture)
 
 
 @dataclass(frozen=True)
@@ -52,15 +128,29 @@ class RequestOrigin:
 
     scheme: str
     authority: str
-    #: Everything before '/mcp/<token>' — the front's mount point, if any.
+    #: Everything before '/mcp/<token>' in the path we were actually given.
+    #: Usually EMPTY behind a stripping front — a Tailscale funnel mounted
+    #: with '--set-path /shared' removes the prefix before proxying, so the
+    #: process never sees it (#417). Never treat this as authoritative for
+    #: a public URL; ask 'resolve_prefix' instead.
     prefix: str
     token: str
+    #: The port this process was reached on, from the ASGI scope. What the
+    #: live funnel lookup matches against.
+    local_port: int | None = None
 
-    def mcp_url(self) -> str:
-        return f"{self.scheme}://{self.authority}{self.prefix}/mcp/{self.token}"
+    @property
+    def is_loopback(self) -> bool:
+        """A request that arrived on loopback needs no prefix — it is
+        already the complete address."""
+        host = self.authority.split(":")[0]
+        return host in {"127.0.0.1", "::1", "localhost"}
 
-    def ui_url(self) -> str:
-        return f"{self.scheme}://{self.authority}{self.prefix}/ui/{self.token}/"
+    def mcp_url(self, prefix: str = "") -> str:
+        return f"{self.scheme}://{self.authority}{prefix}/mcp/{self.token}"
+
+    def ui_url(self, prefix: str = "") -> str:
+        return f"{self.scheme}://{self.authority}{prefix}/ui/{self.token}/"
 
 
 def request_origin(scope: Scope, token: str) -> RequestOrigin | None:
@@ -87,7 +177,11 @@ def request_origin(scope: Scope, token: str) -> RequestOrigin | None:
     path = raw.decode("latin-1") if raw else scope.get("path", "")
     marker = f"/mcp/{token}"
     prefix = path.split(marker)[0] if marker in path else ""
-    return RequestOrigin(scheme=scheme, authority=authority, prefix=prefix, token=token)
+    server = tuple(scope.get("server") or ())
+    local_port = server[1] if len(server) > 1 and isinstance(server[1], int) else None
+    return RequestOrigin(
+        scheme=scheme, authority=authority, prefix=prefix, token=token, local_port=local_port
+    )
 
 
 _request_origin: contextvars.ContextVar[RequestOrigin | None] = contextvars.ContextVar(
