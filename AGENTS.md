@@ -183,6 +183,35 @@ Evaluation cases should include:
 
 Live-model evaluations must be explicitly marked and excluded from the default fast suite.
 
+**A test for a bug must be shown to FAIL against the unfixed code.** Revert
+the fix, run it, confirm it fails, restore. A test written from the same
+assumption as the fix proves only that you are consistent — three such
+tests passed against broken code in a single session, including one whose
+fixture fed a request shape the deployment never produces.
+
+**Verify against the running system, not only the suite.** A green suite
+said nothing about a banner printed after the lines it contextualised, a
+port still held at restart, or a public URL that 404s. Run the thing.
+
+## Failure Reporting
+
+Diagnostics are read by somebody deciding what to do next, usually in a
+hurry. Two distinctions are load-bearing, and collapsing either sends them
+to fix the wrong thing:
+
+- **Absent is not unreadable.** `Path.exists()` raises on `EACCES` rather
+  than returning False, and a shared-config directory (`/etc/wingman` is
+  `750 root:wingman`) makes that the ordinary case. Reporting "no such
+  file" for a file that is present, correct, and merely not yours to see
+  has cost real hours here. Route such checks through
+  `broadcast.permission_problem()`; a test enforces this.
+- **Stale is not down.** "The install failed, the previous build is still
+  serving" and "the process was stopped and has not come back" look
+  identical in a log and need opposite responses. Say which.
+
+State what did NOT happen, and never claim nothing changed when something
+did.
+
 ## Scoring and Recommendations
 
 Scores must expose:

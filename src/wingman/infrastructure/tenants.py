@@ -108,9 +108,31 @@ class Tenant:
         --rotate-token' run for this tenant is picked up on the next
         index reload with no coordination needed."""
         path = self.token_path()
-        if not path.exists():
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            # No token issued yet. Ordinary, and not this method's problem.
             return None
-        value = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            # Unreadable — most likely a permission problem on somebody
+            # else's data dir under the shared process. FAIL CLOSED FOR
+            # THIS TENANT, never loud for all of them: '_load' already
+            # treats None as "no token", so this account cannot
+            # authenticate while every other tenant is untouched. Raising
+            # here would take the whole index down over one bad file.
+            #
+            # One 'read_text' rather than 'exists()' then read: exists()
+            # raises on EACCES rather than returning False (#401, #411),
+            # so the two-call form turned a permission problem into a
+            # traceback while looking like a check.
+            _logger.warning(
+                "tenant %r: token file %s could not be read (%s) — treating this tenant "
+                "as having no token; every other tenant is unaffected",
+                self.slug,
+                path,
+                exc,
+            )
+            return None
         return value or None
 
     def config(self) -> Config:
