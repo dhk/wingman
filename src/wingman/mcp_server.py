@@ -1220,12 +1220,14 @@ def heap(
     return f"unknown action {action!r}; use add, show, sort, or remove."
 
 
-# No return annotation, deliberately: this tool returns IMAGES alongside
-# text, and FastMCP builds an output schema from the annotation — a union
-# containing Image is not something pydantic can generate a schema for.
-# Every other tool here is annotated '-> str' and should stay that way.
+# Annotated 'list[Any]' rather than the precise 'list[str | Image]', which is
+# what this actually returns: FastMCP builds an output schema from the
+# annotation and pydantic cannot generate one for Image (it raises at
+# import time, taking the whole server with it). mypy needs SOME
+# annotation, so the bare container is the honest compromise — the real
+# element type is stated here instead. Every other tool stays '-> str'.
 @server.tool()
-def heap_read(item_id: str = "", items: list[str] | None = None):  # noqa: ANN201
+def heap_read(item_id: str = "", items: list[str] | None = None) -> list[Any]:
     """Return dropped screenshots from the heap so YOU can read them (#392).
 
     Wingman does not look at these and has no vision model. You do. So the
@@ -1257,7 +1259,7 @@ def heap_read(item_id: str = "", items: list[str] | None = None):  # noqa: ANN20
 
     config = _ready_config()
     if config is None:
-        return _NOT_INITIALIZED
+        return [_NOT_INITIALIZED]
     ids = [entry for entry in (items or []) if entry.strip()] or (
         [item_id] if item_id.strip() else []
     )
@@ -1265,9 +1267,9 @@ def heap_read(item_id: str = "", items: list[str] | None = None):  # noqa: ANN20
         with Storage(config.db_path) as storage:
             screenshots, refused = read_screenshots(ids, storage, config)
     except IngestError as exc:
-        return f"heap read failed: {exc}"
+        return [f"heap read failed: {exc}"]
 
-    payload: list[object] = [render_screenshot_header(screenshots, refused)]
+    payload: list[Any] = [render_screenshot_header(screenshots, refused)]
     payload.extend(Image(data=shot.data, format=shot.image_format) for shot in screenshots)
     return payload
 
