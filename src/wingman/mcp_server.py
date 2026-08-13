@@ -3208,10 +3208,17 @@ def feature_request(title: str = "", body: str = "", confirmed: bool = False) ->
 
 
 @server.tool()
-def digest() -> str:
+def digest(as_html: bool = False) -> str:
     """The newest overnight digest — what changed, what failed, and the action
     list (what/why/who/evidence). The morning starting point after a scheduled
     'wingman overnight' run; pair with 'search' to dig into anything it raises.
+
+    Every overnight run already writes a styled HTML twin alongside the
+    Markdown (same design tokens as every other wingman export, action list
+    first) — set as_html=True to report that file's path instead of reading
+    it here, useful for a browser-viewable snapshot rather than the tool's
+    text response. The Markdown stays canonical either way; this only
+    changes which file the reply points at.
     """
     config = _ready_config()
     if config is None:
@@ -3221,6 +3228,15 @@ def digest() -> str:
         return (
             "No digests yet — 'wingman overnight' writes one per run "
             "(enroll targets first with company_follow)."
+        )
+    if as_html:
+        html_path = newest.with_suffix(".html")
+        if html_path.exists():
+            return f"HTML digest: {html_path}"
+        return (
+            f"No HTML twin found at {html_path} — it's written by 'wingman "
+            "overnight' runs from this version onward. Re-run overnight to "
+            "generate one, or call digest() without as_html for the Markdown."
         )
     return newest.read_text(encoding="utf-8")
 
