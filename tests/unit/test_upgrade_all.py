@@ -1,5 +1,7 @@
 """Root-run: keep every shape-B user's wingman install current (#125, #167)."""
 
+from pathlib import Path
+
 from wingman.infrastructure.upgrade_all import (
     UpgradeTarget,
     _parse_usernames,
@@ -425,3 +427,82 @@ def test_the_happy_path_costs_one_extra_call_not_four() -> None:
     upgrade_one(target, run=run, resolve_uid=lambda _u: 1000)
     probes = [c for c in run.calls if "status" in c or "@{u}" in c]  # type: ignore[attr-defined]
     assert probes == [], "the failure-only probes must not run on a successful pull"
+
+
+# --------------------------------------------------------------------------
+# Root-owned bytecode heals itself (#406)
+# --------------------------------------------------------------------------
+
+
+def _store(tmp_path: Path) -> Path:
+    store = tmp_path / ".local/share/uv/tools/wingman/lib/python3.12/site-packages/wingman"
+    store.mkdir(parents=True)
+    return tmp_path / ".local/share/uv/tools/wingman"
+
+
+def test_a_missing_store_is_not_an_error(tmp_path: Path) -> None:
+    from wingman.infrastructure.upgrade_all import clear_root_owned_bytecode
+
+    assert clear_root_owned_bytecode(tmp_path / "nothing-here") == []
+
+
+def test_it_does_nothing_when_not_running_as_root(tmp_path: Path, monkeypatch) -> None:
+    """The whole justification is the privilege asymmetry — root removing
+    what the unprivileged reinstall cannot. Running it unprivileged would
+    delete a user's own caches for no reason."""
+    from wingman.infrastructure import upgrade_all
+
+    store = _store(tmp_path)
+    cache = store / "lib/python3.12/site-packages/wingman/__pycache__"
+    cache.mkdir()
+    monkeypatch.setattr(upgrade_all.os, "geteuid", lambda: 1000)
+
+    assert upgrade_all.clear_root_owned_bytecode(store) == []
+    assert cache.exists()
+
+
+def test_only_root_owned_caches_are_removed(tmp_path: Path, monkeypatch) -> None:
+    """A user's own bytecode is theirs, reinstallable by them, and removing
+    it costs startup time for nothing."""
+    from wingman.infrastructure import upgrade_all
+
+    store = _store(tmp_path)
+    package = store / "lib/python3.12/site-packages/wingman"
+    root_owned = package / "__pycache__"
+    root_owned.mkdir()
+    (root_owned / "__init__.cpython-312.pyc").write_bytes(b"x")
+    mine = package / "cli" / "__pycache__"
+    mine.mkdir(parents=True)
+
+    monkeypatch.setattr(upgrade_all.os, "geteuid", lambda: 0)
+
+    removed = upgrade_all.clear_root_owned_bytecode(
+        store, owner_of=lambda path: 0 if path == root_owned else 1000
+    )
+
+    assert len(removed) == 1
+    assert not root_owned.exists()
+    assert mine.exists(), "a cache the account owns must be left alone"
+
+
+def test_nothing_outside_a_pycache_directory_is_touched(tmp_path: Path, monkeypatch) -> None:
+    """Bytecode is regenerable, which is why removing it is safe. Nothing
+    else in the store is, which is why nothing else is in scope."""
+    from wingman.infrastructure import upgrade_all
+
+    store = _store(tmp_path)
+    package = store / "lib/python3.12/site-packages/wingman"
+    precious = package / "data.json"
+    precious.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(upgrade_all.os, "geteuid", lambda: 0)
+
+    upgrade_all.clear_root_owned_bytecode(store, owner_of=lambda _path: 0)
+
+    assert precious.exists()
+
+
+def test_the_tool_store_path_is_derived_from_the_accounts_home() -> None:
+    from wingman.infrastructure.upgrade_all import tool_store
+
+    assert tool_store("/home/dhk") == Path("/home/dhk/.local/share/uv/tools/wingman")
+    assert tool_store("/home/dhk/") == Path("/home/dhk/.local/share/uv/tools/wingman")

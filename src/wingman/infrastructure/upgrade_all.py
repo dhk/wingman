@@ -51,10 +51,12 @@ import argparse
 import os
 import pwd
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 SYSTEMD_UNIT = "wingman-mcp.service"
 REPO_SUBPATH = "src/wingman"
@@ -204,6 +206,64 @@ def diagnose_reinstall(failure: str, user: str, home: str | None) -> str | None:
     return None
 
 
+#: Who owns a path. Injectable for the same reason Runner and UidResolver
+#: are: a test must not need root, and must not fake Path.stat wholesale —
+#: is_dir() and rglob() go through it too.
+OwnerOf = Callable[[Path], int]
+
+
+def _default_owner(path: Path) -> int:
+    return path.stat().st_uid
+
+
+def tool_store(home: str | None) -> Path:
+    """Where an account's uv tool install of wingman lives."""
+    return Path((home or "~").rstrip("/")) / ".local/share/uv/tools/wingman"
+
+
+def clear_root_owned_bytecode(store: Path, owner_of: OwnerOf = _default_owner) -> list[str]:
+    """Remove root-owned __pycache__ directories from one account's tool
+    store, returning what was removed (#406).
+
+    This runs as ROOT — the unit's ExecStart is root, and it sudo's DOWN to
+    each account — so it can delete what the unprivileged reinstall cannot.
+    That asymmetry is the whole point: a single `sudo wingman motd set`
+    seeds root-owned bytecode in the invoking account's store, and
+    `uv tool install --reinstall` then fails as that account, days later,
+    naming a package nobody has heard of.
+
+    #377 stops this for every module except the one it lives in: Python
+    writes `wingman/__init__.py`'s own .pyc as part of importing it, before
+    the guard inside it executes, so no code in the package can be early
+    enough. The blast radius shrank from 1,824 files to 2 and the
+    operational consequence did not change — one root-owned directory
+    blocks a reinstall exactly as well as 1,824 did. So the upgrade heals
+    it instead of asking a human for a chown.
+
+    Deliberately narrow: directories NAMED __pycache__, owned by uid 0,
+    beneath this store only. Bytecode is regenerable, so removing it costs
+    nothing; removing anything else would not be repairable, which is why
+    nothing else is in scope.
+    """
+    if os.geteuid() != 0 or not store.is_dir():
+        return []
+    removed: list[str] = []
+    for path in sorted(store.rglob("__pycache__")):
+        if not path.is_dir():
+            continue
+        try:
+            if owner_of(path) != 0:
+                continue
+            shutil.rmtree(path)
+        except OSError as exc:  # pragma: no cover - defensive
+            # Reported, not raised: a cache we cannot clear is the state we
+            # were already in, and it must not stop the upgrade attempt.
+            removed.append(f"{path} (could NOT be removed: {exc})")
+            continue
+        removed.append(str(path))
+    return removed
+
+
 def _sudo_as(user: str, argv: list[str], resolve_uid: UidResolver) -> list[str]:
     # XDG_RUNTIME_DIR is required for 'systemctl --user' to reach this
     # user's session bus when invoked via sudo from root; harmless to set
@@ -244,6 +304,15 @@ def upgrade_one(
             steps.append(f"pull failed, nothing was touched: {why}")
             return UpgradeResult(target.user, ok=False, steps=steps)
         steps.append("pulled latest")
+
+    # Before the reinstall, not after a failure: the point is that it
+    # never fails for this reason again (#406).
+    healed = clear_root_owned_bytecode(tool_store(target.home))
+    if healed:
+        steps.append(
+            f"removed {len(healed)} root-owned __pycache__ director(y/ies) left by a "
+            "privileged run — they would have blocked this reinstall"
+        )
 
     code, out = run(sudo(["uv", "tool", "install", "--reinstall", target.install_source]))
     if code != 0:
