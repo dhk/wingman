@@ -232,7 +232,7 @@ def my_urls() -> str:
     carries a bearer token, so it belongs in a password manager rather than
     an email. If one leaks, whoever runs this Wingman can rotate it.
     """
-    from wingman.infrastructure.tenant_asgi import current_request_origin
+    from wingman.infrastructure.tenant_asgi import current_request_origin, resolve_prefix
 
     config = _ready_config()
     if config is None:
@@ -248,11 +248,32 @@ def my_urls() -> str:
             "report. On a single-workspace install, 'wingman mcp url' prints them; on "
             "a shared process, ask whoever runs the machine."
         )
+    prefix = resolve_prefix(origin)
+    if prefix is None:
+        # A stripping front removed the mount path and the live funnel could
+        # not be read, so the public prefix is genuinely unknown (#417).
+        # Emitting a public URL anyway is what produced a confident 404 in
+        # somebody's hands — silence is better than a wrong address.
+        return (
+            "I can see you reached this workspace at "
+            f"{origin.scheme}://{origin.authority}, but not which path prefix the front "
+            "in between mounts it under — so any public URL I printed could 404.\n"
+            "\n"
+            f"On the machine itself these work:\n"
+            f"  MCP connector:        http://127.0.0.1:{origin.local_port or 8789}"
+            f"/mcp/{origin.token}\n"
+            f"  Web UI (read+upload): http://127.0.0.1:{origin.local_port or 8789}"
+            f"/ui/{origin.token}/\n"
+            "\n"
+            "For the public address, ask whoever runs this Wingman for the path prefix "
+            "(they can read it with 'tailscale serve status'). These carry a bearer "
+            "token — treat them like a password."
+        )
     return (
         "Your URLs for this workspace — both carry a bearer token, so treat them "
         "like a password (a password manager, not an email):\n"
-        f"  MCP connector:        {origin.mcp_url()}\n"
-        f"  Web UI (read+upload): {origin.ui_url()}\n"
+        f"  MCP connector:        {origin.mcp_url(prefix)}\n"
+        f"  Web UI (read+upload): {origin.ui_url(prefix)}\n"
         "\n"
         "They are the same address with one path segment changed. The web UI is where "
         "you upload a CV or a LinkedIn export yourself. If a URL leaks, whoever runs "
