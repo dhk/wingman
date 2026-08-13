@@ -105,6 +105,21 @@ EnvironmentFile=-%h/.config/wingman/wingman.env
 EnvironmentFile=-%h/.config/wingman/secrets.env
 ExecStart=%h/.local/bin/wingman-mcp --http --port $PORT --tenant-registry $REGISTRY_PATH
 Restart=on-failure
+RestartSec=2
+# A slow port release must never become a PERMANENT outage (#415).
+#
+# systemd's default StartLimitBurst is 5: five failed starts inside the
+# interval and it gives up, leaving the unit dead until somebody notices.
+# On this box a redeploy produced 24 consecutive bind failures over ~50
+# seconds — the outgoing process was still draining sessions and holding
+# :$PORT — and every one of them counted. It came up only because the
+# limit was not enforced over that window.
+#
+# The real fix is that redeploy-shared now waits for the port instead of
+# racing it. This is the backstop for every other path: a manual
+# 'systemctl restart', a reboot, an OOM kill. Giving up on a service that
+# serves every tenant is a worse failure than retrying it for a while.
+StartLimitBurst=0
 
 [Install]
 WantedBy=default.target

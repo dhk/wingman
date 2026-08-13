@@ -76,12 +76,46 @@ say "2/5 reinstalling"
 # 'sudo -i', for the reason spelled out at length above.
 sudo -iu "$SERVICE_USER" bash -c 'export PATH="$HOME/.local/bin:$PATH"; ~/src/wingman/scripts/wingman-tool-install.sh ~/src/wingman'
 
+# STOP, wait for the port, THEN start — never a bare 'restart' (#415).
+#
+# 'systemctl restart' returns once the unit reports stopped, and stopped
+# does NOT mean the socket is free: the outgoing process drains open
+# streamable-HTTP sessions first. The incoming one then dies on "Address
+# already in use", systemd relaunches it, and that repeats. Observed on
+# this box: 24 failed binds across ~50 seconds before it finally won.
+#
+# That is not merely slow. The unit's StartLimitBurst is 5. If systemd had
+# enforced the limit over that window it would have given up and left the
+# service dead — every tenant down, indefinitely, while the operator was
+# told the redeploy had not happened. It survived by luck.
+#
+# Waiting for the port removes the race instead of tolerating it.
 say "3/5 restarting wingman-mcp.service"
 BEFORE_STARTED_AT=$(curl -s "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -o '"started_at":"[^"]*"' || true)
-sudo_user_ctl restart wingman-mcp.service
+sudo_user_ctl stop wingman-mcp.service
+
+PORT_DEADLINE=$((SECONDS + 60))
+while [ "$SECONDS" -lt "$PORT_DEADLINE" ]; do
+  # ss over lsof: present on a minimal server, and no privileges needed to
+  # answer "is anything listening", which is the only question here.
+  ss -ltn "sport = :$PORT" 2>/dev/null | grep -q ":$PORT" || break
+  sleep 1
+done
+if ss -ltn "sport = :$PORT" 2>/dev/null | grep -q ":$PORT"; then
+  echo "ERROR: port $PORT is STILL held 60s after stopping the service." >&2
+  echo "The old process has not released it, so starting now would fail to bind and" >&2
+  echo "systemd would restart-loop. NOTHING IS SERVING right now — this is not stale," >&2
+  echo "it is down. Find the holder with: sudo lsof -ti :$PORT" >&2
+  exit 1
+fi
+
+sudo_user_ctl start wingman-mcp.service
 
 say "4/5 verifying health"
-DEADLINE=$((SECONDS + 30))
+# 90s, not 30: the old window was shorter than a real convergence and
+# declared failure while the service was still coming up.
+HEALTH_WINDOW=90
+DEADLINE=$((SECONDS + HEALTH_WINDOW))
 STATUS=""
 while [ "$SECONDS" -lt "$DEADLINE" ]; do
   STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health" 2>/dev/null || echo "000")
@@ -90,7 +124,15 @@ while [ "$SECONDS" -lt "$DEADLINE" ]; do
 done
 
 if [ "$STATUS" != "200" ]; then
-  echo "ERROR: /health did not return 200 within 30s (last: $STATUS). Not confirmed healthy." >&2
+  # Say which of the two situations this is. They look identical in a log
+  # and need opposite responses: an operator who reads "left alone" when
+  # nothing is serving will go back to bed.
+  echo "ERROR: /health did not return 200 within ${HEALTH_WINDOW}s (last: $STATUS)." >&2
+  echo "" >&2
+  echo "The service WAS stopped and started — this is not 'nothing changed'." >&2
+  echo "NOTHING IS SERVING TENANTS until it comes up. Treat this as an outage," >&2
+  echo "not as a stale build." >&2
+  echo "" >&2
   echo "Check: sudo -u $SERVICE_USER env XDG_RUNTIME_DIR=/run/user/$WS_UID systemctl --user status wingman-mcp.service" >&2
   echo "Logs:  sudo -u $SERVICE_USER env XDG_RUNTIME_DIR=/run/user/$WS_UID journalctl --user -u wingman-mcp.service -n 50 --no-pager" >&2
   exit 1
