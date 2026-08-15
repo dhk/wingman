@@ -402,6 +402,106 @@ def test_mcp_perspectives_start_promotes_resume_when_captures_exist(
     assert "2 Values nominations" in result
 
 
+def test_mcp_wingman_flow_empty_workspace_names_all_destinations(workspace: Config) -> None:
+    from wingman.mcp_server import wingman_flow
+
+    result = wingman_flow()
+    assert result.startswith("wingman_flow — front-door orientation")
+    # the three question cards
+    assert "What do you understand of Wingman?" in result
+    assert "How do you like to learn?" in result
+    assert "What's top of mind for you right now?" in result
+    # all five named routing destinations
+    assert "perspectives_start" in result
+    assert "job_criteria" in result
+    assert "people_deep_dive" in result and "company_deep_dive" in result
+    assert "digest()" in result
+    assert "corpus" in result
+    # does not gate perspectives_start — reachable, not a required first step
+    assert "does not gate or replace perspectives_start" in result
+    # no prior interview progress claimed in a fresh workspace
+    assert "Pick up where I left off" not in result
+    assert "Acting as: yourself." in result
+    assert "Opportunities: none assessed yet." in result
+
+
+def test_mcp_wingman_flow_is_persona_scoped(workspace: Config) -> None:
+    from wingman.mcp_server import coach_persona, wingman_flow
+
+    coach_persona("set", "Mike Chen")
+    result = wingman_flow()
+    assert "Acting as: coach for Mike Chen." in result
+
+    coach_persona("clear")
+    own_result = wingman_flow()
+    assert "Acting as: yourself." in own_result
+
+
+def test_mcp_wingman_flow_reflects_assessed_opportunities(workspace: Config) -> None:
+    from wingman.domain.opportunity import (
+        FitVerdict,
+        Opportunity,
+        Requirement,
+        RequirementAssessment,
+        RequirementKind,
+    )
+    from wingman.domain.profile import EvidenceSpan
+    from wingman.mcp_server import wingman_flow
+
+    assert "Opportunities: none assessed yet." in wingman_flow()
+
+    requirement = Requirement(
+        name="req-1",
+        kind=RequirementKind.REQUIRED,
+        evidence=[EvidenceSpan(source_record_id="r", quote="asks for it")],
+    )
+    assessment = RequirementAssessment(
+        requirement_id=requirement.requirement_id,
+        verdict=FitVerdict.MET,
+        rationale="because",
+        confidence=0.5,
+    )
+    opportunity = Opportunity(
+        title="Staff MLE at Acme",
+        source_record_id="r1",
+        next_action="Decide on it",
+        requirements=[requirement],
+        assessments=[assessment],
+    )
+    with Storage(workspace.db_path) as storage:
+        storage.save_opportunity(opportunity)
+
+    assert "Opportunities: at least one has been assessed already." in wingman_flow()
+
+
+def test_mcp_wingman_flow_names_skip_and_done_exits_on_every_card(workspace: Config) -> None:
+    """BP-04: every card needs a reachable exit, not just free text the user
+    has to already know to type (Copilot review, PR #427)."""
+    from wingman.mcp_server import wingman_flow
+
+    result = wingman_flow()
+    assert "skip this one" in result.lower()
+    assert "I'm done for now" in result
+    assert "nothing in particular" in result.lower()
+
+
+def test_mcp_wingman_flow_warns_job_search_route_ignores_active_persona(
+    workspace: Config,
+) -> None:
+    """job_criteria/assess_job/pack read and write the workspace's own
+    state, not a persona's — routing a coachee there silently would read or
+    overwrite the coach's own job search (Copilot review, PR #427)."""
+    from wingman.mcp_server import coach_persona, wingman_flow
+
+    own_result = wingman_flow()
+    assert "NOT persona-scoped" not in own_result
+
+    coach_persona("set", "Mike Chen")
+    persona_result = wingman_flow()
+    assert "NOT persona-scoped" in persona_result
+    assert "coach's own criteria" in persona_result
+
+
 def test_url_submission_over_size_limit_is_rejected(workspace: Config) -> None:
     from wingman.application.interview import INTERVIEW_MAX_SUBMISSION_BYTES
 

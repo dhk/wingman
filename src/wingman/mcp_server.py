@@ -999,6 +999,193 @@ def perspectives_start() -> str:
 
 
 @server.tool()
+def wingman_flow() -> str:
+    """Front-door orientation, one level above perspectives_start — call this
+    when "what should I do in Wingman" has no obvious home yet: the caller
+    doesn't already know they want a profile built (that's
+    perspectives_start's job, docs/UX-0001-interview-flow.md), they just
+    don't know where to start. perspectives_start stays the direct entry
+    point for anyone who already knows they want it; this tool routes
+    everyone else, including into perspectives_start itself.
+
+    Collects and infers nothing here in code (AGENTS.md invariant 9,
+    "partial truth over polished fiction" — no new inference logic): the
+    function body below computes exactly two cheap read-only signals —
+    interview_status()'s own persona-aware status text, reused wholesale
+    (same "reuse the built thing" spirit as the rest of this codebase), and
+    whether any opportunity has been assessed yet (Storage.count_opportunities()
+    — a direct COUNT(*) against the opportunities table; opportunities_list()
+    the MCP tool always renders a non-empty "no opportunities yet" sentence,
+    so bool() of it is not a usable signal, and list_opportunity_summaries
+    does far more work than a front-door existence check needs — it
+    deserializes every opportunity and answer, does opportunity×answer
+    matching, and globs the packs directory per opportunity). Everything
+    else — the three questions, and the routing that turns the answer to
+    question 3 into a destination — is conversational judgment for the
+    calling agent, carried in the return value below, not a lookup table or
+    classifier in code.
+
+    Follows the UX-0001 protocol by name (docs/UX-0001-interview-flow.md
+    §2), same vocabulary perspectives_start and interview_react use: BP-01
+    explain before every card, BP-02 one decision per card, BP-03 options
+    for structure but free text for the one card whose answer IS the
+    routing signal, BP-04 every card has an exit, BP-09 suggest-never-gate
+    — reachable and re-enterable any number of times, never a prerequisite
+    for anything else.
+
+    Three cards, presented ONE AT A TIME via AskUserQuestion (BP-02), each
+    opened with 2-3 sentences of plain-prose explainer (BP-01). BP-04 (every
+    card has an exit) applies to all three, not just the free-text ones —
+    "skip this one" and "I'm done for now" must be reachable as explicit
+    options, never just things the user has to already know to type:
+
+    1. "What do you understand of Wingman?" — single select (brand-new /
+       used it a little / know it well / not sure, skip this one;
+       free-text "Other" always last, BP-04). Calibrates how much
+       explaining the rest of this conversation needs — downstream depth,
+       not a gate.
+    2. "How do you like to learn?" — single select (just tell me what to
+       do / walk me through the reasoning / show me examples first /
+       skip this one; free-text "Other" always last). Sets how much
+       justification accompanies routing — pass this choice through
+       VERBATIM to whatever destination gets invoked, don't summarize or
+       drop it.
+    3. "What's top of mind for you right now?" — free text, no presets
+       (BP-03: a menu would shape the very answer this tool routes on).
+       This answer alone determines the destination below. "Nothing in
+       particular" is a valid, complete answer here (BP-08) — treat it as
+       "no strong pull" in the routing below, never press for more.
+
+    Before card 1, and again before card 3 (the last one), say plainly that
+    they can stop at any point — "I'm done for now" ends the flow
+    immediately, no card is a prerequisite for another, and every card is
+    re-enterable later (BP-09). Offering this only once, at the very start,
+    is not enough for someone who wants to stop midway.
+
+    Routing once card 3's free-text answer is in hand — intent-matching for
+    the calling agent's own judgment, deliberately not a lookup table,
+    regex, or classifier:
+    - No strong pull / "just get started" / not sure → explain briefly what
+      Perspectives is, then hand off to perspectives_start.
+    - Job search language (looking for a job, applying, a role or company
+      they're pursuing in general terms) → state the real sequence OUT
+      LOUD before calling anything: perspectives_start first if the status
+      below shows a thin profile, then job_criteria, then
+      assess_job/assess_job_url, then pack. Never jump straight to
+      assess_job on a thin profile without saying so. UNLIKE every other
+      destination here, none of job_criteria/assess_job/assess_job_url/pack
+      are persona-scoped today — they read and write the WORKSPACE's own
+      criteria file and the WORKSPACE's own profile items, not a persona's.
+      If a persona is active (the status line below says so), say that
+      plainly before routing here: following this route acts on the
+      coach's own job search, not the persona's, and will read or
+      overwrite the coach's own job-criteria doc. Confirm that is actually
+      what they want before calling anything, rather than routing here
+      silently.
+    - Names a specific person or company → skip profile/job scaffolding
+      entirely; go straight to people_deep_dive/company_deep_dive, or
+      people_pov/company_pov if they want a synthesized stance rather than
+      fresh research.
+    - Vague / "just checking in" / no clear ask → call digest() on demand
+      and surface it if it has content. There is no precomputed
+      "unactioned" flag here — whether the digest is worth surfacing is a
+      judgment call for the calling agent, not state this tool decides. If
+      digest() is empty or stale, ask one plain follow-up instead of
+      guessing.
+    - Has existing writing to add → identical to perspectives_start's own
+      "I do have writing to add" option: point at corpus ingestion
+      directly ('wingman corpus add <path>' or this client's own
+      corpus-upload path), not at the interview.
+
+    This tool does not gate or replace perspectives_start — it is one of
+    the five destinations above, reachable at any time, re-enterable any
+    number of times (BP-09).
+
+    Coaching mode (docs/COACHING-MODE-DESIGN.md): scoped to whatever
+    persona is active, exactly like perspectives_start — the
+    interview-status text folded into the return below already says who
+    ("Acting as: coach for NAME." vs "Acting as: yourself."), and most
+    destinations above (perspectives_start, people/company deep-dives,
+    corpus ingestion) keep acting on that same active persona, unchanged by
+    this tool. The job-search sequence is the one exception, named as such
+    in its own routing rule above: job_criteria/assess_job/pack are not
+    persona-scoped, so routing there acts on the coach's own data even
+    while a persona is active. Opportunities are not persona-scoped either
+    — the assessed-opportunities line below is global regardless of which
+    persona is active.
+    """
+    from wingman.application.coaching import get_active_persona
+
+    has_assessed = False
+    persona_active = False
+    config = _ready_config()
+    if config is not None:
+        with Storage(config.db_path) as storage:
+            has_assessed = storage.count_opportunities() > 0
+            persona_active = get_active_persona(storage, config) is not None
+
+    opportunities_line = (
+        "Opportunities: at least one has been assessed already."
+        if has_assessed
+        else "Opportunities: none assessed yet."
+    )
+    job_search_caveat = (
+        " NOT persona-scoped — acts on the coach's own criteria/profile even "
+        "while acting as this persona; say so plainly and confirm that's "
+        "wanted before routing here."
+        if persona_active
+        else ""
+    )
+
+    return (
+        "wingman_flow — front-door orientation, one level above Perspectives. "
+        "Present three AskUserQuestion cards ONE AT A TIME (BP-02), each opened "
+        "with 2-3 sentences (BP-01) explaining what's being asked and why. Say "
+        "plainly, before card 1 and again before card 3, that they can stop at "
+        'any point — "I\'m done for now" ends this immediately, nothing here '
+        "is a prerequisite for anything else, and every card is re-enterable "
+        "later (BP-09):\n\n"
+        '1. "What do you understand of Wingman?" (single select: brand-new / '
+        "used it a little / know it well / not sure, skip this one; free-text "
+        '"Other" always last, BP-04) — calibrates depth for the rest of this '
+        "conversation.\n"
+        '2. "How do you like to learn?" (single select: just tell me what to do '
+        "/ walk me through the reasoning / show me examples first / skip this "
+        'one; free-text "Other" always last, BP-04) — sets how much '
+        "justification accompanies routing; pass this choice through VERBATIM "
+        "to whatever destination gets invoked.\n"
+        '3. "What\'s top of mind for you right now?" (free text, no presets — '
+        'this answer alone determines the route below; "nothing in '
+        'particular" is a complete, valid answer, BP-08 — route it as "no '
+        'strong pull" below, never press for more).\n\n'
+        f"{interview_status()}\n"
+        f"{opportunities_line}\n\n"
+        "Once you have the free-text answer to card 3, route by intent (your "
+        "own judgment, not a lookup table):\n"
+        '- No strong pull / "just get started" → explain briefly what '
+        "Perspectives is, then hand off to perspectives_start.\n"
+        "- Job search language → state the real sequence FIRST, before calling "
+        "anything: perspectives_start (if the status above shows a thin "
+        "profile) → job_criteria → assess_job/assess_job_url → "
+        f"pack.{job_search_caveat}\n"
+        "- Names a specific person or company → skip profile/job scaffolding, "
+        "go straight to people_deep_dive/company_deep_dive, or "
+        "people_pov/company_pov for a synthesized stance instead of fresh "
+        "research.\n"
+        '- Vague / "just checking in" → call digest() on demand and surface it '
+        "if it has content (no precomputed flag — that judgment is yours); "
+        "otherwise ask one follow-up.\n"
+        "- Has existing writing to add → same as perspectives_start's own "
+        "option: point at corpus ingestion directly ('wingman corpus add "
+        "<path>' or this client's own corpus-upload path).\n\n"
+        "This does not gate or replace perspectives_start — it is one of the "
+        "five destinations above, reachable any time, re-enterable any number "
+        "of times (BP-09). perspectives_start stays the direct entry point for "
+        "anyone who already knows they want it."
+    )
+
+
+@server.tool()
 def coach_persona(action: str, name: str = "") -> str:
     """Coaching mode (docs/COACHING-MODE-DESIGN.md): act as coach for
     someone, or check/clear who's currently active.
