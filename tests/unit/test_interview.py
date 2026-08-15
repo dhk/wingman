@@ -474,6 +474,34 @@ def test_mcp_wingman_flow_reflects_assessed_opportunities(workspace: Config) -> 
     assert "Opportunities: at least one has been assessed already." in wingman_flow()
 
 
+def test_mcp_wingman_flow_names_skip_and_done_exits_on_every_card(workspace: Config) -> None:
+    """BP-04: every card needs a reachable exit, not just free text the user
+    has to already know to type (Copilot review, PR #427)."""
+    from wingman.mcp_server import wingman_flow
+
+    result = wingman_flow()
+    assert "skip this one" in result.lower()
+    assert "I'm done for now" in result
+    assert "nothing in particular" in result.lower()
+
+
+def test_mcp_wingman_flow_warns_job_search_route_ignores_active_persona(
+    workspace: Config,
+) -> None:
+    """job_criteria/assess_job/pack read and write the workspace's own
+    state, not a persona's — routing a coachee there silently would read or
+    overwrite the coach's own job search (Copilot review, PR #427)."""
+    from wingman.mcp_server import coach_persona, wingman_flow
+
+    own_result = wingman_flow()
+    assert "NOT persona-scoped" not in own_result
+
+    coach_persona("set", "Mike Chen")
+    persona_result = wingman_flow()
+    assert "NOT persona-scoped" in persona_result
+    assert "coach's own criteria" in persona_result
+
+
 def test_url_submission_over_size_limit_is_rejected(workspace: Config) -> None:
     from wingman.application.interview import INTERVIEW_MAX_SUBMISSION_BYTES
 
