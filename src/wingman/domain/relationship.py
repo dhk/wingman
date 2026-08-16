@@ -12,9 +12,32 @@ a living judgment, not a lineage of superseded claims.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from enum import StrEnum
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+
+
+class EvidenceTier(StrEnum):
+    """How a relationship_log entry's note relates to what actually
+    happened (RFC-073).
+
+    OBSERVED: the note is the user's own words, or a direct quote from a
+    real source (an email, a genuine transcript) — RFC-037's original
+    "zero model calls" contract, named rather than merely implied.
+    ENDORSED: the note is a model-drafted synthesis of a source (an
+    AI-generated meeting-notes summary, a gestalt read of a call) that the
+    person has reviewed and confirmed or corrected before it was stored.
+
+    There is no third stored value for an unconfirmed draft — "inferred"
+    is protocol vocabulary describing that pre-confirmation state, never
+    itself written here. By the time a call reaches log_interaction, the
+    note is either a real source's own words or a synthesis the person has
+    already promoted by confirming it.
+    """
+
+    OBSERVED = "observed"
+    ENDORSED = "endorsed"
 
 
 class RelationshipObjective(BaseModel):
@@ -40,13 +63,23 @@ class RelationshipLogEntry(BaseModel):
     """One recorded interaction with a person — what actually happened.
 
     Deterministic and person-attributed, the qa_capture way (RFC-036): the
-    user's own words become the evidence quote in a source file, zero model
-    calls between what was typed and what is stored. The raw material every
-    future brief and thesis revision cites.
+    note becomes the evidence quote in a source file, zero model calls
+    between what was typed and what is stored, by default. The raw
+    material every future brief and thesis revision cites.
+
+    evidence_tier (RFC-073) names what kind of evidence the note is —
+    OBSERVED (the default: the user's own words, or a direct source quote)
+    or ENDORSED (a model-drafted synthesis the person reviewed and
+    confirmed). source_url is an optional pointer to the real external
+    document a synthesis was drawn from (a meeting-notes doc, an email
+    thread) — distinct from source_record_id, which always points at this
+    entry's own generated inbox note.
     """
 
     entry_id: str = Field(default_factory=lambda: str(uuid4()))
     person_id: str
     source_record_id: str
     note: str
+    evidence_tier: EvidenceTier = EvidenceTier.OBSERVED
+    source_url: str = ""
     happened_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

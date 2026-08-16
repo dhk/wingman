@@ -1379,23 +1379,56 @@ def relationship_objective(
 
 
 @server.tool()
-def relationship_log(person: str, note: str = "", action: str = "add") -> str:
+def relationship_log(
+    person: str,
+    note: str = "",
+    action: str = "add",
+    evidence_tier: str = "observed",
+    source_url: str = "",
+) -> str:
     """Record what actually happened with a watched person (RFC-037):
     'coffee with R., discussed the eval harness role' — the qa_capture
     way (#96, RFC-036). action is 'add' (log `note` for `person`) or
     'list' (show the person's interaction log, oldest first).
 
-    Deterministic and zero-model: the note becomes a source file and a
-    log entry whose evidence quote is the user's words verbatim. This is
-    raw material a future brief or objective revision can cite — never a
-    summary, never a model's characterization of the interaction.
+    evidence_tier (RFC-073) is 'observed' (default) or 'endorsed'.
+
+    - 'observed': the note is the user's own words, or a direct quote
+      from a real source (an email, a genuine transcript) — deterministic
+      and zero-model, exactly as before. This is the only tier for
+      anything the user typed themselves.
+    - 'endorsed': the note is a model-drafted synthesis of a source the
+      user did NOT write themselves — an AI-generated meeting-notes
+      summary, a gestalt read of a call. NEVER call with evidence_tier='endorsed'
+      until the person has seen the exact note text and explicitly
+      confirmed or corrected it — show it in a quote block first, the
+      same echo-before-save gate as interview_react and profile_manage's
+      amend (BP-06). There is no third value for an unconfirmed draft: a
+      synthesis you haven't shown them yet isn't a relationship_log call,
+      it's still just your own draft in the conversation.
+
+    source_url is optional and only meaningful for 'endorsed' entries —
+    the real external document the synthesis was drawn from (a
+    meeting-notes doc, a call recording link), so anyone reading the
+    entry later can trace it back to root truth. Never invent one.
+
+    Either way, this is raw material a future brief or objective revision
+    can cite — 'observed' entries are never a summary or characterization;
+    'endorsed' entries are a synthesis, but the record says so plainly and
+    the person stood behind it before it was saved.
 
     Protocol: when the user describes something that happened with a
     watched person in conversation, OFFER to log it — show the exact
-    note text that will be stored, and save only after they agree. Store
-    their words verbatim; never paraphrase without confirmation.
+    note text that will be stored, and save only after they agree
+    (evidence_tier='observed'). When the only material is a source you
+    read on their behalf (their words, not yours, but a document rather
+    than something they typed to you directly), draft the note, label it
+    plainly as your own synthesis, and save only after they confirm
+    (evidence_tier='endorsed') — never paraphrase without confirmation,
+    either way.
     """
     from wingman.application.relationship import list_log, log_interaction, render_log
+    from wingman.domain.relationship import EvidenceTier
 
     config = _ready_config()
     if config is None:
@@ -1403,9 +1436,17 @@ def relationship_log(person: str, note: str = "", action: str = "add") -> str:
     try:
         with Storage(config.db_path) as storage:
             if action == "add":
-                report = log_interaction(person, note, config, storage)
+                try:
+                    tier = EvidenceTier(evidence_tier.strip().lower())
+                except ValueError:
+                    valid = ", ".join(entry.value for entry in EvidenceTier)
+                    return f"unknown evidence_tier {evidence_tier!r}; use one of: {valid}."
+                report = log_interaction(
+                    person, note, config, storage, evidence_tier=tier, source_url=source_url
+                )
+                tier_note = f" [{tier.value}]" if tier is EvidenceTier.ENDORSED else ""
                 return (
-                    f"Logged for {report.person}: {report.entry.note}\n"
+                    f"Logged for {report.person}{tier_note}: {report.entry.note}\n"
                     f"Evidence file: {report.source_path}"
                 )
             if action == "list":
