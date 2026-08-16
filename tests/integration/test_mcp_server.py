@@ -54,6 +54,7 @@ def test_all_tools_are_registered() -> None:
         "interview_status",
         "perspectives_start",
         "wingman_flow",
+        "wingman_demo",
         "relationship_objective",
         "relationship_log",
         "heap",

@@ -1185,6 +1185,349 @@ def wingman_flow() -> str:
     )
 
 
+# wingman_demo (issue #428): a scripted, zero-setup, zero-network walkthrough
+# of Wingman's core loop, plus plain instructions for a genuinely real but
+# fully isolated session. Both tiers below are large, hand-written strings —
+# not templated, not assembled from live data — because the whole point
+# (AGENTS.md invariant 9, and the pattern perspectives_start/wingman_flow
+# already establish) is that the guided script lives in text, not in new
+# inference logic. wingman_demo's function body does nothing but pick one of
+# these two strings; see its own docstring below for why.
+#
+# One fictional persona, one fictional company, one fictional counterpart,
+# reused across every step so the walkthrough reads as one continuous
+# session rather than six disconnected snippets:
+#   - Alex Rivera — a product manager exploring a move into applied AI.
+#   - Meridian Health — the fictional company Alex is targeting, hiring for
+#     "Senior Product Manager, Applied AI Platform".
+#   - Priya Desai — Meridian Health's fictional VP of Product, the person
+#     Alex is about to meet.
+# None of these are real people, companies, or postings. Nothing about them
+# should ever be reused as if it were.
+_DEMO_GUIDED_WALKTHROUGH = (
+    "WINGMAN DEMO — guided walkthrough (issue #428)\n"
+    "================================================\n\n"
+    "Everything below is invented for this walkthrough — no network call, "
+    "no real account, nothing saved anywhere. Every 'what you'd type' and "
+    "'what Wingman would say back' pair is fabricated text returned by this "
+    "one tool call; no other tool was called to produce it, and none should "
+    "be called while narrating it.\n\n"
+    "Your walkthrough persona: Alex Rivera, a product manager exploring a "
+    "move into applied AI. Alex is an invented character, not a real "
+    "person or a real account — say so if the person you're walking through "
+    "this asks who Alex is. Every example below stays consistent with one "
+    "fictional thread so it reads like a real session: Alex is targeting a "
+    "'Senior Product Manager, Applied AI Platform' opening at a fictional "
+    "company, MERIDIAN HEALTH, and is about to meet Meridian's fictional VP "
+    "of Product, PRIYA DESAI. None of these three names refer to anything "
+    "real. Nothing here was fetched, embedded, modeled, or written to disk.\n\n"
+    "Six steps, the same order a real first session tends to take. Each one "
+    "shows what you'd type, what Wingman would say back, and why the step "
+    "matters — then the real tool that step maps to.\n\n"
+    "--- STEP 1 of 6 — Building a first sliver of a career profile "
+    "(Perspectives) ---\n\n"
+    "What you'd type: call perspectives_start(), choose \"React to things "
+    "I've read,\" and paste something you actually have an opinion about.\n"
+    "  Alex pastes: https://example.com/articles/metrics-that-matter\n"
+    "  Wingman asks: \"'Metrics that matter' — where do you land: agree, "
+    "disagree, or it's complicated?\"\n"
+    "  Alex picks: Agree\n"
+    '  Wingman asks: "Why? In your own words — this sentence is the '
+    'evidence."\n'
+    "  Alex types: \"I've watched teams chase a vanity metric for a full "
+    "quarter and it never once changed what shipped. The pieces I trust "
+    'tie a metric to a decision someone actually owns."\n\n'
+    "What Wingman would say back (the real tool always echoes before it "
+    "saves, so nothing gets tidied on the way in):\n"
+    "  Saving this as your own words, verbatim:\n"
+    "  \"I've watched teams chase a vanity metric for a full quarter and "
+    "it never once changed what shipped. The pieces I trust tie a metric "
+    'to a decision someone actually owns."\n'
+    "  subtype alignment_of_perspective_agree · Saved. That's 1 agree, 0 "
+    "disagree so far.\n\n"
+    "Why this matters: a profile built from reactions to things you've "
+    "already read beats a blank-page interview — and only your own words "
+    "ever become evidence. Nothing here was fetched or modeled; the URL is "
+    "provenance only, never quoted back as if it were Alex's view.\n"
+    "Real tool: perspectives_start(), then interview_react().\n\n"
+    "--- STEP 2 of 6 — Setting job criteria ---\n\n"
+    "What you'd type: call job_criteria(action='review').\n"
+    "  Wingman asks: \"What's a must-have for the next role — something "
+    "that's not negotiable?\"\n"
+    '  Alex types: "The team has to have actually shipped something '
+    'ML-backed, not just adjacent to a team that did."\n'
+    '  Wingman asks: "Anything that\'s a hard no?"\n'
+    '  Alex types: "Fully in-office, zero remote flexibility."\n'
+    '  Wingman asks: "Anything that\'s a nice-to-have but not required?"\n'
+    "  Alex types: \"A domain I'd actually want to explain to my mother — "
+    'healthcare, education, something like that."\n\n'
+    "What Wingman would say back:\n"
+    "  Saved to job-criteria.md — 1 must-have, 1 deal-breaker, 1 "
+    "nice-to-have, in your own words. Every opening you assess from here "
+    "gets scored against this; without it, scoring runs unweighted.\n\n"
+    "Why this matters: this is the bar every future opening gets measured "
+    "against, stated once, in Alex's own words, instead of re-litigated "
+    "on every single posting.\n"
+    "Real tool: job_criteria().\n\n"
+    "--- STEP 3 of 6 — Assessing a job posting (a fit brief) ---\n\n"
+    "What you'd type: call assess_job_url() with the posting's URL (or "
+    "assess_job() with pasted text).\n"
+    "  Alex pastes: https://example.com/careers/meridian-health/senior-pm-"
+    "applied-ai\n\n"
+    "What Wingman would say back — a fit brief, one verdict per "
+    "requirement, each citing the profile evidence behind it (fabricated "
+    "for this walkthrough, but structurally exactly what a real fit brief "
+    "looks like):\n\n"
+    "  FIT BRIEF — Meridian Health · Senior Product Manager, Applied AI "
+    "Platform\n"
+    '  1. "5+ years PM experience shipping at least one ML-backed '
+    'feature" — MET\n'
+    '     Evidence: profile item pi-2024-fraud-scoring ("led the '
+    "fraud-scoring rollout at Northlight Bank, shipped to 100% of "
+    'transactions")\n'
+    '  2. "Direct experience with LLM-based products specifically" — '
+    "PARTIAL\n"
+    '     Evidence: profile item pi-2025-genai-pilot ("ran a generative-AI '
+    'pilot for two quarters") — a pilot, not a shipped feature; the gap '
+    "is real, not glossed over.\n"
+    '  3. "Healthcare or adjacent regulated-domain experience" — GAP\n'
+    "     Rationale: no healthcare-domain evidence in the profile yet — "
+    "this is an honest gap, not an invented workaround.\n"
+    '  4. "Manages a team of 5 or more direct reports" — UNKNOWN\n'
+    "     Rationale: no management-scope evidence has been captured — "
+    "worth adding to the profile if true, rather than guessed at here.\n\n"
+    "A real fit brief only ever marks MET or PARTIAL when it can point at "
+    "an actual profile item — never a plausible-sounding rationale with "
+    "nothing behind it (that's what pushes an unsupported verdict down to "
+    "UNKNOWN instead).\n\n"
+    "Why this matters: met/partial/gap/unknown, each traceable to real "
+    "evidence, is the whole difference between an assessment and a guess.\n"
+    "Real tool: assess_job() / assess_job_url().\n\n"
+    "--- STEP 4 of 6 — Researching a person (a POV card) ---\n\n"
+    "What you'd type: call people_deep_dive('Priya Desai') or "
+    "people_pov('Priya Desai') once she's tracked as a person.\n"
+    "  (In a real session, Wingman would first confirm you mean a specific "
+    "Priya Desai — company, role, a URL — rather than silently guessing "
+    "from a bare name. A demo must never model auto-resolving a real "
+    "person's identity from thin metadata, so this example already gives "
+    "the company and title Alex actually knows.)\n\n"
+    "What Wingman would say back — a POV card (fabricated for this "
+    "walkthrough; a real one is built from a person's own public writing, "
+    "cited line by line):\n\n"
+    "  POV card: Priya Desai — VP of Product, Meridian Health\n"
+    "  (built from 3 documents, model-synthesized — read as inference, "
+    "not verified fact, until Priya has confirmed any of it herself)\n"
+    "  Stances:\n"
+    "  - [product philosophy] Favors shipping small and often over a big "
+    "launch\n"
+    '      "Velocity is a leading indicator of clarity, not luck." '
+    "(ProductWorld 2025 keynote)\n"
+    "  - [hiring] Weighs judgment under ambiguity over credentialed "
+    "pattern-matching\n"
+    "      \"I'd rather hire someone who asks the right question than "
+    'someone who already knows the textbook answer." (Meridian Health '
+    "engineering blog)\n"
+    "  Writes about: applied ML in regulated industries, product-led "
+    "growth\n\n"
+    "Why this matters: a POV card is a model's SYNTHESIS of what someone "
+    "seems to believe, built from citations you can check — it is "
+    "labeled as inference and never presented as a verified fact about "
+    "Priya, and it never claims to know something she hasn't actually "
+    "said or done in public.\n"
+    "Real tool: people_deep_dive() / people_pov().\n\n"
+    "--- STEP 5 of 6 — Logging what happened after a real conversation "
+    "---\n\n"
+    "What you'd type: call relationship_log(person='Priya Desai', "
+    "action='add', note=...) right after the actual meeting.\n"
+    '  Alex types: "Good conversation — Priya pushed back on my '
+    "healthcare-domain gap directly, said she'd rather see how I'd close "
+    "it than pretend it isn't there. Said to follow up with two questions "
+    'I had about their eval pipeline."\n\n'
+    "What Wingman would say back:\n"
+    '  Logged for Priya Desai: "Good conversation — Priya pushed back on '
+    "my healthcare-domain gap directly, said she'd rather see how I'd "
+    "close it than pretend it isn't there. Said to follow up with two "
+    'questions I had about their eval pipeline."\n'
+    "  Evidence file: relationship-log/priya-desai/2026-08-16.md\n\n"
+    "Why this matters: the note is stored exactly as typed — raw material "
+    "a later brief or objective revision can cite — never a model's "
+    "tidied-up summary of what was actually said.\n"
+    "Real tool: relationship_log().\n\n"
+    "--- STEP 6 of 6 — The overnight digest / action list ---\n\n"
+    "What you'd type: nothing new — digest() reads the newest overnight "
+    "run and pulls every thread above into one morning-sized list.\n\n"
+    "What Wingman would say back (fabricated for this walkthrough; a real "
+    "digest reads from an actual overnight run, not from thin air):\n\n"
+    "  OVERNIGHT DIGEST — 2026-08-17\n"
+    "  Action list:\n"
+    "  1. Follow up with Priya Desai on Meridian's eval pipeline "
+    "questions — promised in your last conversation, logged 2026-08-16.\n"
+    "  2. Meridian Health · Senior PM, Applied AI Platform — fit brief "
+    "still shows one GAP (healthcare domain) and one UNKNOWN (team size); "
+    "add evidence or ask about scope before the next round.\n"
+    "  3. 1 agree captured this week toward your Perspectives profile — "
+    "0 disagree yet; disagreement is what actually discriminates, so it's "
+    "worth the next few minutes.\n\n"
+    "Why this matters: this is the single glanceable place where a "
+    "profile gap, an open opportunity, and a relationship follow-up all "
+    "land together, instead of three things you'd have to remember to go "
+    "check separately.\n"
+    "Real tool: digest() (and overnight() to generate a fresh run).\n\n"
+    "================================================\n"
+    "That's the whole loop, once through: a first sliver of profile, a "
+    "criteria bar, a fit brief against a real opening, a POV card on a "
+    "real person, a logged conversation, and a digest that ties it "
+    "together. Nothing above touched a network, a model, or a workspace — "
+    "it's one string, returned by this one call.\n\n"
+    "A REAL first step: call perspectives_start() (to start building your "
+    "own profile) or wingman_flow() (if you'd rather be routed based on "
+    "what's actually on your mind) — both work with zero setup beyond "
+    "'wingman init'.\n\n"
+    "To try the INTERACTIVE tier instead — a genuinely real, fully "
+    "isolated, zero-cost Wingman session you drive yourself — call "
+    "wingman_demo(tier='interactive')."
+)
+
+_DEMO_INTERACTIVE_INSTRUCTIONS = (
+    "WINGMAN DEMO — interactive tier (issue #428)\n"
+    "==============================================\n\n"
+    "This tier does not invent a new sandboxing mechanism. It points you "
+    "at a genuinely real Wingman session that happens to be fully "
+    "isolated and zero-cost — real tool calls, real code paths, your own "
+    "exploration, not a script.\n\n"
+    "THE RECIPE: point WINGMAN_DATA_DIR at a fresh, empty temporary "
+    "directory before you start, and add no provider API keys to that "
+    "session's environment. That's the whole mechanism — two ordinary, "
+    "already-existing pieces of Wingman behavior, combined:\n\n"
+    "1. WINGMAN_DATA_DIR (src/wingman/infrastructure/config.py's "
+    "ENV_DATA_DIR) is the ONLY thing that decides where a workspace "
+    "lives. Point it at a directory that has never held a real workspace "
+    "and everything you do — profile items, job criteria, interview "
+    "captures, logs — lands there, not in your real workspace, by "
+    "construction. Delete the directory afterward and nothing remains.\n\n"
+    "2. With no ANTHROPIC_API_KEY / VOYAGE_API_KEY / OPENROUTER_API_KEY "
+    "configured for that session, every model- or network-dependent step "
+    "already skips visibly instead of erroring or silently pretending to "
+    "work — this is real, existing behavior, not something added for the "
+    "demo. application/pipeline.py's make_it_so() is explicit about it: "
+    '"a missing API key skips the model steps visibly" — it catches '
+    "ModelConfigError from providers.router.get_provider() / "
+    "get_embedding_provider() and records the step as skipped, with the "
+    "reason, rather than failing. The same guard covers embedding, POV "
+    "synthesis, and every other model-backed step. A key-less environment "
+    "is therefore PHYSICALLY INCAPABLE of making a paid or network call — "
+    "not prevented by convention, but because there is no key for any "
+    "provider call to use.\n\n"
+    "Put those two together: a fresh temp directory plus no keys is a "
+    "real, live Wingman instance that cannot read or write your real "
+    "data (different directory) and cannot make a paid or network call "
+    "(no keys) — genuine behavior, not a simulation of safety.\n\n"
+    "EXACT INVOCATIONS\n\n"
+    "CLI, one line, POSIX shell:\n"
+    "  WINGMAN_DATA_DIR=$(mktemp -d) wingman init && "
+    "WINGMAN_DATA_DIR=$(mktemp -d --tmpdir wingman-demo.XXXXXX) wingman "
+    "status\n"
+    "  (Two separate mktemp calls above only to show init and a follow-up "
+    "command in one line — in a real session, export the directory once "
+    "and reuse it for every command:)\n"
+    "  export WINGMAN_DATA_DIR=$(mktemp -d) && wingman init\n"
+    "  Every subsequent 'wingman ...' command in that same shell now "
+    "reads and writes only inside that throwaway directory.\n\n"
+    "MCP client (Claude Desktop or any MCP client that lets you set "
+    "per-server environment variables) — add WINGMAN_DATA_DIR to the "
+    "wingman server's env block, pointed at a fresh directory you create "
+    "first, and do not add any provider key alongside it:\n"
+    "  {\n"
+    '    "mcpServers": {\n'
+    '      "wingman": {\n'
+    '        "command": "wingman",\n'
+    '        "args": ["mcp"],\n'
+    '        "env": { "WINGMAN_DATA_DIR": "/tmp/wingman-demo" }\n'
+    "      }\n"
+    "    }\n"
+    "  }\n"
+    "  Create /tmp/wingman-demo (or wherever you point it) yourself "
+    "first, e.g. 'mkdir -p /tmp/wingman-demo', then run 'wingman init' "
+    "against it once (with the same WINGMAN_DATA_DIR set) before "
+    "connecting the client.\n\n"
+    "From there: perspectives_start(), job_criteria(), assess_job(), "
+    "people_deep_dive(), relationship_log(), digest() — every real tool, "
+    "genuinely called, genuinely local, genuinely free, in a workspace "
+    "that can't touch anything that matters.\n\n"
+    "Prefer a fully scripted tour with no setup at all? Call "
+    "wingman_demo(tier='guided')."
+)
+
+
+@server.tool()
+def wingman_demo(tier: str = "guided") -> str:
+    """Zero-setup, zero-network demo of Wingman (docs/PRODUCT-STRATEGY.md,
+    issue #428) — call this whenever someone asks "what does Wingman do,"
+    "can I try this without setting anything up," or "show me a demo."
+    Unlike every other tool in this file, this one is guaranteed to work
+    with NO workspace: `_ready_config()` is never even called, because the
+    entire point of a demo is that trying Wingman costs nothing and
+    touches nothing real (issue #428's acceptance criteria — zero network
+    calls, no real workspace read or written, reachable with zero setup).
+
+    Two tiers, one obvious entry point:
+
+    tier='guided' (the default) — a fully self-contained, scripted
+    walkthrough of Wingman's actual core loop (building a first sliver of
+    a career profile via Perspectives, setting job criteria, assessing a
+    job posting into a fit brief, researching a person into a POV card,
+    logging a real conversation, and the overnight digest that ties it
+    together), narrated through ONE consistent, clearly-fictional persona
+    (Alex Rivera) and one fictional company/counterpart, invented once and
+    reused throughout so the tour reads as a single continuous session.
+    Every example in this tier is fabricated text returned by THIS call —
+    calling agents must make NO other tool calls while narrating it (no
+    people_add, no career_profile, nothing touching real state); the
+    walkthrough is zero-network and zero-cost by construction, because
+    nothing beyond returning a string happens. Matches perspectives_start
+    and wingman_flow's own split (#426, #427): code computes nothing
+    interesting here, the return value IS the content.
+
+    tier='interactive' — does not invent a new sandboxing mechanism.
+    Explains, in plain instructions, how to get a genuinely real, fully
+    isolated, zero-cost Wingman session: point WINGMAN_DATA_DIR at a
+    fresh temporary directory before starting, and add no provider API
+    keys to it. Real tool calls, not a script — freer exploration against
+    a workspace that is physically incapable of touching real data
+    (different directory) or making a paid/network call (no keys
+    configured, so every model-dependent step already skips visibly
+    rather than erroring — see application/pipeline.py's make_it_so()).
+
+    Any other value returns a plain error naming the two valid tiers,
+    rather than raising.
+
+    The one boundary from docs/PRODUCT-STRATEGY.md §8.2 ("it works for
+    the person, not on them") worth naming explicitly here: a demo must
+    never teach patterns the real product's own guardrails reject. That
+    means the guided tier's person-research step does NOT model silently
+    auto-resolving a real person's identity from thin metadata — it
+    narrates the same confirm-before-assume caution a real people_deep_dive
+    call uses — and it does NOT present a model's synthesis of what
+    someone believes as if it were a verified fact about them; a POV card,
+    real or fabricated, is labeled inference, not evidence. Every example
+    output in the guided tier is stated, plainly, to be invented for this
+    walkthrough — never dressed up as real research, a real API response,
+    or a real person's actual words.
+    """
+    normalized = tier.strip().lower()
+    if normalized == "guided":
+        return _DEMO_GUIDED_WALKTHROUGH
+    if normalized == "interactive":
+        return _DEMO_INTERACTIVE_INSTRUCTIONS
+    return (
+        f"wingman_demo: unrecognized tier {tier!r}. Valid tiers are "
+        "'guided' (default — a fully scripted walkthrough, zero setup, "
+        "zero network calls) and 'interactive' (instructions for a real, "
+        "fully isolated, zero-cost Wingman session you drive yourself). "
+        "Call again with one of those two."
+    )
+
+
 @server.tool()
 def coach_persona(action: str, name: str = "") -> str:
     """Coaching mode (docs/COACHING-MODE-DESIGN.md): act as coach for
