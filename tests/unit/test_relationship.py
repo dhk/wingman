@@ -14,10 +14,12 @@ from wingman.application.relationship import (
     log_interaction,
     render_interview,
     render_log,
+    render_log_entry,
     render_objective,
     render_relationship_context,
     save_objective,
 )
+from wingman.domain.relationship import EvidenceTier
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.storage import Storage
 
@@ -152,6 +154,46 @@ def test_log_interaction_creates_source_file_and_entry(workspace: Config) -> Non
         assert len(entries) == 1 and entries[0].note == LOG_NOTE
 
 
+def test_log_interaction_defaults_to_observed_tier(workspace: Config) -> None:
+    """RFC-073: unchanged callers (the CLI, every pre-existing test) keep
+    getting exactly the old zero-model, verbatim-only behavior."""
+    with Storage(workspace.db_path) as storage:
+        add_person("Brandon Galang", storage)
+        report = log_interaction("Brandon Galang", LOG_NOTE, workspace, storage)
+        assert report.entry.evidence_tier is EvidenceTier.OBSERVED
+        assert report.entry.source_url == ""
+        rendered = render_log_entry(report.entry)
+        assert "[endorsed]" not in rendered
+
+
+def test_log_interaction_endorsed_tier_records_source_url(workspace: Config) -> None:
+    """A confirmed synthesis is stored as ENDORSED with its real source
+    kept as a locator, and the render marks it distinctly from an
+    observed (verbatim) entry (RFC-073)."""
+    with Storage(workspace.db_path) as storage:
+        add_person("Brandon Galang", storage)
+        report = log_interaction(
+            "Brandon Galang",
+            "Met for coffee; discussed the eval harness role at length.",
+            workspace,
+            storage,
+            evidence_tier=EvidenceTier.ENDORSED,
+            source_url="https://docs.google.com/document/d/abc123",
+        )
+        assert report.entry.evidence_tier is EvidenceTier.ENDORSED
+        assert report.entry.source_url == "https://docs.google.com/document/d/abc123"
+        rendered = render_log_entry(report.entry)
+        assert "[endorsed]" in rendered
+        assert "https://docs.google.com/document/d/abc123" in rendered
+        source = (
+            workspace.data_dir
+            / storage.get_source_record(report.entry.source_record_id).source_locator
+        )
+        content = source.read_text(encoding="utf-8")
+        assert "Evidence: endorsed" in content
+        assert "Source: https://docs.google.com/document/d/abc123" in content
+
+
 def test_log_interaction_allows_identical_note_twice(workspace: Config) -> None:
     """Regression: logging the exact same short note twice for the same
     person (e.g. "Coffee." on two different days) must produce two
@@ -177,6 +219,60 @@ def test_log_interaction_requires_note_and_known_person(workspace: Config) -> No
             log_interaction("Nobody Here", LOG_NOTE, workspace, storage)
 
 
+def test_mcp_relationship_log_defaults_to_observed(workspace: Config) -> None:
+    """The MCP tool's default evidence_tier reproduces the exact pre-RFC-073
+    call shape and result text — no caller has to know the tier exists."""
+    from wingman.mcp_server import relationship_log
+
+    with Storage(workspace.db_path) as storage:
+        add_person("Brandon Galang", storage)
+    result = relationship_log("Brandon Galang", LOG_NOTE)
+    assert result.startswith(f"Logged for Brandon Galang: {LOG_NOTE}")
+    assert "[endorsed]" not in result
+
+
+def test_mcp_relationship_log_endorsed_tier_roundtrips(workspace: Config) -> None:
+    from wingman.mcp_server import relationship_log
+
+    with Storage(workspace.db_path) as storage:
+        add_person("Brandon Galang", storage)
+    result = relationship_log(
+        "Brandon Galang",
+        "Notes summary says he's moving to a new role.",
+        evidence_tier="endorsed",
+        source_url="https://docs.google.com/document/d/abc123",
+    )
+    assert "[endorsed]" in result
+    with Storage(workspace.db_path) as storage:
+        _who, entries = list_log("Brandon Galang", storage)
+    assert entries[0].evidence_tier is EvidenceTier.ENDORSED
+    assert entries[0].source_url == "https://docs.google.com/document/d/abc123"
+
+
+def test_mcp_relationship_log_rejects_unknown_evidence_tier(workspace: Config) -> None:
+    from wingman.mcp_server import relationship_log
+
+    with Storage(workspace.db_path) as storage:
+        add_person("Brandon Galang", storage)
+    result = relationship_log("Brandon Galang", LOG_NOTE, evidence_tier="inferred")
+    assert "unknown evidence_tier" in result
+    with Storage(workspace.db_path) as storage:
+        _who, entries = list_log("Brandon Galang", storage)
+    assert entries == []  # nothing was written on a rejected tier
+
+
+def test_mcp_relationship_log_docstring_carries_the_confirm_gate() -> None:
+    """RFC-073's protocol backstop, the same shape as every other capture
+    tool's docstring test (interview_react, profile_manage.amend, BP-06):
+    the confirm-before-endorse rule has to live where the calling agent
+    reads it."""
+    from wingman.mcp_server import relationship_log
+
+    doc = relationship_log.__doc__ or ""
+    assert "NEVER call with evidence_tier='endorsed'" in doc
+    assert "confirmed or corrected" in doc
+
+
 def test_list_log_and_render(workspace: Config) -> None:
     with Storage(workspace.db_path) as storage:
         add_person("Brandon Galang", storage)
@@ -185,7 +281,7 @@ def test_list_log_and_render(workspace: Config) -> None:
         assert "No interactions logged" in render_log(who, empty)
         log_interaction("Brandon Galang", LOG_NOTE, workspace, storage)
         log_interaction("Brandon Galang", "Second chat, follow-up.", workspace, storage)
-        who, entries = list_log("Brandon Galang", storage)
+        _who, entries = list_log("Brandon Galang", storage)
         assert len(entries) == 2
         rendered = render_log(who, entries)
         assert LOG_NOTE in rendered and "Second chat" in rendered

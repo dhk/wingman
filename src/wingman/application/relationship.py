@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from wingman.application.ingest import IngestError
 from wingman.application.people import match_people
 from wingman.domain.person import Person
-from wingman.domain.relationship import RelationshipLogEntry, RelationshipObjective
+from wingman.domain.relationship import EvidenceTier, RelationshipLogEntry, RelationshipObjective
 from wingman.domain.source_record import SourceRecord
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
@@ -175,11 +175,29 @@ class LogReport(BaseModel):
     source_path: str
 
 
-def log_interaction(name: str, note: str, config: Config, storage: Storage) -> LogReport:
+def log_interaction(
+    name: str,
+    note: str,
+    config: Config,
+    storage: Storage,
+    evidence_tier: EvidenceTier = EvidenceTier.OBSERVED,
+    source_url: str = "",
+) -> LogReport:
     """Record what actually happened with a person — the qa_capture way
-    (RFC-036): deterministic, person-attributed, the user's own words as
-    the evidence quote, zero model calls. The raw material a future brief
-    or objective revision can cite.
+    (RFC-036): deterministic, person-attributed. The raw material a future
+    brief or objective revision can cite.
+
+    evidence_tier (RFC-073) defaults to OBSERVED: the note is the user's
+    own words, or a direct quote from a real source, zero model calls
+    between what was typed and what is stored — RFC-037's original
+    contract, unchanged. Pass ENDORSED only for a model-drafted synthesis
+    the person has already reviewed and confirmed or corrected — the
+    caller's protocol lives on the relationship_log MCP tool's docstring;
+    this function does not itself gate on confirmation, since it has no
+    way to know whether one happened. source_url optionally names the real
+    external document a synthesis was drawn from (a meeting-notes doc, an
+    email thread) — distinct from the source_record_id this call always
+    creates, which points at this entry's own generated inbox note.
 
     Always writes its own new source file and record, even when an
     identical note was logged before: unlike qa_capture's evidence corpus
@@ -194,7 +212,10 @@ def log_interaction(name: str, note: str, config: Config, storage: Storage) -> L
     note = " ".join(note.split())
     if not note:
         raise IngestError("the note is empty — nothing was logged.")
-    content = f"# Relationship log\n\nPerson: {person.name}\n\n{note}\n"
+    source_url = source_url.strip()
+    tier_line = f"Evidence: {evidence_tier.value}\n"
+    source_line = f"Source: {source_url}\n" if source_url else ""
+    content = f"# Relationship log\n\nPerson: {person.name}\n{tier_line}{source_line}\n{note}\n"
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     config.inbox_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
@@ -215,9 +236,11 @@ def log_interaction(name: str, note: str, config: Config, storage: Storage) -> L
         person_id=person.person_id,
         source_record_id=record.record_id,
         note=note,
+        evidence_tier=evidence_tier,
+        source_url=source_url,
     )
     storage.add_log_entry(entry)
-    _logger.info("relationship logged person=%s", person.name)
+    _logger.info("relationship logged person=%s evidence_tier=%s", person.name, evidence_tier.value)
     return LogReport(person=person.name, entry=entry, source_path=record.source_locator)
 
 
@@ -229,7 +252,9 @@ def list_log(name: str, storage: Storage) -> tuple[Person, list[RelationshipLogE
 
 def render_log_entry(entry: RelationshipLogEntry) -> str:
     when = entry.happened_at.date().isoformat()
-    return f"{when}  {entry.note}"
+    tag = "" if entry.evidence_tier is EvidenceTier.OBSERVED else " [endorsed]"
+    source = f"  (source: {entry.source_url})" if entry.source_url else ""
+    return f"{when}{tag}  {entry.note}{source}"
 
 
 def render_log(person: Person, entries: list[RelationshipLogEntry]) -> str:
