@@ -1,4 +1,4 @@
-# Question Blocks — interview modules that read against an external frame (proposal, not yet an RFC)
+# Question Blocks — interview modules that read against an external rubric (proposal, not yet an RFC)
 
 **Status.** Design recorded 2026-08-20 from an ideation session. Nothing is
 implemented; no code, no issue slice, no tests. §3's evidence audit was run
@@ -31,11 +31,11 @@ interview currently does.
 
 | | Today's interview | What the ladder question needs |
 |---|---|---|
-| Grounding | None. Nine subtypes hardcoded in `application/interview.py` | An **external frame** it is measured against |
+| Grounding | None. Nine subtypes hardcoded in `application/interview.py` | An **external rubric** it is measured against |
 | Subject | Other people, other organisations, other people's writing | The person themselves |
-| Questions | A fixed inventory, authored once | **Derived** from the frame's own dimensions |
+| Questions | A fixed inventory, authored once | **Derived** from the rubric's own dimensions |
 | Output | A `ProfileItem` per capture | A **positioning** across dimensions, with citations |
-| Growth | Add a subtype to a `set` literal, add a category tuple | Add a frame — no code change |
+| Growth | Add a subtype to a `set` literal, add a category tuple | Add a rubric — no code change |
 
 Every existing subtype deliberately asks about somebody else. That is a real
 design achievement and §4 explains why it must survive contact with this
@@ -53,9 +53,82 @@ Only one of the three is questions.
 
 | Layer | What it is | Nearest existing thing |
 |---|---|---|
-| **Frame** | The external rubric — e.g. a software-engineering ladder's dimensions and rungs. Sourced, cited, versioned. It is the ruler, never a measurement, and **never evidence about the person**. | `company_deep_dive` findings — every finding carries the source that backs it |
-| **Block** | Declarative: id, title, the frame it reads, its dimensions, the question script per dimension, the capture mapping. This is what replaces `VALID_SUBTYPES` being a hardcoded `set`. | Nothing. This is the new part. |
+| **Rubric** | A file. A named external standard's dimensions and rungs — e.g. a software-engineering ladder. Sourced, cited, versioned. It is the ruler, never a measurement, and **never evidence about the person**. | `company_deep_dive` findings — every finding carries the source that backs it |
+| **Block** | Declarative: id, title, the rubric it reads, its dimensions, the question script per dimension, the capture mapping. This is what replaces `VALID_SUBTYPES` being a hardcoded `set`. | Nothing. This is the new part. |
 | **Reading** | A per-dimension positioning, citing the `item_id`s that informed it, refusing below an evidence floor. | `application/values.py` / `my_values` — exactly this shape already |
+
+### 2.1 What a rubric actually looks like
+
+The word does no work without an example. A rubric is a data file — this
+shape, sketched here in TOML to match `models.toml`; the serialisation is not
+decided:
+
+```toml
+[rubric]
+id      = "swe-ladder-google-public"
+title   = "Software engineering ladder (Google) — public reconstruction"
+version = "2026-08-20"
+
+[rubric.provenance]
+tier       = "reconstruction"   # first_party | reconstruction | inferred
+sources    = ["https://www.levels.fyi/...", "..."]
+disclaimer = "Reconstructed from public sources. Not Google's own document."
+
+[[dimension]]
+id   = "scope"
+name = "Scope of impact"
+asks = "How far does the effect of your work reach?"
+
+  [[dimension.rung]]
+  level      = "L4"
+  descriptor = "Your own projects; effects land inside your team."
+
+  [[dimension.rung]]
+  level      = "L5"
+  descriptor = "Your team's roadmap; other teams consume what you build."
+
+  [[dimension.rung]]
+  level      = "L6"
+  descriptor = "Multiple teams change what they do because of your work."
+
+[[dimension]]
+id   = "ambiguity"
+name = "Ambiguity absorbed"
+asks = "How defined was the problem when it reached you?"
+
+  # Asked (v1) only when this dimension has no evidence to read.
+  [dimension.probe]
+  question    = "What did people think the problem was, before you started?"
+  attaches_to = "achievement"
+```
+
+Adding a second ladder means adding a second file. That is the whole of the
+"add a rubric — no code change" claim in §1; today, adding an interview
+category means editing a `set` literal, a category tuple, and a render
+function.
+
+**Three things a rubric is not.**
+
+1. **Not a prompt.** It is data the reading cites, not instructions handed to
+   a model. The model sees `descriptor` strings as text to match evidence
+   against; it never sees "decide what level this person is."
+2. **Not evidence about the person.** It never becomes a `ProfileItem`, never
+   appears in `career.md`. It is the ruler; the profile is what gets measured.
+3. **Not code.** See above.
+
+**And what it does, on one real item.** Take an achievement already in a
+workspace:
+
+> *"Architected a financial data integrity platform supporting $100B+ in
+> ledger activity with to-the-penny reconciliation across banking partners"*
+
+Read against `scope`'s rungs, an honest reading says: *matches the L5
+descriptor — other teams consume what you build — and nothing in the cited
+evidence shows another team changing what it does, which is what L6 asks
+for.* Plus the citation, plus the note that `ambiguity` was not scored at all
+because no evidence speaks to it. The rubric supplies the rung names and the
+descriptors; the profile supplies everything else; **the reading is the
+join**, and every part of it is inspectable.
 
 **The capture layer does not change.** A block's answers land through
 `capture_interview_reaction` with block-scoped subtypes, so they inherit —
@@ -144,7 +217,7 @@ Two ways out. Only one is acceptable:
    where you set the direction, rather than someone else"* — capture the
    answer verbatim as evidence, and let the **reading** map stories onto
    rungs, citing the person's own words. The person never asserts a level;
-   the frame does, in public, showing what it read.
+   the rubric does, in public, showing what it read.
 
 **(2), always.** It is the same move `my_values` already makes — never ask
 for the score, compute it — and the audit supports it empirically: across 40
@@ -157,7 +230,7 @@ story-not-rating discipline is currently intact, and a block that asked
 | Say | Never say |
 |---|---|
 | "Name the largest thing you shipped where you set the direction." | "What level do you think you're at?" — invites the assertion the reading exists to derive. |
-| "Here's what the frame reads from your own words, and what it can't see." | "You're an L6." — a bare rung with no visible derivation. |
+| "Here's what the rubric reads from your own words, and what it can't see." | "You're an L6." — a bare rung with no visible derivation. |
 
 ---
 
@@ -227,8 +300,8 @@ Revised by §3. The original proposal — "read existing evidence first, no new
 questions" — assumed the profile would have material on all dimensions. It
 does not.
 
-**v0 — Frame + gap map. No new questions, no positioning.**
-Store one frame with honest provenance. Read the existing profile and corpus
+**v0 — Rubric + gap map. No new questions, no positioning.**
+Store one rubric with honest provenance. Read the existing profile and corpus
 against its dimensions. Emit: which dimensions have evidence, which have
 none, and the cited items behind each. Explicitly **do not** emit a rung.
 Useful on its own (it is a "what is my profile missing, and for what
@@ -243,8 +316,8 @@ block-scoped subtypes. At the end of v1 a reading has something to read on
 every dimension, and positioning becomes defensible.
 
 **v2 — Registry and wiring.**
-Generalise to a block registry, proven by a **second frame of a different
-kind** — not a second ladder. If the only frame it ever serves is a ladder,
+Generalise to a block registry, proven by a **second rubric of a different
+kind** — not a second ladder. If the only rubric it ever serves is a ladder,
 this should be called a ladder and the registry is over-engineering (§10 Q4).
 Then wire into the flows in §8.
 
@@ -264,7 +337,7 @@ Deferred to v2, listed here so the seams are known while v0/v1 are built.
 | `wingman_flow` | A routing destination — "measure me against something" is a distinct front-door intent from "build my profile" |
 | `perspectives_start` | **Not** a sixth option on that card. It is already five, and blocks are a different intent. A block gets its own entry point that `wingman_flow` routes to (BP-09: reachable, never gated) |
 | `completeness` | Unevidenced dimensions become "Things to do" entries — the report already leads with an ordered gap list, and this is exactly that shape |
-| `assess_job` / fit brief | A reading becomes a citable input, the same way RFC-066's work view already is. A posting with its own levelling language is a frame candidate (§10 Q1) |
+| `assess_job` / fit brief | A reading becomes a citable input, the same way RFC-066's work view already is. A posting with its own levelling language is a rubric candidate (§10 Q1) |
 | `answer_bank` / `pack` | Elaboration answers *are* the STAR material an interview loop asks for. Captured once, reused |
 | `artifacts` / `values_chart` | A dimension reading renders on the same radar machinery, with `artifacts action='stale'` already able to say when the code that drew it has moved on |
 | `overnight` / `digest` | Re-read when new evidence lands; a dimension crossing from unevidenced to evidenced is a digest-worthy change |
@@ -275,13 +348,13 @@ Deferred to v2, listed here so the seams are known while v0/v1 are built.
 
 **Goals.**
 
-1. Measure a person against a **named, sourced, external** frame, and show
+1. Measure a person against a **named, sourced, external** rubric, and show
    what was read.
-2. Derive questions from the frame's gaps rather than authoring a fixed
+2. Derive questions from the rubric's gaps rather than authoring a fixed
    inventory.
 3. Reuse the existing capture pipeline unchanged — no second path to
    provenance.
-4. Add a frame without changing code.
+4. Add a rubric without changing code.
 
 **Non-goals.**
 
@@ -291,7 +364,7 @@ Deferred to v2, listed here so the seams are known while v0/v1 are built.
    at their own request. Nothing here is for evaluating somebody else, and
    coaching mode's persona scoping is a containment boundary, not a
    management feature.
-3. **Not a claim to reproduce any employer's internal process.** A frame is
+3. **Not a claim to reproduce any employer's internal process.** A rubric is
    a public reconstruction and says so (§10 Q1).
 4. **No new capture pipeline.** If a block needs a mechanic
    `capture_interview_reaction` cannot express, that is a reason to extend
@@ -301,16 +374,16 @@ Deferred to v2, listed here so the seams are known while v0/v1 are built.
 
 ## 10. Open questions
 
-**Q1 — Where does frame content come from, and how is its provenance
+**Q1 — Where does rubric content come from, and how is its provenance
 honest?**
 A well-known employer's internal ladder is not published in full; what
-circulates publicly is reconstruction. A frame must carry that on its face —
+circulates publicly is reconstruction. A rubric must carry that on its face —
 "reconstructed from these public sources, not the employer's own document" —
 or it is polished fiction with a company's name on it (invariant 9).
-A strong alternative worth costing: source frames from **job postings' own
+A strong alternative worth costing: source rubrics from **job postings' own
 levelling language**, which is first-party, already flows through the
 opportunity pipeline, and carries its own URL. Possibly both, with the tier
-visible in every reading that cites the frame.
+visible in every reading that cites the rubric.
 
 **Q2 — Does a reading ever emit a rung?**
 "You are an L6" that is wrong is worse than no answer, and the audit shows
@@ -325,17 +398,17 @@ RFC-071 refuses interview amendment of achievement items and the second
 option walks straight into that.
 
 **Q4 — Is "block" the right generalisation, or is this just a ladder?**
-The registry only earns its complexity if a second frame *of a different
-kind* — a competency matrix, a compensation band, a domain-skills rubric —
+The registry only earns its complexity if a second rubric *of a different
+kind* — a competency matrix, a compensation band, a domain-skills grid —
 fits the same three layers without special-casing. v2 should be blocked on
 demonstrating that, and if it cannot be demonstrated, this should collapse
 into a single purpose-built ladder feature.
 
-**Q5 — Do frames ship with the code, or live in the workspace?**
+**Q5 — Do rubrics ship with the code, or live in the workspace?**
 Shipped means curated, versioned with releases, and identical for every
 tenant. Workspace-local means editable and per-tenant, and immediately
-raises what a coached persona's frames are and who may write them. Not
-urgent for v0 (one frame, shipped) but it decides v2's shape.
+raises what a coached persona's rubrics are and who may write them. Not
+urgent for v0 (one rubric, shipped) but it decides v2's shape.
 
 **Q6 — What happens when a reading contradicts the person's self-image?**
 This is the first wingman surface that tells somebody something unwelcome
@@ -348,7 +421,7 @@ as *what the evidence shows*, never *what you are*.
 
 ## 11. Revisit if
 
-- A second frame cannot be expressed in the same three layers → Q4 resolves
+- A second rubric cannot be expressed in the same three layers → Q4 resolves
   toward a purpose-built ladder, and this document collapses.
 - v0's gap map turns out to be empty or trivially uniform across workspaces →
   the derive-questions-from-gaps property is worthless and v1 reverts to an
