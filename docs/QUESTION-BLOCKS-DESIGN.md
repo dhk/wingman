@@ -1,7 +1,7 @@
 # Question Blocks — interview modules that read against an external rubric (proposal, not yet an RFC)
 
-**Status.** Design recorded 2026-08-20 from an ideation session. Nothing is
-implemented; no code, no issue slice, no tests. §3's evidence audit was run
+**Status.** Design recorded 2026-08-20 from an ideation session (issue #436).
+Nothing is implemented; no code, no slice started, no tests. §3's evidence audit was run
 the same day against one real workspace and is the reason the build order in
 §7 is what it is rather than what the session first proposed. Graduates to a
 numbered `RFC.md` entry (and a `ROADMAP.md` slice) once it is referenced
