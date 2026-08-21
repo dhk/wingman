@@ -244,8 +244,9 @@ Everything below is a sentence to Claude, not a command to remember:
   separate login for them (`coach_persona`); once it's worth splitting
   off, "carve off Trent's persona into his own workspace" seeds a
   brand-new workspace from everything captured (`carve_off_persona`).
-  Lighter than a fully separate instance per person — for that, see
-  [`WALKTHROUGH-SECOND-USER.md`](WALKTHROUGH-SECOND-USER.md).
+  Lighter than a fully separate instance per person — for that, add them
+  as their own tenant ([`SERVER.md`](SERVER.md)) and hand them
+  [`WALKTHROUGH-HOSTED.md`](WALKTHROUGH-HOSTED.md).
 - **Keep it alive** — `wingman sync` daily and `wingman backup` weekly are
   still worth a terminal or a schedule, but Claude can run either
   conversationally too ("sync my workspace", "back it up").

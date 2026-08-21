@@ -46,6 +46,16 @@ Now start a new chat and say:
 
 If it answers — even with "nothing yet" — you're connected.
 
+Then, before you put anything real into it, confirm the workspace is
+yours:
+
+> is this my own workspace, and whose is it?
+
+Expect your own name back — not someone else's. On a server shared with
+other people this is the one thing worth checking by hand, because
+everything after this point assumes the answer is you. If it names
+anyone else, stop and tell your host.
+
 ## Step 2 — Open your page and add your CV
 
 Open the second link in a browser. It's your own page: uploads at the top,
@@ -152,7 +162,8 @@ Worth being clear about, since it's different from running it yourself:
 - **Your data lives on their machine**, not yours. Whoever runs the server
   can read it. That's a matter of trusting them, not of software.
 - **Your workspace is yours alone.** Other people using the same server
-  can't see your data, and you can't see theirs.
+  can't see your data, and you can't see theirs. The check in Step 1 is
+  how you confirm that for yourself rather than taking it on faith.
 - **The overnight run happens for you automatically.** You don't schedule
   anything.
 - **Lost your links?** Ask your host. They can print them again or issue

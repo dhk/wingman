@@ -40,3 +40,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# website/build/ holds Vite build *source* (sites-vite-plugin.ts), not artifacts —
+# the repo-wide `build/` rule silently dropped it from #297.
+!/build/
