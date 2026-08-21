@@ -146,14 +146,20 @@ from wingman.infrastructure.host_config import (
 )
 from wingman.infrastructure.keys import (
     KNOWN_KEYS,
+    KeyLocation,
     KeyStoreError,
+    KeyValidation,
+    describe_key_locations,
     ensure_env,
     host_keys_path,
     key_status,
     resolve_key_sources,
     set_key,
+    store_host_key,
+    store_workspace_key,
     test_keys,
     unset_key,
+    validate_keys,
 )
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.mcp_process import server_status, stop_server
@@ -3208,25 +3214,73 @@ def keys_set(
         help="The key itself. Omit to take it from the already-exported environment "
         "variable, or be prompted with hidden input.",
     ),
+    scope: str = typer.Option(
+        "keychain",
+        "--scope",
+        help="Where to write it: keychain (default), host, or workspace.",
+    ),
+    tenant: str = typer.Option(
+        "", "--tenant", help="With --scope workspace: which tenant's workspace (operators)."
+    ),
 ) -> None:
-    """Store an API key in the macOS Keychain (replaces any previous value).
+    """Store an API key in one tier — the Keychain by default.
 
-    Once stored, every wingman command and the MCP server hydrate it
+    Pick the tier that actually holds the key you are replacing ('wingman
+    keys where' names it). Writing to the wrong tier is the classic way an
+    expired key survives: the new copy loses to the stale one that outranks
+    it, and nothing looks different.
+
+      --scope keychain   macOS Keychain, this account (default)
+      --scope host       ~/.config/wingman/secrets.env — every consumer on the box
+      --scope workspace  this workspace's keys.env — one person only, and it
+                         outranks every other tier (BYOK)
+
+    Once stored, every wingman command and the MCP server pick it up
     automatically — no env blocks in claude_desktop_config.json, no
-    EnvironmentVariables in launchd plists, no wrapper scripts. An exported
-    environment variable still wins when both exist.
+    EnvironmentVariables in launchd plists, no wrapper scripts.
     """
     configure_logging()
     env_var = KNOWN_KEYS.get(name.strip().lower(), "")
     secret = value or os.environ.get(env_var, "").strip()
     if not secret:
         secret = typer.prompt(f"{name} key", hide_input=True)
+
+    choice = scope.strip().lower()
+    if choice not in ("keychain", "host", "workspace"):
+        typer.echo(
+            f"keys set failed: unknown --scope {scope!r}; use keychain, host, or workspace.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if tenant and choice != "workspace":
+        typer.echo("keys set failed: --tenant only applies to --scope workspace.", err=True)
+        raise typer.Exit(code=1)
+
     try:
-        stored = set_key(name, secret)
+        if choice == "keychain":
+            stored = set_key(name, secret)
+            typer.echo(f"Stored {stored} in the Keychain (account 'wingman').")
+        elif choice == "host":
+            path = store_host_key(name, secret)
+            typer.echo(f"Stored {env_var} in {path} (0600).")
+        else:
+            data_dir = load_config().data_dir
+            if tenant:
+                from wingman.infrastructure.tenants import load_registry, tenant_registry_path
+
+                registry = tenant_registry_path()
+                match = [t for t in load_registry(registry) if t.slug == tenant]
+                if not match:
+                    typer.echo(f"keys set failed: no tenant {tenant!r} in {registry}.", err=True)
+                    raise typer.Exit(code=1)
+                data_dir = match[0].data_dir
+            store_workspace_key(data_dir, name, secret)
+            typer.echo(f"Stored {env_var} in {data_dir / 'keys.env'} (0600).")
     except KeyStoreError as exc:
         typer.echo(f"keys set failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(f"Stored {stored} in the Keychain (account 'wingman').")
+
+    typer.echo("Confirm which copy now wins with: wingman keys where")
 
 
 @keys_app.command("list")
@@ -3235,7 +3289,94 @@ def keys_list() -> None:
     configure_logging()
     for short_name, env_var, state in key_status():
         typer.echo(f"{short_name:10s} {env_var:20s} {state}")
-    typer.echo("Precedence: an exported environment variable wins; the Keychain fills gaps.")
+    typer.echo(
+        "Precedence: a workspace's own key wins (BYOK), then the environment, then the "
+        "Keychain, the host file, and the box-wide global file."
+    )
+    typer.echo("Run 'wingman keys where' to see every tier, its path, and which copy is used.")
+
+
+def _echo_key_locations(title: str, rows_by_key: dict[str, list[KeyLocation]]) -> bool:
+    """Print one workspace's tier table. Returns True if any drift was found."""
+    typer.echo(f"\n{title}")
+    drifted = False
+    for short_name, rows in rows_by_key.items():
+        env_var = KNOWN_KEYS[short_name]
+        winner = next((r for r in rows if r.winner), None)
+        headline = winner.tier if winner else "NOT SET ANYWHERE"
+        typer.echo(f"  {short_name:11s} {env_var:22s} -> {headline}")
+        others = [r.fingerprint for r in rows if r.present and not r.winner]
+        if winner and any(f != winner.fingerprint for f in others):
+            drifted = True
+        for row in rows:
+            if not row.present:
+                continue
+            mark = "USED " if row.winner else "     "
+            note = ""
+            if winner and not row.winner and row.fingerprint != winner.fingerprint:
+                note = "   <-- DIFFERENT KEY (ignored)"
+            where = f" {row.path}" if row.path else ""
+            typer.echo(f"    {mark}{row.tier:42s} {row.fingerprint}{note}")
+            if where.strip():
+                typer.echo(f"         {where.strip()}")
+    return drifted
+
+
+@keys_app.command("where")
+def keys_where(
+    tenant: str = typer.Option(
+        "", "--tenant", help="Show one tenant's workspace instead of this account's."
+    ),
+    all_tenants: bool = typer.Option(
+        False, "--all-tenants", help="Show every tenant in the registry (operators)."
+    ),
+) -> None:
+    """Every place a key could live, which copy is actually used, and whether
+    the copies disagree — by fingerprint, never by value.
+
+    'wingman keys list' can only ever say "environment", because startup
+    hydration has already copied the winning tier into it. This shows the
+    tiers themselves, so an expired key can be found in the one file that
+    still holds it.
+    """
+    configure_logging()
+    config = load_config()
+
+    typer.echo("Resolution order (first one present wins):")
+    typer.echo("  1. workspace file   <workspace>/keys.env      (BYOK - this person's own key)")
+    typer.echo("  2. environment      exported variable")
+    typer.echo("  3. keychain         macOS only, account 'wingman'")
+    typer.echo(f"  4. host file        {host_keys_path()}")
+    typer.echo("  5. global file      /etc/wingman/global-secrets.env  (whole box)")
+    typer.echo("\nTiers 2-5 are the box's; tier 1 is per person. A fingerprint is")
+    typer.echo("prefix...#digest (len N) - same digest means the same key.")
+
+    drifted = False
+    if all_tenants or tenant:
+        from wingman.infrastructure.tenants import load_registry, tenant_registry_path
+
+        registry = tenant_registry_path()
+        tenants = load_registry(registry)
+        if not tenants:
+            typer.echo(f"\nNo tenants in {registry}.", err=True)
+            raise typer.Exit(code=1)
+        if tenant:
+            tenants = [t for t in tenants if t.slug == tenant]
+            if not tenants:
+                typer.echo(f"\nNo tenant named {tenant!r} in {registry}.", err=True)
+                raise typer.Exit(code=1)
+        for entry in tenants:
+            rows = describe_key_locations(_pre_hydration_env, data_dir=entry.data_dir)
+            drifted |= _echo_key_locations(f"tenant '{entry.slug}'  ({entry.data_dir})", rows)
+    else:
+        rows = describe_key_locations(_pre_hydration_env, data_dir=config.data_dir)
+        drifted |= _echo_key_locations(f"this workspace  ({config.data_dir})", rows)
+
+    if drifted:
+        typer.echo(
+            "\nSome tiers hold a DIFFERENT key from the one being used. That is how an "
+            "expired key hides: fix or remove the stale copy, or it will win somewhere else."
+        )
 
 
 @keys_app.command("test")
@@ -3253,6 +3394,77 @@ def keys_test() -> None:
         if not worked and message != "not set":
             failed = True
     if failed:
+        raise typer.Exit(code=1)
+
+
+def _echo_validation(title: str, rows: list[KeyValidation]) -> bool:
+    """Print one workspace's validation table. Returns True if anything failed."""
+    typer.echo(f"\n{title}")
+    failed = False
+    for row in rows:
+        if row.tier == "not set":
+            typer.echo(f"  [  --] {row.short_name:11s} {row.env_var:22s} not set anywhere")
+            continue
+        status = "  ok" if row.ok else "FAIL"
+        typer.echo(f"  [{status}] {row.short_name:11s} {row.env_var:22s} {row.message}")
+        typer.echo(f"           from {row.tier} - {row.fingerprint}")
+        if not row.ok:
+            failed = True
+    return failed
+
+
+@keys_app.command("validate")
+def keys_validate(
+    tenant: str = typer.Option(
+        "", "--tenant", help="Validate one tenant's keys instead of this account's."
+    ),
+    all_tenants: bool = typer.Option(
+        False, "--all-tenants", help="Validate every tenant in the registry (operators)."
+    ),
+) -> None:
+    """Take the key that is actually in use and call the provider with it.
+
+    Differs from 'keys test' in the thing that matters: it resolves each
+    key through the real ladder first — a workspace's own key, then the
+    environment, Keychain, host file, global file — and tests THAT value,
+    naming the tier it came from. 'keys test' only ever looks at the
+    environment and the Keychain, so it can report a healthy key while
+    every real call is spending an expired one out of a file.
+
+    Costs one cheap, no-completion-tokens call per configured key
+    (Anthropic: list models; Voyage: a one-word embed; GitHub/OpenRouter:
+    an auth-status GET). Exits non-zero if any key fails.
+    """
+    configure_logging()
+    config = load_config()
+    failed = False
+
+    if all_tenants or tenant:
+        from wingman.infrastructure.tenants import load_registry, tenant_registry_path
+
+        registry = tenant_registry_path()
+        tenants = load_registry(registry)
+        if not tenants:
+            typer.echo(f"No tenants in {registry}.", err=True)
+            raise typer.Exit(code=1)
+        if tenant:
+            tenants = [entry for entry in tenants if entry.slug == tenant]
+            if not tenants:
+                typer.echo(f"No tenant named {tenant!r} in {registry}.", err=True)
+                raise typer.Exit(code=1)
+        for entry in tenants:
+            rows = validate_keys(_pre_hydration_env, data_dir=entry.data_dir)
+            failed |= _echo_validation(f"tenant '{entry.slug}'  ({entry.data_dir})", rows)
+    else:
+        rows = validate_keys(_pre_hydration_env, data_dir=config.data_dir)
+        failed |= _echo_validation(f"this workspace  ({config.data_dir})", rows)
+
+    if failed:
+        typer.echo(
+            "\nA key that fails here is the one being spent. Replace it in the tier "
+            "named above with: wingman keys set <name> --scope <tier>",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
 

@@ -1076,6 +1076,39 @@ live migrating dhk's own account: a key added to a running tenant's
 even though every server-side check (file contents, ownership, a direct
 `wingman keys test` run as the exact account and data dir the server
 uses) confirmed the key was correct and readable the whole time.
+
+### Finding a key that has expired
+
+An expired key on a shared box is rarely mysterious once you can see the
+tiers. Three commands, run as the account that serves:
+
+```bash
+wingman keys where                  # every tier, its path, and which copy wins
+wingman keys where --all-tenants    # the same, per tenant
+wingman keys validate               # call the provider with the key actually in use
+wingman keys validate --all-tenants
+```
+
+`keys where` prints a fingerprint per tier — `sk-ant-a...#ac9844 (len
+108)` — never a value. Same digest means the same key; different digests
+in two tiers mean they have drifted, and it names which copy loses.
+
+Prefer `keys validate` over `keys test` here. `keys test` only ever looks
+at the environment and the Keychain, so on a server it can report a
+healthy key while every real call spends an expired one out of a tenant's
+`keys.env` or the host `secrets.env` that outranks it. `keys validate`
+resolves through the real ladder first and names the tier it tested.
+
+Fix the key in whichever tier `keys where` named, not whichever is
+convenient — writing to a tier that loses leaves the stale key winning
+and nothing looking different:
+
+```bash
+wingman keys set anthropic --scope host                    # ~/.config/wingman/secrets.env
+wingman keys set anthropic --scope workspace --tenant bob  # one tenant only
+wingman keys set anthropic --scope keychain                # macOS, this account
+```
+
 ## 10. Google Drive push for backups + digests (RFC-053, #205)
 
 Optional, per-account, opt-in: `wingman backup` and `wingman overnight`'s
