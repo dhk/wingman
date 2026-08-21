@@ -212,6 +212,8 @@ watchlist_app = typer.Typer(help="Named groups of people and companies to cycle 
 app.add_typer(watchlist_app, name="watchlist")
 keys_app = typer.Typer(help="API keys in the macOS Keychain — no plaintext files (RFC-019).")
 app.add_typer(keys_app, name="keys")
+examples_app = typer.Typer(help="Good and bad examples of the documents wingman writes (#438).")
+app.add_typer(examples_app, name="examples")
 telemetry_app = typer.Typer(help="Opt-in local usage journal — never leaves the machine (RFC-023).")
 app.add_typer(telemetry_app, name="telemetry")
 feature_app = typer.Typer(
@@ -3494,6 +3496,81 @@ def keys_unset(
         typer.echo(f"keys unset failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo("Removed." if removed else "Nothing was stored under that name.")
+
+
+@examples_app.command("list")
+def examples_list(
+    kind: str = typer.Option("", "--kind", help="Only this kind of document."),
+    verdict: str = typer.Option("", "--verdict", help="Only 'good' or only 'bad'."),
+    contains: str = typer.Option("", "--contains", help="Only ones matching this text."),
+) -> None:
+    """Saved examples, newest first — a preview of each, not the whole document.
+
+    Saving happens in conversation ("save this as a good example"); this is
+    for looking over what has accumulated.
+    """
+    configure_logging()
+    from wingman.application.examples import list_examples, render_examples
+
+    config = load_config()
+    _require_workspace(config, "examples")
+    with Storage(config.db_path) as storage:
+        typer.echo(
+            render_examples(list_examples(storage, kind=kind, verdict=verdict, contains=contains))
+        )
+
+
+@examples_app.command("show")
+def examples_show(
+    example_id: str = typer.Argument(..., help="Id, or the first few characters of one."),
+) -> None:
+    """One example in full — the whole document, its verdict and its reason."""
+    configure_logging()
+    from wingman.application.examples import find_example, render_example
+
+    config = load_config()
+    _require_workspace(config, "examples")
+    try:
+        with Storage(config.db_path) as storage:
+            typer.echo(render_example(find_example(example_id, storage)))
+    except IngestError as exc:
+        typer.echo(f"examples show failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@examples_app.command("kinds")
+def examples_kinds() -> None:
+    """Which kinds of document have examples, commonest first.
+
+    Kinds are free text, so this is how the vocabulary stays visible:
+    near-duplicates here mean it is drifting.
+    """
+    configure_logging()
+    from wingman.application.examples import example_kinds, render_kinds
+
+    config = load_config()
+    _require_workspace(config, "examples")
+    with Storage(config.db_path) as storage:
+        typer.echo(render_kinds(example_kinds(storage)))
+
+
+@examples_app.command("remove")
+def examples_remove(
+    example_id: str = typer.Argument(..., help="Id, or the first few characters of one."),
+) -> None:
+    """Forget one example."""
+    configure_logging()
+    from wingman.application.examples import remove_example
+
+    config = load_config()
+    _require_workspace(config, "examples")
+    try:
+        with Storage(config.db_path) as storage:
+            removed = remove_example(example_id, storage)
+    except IngestError as exc:
+        typer.echo(f"examples remove failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Removed the {removed.verdict} example of '{removed.kind}'.")
 
 
 @drive_app.command("auth")

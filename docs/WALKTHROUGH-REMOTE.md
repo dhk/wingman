@@ -222,6 +222,11 @@ Everything below is a sentence to Claude, not a command to remember:
 - **Drop leads in the heap** — a burst of postings/profiles/links with no
   time to sort them? "add these to the heap" (`heap`) captures them
   instantly, hottest first — nothing fetched or spent until you sort later.
+- **Keep a good or bad example** — "save this as a good example" / "save
+  this as a bad example" (`examples`) keeps your verdict on something
+  wingman wrote, with what kind of document it is and why. The why is
+  required: "bad" is not a lesson, "bad, it over-claims seniority" is.
+  It stores them for you to look over; it does not change future drafts.
 - **Deep-dive a person** — "do a deep dive on Jane Author" (`people_deep_dive`)
   is one of two lookups that reach the open web and cost real API spend; it
   always asks you to confirm before spending, and only saves to

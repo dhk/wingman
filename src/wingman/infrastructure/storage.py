@@ -18,6 +18,7 @@ from wingman.domain.commentary import CommentaryEntry
 from wingman.domain.company import CompanyDossier
 from wingman.domain.corpus import CorpusDocument
 from wingman.domain.delivered_message import DeliveredMessage
+from wingman.domain.examples import Example
 from wingman.domain.heap import HeapItem
 from wingman.domain.operator_answer import OperatorAnswer
 from wingman.domain.opportunity import Opportunity
@@ -200,6 +201,18 @@ CREATE TABLE IF NOT EXISTS heap_items (
     payload TEXT NOT NULL,
     added_at TEXT NOT NULL
 );
+-- Judged examples (#438): a document plus whether it was good or bad, what
+-- kind of document it is an example OF, and why. 'kind' and 'verdict' are
+-- columns rather than payload-only so filtering is a query, not a scan of
+-- every stored document.
+CREATE TABLE IF NOT EXISTS examples (
+    example_id TEXT PRIMARY KEY,
+    verdict TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    saved_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS examples_kind_verdict ON examples (kind, verdict);
 -- The commentary corpus (RFC-058, #339). A table of its own, not a profile_items
 -- kind, and deliberately without an FTS index joined to corpus_fts: the
 -- isolation is structural, so a query that doesn't name this table cannot
@@ -1594,6 +1607,49 @@ class Storage:
 
     def delete_heap_item(self, item_id: str) -> bool:
         cursor = self._conn.execute("DELETE FROM heap_items WHERE item_id = ?", (item_id,))
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def add_example(self, example: Example) -> None:
+        self._conn.execute(
+            "INSERT INTO examples (example_id, verdict, kind, payload, saved_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                example.example_id,
+                str(example.verdict),
+                example.kind,
+                example.model_dump_json(),
+                example.saved_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def list_examples(self, kind: str = "", verdict: str = "") -> list[Example]:
+        """Newest first. Empty filters mean no filter, not "match empty"."""
+        clauses, params = [], []
+        if kind.strip():
+            clauses.append("kind = ?")
+            params.append(kind.strip().lower())
+        if verdict.strip():
+            clauses.append("verdict = ?")
+            params.append(verdict.strip().lower())
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        cursor = self._conn.execute(
+            f"SELECT payload FROM examples{where} ORDER BY saved_at DESC",
+            params,  # noqa: S608
+        )
+        return [Example.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def example_kinds(self) -> list[tuple[str, int]]:
+        """(kind, count) for every kind stored, commonest first — how a
+        free-text vocabulary is kept visible instead of drifting quietly."""
+        cursor = self._conn.execute(
+            "SELECT kind, COUNT(*) FROM examples GROUP BY kind ORDER BY COUNT(*) DESC, kind"
+        )
+        return [(row[0], row[1]) for row in cursor.fetchall()]
+
+    def delete_example(self, example_id: str) -> bool:
+        cursor = self._conn.execute("DELETE FROM examples WHERE example_id = ?", (example_id,))
         self._conn.commit()
         return cursor.rowcount > 0
 

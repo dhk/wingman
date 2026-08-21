@@ -1862,6 +1862,101 @@ def heap(
     return f"unknown action {action!r}; use add, show, sort, or remove."
 
 
+@server.tool()
+def examples(
+    action: str = "list",
+    text: str = "",
+    verdict: str = "",
+    kind: str = "",
+    reason: str = "",
+    author: str = "wingman",
+    source: str = "",
+    example_id: str = "",
+    contains: str = "",
+) -> str:
+    """Good and bad examples (#438): keep the judgment that would otherwise
+    evaporate when the conversation ends.
+
+    Wingman produces briefings, POVs, cover letters and outreach drafts all
+    day, and some are right and some are wrong. Without this, "that one was
+    good" and "that one over-claims" survive only as long as the chat, so
+    the same failure recurs and the good version cannot be pointed at again.
+
+    action is 'add' (store `text` with a `verdict`, a `kind` and a
+    `reason`), 'list' (newest first, filtered by `kind`, `verdict`, and
+    `contains`), 'show' (`example_id` — the whole document, not a
+    preview), 'kinds' (the vocabulary in use, commonest first), or
+    'remove' (`example_id`).
+
+    verdict is 'good' or 'bad'. kind is what sort of document this is an
+    example OF — cover letter, briefing, POV, outreach message — free text,
+    lowercased, so a save is never blocked on a taxonomy decision. author
+    is 'wingman' (it produced the document) or 'user' (they supplied it —
+    someone else's cover letter, a job spec worth imitating).
+
+    reason is REQUIRED on both verdicts and a save without one is refused.
+    "bad" is not a lesson; "bad — it over-claims seniority" is the part
+    that is still useful in six weeks, and the part somebody else could
+    review. If the user has not said why, ask before saving rather than
+    storing a bare verdict.
+
+    This stores and retrieves. It does NOT feed examples back into what
+    wingman writes — that is a separate, deliberate decision, so do not
+    tell the user their saved examples will change future drafts.
+
+    Protocol: when the user says "save this as a good example" or "save
+    this as a bad example", the document they mean is almost always the one
+    you just produced — pass it as `text` with author='wingman', rather
+    than asking them to paste it back. If they supply their own text, pass
+    that with author='user'. Ask for the kind and the reason if they have
+    not already said them, and say plainly that the reason is required.
+    """
+    from wingman.application.examples import (
+        example_kinds,
+        find_example,
+        list_examples,
+        remove_example,
+        render_example,
+        render_examples,
+        render_kinds,
+        save_example,
+    )
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "add":
+                saved = save_example(
+                    text,
+                    verdict=verdict,
+                    kind=kind,
+                    reason=reason,
+                    storage=storage,
+                    author=author,
+                    source=source,
+                )
+                return (
+                    f"Saved a {saved.verdict} example of '{saved.kind}' "
+                    f"(id {saved.example_id[:8]}).\nwhy: {saved.reason}"
+                )
+            if action == "list":
+                return render_examples(
+                    list_examples(storage, kind=kind, verdict=verdict, contains=contains)
+                )
+            if action == "show":
+                return render_example(find_example(example_id, storage))
+            if action == "kinds":
+                return render_kinds(example_kinds(storage))
+            if action == "remove":
+                removed = remove_example(example_id, storage)
+                return f"Removed the {removed.verdict} example of '{removed.kind}'."
+    except IngestError as exc:
+        return f"examples {action} failed: {exc}"
+    return f"unknown action {action!r}; use add, list, show, kinds, or remove."
+
+
 # Annotated 'list[Any]' rather than the precise 'list[str | Image]', which is
 # what this actually returns: FastMCP builds an output schema from the
 # annotation and pydantic cannot generate one for Image (it raises at
