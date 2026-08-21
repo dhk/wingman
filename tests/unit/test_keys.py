@@ -665,3 +665,94 @@ def test_test_key_value_refuses_an_empty_value_without_calling_out() -> None:
     from wingman.infrastructure.keys import test_key_value
 
     assert test_key_value("anthropic", "  ") == (False, "not set")
+
+
+#: chmod(0) denies nobody when you are root, so the permission tests would
+#: silently invert rather than fail loudly. Skip instead of pretending.
+_needs_non_root = pytest.mark.skipif(
+    os.geteuid() == 0, reason="root can read a 0o000 file; the denial cannot be staged"
+)
+
+
+def _unreadable(path: Path) -> Path:
+    """A file that exists but this account cannot read."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("ANTHROPIC_API_KEY=sk-ant-hidden\n", encoding="utf-8")
+    path.chmod(0o000)
+    return path
+
+
+@_needs_non_root
+def test_unreadable_tier_is_reported_as_unreadable_not_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#442: 'not set' when we could not look is a confident wrong answer —
+    it sends someone off to set a key that is already there."""
+    from wingman.infrastructure.keys import describe_key_locations
+
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    denied = _unreadable(tmp_path / "global-secrets.env")
+    try:
+        rows = describe_key_locations(
+            {}, data_dir=tmp_path / "ws", home=tmp_path / "home", global_path=denied
+        )["anthropic"]
+    finally:
+        denied.chmod(0o600)
+    global_row = next(r for r in rows if "global" in r.tier)
+    assert global_row.readable is False
+    assert global_row.present is False
+    # A tier we simply do not have is still plainly absent, not "unreadable".
+    assert all(r.readable for r in rows if "global" not in r.tier)
+
+
+@_needs_non_root
+def test_validate_will_not_call_a_key_missing_when_a_tier_was_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure.keys import validate_keys
+
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    denied = _unreadable(tmp_path / "global-secrets.env")
+    try:
+        rows = validate_keys(
+            {}, data_dir=tmp_path / "ws", home=tmp_path / "home", global_path=denied
+        )
+    finally:
+        denied.chmod(0o600)
+    row = next(r for r in rows if r.short_name == "anthropic")
+    assert row.ok is False
+    assert row.message != "not set"
+    assert "cannot tell" in row.message
+    assert row.unreadable_tiers
+
+
+@_needs_non_root
+def test_ensure_env_still_tolerates_an_unreadable_tier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-047: one inaccessible tier must never crash every command for
+    that account. #442 changed what the DIAGNOSTICS say, not this."""
+    from wingman.infrastructure.keys import ensure_env
+
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    denied = _unreadable(tmp_path / "global-secrets.env")
+    try:
+        hydrated = ensure_env(data_dir=tmp_path / "ws", home=tmp_path / "home", global_path=denied)
+    finally:
+        denied.chmod(0o600)
+    assert hydrated == []
+
+
+def test_a_genuinely_absent_tier_is_still_readable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absent and unreadable must stay distinguishable in both directions."""
+    from wingman.infrastructure.keys import describe_key_locations
+
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    rows = describe_key_locations(
+        {}, data_dir=tmp_path / "ws", home=tmp_path / "home", global_path=tmp_path / "nope.env"
+    )["anthropic"]
+    assert all(row.readable for row in rows)
+    assert not any(row.present for row in rows)
