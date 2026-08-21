@@ -392,6 +392,69 @@ cmd_hosts() {
   wingman-host-status "$@"
 }
 
+#: Same default as wingman-provision-shared.sh / wingman-redeploy-shared.sh.
+SHARED_USER="${WINGMAN_SHARED_USER:-wingman-shared}"
+
+require_no_args() {
+  # A subcommand that takes nothing must SAY so rather than quietly doing
+  # something else (#443). 'wg upgrade all' matched 'upgrade)', threw the
+  # 'all' away and refreshed one account while the operator believed the
+  # whole box had been done — on a pair of commands one hyphen apart whose
+  # blast radius is very different. The same class of bug is already
+  # documented in cmd_tenant below.
+  local cmd="$1"; shift
+  [ "$#" -eq 0 ] && return 0
+  say "$0 $cmd: takes no arguments (got '$1')."
+  case "$cmd" in
+    upgrade) say "Did you mean '$0 upgrade-all'?" ;;
+    stop)    say "Did you mean '$0 stop-all'?" ;;
+  esac
+  exit 2
+}
+
+cmd_keys() {
+  # #444: the 'keys' commands live on the wingman CLI, but the account
+  # whose keys need looking at is usually not the one you are logged in
+  # as. sudo resets PATH, so every invocation had become
+  #   sudo -iu wingman-shared bash -c 'export PATH=...; wingman keys ...'
+  # which docs/SERVER.md had absorbed rather than solved, and which fails
+  # two unhelpful ways: 'command not found', or -- worse -- running as the
+  # wrong account and reading every tenant's keys.env as absent (#442).
+  local as_shared=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --all-tenants|--tenant|--tenant=*) as_shared=1 ;;
+    esac
+  done
+
+  if [ "$as_shared" -eq 0 ]; then
+    command -v wingman >/dev/null 2>&1 || {
+      say "no 'wingman' on PATH for $(id -un) — is the CLI installed for this account?"
+      return 127
+    }
+    say "→ as $(id -un) (this account)"
+    wingman keys "$@"
+    return $?
+  fi
+
+  # Tenant-scoped: the registry and every tenant's keys.env belong to the
+  # shared service account. Read as anyone else they come back "absent",
+  # which is a permissions failure wearing a finding's costume.
+  id "$SHARED_USER" >/dev/null 2>&1 || {
+    say "no '$SHARED_USER' account on this box — is the RFC-048 shared process provisioned?"
+    say "(override the name with WINGMAN_SHARED_USER=...)"
+    return 1
+  }
+  say "→ as $SHARED_USER (owns the tenant registry and every tenant's keys.env)"
+  sudo -iu "$SHARED_USER" bash -c \
+    'export PATH="$HOME/.local/bin:$PATH"
+     command -v wingman >/dev/null 2>&1 || {
+       echo "no wingman on PATH for $(id -un) — run '"'"'wg upgrade-all'"'"' first" >&2
+       exit 127
+     }
+     exec wingman keys "$@"' _ "$@"
+}
+
 cmd_tenant() {
   # Thin wrapper over the real implementation ('wingman tenant ...',
   # RFC-048 #209/#210) — same shape as every other wingman-ctl command
@@ -418,18 +481,19 @@ cmd_tenant() {
 }
 
 case "${1:-}" in
-  status)      cmd_status ;;
-  start)       cmd_start ;;
-  stop)        cmd_stop ;;
+  status)      shift; require_no_args status "$@"; cmd_status ;;
+  start)       shift; require_no_args start "$@"; cmd_start ;;
+  stop)        shift; require_no_args stop "$@"; cmd_stop ;;
   stop-all)    cmd_stop_all "${2:-}" ;;
-  upgrade)     cmd_upgrade ;;
-  cycle)       cmd_cycle ;;
-  upgrade-all) cmd_upgrade_all ;;
-  redeploy-shared) cmd_redeploy_shared ;;
+  upgrade)     shift; require_no_args upgrade "$@"; cmd_upgrade ;;
+  cycle)       shift; require_no_args cycle "$@"; cmd_cycle ;;
+  upgrade-all) shift; require_no_args upgrade-all "$@"; cmd_upgrade_all ;;
+  redeploy-shared) shift; require_no_args redeploy-shared "$@"; cmd_redeploy_shared ;;
   hosts)       shift; cmd_hosts "$@" ;;
+  keys)        shift; cmd_keys "$@" ;;
   tenant)      shift; cmd_tenant "$@" ;;
   *)
-    say "usage: $0 status|hosts|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|redeploy-shared|tenant ..."
+    say "usage: $0 status|hosts|keys|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|redeploy-shared|tenant ..."
     say "  status       what's running, who owns each process, what's safe to stop (YOU only)"
     say "  hosts        every wingman instance on this box: version, uptime, build drift,"
     say "               and whether any is running outside systemd's control (#263)"
@@ -444,6 +508,9 @@ case "${1:-}" in
     say "               talks to. Needs sudo; says which half did not happen (#375)"
     say "  redeploy-shared  pull, then redeploy the RFC-048 shared multi-tenant process"
     say "               (needs sudo; briefly interrupts every tenant on it)"
+    say "  keys ...     forward to 'wingman keys' with a working PATH; tenant-scoped"
+    say "               flags (--tenant/--all-tenants) run as the account that owns"
+    say "               the registry, so tenant files are readable (#442, #444)"
     say "  tenant url <slug>           print a tenant's connector URLs (RFC-048, #209)"
     say "  tenant rotate-token <slug>  invalidate + reissue a tenant's token in one step,"
     say "                              no restart, no drain (RFC-048, #210)"

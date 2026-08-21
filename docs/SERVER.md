@@ -1083,11 +1083,17 @@ An expired key on a shared box is rarely mysterious once you can see the
 tiers. Three commands, run as the account that serves:
 
 ```bash
-wingman keys where                  # every tier, its path, and which copy wins
-wingman keys where --all-tenants    # the same, per tenant
-wingman keys validate               # call the provider with the key actually in use
-wingman keys validate --all-tenants
+wg keys where                  # every tier, its path, and which copy wins
+wg keys where --all-tenants    # the same, per tenant
+wg keys validate               # call the provider with the key actually in use
+wg keys validate --all-tenants
 ```
+
+`wg keys` forwards to the `wingman` CLI and says which account it ran as.
+The tenant-scoped flags run it as the account that owns the registry and
+every tenant's `keys.env` — read as anyone else those files come back
+"unreadable", which `keys where` now says plainly instead of reporting
+them absent (#442). Nothing to `sudo -iu` and no `PATH` to export.
 
 `keys where` prints a fingerprint per tier — `sk-ant-a...#ac9844 (len
 108)` — never a value. Same digest means the same key; different digests
