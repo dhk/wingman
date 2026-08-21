@@ -28,6 +28,7 @@ Secrets are never logged and never printed back by any command here.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -246,6 +247,31 @@ def store_workspace_key(data_dir: Path, name: str, value: str) -> bool:
     return True
 
 
+def store_host_key(name: str, value: str, home: Path | None = None) -> Path:
+    """Store one key in the host's canonical secrets file (0600), creating it.
+
+    The tier a server host actually wants: read by the CLI, the MCP server
+    and the overnight timer alike, so a key fixed here is fixed for every
+    consumer on the box at once — unlike the Keychain (macOS only) or a
+    single workspace's 'keys.env' (that tenant only). Other keys already
+    in the file are preserved; only the named one is replaced.
+    """
+    short = _require_name(name)
+    env_var = KNOWN_KEYS[short]
+    if not value.strip():
+        raise KeyStoreError("the key value is empty; nothing was stored.")
+    values = read_host_keys(home)
+    values[env_var] = value.strip()
+    path = host_keys_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(f"{key}={val}\n" for key, val in sorted(values.items())), encoding="utf-8"
+    )
+    path.chmod(0o600)
+    _logger.info("host key stored var=%s", env_var)  # never the value
+    return path
+
+
 def resolve_provider_key(env_var: str, data_dir: Path | None = None) -> str | None:
     """The value a provider should use for one known env var, read-only.
 
@@ -416,6 +442,122 @@ def resolve_key_sources(
     return results
 
 
+#: How much of a key value may be shown. Eight characters is the provider's
+#: own public prefix ('sk-ant-a', 'pa-4uc-S') and nothing more — enough to
+#: tell Anthropic from Voyage and to eyeball a truncated paste, short of
+#: the entropy that makes the key a secret. The digest, not the prefix, is
+#: what makes two tiers comparable (AGENTS.md "redact sensitive data").
+PREFIX_CHARS = 8
+
+
+def fingerprint(value: str) -> str:
+    """A key's identity without the key: public prefix, short digest, length.
+
+    Two tiers holding the same fingerprint hold the same key; two tiers
+    with different fingerprints have drifted, which is the whole reason
+    'keys where' exists. The digest is sha256 truncated to 6 hex chars —
+    collision-proof enough to compare four tiers of one key, useless for
+    recovering the value.
+    """
+    text = value.strip()
+    if not text:
+        return "(empty)"
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:6]
+    return f"{text[:PREFIX_CHARS]}...#{digest} (len {len(text)})"
+
+
+@dataclass(frozen=True)
+class KeyLocation:
+    """One tier's answer for one key: is it here, and is it the one used?"""
+
+    tier: str
+    #: Where the tier physically lives, when it is a file. None for the
+    #: environment and the Keychain, which have no path to go look at.
+    path: str | None
+    present: bool
+    #: None when absent; a 'fingerprint' string otherwise. Never the value.
+    fingerprint: str | None
+    winner: bool
+
+
+def _key_tiers(
+    short_name: str,
+    env_var: str,
+    environ: Mapping[str, str],
+    data_dir: Path | None,
+    home: Path | None,
+    runner: Runner | None,
+    global_path: Path | None,
+) -> list[tuple[str, str | None, str]]:
+    """(tier label, path, value) for one key, in effective precedence order.
+
+    The single definition of "which tier comes first", shared by the
+    reporting and the validating paths so they can never disagree about
+    which copy is the live one — the disagreement 'key_status' and
+    'test_key' still have with the rest of this module.
+    """
+    keychain_value = get_key(short_name, runner=runner) if keychain_available() else None
+    tiers: list[tuple[str, str | None, str]] = [
+        (
+            _SOURCE_LABELS[4],
+            str(workspace_keys_path(data_dir)) if data_dir is not None else None,
+            read_workspace_keys(data_dir).get(env_var, "") if data_dir is not None else "",
+        ),
+        (_SOURCE_LABELS[0], None, environ.get(env_var, "")),
+        (_SOURCE_LABELS[1], None, keychain_value or ""),
+        (_SOURCE_LABELS[2], str(host_keys_path(home)), read_host_keys(home).get(env_var, "")),
+        (
+            _SOURCE_LABELS[3],
+            str(global_path if global_path is not None else GLOBAL_KEYS_PATH),
+            read_global_keys(global_path).get(env_var, ""),
+        ),
+    ]
+    # The workspace tier only exists when a workspace was named.
+    return tiers if data_dir is not None else tiers[1:]
+
+
+def describe_key_locations(
+    environ: Mapping[str, str],
+    data_dir: Path | None = None,
+    home: Path | None = None,
+    runner: Runner | None = None,
+    global_path: Path | None = None,
+) -> dict[str, list[KeyLocation]]:
+    """Every tier for every known key, in the order they are consulted.
+
+    The read-only, value-free answer to "where is this key, and which copy
+    is actually being used?" — the question 'key_status' cannot answer,
+    because by the time it runs 'ensure_env' has copied whichever tier won
+    into the environment and every key looks like it came from there.
+
+    Pass an 'environ' snapshot taken BEFORE 'ensure_env' for the same
+    reason 'resolve_key_sources' does. Tier order here is the effective
+    one: the workspace's own key wins (BYOK), then the environment, then
+    Keychain, host file, and the box-wide global file.
+    """
+    out: dict[str, list[KeyLocation]] = {}
+    for short_name, env_var in KNOWN_KEYS.items():
+        won = False
+        rows: list[KeyLocation] = []
+        for tier, path, value in _key_tiers(
+            short_name, env_var, environ, data_dir, home, runner, global_path
+        ):
+            present = bool(value.strip())
+            winner = present and not won
+            won = won or winner
+            rows.append(
+                KeyLocation(
+                    tier=tier,
+                    path=path,
+                    present=present,
+                    fingerprint=fingerprint(value) if present else None,
+                    winner=winner,
+                )
+            )
+        out[short_name] = rows
+    return out
+
+
 def key_status(runner: Runner | None = None) -> list[tuple[str, str, str]]:
     """(short name, env var, state) per known key — states name the source,
     never the value: 'environment', 'keychain', or 'not set'."""
@@ -508,6 +650,81 @@ def _test_openrouter(api_key: str) -> tuple[bool, str]:
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         return False, f"could not reach the OpenRouter API ({exc})"
     return True, "working"
+
+
+#: short name -> the one cheap authenticated call that proves the key works.
+_LIVE_TESTS: dict[str, Callable[[str], tuple[bool, str]]] = {
+    "anthropic": _test_anthropic,
+    "voyage": _test_voyage,
+    "github": _test_github,
+    "openrouter": _test_openrouter,
+}
+
+
+def test_key_value(short_name: str, value: str) -> tuple[bool, str]:
+    """Live-test a key value the caller already resolved.
+
+    Separate from 'test_key' because validation must test the key that is
+    actually in use — which, since BYOK, may come from a workspace or host
+    file that 'test_key' never looks at.
+    """
+    key = _require_name(short_name)
+    if not value.strip():
+        return False, "not set"
+    return _LIVE_TESTS[key](value)
+
+
+@dataclass(frozen=True)
+class KeyValidation:
+    """One key, live-tested where it actually resolves from."""
+
+    short_name: str
+    env_var: str
+    #: The tier the tested value came from, or "not set" when nowhere.
+    tier: str
+    fingerprint: str | None
+    ok: bool
+    message: str
+
+
+def validate_keys(
+    environ: Mapping[str, str],
+    data_dir: Path | None = None,
+    home: Path | None = None,
+    runner: Runner | None = None,
+    global_path: Path | None = None,
+) -> list[KeyValidation]:
+    """Live-test the key each tier ladder actually resolves to, and name
+    the tier it came from.
+
+    'test_keys' answers "does the key in env or the Keychain work?".
+    That is the wrong question once a workspace or host file can outrank
+    both: it can report a healthy key while every real call spends an
+    expired one from a file it never read. This asks the right question —
+    the winning tier's value is the one put on the wire.
+
+    Costs at most one cheap, no-completion-tokens call per configured key.
+    A key that resolves nowhere is reported without any network call.
+    """
+    results: list[KeyValidation] = []
+    for short_name, env_var in KNOWN_KEYS.items():
+        winner = next(
+            (
+                (tier, value)
+                for tier, _path, value in _key_tiers(
+                    short_name, env_var, environ, data_dir, home, runner, global_path
+                )
+                if value.strip()
+            ),
+            None,
+        )
+        if winner is None:
+            results.append(KeyValidation(short_name, env_var, "not set", None, False, "not set"))
+            continue
+        tier, value = winner
+        ok, message = test_key_value(short_name, value)
+        results.append(KeyValidation(short_name, env_var, tier, fingerprint(value), ok, message))
+    return results
 
 
 def test_key(short_name: str, runner: Runner | None = None) -> tuple[bool, str]:

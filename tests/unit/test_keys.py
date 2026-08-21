@@ -493,3 +493,175 @@ def test_resolve_key_sources_no_warning_when_duplicate_values_agree(
     sources = resolve_key_sources(environ, data_dir=tmp_path, home=tmp_path / "home")
     by_name = {source.short_name: source for source in sources}
     assert by_name["anthropic"].shadowed_by == []
+
+
+def test_fingerprint_shows_the_prefix_but_never_the_key() -> None:
+    """The whole point of showing a key at all: enough to recognise it,
+    not enough to use it."""
+    from wingman.infrastructure.keys import PREFIX_CHARS, fingerprint
+
+    secret = "sk-ant-api03-SECRET-TAIL-NOBODY-SHOULD-SEE"
+    shown = fingerprint(secret)
+    assert shown.startswith(secret[:PREFIX_CHARS])
+    assert "SECRET-TAIL" not in shown
+    assert "NOBODY-SHOULD-SEE" not in shown
+    assert f"len {len(secret)}" in shown
+    assert fingerprint("   ") == "(empty)"
+
+
+def test_fingerprint_matches_for_equal_keys_and_differs_for_drifted_ones() -> None:
+    """Comparing tiers is the job; the digest is what makes it possible
+    without ever printing a value."""
+    from wingman.infrastructure.keys import fingerprint
+
+    assert fingerprint("sk-ant-same-key") == fingerprint("sk-ant-same-key")
+    assert fingerprint("sk-ant-same-key") != fingerprint("sk-ant-other-key")
+
+
+def test_describe_key_locations_marks_one_winner_and_keeps_the_losers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The expired-key scenario: two tiers hold different values. The used
+    one is flagged, and the stale one is still listed — hiding it is how a
+    dead key stays hidden."""
+    from wingman.infrastructure.keys import describe_key_locations, store_workspace_key
+
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    store_workspace_key(tmp_path, "anthropic", "sk-ant-the-live-one")
+    environ = {"ANTHROPIC_API_KEY": "sk-ant-the-expired-one"}
+
+    rows = describe_key_locations(environ, data_dir=tmp_path, home=tmp_path / "home")["anthropic"]
+    winners = [row for row in rows if row.winner]
+    assert len(winners) == 1
+    assert winners[0].tier == "workspace file"
+
+    present = {row.tier: row for row in rows if row.present}
+    assert set(present) == {"workspace file", "environment"}
+    assert present["environment"].winner is False
+    assert present["environment"].fingerprint != winners[0].fingerprint
+    assert all("the-live-one" not in (row.fingerprint or "") for row in rows)
+
+
+def test_describe_key_locations_reports_a_key_that_is_nowhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure.keys import describe_key_locations
+
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    rows = describe_key_locations({}, data_dir=tmp_path, home=tmp_path / "home")["openrouter"]
+    assert not any(row.present for row in rows)
+    assert not any(row.winner for row in rows)
+
+
+def test_describe_key_locations_names_the_file_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'Where is it?' has to be answerable with a path you can go open."""
+    from wingman.infrastructure.keys import describe_key_locations
+
+    monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
+    rows = describe_key_locations({}, data_dir=tmp_path, home=tmp_path / "home")["anthropic"]
+    by_tier = {row.tier: row for row in rows}
+    assert by_tier["workspace file"].path == str(tmp_path / "keys.env")
+    assert by_tier["environment"].path is None
+    assert "secrets.env" in (by_tier["host file (~/.config/wingman/secrets.env)"].path or "")
+
+
+def test_store_host_key_writes_0600_and_preserves_other_keys(tmp_path: Path) -> None:
+    """Fixing one expired key must not drop the others sharing the file."""
+    from wingman.infrastructure.keys import read_host_keys, store_host_key
+
+    store_host_key("anthropic", "sk-ant-first", home=tmp_path)
+    path = store_host_key("voyage", "pa-second", home=tmp_path)
+
+    values = read_host_keys(tmp_path)
+    assert values["ANTHROPIC_API_KEY"] == "sk-ant-first"
+    assert values["VOYAGE_API_KEY"] == "pa-second"
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_store_host_key_replaces_rather_than_appends(tmp_path: Path) -> None:
+    from wingman.infrastructure.keys import read_host_keys, store_host_key
+
+    store_host_key("anthropic", "sk-ant-expired", home=tmp_path)
+    store_host_key("anthropic", "sk-ant-renewed", home=tmp_path)
+    assert read_host_keys(tmp_path)["ANTHROPIC_API_KEY"] == "sk-ant-renewed"
+
+
+def test_store_host_key_refuses_an_empty_value(tmp_path: Path) -> None:
+    from wingman.infrastructure.keys import store_host_key
+
+    with pytest.raises(KeyStoreError):
+        store_host_key("anthropic", "   ", home=tmp_path)
+
+
+def test_validate_keys_tests_the_winning_tier_not_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bug 'keys test' has: a healthy key in env, an expired one in the
+    workspace file that outranks it. Validation must test the one that is
+    actually spent, and say where it came from."""
+    from wingman.infrastructure import keys as module
+    from wingman.infrastructure.keys import store_workspace_key, validate_keys
+
+    monkeypatch.setattr(module, "keychain_available", lambda: False)
+    store_workspace_key(tmp_path, "anthropic", "sk-ant-expired")
+    tested: list[str] = []
+
+    def fake_test(value: str) -> tuple[bool, str]:
+        tested.append(value)
+        return (False, "Anthropic rejected the key (invalid or revoked)")
+
+    monkeypatch.setitem(module._LIVE_TESTS, "anthropic", fake_test)
+
+    rows = validate_keys(
+        {"ANTHROPIC_API_KEY": "sk-ant-healthy"}, data_dir=tmp_path, home=tmp_path / "home"
+    )
+    row = next(r for r in rows if r.short_name == "anthropic")
+    assert tested == ["sk-ant-expired"]
+    assert row.tier == "workspace file"
+    assert row.ok is False
+    assert "rejected" in row.message
+
+
+def test_validate_keys_makes_no_call_for_an_unset_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure import keys as module
+    from wingman.infrastructure.keys import validate_keys
+
+    monkeypatch.setattr(module, "keychain_available", lambda: False)
+
+    def explode(value: str) -> tuple[bool, str]:
+        raise AssertionError("no network call should happen for an unset key")
+
+    for name in module.KNOWN_KEYS:
+        monkeypatch.setitem(module._LIVE_TESTS, name, explode)
+
+    rows = validate_keys({}, data_dir=tmp_path, home=tmp_path / "home")
+    assert all(row.tier == "not set" and row.message == "not set" for row in rows)
+    assert all(row.fingerprint is None for row in rows)
+
+
+def test_validate_keys_never_returns_the_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure import keys as module
+    from wingman.infrastructure.keys import validate_keys
+
+    monkeypatch.setattr(module, "keychain_available", lambda: False)
+    monkeypatch.setitem(module._LIVE_TESTS, "voyage", lambda value: (True, "working"))
+
+    rows = validate_keys(
+        {"VOYAGE_API_KEY": "pa-SECRET-TAIL-VALUE"}, data_dir=tmp_path, home=tmp_path / "home"
+    )
+    row = next(r for r in rows if r.short_name == "voyage")
+    assert row.ok is True
+    assert "SECRET-TAIL-VALUE" not in (row.fingerprint or "")
+    assert "SECRET-TAIL-VALUE" not in row.message
+
+
+def test_test_key_value_refuses_an_empty_value_without_calling_out() -> None:
+    from wingman.infrastructure.keys import test_key_value
+
+    assert test_key_value("anthropic", "  ") == (False, "not set")
