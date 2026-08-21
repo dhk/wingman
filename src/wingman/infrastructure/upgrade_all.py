@@ -8,7 +8,7 @@ every user has the same install shape (#167):
   'git pull --ff-only' against their own checkout, then
   'uv tool install --reinstall' from it.
 - **Local-path shape** (Trent): deliberately has no GitHub access of his
-  own (docs/WALKTHROUGH-SECOND-USER.md's design) — he installs via
+  own (the shared-tenant design in docs/SERVER.md) — he installs via
   'uv tool install <another user's already-updated checkout path>', never
   'git pull'. There is nothing of his own to pull.
 

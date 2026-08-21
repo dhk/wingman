@@ -244,8 +244,9 @@ Everything below is a sentence to Claude, not a command to remember:
   separate login for them (`coach_persona`); once it's worth splitting
   off, "carve off Trent's persona into his own workspace" seeds a
   brand-new workspace from everything captured (`carve_off_persona`).
-  Lighter than a fully separate instance per person — for that, see
-  [`WALKTHROUGH-SECOND-USER.md`](WALKTHROUGH-SECOND-USER.md).
+  Lighter than a fully separate instance per person — for that, add them
+  as their own tenant ([`SERVER.md`](SERVER.md)) and hand them
+  [`WALKTHROUGH-HOSTED.md`](WALKTHROUGH-HOSTED.md).
 - **Check in on the digest** — `https://lobster.<tailnet>.ts.net/ui/<token>/`
   is the landing page for today's digest and every past one; it's also
   the fastest way to glance at something on your phone without opening
