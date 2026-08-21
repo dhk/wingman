@@ -142,32 +142,41 @@ HOST_KEYS_FILENAME = "secrets.env"
 HOST_KEYS_SUBDIR = os.path.join(".config", "wingman")
 
 
-def _parse_known_keys_file(path: Path) -> dict[str, str]:
-    """NAME=value lines from a keys.env-shaped file; unknown names ignored.
+def _read_known_keys_file(path: Path) -> tuple[dict[str, str], bool]:
+    """(values, denied) for a keys.env-shaped file; unknown names ignored.
 
-    A file this account can't even stat/read (most likely RFC-047's global
-    tier, when the account isn't in the 'wingman' group) is treated the
-    same as a missing one, not an error: 'ensure_env' walks all four tiers
-    on every single wingman invocation, so one inaccessible tier must
-    never crash every command for that account. Python 3.12 tightened
-    'Path.exists()' to propagate PermissionError instead of swallowing it
-    the way it used to — this was discovered as a live crash during
-    RFC-048 Phase 3, migrating dhk's own account, of all things.
+    'denied' is True when the file is there but this account cannot read
+    it — a different fact from "not there", and the one the diagnostics
+    need. 'ensure_env' still treats both the same (see
+    '_parse_known_keys_file'), because it walks every tier on every single
+    wingman invocation and one inaccessible tier must never crash every
+    command for that account. Python 3.12 tightened 'Path.exists()' to
+    propagate PermissionError instead of swallowing it the way it used to
+    — discovered as a live crash during RFC-048 Phase 3, migrating dhk's
+    own account, of all things.
     """
     try:
         if not path.exists():
-            return {}
+            return {}, False
         text = path.read_text(encoding="utf-8")
     except PermissionError:
-        _logger.warning("cannot read %s (permission denied) — treating as empty", path)
-        return {}
+        _logger.warning("cannot read %s (permission denied)", path)
+        return {}, True
     known = set(KNOWN_KEYS.values())
     values: dict[str, str] = {}
     for line in text.splitlines():
         name, _, value = line.partition("=")
         if name.strip() in known and value.strip():
             values[name.strip()] = value.strip()
-    return values
+    return values, False
+
+
+def _parse_known_keys_file(path: Path) -> dict[str, str]:
+    """NAME=value lines from a keys.env-shaped file, forgiving an
+    unreadable one exactly as before (RFC-047). Resolution path only:
+    anything that REPORTS to a human should use '_read_known_keys_file'
+    and say so, rather than call a key absent when it could not look."""
+    return _read_known_keys_file(path)[0]
 
 
 def workspace_keys_path(data_dir: Path) -> Path:
@@ -478,18 +487,64 @@ class KeyLocation:
     #: None when absent; a 'fingerprint' string otherwise. Never the value.
     fingerprint: str | None
     winner: bool
+    #: False when the file is there but this account cannot read it. Such a
+    #: tier is NOT absent — reporting it as absent is how a live key looks
+    #: missing and sends someone off to set one that already exists (#442).
+    readable: bool = True
+
+
+@dataclass(frozen=True)
+class _FileTiers:
+    """The three file-backed tiers, read once per command.
+
+    Read lazily per key instead and a four-key walk opens each file four
+    times over, logging any permission warning four times with it — which
+    is exactly how the first cut of this looked in the field.
+    """
+
+    workspace: dict[str, str]
+    workspace_denied: bool
+    workspace_path: str | None
+    host: dict[str, str]
+    host_denied: bool
+    host_path: str
+    shared: dict[str, str]
+    shared_denied: bool
+    shared_path: str
+
+
+def _read_file_tiers(
+    data_dir: Path | None, home: Path | None, global_path: Path | None
+) -> _FileTiers:
+    workspace_values, workspace_denied = (
+        _read_known_keys_file(workspace_keys_path(data_dir))
+        if data_dir is not None
+        else ({}, False)
+    )
+    host_values, host_denied = _read_known_keys_file(host_keys_path(home))
+    resolved_global = global_path if global_path is not None else GLOBAL_KEYS_PATH
+    global_values, global_denied = _read_known_keys_file(resolved_global)
+    return _FileTiers(
+        workspace=workspace_values,
+        workspace_denied=workspace_denied,
+        workspace_path=str(workspace_keys_path(data_dir)) if data_dir is not None else None,
+        host=host_values,
+        host_denied=host_denied,
+        host_path=str(host_keys_path(home)),
+        shared=global_values,
+        shared_denied=global_denied,
+        shared_path=str(resolved_global),
+    )
 
 
 def _key_tiers(
     short_name: str,
     env_var: str,
     environ: Mapping[str, str],
-    data_dir: Path | None,
-    home: Path | None,
+    files: _FileTiers,
     runner: Runner | None,
-    global_path: Path | None,
-) -> list[tuple[str, str | None, str]]:
-    """(tier label, path, value) for one key, in effective precedence order.
+) -> list[tuple[str, str | None, str, bool]]:
+    """(tier label, path, value, readable) for one key, in precedence order.
 
     The single definition of "which tier comes first", shared by the
     reporting and the validating paths so they can never disagree about
@@ -497,23 +552,33 @@ def _key_tiers(
     'test_key' still have with the rest of this module.
     """
     keychain_value = get_key(short_name, runner=runner) if keychain_available() else None
-    tiers: list[tuple[str, str | None, str]] = [
+    workspace_values, workspace_denied = files.workspace, files.workspace_denied
+    host_values, host_denied = files.host, files.host_denied
+    global_values, global_denied = files.shared, files.shared_denied
+    tiers: list[tuple[str, str | None, str, bool]] = [
         (
             _SOURCE_LABELS[4],
-            str(workspace_keys_path(data_dir)) if data_dir is not None else None,
-            read_workspace_keys(data_dir).get(env_var, "") if data_dir is not None else "",
+            files.workspace_path,
+            workspace_values.get(env_var, ""),
+            not workspace_denied,
         ),
-        (_SOURCE_LABELS[0], None, environ.get(env_var, "")),
-        (_SOURCE_LABELS[1], None, keychain_value or ""),
-        (_SOURCE_LABELS[2], str(host_keys_path(home)), read_host_keys(home).get(env_var, "")),
+        (_SOURCE_LABELS[0], None, environ.get(env_var, ""), True),
+        (_SOURCE_LABELS[1], None, keychain_value or "", True),
+        (
+            _SOURCE_LABELS[2],
+            files.host_path,
+            host_values.get(env_var, ""),
+            not host_denied,
+        ),
         (
             _SOURCE_LABELS[3],
-            str(global_path if global_path is not None else GLOBAL_KEYS_PATH),
-            read_global_keys(global_path).get(env_var, ""),
+            files.shared_path,
+            global_values.get(env_var, ""),
+            not global_denied,
         ),
     ]
     # The workspace tier only exists when a workspace was named.
-    return tiers if data_dir is not None else tiers[1:]
+    return tiers if files.workspace_path is not None else tiers[1:]
 
 
 def describe_key_locations(
@@ -535,13 +600,12 @@ def describe_key_locations(
     one: the workspace's own key wins (BYOK), then the environment, then
     Keychain, host file, and the box-wide global file.
     """
+    files = _read_file_tiers(data_dir, home, global_path)
     out: dict[str, list[KeyLocation]] = {}
     for short_name, env_var in KNOWN_KEYS.items():
         won = False
         rows: list[KeyLocation] = []
-        for tier, path, value in _key_tiers(
-            short_name, env_var, environ, data_dir, home, runner, global_path
-        ):
+        for tier, path, value, readable in _key_tiers(short_name, env_var, environ, files, runner):
             present = bool(value.strip())
             winner = present and not won
             won = won or winner
@@ -552,6 +616,7 @@ def describe_key_locations(
                     present=present,
                     fingerprint=fingerprint(value) if present else None,
                     winner=winner,
+                    readable=readable,
                 )
             )
         out[short_name] = rows
@@ -685,6 +750,10 @@ class KeyValidation:
     fingerprint: str | None
     ok: bool
     message: str
+    #: Tiers that exist but this account could not read. A key reported
+    #: "not set" while one of these is non-empty is an unanswered
+    #: question, not a finding (#442).
+    unreadable_tiers: list[str] = field(default_factory=list)
 
 
 def validate_keys(
@@ -706,24 +775,29 @@ def validate_keys(
     Costs at most one cheap, no-completion-tokens call per configured key.
     A key that resolves nowhere is reported without any network call.
     """
+    files = _read_file_tiers(data_dir, home, global_path)
     results: list[KeyValidation] = []
     for short_name, env_var in KNOWN_KEYS.items():
+        tiers = _key_tiers(short_name, env_var, environ, files, runner)
+        blind = [tier for tier, _path, _value, readable in tiers if not readable]
         winner = next(
-            (
-                (tier, value)
-                for tier, _path, value in _key_tiers(
-                    short_name, env_var, environ, data_dir, home, runner, global_path
-                )
-                if value.strip()
-            ),
-            None,
+            ((tier, value) for tier, _path, value, _readable in tiers if value.strip()), None
         )
         if winner is None:
-            results.append(KeyValidation(short_name, env_var, "not set", None, False, "not set"))
+            message = "not set"
+            if blind:
+                # Never call a key missing when a tier could not be read:
+                # the honest answer is that the question is unanswered.
+                message = f"cannot tell — unreadable: {', '.join(blind)}"
+            results.append(
+                KeyValidation(short_name, env_var, "not set", None, False, message, blind)
+            )
             continue
         tier, value = winner
         ok, message = test_key_value(short_name, value)
-        results.append(KeyValidation(short_name, env_var, tier, fingerprint(value), ok, message))
+        results.append(
+            KeyValidation(short_name, env_var, tier, fingerprint(value), ok, message, blind)
+        )
     return results
 
 

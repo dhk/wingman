@@ -3303,22 +3303,31 @@ def _echo_key_locations(title: str, rows_by_key: dict[str, list[KeyLocation]]) -
     for short_name, rows in rows_by_key.items():
         env_var = KNOWN_KEYS[short_name]
         winner = next((r for r in rows if r.winner), None)
-        headline = winner.tier if winner else "NOT SET ANYWHERE"
+        blind = [r for r in rows if not r.readable]
+        if winner:
+            headline = winner.tier
+        elif blind:
+            headline = "CANNOT TELL - a tier could not be read"
+        else:
+            headline = "NOT SET ANYWHERE"
         typer.echo(f"  {short_name:11s} {env_var:22s} -> {headline}")
         others = [r.fingerprint for r in rows if r.present and not r.winner]
         if winner and any(f != winner.fingerprint for f in others):
             drifted = True
         for row in rows:
+            if not row.readable:
+                typer.echo(
+                    f"    ????  {row.tier:42s} UNREADABLE (permission denied)"
+                    "  <-- run as the owning account"
+                )
+                continue
             if not row.present:
                 continue
             mark = "USED " if row.winner else "     "
             note = ""
             if winner and not row.winner and row.fingerprint != winner.fingerprint:
                 note = "   <-- DIFFERENT KEY (ignored)"
-            where = f" {row.path}" if row.path else ""
             typer.echo(f"    {mark}{row.tier:42s} {row.fingerprint}{note}")
-            if where.strip():
-                typer.echo(f"         {where.strip()}")
     return drifted
 
 
@@ -3403,11 +3412,16 @@ def _echo_validation(title: str, rows: list[KeyValidation]) -> bool:
     failed = False
     for row in rows:
         if row.tier == "not set":
-            typer.echo(f"  [  --] {row.short_name:11s} {row.env_var:22s} not set anywhere")
+            marker = "  ??" if row.unreadable_tiers else "  --"
+            typer.echo(f"  [{marker}] {row.short_name:11s} {row.env_var:22s} {row.message}")
+            if row.unreadable_tiers:
+                failed = True
             continue
         status = "  ok" if row.ok else "FAIL"
         typer.echo(f"  [{status}] {row.short_name:11s} {row.env_var:22s} {row.message}")
         typer.echo(f"           from {row.tier} - {row.fingerprint}")
+        if row.unreadable_tiers:
+            typer.echo(f"           unreadable below it: {', '.join(row.unreadable_tiers)}")
         if not row.ok:
             failed = True
     return failed
