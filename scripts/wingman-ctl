@@ -395,6 +395,19 @@ cmd_hosts() {
 #: Same default as wingman-provision-shared.sh / wingman-redeploy-shared.sh.
 SHARED_USER="${WINGMAN_SHARED_USER:-wingman-shared}"
 
+_home_of() {
+  # getent is Linux; macOS needs dscl. Falls back to the conventional path
+  # rather than failing, since a service account may predate either.
+  local user="$1" home=""
+  if command -v getent >/dev/null 2>&1; then
+    home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6)"
+  elif command -v dscl >/dev/null 2>&1; then
+    home="$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+  fi
+  [ -n "$home" ] || home="/home/$user"
+  printf '%s' "$home"
+}
+
 require_no_args() {
   # A subcommand that takes nothing must SAY so rather than quietly doing
   # something else (#443). 'wg upgrade all' matched 'upgrade)', threw the
@@ -445,14 +458,29 @@ cmd_keys() {
     say "(override the name with WINGMAN_SHARED_USER=...)"
     return 1
   }
+  # Exec the binary directly rather than going through a shell. 'sudo -i'
+  # runs the target's LOGIN shell, which joins everything after it into one
+  # string and re-parses it — a quoted multi-line script does not survive
+  # that second parse ("syntax error: unexpected end of file"). No nested
+  # shell means no quoting to get wrong, and arguments arrive verbatim.
+  #
+  # -H is not optional: without it sudo keeps the CALLER's HOME, so wingman
+  # would read this account's ~/.config/wingman/secrets.env while announcing
+  # it ran as somebody else. Silently answering about the wrong account is
+  # the exact failure #442 exists to stop.
+  local shared_home bin
+  shared_home="$(_home_of "$SHARED_USER")"
+  [ -n "$shared_home" ] || {
+    say "cannot resolve $SHARED_USER's home directory — is the account complete?"
+    return 1
+  }
+  bin="$shared_home/.local/bin/wingman"
+  sudo -H -u "$SHARED_USER" test -x "$bin" || {
+    say "no wingman at $bin — run '$0 upgrade-all' first"
+    return 127
+  }
   say "→ as $SHARED_USER (owns the tenant registry and every tenant's keys.env)"
-  sudo -iu "$SHARED_USER" bash -c \
-    'export PATH="$HOME/.local/bin:$PATH"
-     command -v wingman >/dev/null 2>&1 || {
-       echo "no wingman on PATH for $(id -un) — run '"'"'wg upgrade-all'"'"' first" >&2
-       exit 127
-     }
-     exec wingman keys "$@"' _ "$@"
+  sudo -H -u "$SHARED_USER" "$bin" keys "$@"
 }
 
 cmd_tenant() {
