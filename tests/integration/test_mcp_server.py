@@ -41,6 +41,7 @@ def test_all_tools_are_registered() -> None:
         "motd",
         "qotd",
         "artifacts",
+        "examples",
         "briefing",
         "setup_guide",
         "profile_html",

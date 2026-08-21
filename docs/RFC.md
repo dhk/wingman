@@ -1120,3 +1120,44 @@ Where this diverges from the issue's own suggestion: the issue wanted both views
 3. Three separate meetings had no verbatim source at all, only an AI-generated notes summary — itself already a model's synthesis of a transcript. RFC-037's original "zero model calls" contract had no honest answer for this case; the entries either didn't get logged (a real gap) or got logged in violation of the tool's own stated invariant. `OBSERVED` vs `ENDORSED`, plus a `source_url` pointing at the actual notes document, gives this case an honest home: the note can be a synthesis, but the record says so, and the source is one click away.
 
 **Revisit if.** The consequential-interaction briefing (product strategy §4.1, not yet built) starts producing its own pre-meeting synthesis drafts — the same two-tier model should cover both directions rather than each feature inventing its own. Or `source_url` needs to distinguish more than one kind of external reference (a meeting-notes doc vs. an email thread vs. a call recording) — today it is a single opaque string, which is enough until something downstream needs to treat them differently.
+
+## RFC-074: A judged example carries its reason, or it is not worth keeping (issue #438)
+
+**Context.** Wingman writes briefings, POVs, cover letters and outreach
+drafts constantly, and some come out well and some badly. That judgment
+lived for the length of one conversation and then evaporated, so the same
+failure recurred and the good version could not be pointed at later. The
+existing `artifacts` tool is unrelated — it records where a rendered VIEW
+was published (`values_radar`, `completeness`, `profile`), not a store of
+generated documents, and overloading it would have buried both.
+
+**Decision.** `examples` stores a document with three facts about it: a
+verdict (`good`/`bad`), a `kind` — what sort of document it is an example
+OF — and a `reason`. The reason is **required on both verdicts**, and a
+save without one is refused rather than stored with a placeholder. A bare
+"bad" teaches nothing six weeks later and cannot be reviewed by anyone
+else; "bad — it over-claims seniority" is the part that is actually
+reusable. This is the one piece of friction the feature keeps deliberately.
+
+`kind` is free text, normalised to lowercase, rather than a fixed enum.
+Fixed would catch typos, but it would also mean a save can fail because
+the taxonomy has not caught up with the work — and capture that refuses is
+capture that does not happen. The vocabulary accretes instead, and
+`action='kinds'` makes drift visible rather than impossible.
+
+`author` distinguishes wingman's own output from text the user supplied.
+"Wingman wrote this and it was bad" and "someone else wrote this and it
+was good" are different lessons, and a corpus that cannot tell them apart
+teaches neither.
+
+**Deliberately out of scope.** Feeding examples back into generation as
+style references. That changes what wingman produces and needs evaluating
+against the evidence rules in `AGENTS.md`, and it needs a corpus to exist
+before it can work at all. The tool docstring tells the client not to
+promise the user otherwise — a feature that implies it is steering future
+drafts when it is not would be lying about its own effect.
+
+**Not recorded.** Which conversation an example came from: wingman has no
+notion of a conversation id, and inventing one for this would be a larger
+change than the feature. `source` is free text the caller can fill in
+instead, and the gap is stated rather than papered over.
