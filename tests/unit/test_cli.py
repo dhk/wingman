@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -6,6 +7,19 @@ from typer.testing import CliRunner
 from wingman.cli.main import app
 
 runner = CliRunner()
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(text: str) -> str:
+    """Help output with Rich's styling stripped.
+
+    Rich renders an option name as several styled segments — '--tenant'
+    arrives as '\x1b[1;36m-\x1b[0m\x1b[1;36m-tenant\x1b[0m' — so a literal
+    substring check passes only where colour happens to be off. It is off
+    locally and on in CI, which is the worst possible way for it to fail.
+    """
+    return _ANSI.sub("", text)
 
 
 def test_help_lists_commands() -> None:
@@ -89,8 +103,8 @@ def test_keys_where_never_prints_a_key_value(monkeypatch) -> None:
 def test_keys_where_has_help() -> None:
     result = runner.invoke(app, ["keys", "where", "--help"])
     assert result.exit_code == 0
-    assert "--tenant" in result.output
-    assert "--all-tenants" in result.output
+    assert "--tenant" in plain(result.output)
+    assert "--all-tenants" in plain(result.output)
 
 
 def test_keys_set_rejects_an_unknown_scope() -> None:
@@ -113,7 +127,7 @@ def test_keys_set_help_names_every_scope() -> None:
     result = runner.invoke(app, ["keys", "set", "--help"])
     assert result.exit_code == 0
     for scope in ("keychain", "host", "workspace"):
-        assert scope in result.output
+        assert scope in plain(result.output)
 
 
 def test_keys_list_states_the_current_precedence() -> None:
@@ -128,8 +142,8 @@ def test_keys_list_states_the_current_precedence() -> None:
 def test_keys_validate_has_help_and_scopes() -> None:
     result = runner.invoke(app, ["keys", "validate", "--help"])
     assert result.exit_code == 0
-    assert "--tenant" in result.output
-    assert "--all-tenants" in result.output
+    assert "--tenant" in plain(result.output)
+    assert "--all-tenants" in plain(result.output)
 
 
 def test_keys_validate_names_the_tier_and_fails_loudly(monkeypatch) -> None:
