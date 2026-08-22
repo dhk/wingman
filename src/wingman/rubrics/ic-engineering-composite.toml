@@ -15,15 +15,21 @@ title   = "Individual-contributor engineering ladder (composite)"
 version = "2026-08-22"
 
 [rubric.provenance]
-tier = "reconstruction"
+tier = "inferred"
 license = "unspecified"
+# CONSISTENT WITH, not derived from. These dimensions were written first,
+# from judgement, and a prior-art pass afterwards found they line up with the
+# axes these frameworks name (docs/research/career-ladder-rubrics/). That is
+# corroboration, not sourcing — which is why the tier is `inferred` rather
+# than `reconstruction`, and why these are listed as comparisons rather than
+# as the material this was assembled from.
 sources = [
-  "https://dropbox.github.io/dbx-career-framework/ — Dropbox's published framework (Apache-2.0)",
-  "https://handbook.gitlab.com/handbook/engineering/careers/matrix/ — GitLab's public handbook matrix",
-  "https://progression.fyi/ — catalogue of published frameworks (verify each licence at its source)",
+  "consistent with https://dropbox.github.io/dbx-career-framework/ — Dropbox's published framework",
+  "consistent with https://handbook.gitlab.com/handbook/engineering/careers/matrix/ — GitLab's public handbook",
 ]
 disclaimer = """\
-Assembled from publicly published career frameworks. This is NOT any single \
+Wingman's own axes, written from judgement and afterwards found consistent \
+with published frameworks — corroborated, not sourced. This is NOT any single \
 employer's internal document — not Google's, not any other named company's — \
 and must not be described as one. No first-party public engineering ladder \
 exists for Google, Meta, Amazon, Apple, Netflix or Microsoft. This rubric's \
@@ -79,7 +85,7 @@ Reach and impact are separate axes here, and a large number evidences this \
 one, not reach."""
 signals = [
   "reduced", "increased", "improved", "grew", "drove", "saved",
-  "revenue", "adoption", "retention", "conversion", "throughput",
+  "revenue", "adoption", "retention", "conversion",
   "faster", "cheaper", "roi", "x reduction", "% growth",
 ]
 

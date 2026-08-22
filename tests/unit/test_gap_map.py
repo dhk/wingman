@@ -262,7 +262,7 @@ def test_cli_rubrics_lists_provenance() -> None:
 
     result = CliRunner().invoke(app, ["rubrics"])
     assert result.exit_code == 0, result.output
-    assert "reconstruction" in result.output
+    assert "inferred" in result.output
     assert "NOT any single" in result.output
 
 
@@ -300,6 +300,30 @@ def test_every_packaged_rubric_loads_and_declares_its_provenance() -> None:
                 f"{rubric.id}/{dimension.id}: signals are matched lowercased, "
                 "so an uppercase signal can never fire"
             )
+
+
+def test_no_signal_is_shared_between_two_dimensions_of_one_rubric() -> None:
+    """A signal that fires for two dimensions credits one line to both, and
+    the reader cannot tell which reading is meant.
+
+    Substring counts as sharing, not just equality: matching is substring
+    matching, so a `leadership` signal on one axis fires on every
+    `project leadership` intended for another. That is a silent double-count,
+    which is worse than a loud one — it inflates coverage on the very axis a
+    gap map is supposed to report as empty.
+    """
+    for rubric in load_all_rubrics():
+        owner: dict[str, str] = {}
+        for dimension in rubric.dimensions:
+            for signal in dimension.signals:
+                for seen, seen_in in owner.items():
+                    if seen_in == dimension.id:
+                        continue  # within one dimension, overlap is deliberate
+                    assert signal not in seen and seen not in signal, (
+                        f"{rubric.id}: signal {signal!r} ({dimension.id}) overlaps "
+                        f"{seen!r} ({seen_in}) — one line would count for both"
+                    )
+                owner[signal] = dimension.id
 
 
 def test_reach_and_impact_are_separate_dimensions_everywhere() -> None:

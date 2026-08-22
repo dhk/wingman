@@ -230,6 +230,15 @@ GitLab's, but the phrasing — "organisational reach versus outcome size" — is
 this document's inference and not a quotation from either. The rubric data
 says so where the warning is authored.
 
+**And a note on what "validated" bought.** Retro-validation is corroboration,
+not sourcing. These axes were written from judgement and *then* found to line
+up with published frameworks; they were not derived from them. That ordering
+is why the composite rubric ships at `ProvenanceTier.INFERRED` rather than
+`RECONSTRUCTION`, and why its sources are listed as "consistent with" rather
+than as material it was assembled from. Calling it a reconstruction would
+claim a derivation that never happened — the same overclaim this feature
+exists to prevent, made by the feature itself.
+
 ---
 
 ## 4. The hard problem: a block asks about the person
