@@ -201,6 +201,35 @@ least this workspace, and the design must not depend on it.
 read. A reading that emitted a level today would be inventing two fifths of
 it. So v0's deliverable is the **gap map**, not the positioning — see §7.
 
+### 3.1 The dimensions, checked against published frameworks
+
+The five dimensions above were this document's own invention until a prior-art
+pass checked them
+([`research/career-ladder-rubrics/`](research/career-ladder-rubrics/README.md),
+2026-08-22). They hold — scope, autonomy, ambiguity, technical depth and
+influence all appear as named axes in Dropbox's and GitLab's public
+frameworks — **with one correction that changed the shipped rubric.**
+
+Dropbox separates three things this document had merged into "scope of
+impact": **Scope** (area of ownership, and level of autonomy/ambiguity),
+**Collaborative Reach** (organisational reach and extent of influence), and
+**Impact Levers** (the technical means to business impact). GitLab's public
+product-manager ladder makes the same split unmissable — Scope counted in
+teams (1–2, 3–5, 5+) in one column, Outcomes stated as metrics, adoption and
+ARR in another.
+
+So "scope of impact" was carrying reach and magnitude in a single axis —
+**precisely the conflation this document's own trap warning describes.** The
+rubric now has separate `reach` and `impact` dimensions, and a test refuses
+any shipped rubric that has one without the other. The trap warning survives
+on both, pointing in opposite directions: don't read magnitude as reach, and
+don't claim a magnitude you cannot attribute.
+
+One honest note on that warning: the underlying separation is Dropbox's and
+GitLab's, but the phrasing — "organisational reach versus outcome size" — is
+this document's inference and not a quotation from either. The rubric data
+says so where the warning is authored.
+
 ---
 
 ## 4. The hard problem: a block asks about the person
@@ -397,15 +426,42 @@ Deferred to v2, listed here so the seams are known while v0/v1 are built.
 ## 10. Open questions
 
 **Q1 — Where does rubric content come from, and how is its provenance
-honest?**
-A well-known employer's internal ladder is not published in full; what
-circulates publicly is reconstruction. A rubric must carry that on its face —
-"reconstructed from these public sources, not the employer's own document" —
-or it is polished fiction with a company's name on it (invariant 9).
-A strong alternative worth costing: source rubrics from **job postings' own
-levelling language**, which is first-party, already flows through the
-opportunity pipeline, and carries its own URL. Possibly both, with the tier
-visible in every reading that cites the rubric.
+honest? — RESOLVED 2026-08-22.**
+A research pass (prior-art scan, sources in `docs/research/`) settled this,
+and better than the question assumed.
+
+*Finding 1: there is no first-party public engineering ladder for Google,
+Meta, Amazon, Apple, Netflix or Microsoft.* Career-site job qualifications
+and culture posts ("larger scope and real impact"; "no set bands and
+grades") are not frameworks. So a rubric branded with any of those names can
+never rise above `reconstruction`, and the original worked example — "the
+Google ladder" — has no honest first-party form. It is not going to get one
+by trying harder.
+
+*Finding 2: it does not need one.* Dropbox publishes its **complete**
+engineering career framework, from a Dropbox-owned repository, under
+**Apache-2.0** — verified at the repository itself, not taken from a
+catalogue. GitLab publishes its handbook matrix and job-family descriptors
+openly. Several smaller frameworks are CC BY or CC BY-SA. So the honest
+question was never "how do we dress up a reconstruction"; it was "why ship
+one at all", and the answer is that we should not when a first-party,
+redistributable framework exists.
+
+**Resolution.** Prefer `first_party` and redistributable. Ship
+reconstructions only where nothing better exists, and never branded with a
+company's name. `RubricProvenance.license` is a required field (SPDX
+identifier, or the literal `unspecified` meaning *link, do not reproduce*),
+because "publicly readable" is not "ours to redistribute". Verify every
+licence at its primary source: a public framework catalogue listed Dropbox's
+framework as unlicensed when the Dropbox repository it came from is
+Apache-2.0, and metadata wrong about a checkable case cannot be trusted on
+the rest.
+
+**Still open under Q1:** job postings' own levelling language as a
+first-party per-employer source. It remains attractive — it is genuinely
+first-party, already flows through the opportunity pipeline, and carries its
+own URL — but the research found postings state years-of-experience far more
+often than they describe scope, so the yield is probably thin. Not blocking.
 
 **Q2 — Does a reading ever emit a rung?**
 "You are an L6" that is wrong is worse than no answer, and the audit shows

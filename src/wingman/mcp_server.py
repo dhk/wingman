@@ -516,7 +516,10 @@ def rubrics() -> str:
         return "No rubrics are packaged with this build."
     lines: list[str] = []
     for entry in loaded:
-        lines.append(f"{entry.id}  v{entry.version}  [{entry.provenance.tier.value}]")
+        lines.append(
+            f"{entry.id}  v{entry.version}  "
+            f"[{entry.provenance.tier.value} · {entry.provenance.license}]"
+        )
         lines.append(f"  {entry.title}")
         lines.append(f"  dimensions: {', '.join(item.name for item in entry.dimensions)}")
         lines.append(f"  {entry.provenance.disclaimer}")

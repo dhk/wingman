@@ -158,18 +158,35 @@ class RubricDimension(BaseModel):
 
 
 class RubricProvenance(BaseModel):
-    """Where a rubric's content came from, and what it may claim to be.
+    """Where a rubric's content came from, what it may claim to be, and
+    under what terms its text may be carried.
 
     `disclaimer` is required and non-empty on purpose: every surface that
     renders a gap map renders this line with it, so a reconstruction can
     never be read as the organisation's own document just because nobody
     thought to mention it (invariant 9, "partial truth over polished
     fiction").
+
+    `license` is required for the same reason, and it is the field that
+    stops "publicly readable" from silently becoming "ours to
+    redistribute". A rubric that carries an organisation's own descriptor
+    text is carrying somebody else's copyrighted work, and the terms have
+    to travel with it. Use the SPDX identifier where there is one
+    (`Apache-2.0`, `CC-BY-4.0`, `CC-BY-SA-4.0`), or the literal string
+    `unspecified` — which is an honest answer meaning *link to it, do not
+    reproduce it*, never a synonym for "probably fine".
+
+    **Verify a licence at the primary source, never from a catalogue.**
+    A public framework catalogue listed Dropbox's framework as having no
+    licence when the Dropbox-owned repository it came from is Apache-2.0.
+    Catalogue metadata that is wrong about a case you can check should not
+    be trusted for the ones you cannot.
     """
 
     tier: ProvenanceTier
     sources: list[str] = Field(default_factory=list)
     disclaimer: str = Field(min_length=1)
+    license: str = Field(min_length=1)
 
 
 class Rubric(BaseModel):

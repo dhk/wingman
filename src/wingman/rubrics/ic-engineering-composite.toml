@@ -16,27 +16,39 @@ version = "2026-08-22"
 
 [rubric.provenance]
 tier = "reconstruction"
+license = "unspecified"
 sources = [
-  "https://progression.fyi/ — aggregator of publicly published engineering career frameworks",
-  "https://www.dropbox.com/careerframework — Dropbox's own published framework",
-  "https://www.levels.fyi/ — public levelling aggregator",
+  "https://dropbox.github.io/dbx-career-framework/ — Dropbox's published framework (Apache-2.0)",
+  "https://handbook.gitlab.com/handbook/engineering/careers/matrix/ — GitLab's public handbook matrix",
+  "https://progression.fyi/ — catalogue of published frameworks (verify each licence at its source)",
 ]
 disclaimer = """\
 Assembled from publicly published career frameworks. This is NOT any single \
 employer's internal document — not Google's, not any other named company's — \
-and must not be described as one. It is a common-denominator reading of what \
-public IC ladders measure."""
+and must not be described as one. No first-party public engineering ladder \
+exists for Google, Meta, Amazon, Apple, Netflix or Microsoft. This rubric's \
+own wording is ours, so it is licensed as unspecified: link to it, and cite \
+the frameworks below rather than this paraphrase."""
+
+# Dropbox separates three things a single "scope of impact" axis merges:
+# Scope (ownership, autonomy, ambiguity), Collaborative Reach
+# (organisational reach and influence), and Impact Levers (the technical
+# means to business impact). GitLab's public PM ladder makes the same split
+# unmissable — Scope counted in teams (1-2, 3-5, 5+) in one column, Outcomes
+# stated as metrics/adoption/ARR in another. This rubric follows that split
+# rather than scoring reach and magnitude as one number.
 
 [[dimension]]
-id   = "scope"
-name = "Scope of impact"
-asks = "How far does the effect of your work reach?"
+id   = "reach"
+name = "Organisational reach"
+asks = "How far does the effect of your work reach, in people and teams?"
 probe = "Who outside your own team changed what they were doing because of this?"
 confusable_with = """\
 Outcome magnitude. A big number ($100B processed, 267% growth) is the size of \
 a SYSTEM, which one person can build alone — it is not organisational reach. \
-Matching one for the other systematically over-positions strong individual \
-contributors."""
+Reading one as the other over-positions strong individual contributors. \
+Dropbox and GitLab both assess these as separate axes; the wording of this \
+warning is ours, not a quotation from either."""
 signals = [
   "across teams", "cross-team", "cross-functional", "multiple teams",
   "company-wide", "org-wide", "organization-wide", "organisation-wide",
@@ -54,6 +66,34 @@ signals = [
   [[dimension.rungs]]
   level = "multiplier"
   descriptor = "Multiple teams change what they do because of your work."
+
+[[dimension]]
+id   = "impact"
+name = "Business impact"
+asks = "What measurably changed in the business because of your work?"
+probe = "What would have happened if you had not done this — and how do you know?"
+confusable_with = """\
+Attribution. A number is only yours to the extent you can say what changed \
+BECAUSE of you: a platform may have processed $100B before you touched it. \
+Reach and impact are separate axes here, and a large number evidences this \
+one, not reach."""
+signals = [
+  "reduced", "increased", "improved", "grew", "drove", "saved",
+  "revenue", "adoption", "retention", "conversion", "throughput",
+  "faster", "cheaper", "roi", "x reduction", "% growth",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "Your work ships; impact is measured at the project level."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "You move a metric the team is held to."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "You move a metric the business is held to."
 
 [[dimension]]
 id   = "autonomy"

@@ -285,7 +285,10 @@ def rubrics_cmd() -> None:
 
     configure_logging()
     for rubric in load_all_rubrics():
-        typer.echo(f"{rubric.id}  v{rubric.version}  [{rubric.provenance.tier.value}]")
+        typer.echo(
+            f"{rubric.id}  v{rubric.version}  "
+            f"[{rubric.provenance.tier.value} · {rubric.provenance.license}]"
+        )
         typer.echo(f"  {rubric.title}")
         typer.echo(f"  dimensions: {', '.join(item.name for item in rubric.dimensions)}")
         typer.echo(f"  {rubric.provenance.disclaimer}")

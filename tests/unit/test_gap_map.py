@@ -8,6 +8,7 @@ wording can never silently change what these assert.
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from wingman.application.gap_map import (
     EVIDENCED_THRESHOLD,
@@ -47,11 +48,12 @@ def _rubric(**overrides: object) -> Rubric:
             "tier": ProvenanceTier.RECONSTRUCTION,
             "sources": ["https://example.invalid/"],
             "disclaimer": "Not anybody's real document.",
+            "license": "unspecified",
         },
         "dimensions": [
             {
-                "id": "scope",
-                "name": "Scope of impact",
+                "id": "reach",
+                "name": "Organisational reach",
                 "asks": "How far does it reach?",
                 "signals": ["across teams", "company-wide"],
                 "probe": "Who else changed what they were doing?",
@@ -123,12 +125,12 @@ def test_matching_achievement_is_first_party_evidence(workspace: Path) -> None:
             "Rolled out tooling across teams",
         )
         report = build_gap_map(_rubric(), storage)
-    scope = _gap(report, "scope")
-    assert scope.coverage is Coverage.THIN
-    assert scope.first_party == 1
-    assert scope.third_party == 0
-    assert scope.evidence[0].voice is EvidenceVoice.FIRST_PARTY
-    assert scope.evidence[0].matched == ["across teams"]
+    reach = _gap(report, "reach")
+    assert reach.coverage is Coverage.THIN
+    assert reach.first_party == 1
+    assert reach.third_party == 0
+    assert reach.evidence[0].voice is EvidenceVoice.FIRST_PARTY
+    assert reach.evidence[0].matched == ["across teams"]
 
 
 def test_evidenced_needs_the_threshold(workspace: Path) -> None:
@@ -141,7 +143,7 @@ def test_evidenced_needs_the_threshold(workspace: Path) -> None:
                 f"Shipped thing {index} across teams",
             )
         report = build_gap_map(_rubric(), storage)
-    assert _gap(report, "scope").coverage is Coverage.EVIDENCED
+    assert _gap(report, "reach").coverage is Coverage.EVIDENCED
 
 
 def test_testimonial_only_is_reported_as_third_party_only(workspace: Path) -> None:
@@ -156,10 +158,10 @@ def test_testimonial_only_is_reported_as_third_party_only(workspace: Path) -> No
                 detail="Changed how we worked across teams, company-wide.",
             )
         report = build_gap_map(_rubric(), storage)
-    scope = _gap(report, "scope")
-    assert scope.coverage is Coverage.THIRD_PARTY_ONLY
-    assert scope.first_party == 0
-    assert scope.third_party == EVIDENCED_THRESHOLD + 2
+    reach = _gap(report, "reach")
+    assert reach.coverage is Coverage.THIRD_PARTY_ONLY
+    assert reach.first_party == 0
+    assert reach.third_party == EVIDENCED_THRESHOLD + 2
 
 
 def test_interview_captures_are_never_read(workspace: Path) -> None:
@@ -175,7 +177,7 @@ def test_interview_captures_are_never_read(workspace: Path) -> None:
             subtype="values_pro",
         )
         report = build_gap_map(_rubric(), storage)
-    assert _gap(report, "scope").coverage is Coverage.ABSENT
+    assert _gap(report, "reach").coverage is Coverage.ABSENT
     assert report.items_read == 0
 
 
@@ -195,7 +197,7 @@ def test_superseded_and_persona_items_are_excluded(workspace: Path) -> None:
             persona_id="persona-1",
         )
         report = build_gap_map(_rubric(), storage)
-    assert _gap(report, "scope").coverage is Coverage.ABSENT
+    assert _gap(report, "reach").coverage is Coverage.ABSENT
     assert report.items_read == 0
 
 
@@ -207,9 +209,9 @@ def test_counts_are_not_truncated_by_the_citation_cap(workspace: Path) -> None:
         for index in range(matches):
             _add_item(storage, ProfileItemKind.ACHIEVEMENT, f"Thing {index} across teams")
         report = build_gap_map(_rubric(), storage)
-    scope = _gap(report, "scope")
-    assert scope.first_party == matches
-    assert len(scope.evidence) == MAX_CITATIONS
+    reach = _gap(report, "reach")
+    assert reach.first_party == matches
+    assert len(reach.evidence) == MAX_CITATIONS
 
 
 def test_render_carries_the_disclaimer_and_refuses_to_position(workspace: Path) -> None:
@@ -270,6 +272,17 @@ def test_unknown_rubric_names_what_is_available() -> None:
     assert "available:" in str(excinfo.value)
 
 
+def test_a_rubric_without_a_licence_is_refused() -> None:
+    """'Publicly readable' is not 'ours to redistribute'. A rubric carrying an
+    organisation's own descriptor text carries their copyright with it, so the
+    terms are a required field — `unspecified` is the honest answer, and a
+    missing one is not an answer at all."""
+    payload = _rubric().model_dump()
+    del payload["provenance"]["license"]
+    with pytest.raises(ValidationError):
+        Rubric.model_validate(payload)
+
+
 def test_every_packaged_rubric_loads_and_declares_its_provenance() -> None:
     """A shipped rubric with a blank disclaimer would let a reconstruction be
     read as the real thing — the model requires one, this proves it holds
@@ -279,10 +292,25 @@ def test_every_packaged_rubric_loads_and_declares_its_provenance() -> None:
     assert {rubric.id for rubric in rubrics} == set(list_rubric_ids())
     for rubric in rubrics:
         assert rubric.provenance.disclaimer.strip()
+        assert rubric.provenance.license.strip()
         assert rubric.dimensions
         for dimension in rubric.dimensions:
             assert dimension.signals
             assert dimension.signals == [signal.lower() for signal in dimension.signals], (
                 f"{rubric.id}/{dimension.id}: signals are matched lowercased, "
                 "so an uppercase signal can never fire"
+            )
+
+
+def test_reach_and_impact_are_separate_dimensions_everywhere() -> None:
+    """Dropbox separates organisational reach from business impact, and
+    GitLab's public PM ladder puts them in different columns. Merging them
+    into one axis is the conflation that over-positions strong individual
+    contributors — so no shipped rubric may score them together."""
+    for rubric in load_all_rubrics():
+        ids = {dimension.id for dimension in rubric.dimensions}
+        if "reach" in ids or "impact" in ids:
+            assert {"reach", "impact"} <= ids, (
+                f"{rubric.id}: reach and impact must both exist, or neither — "
+                "one without the other is the merged axis by another name"
             )
