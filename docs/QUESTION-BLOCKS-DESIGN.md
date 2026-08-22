@@ -1,7 +1,12 @@
 # Question Blocks — interview modules that read against an external rubric (proposal, not yet an RFC)
 
 **Status.** Design recorded 2026-08-20 from an ideation session (issue #436).
-Nothing is implemented; no code, no slice started, no tests. §3's evidence audit was run
+**v0 is built** (2026-08-22): rubrics as packaged data, and the gap map —
+`wingman gap-map` / `wingman rubrics`, and the `gap_map` / `rubrics` MCP
+tools. It emits coverage and gaps, never a rung, and calls no model. v1 (the
+block, and the elaboration capture mechanic) and v2 (the registry and flow
+wiring) are not started. §6 was corrected during v0's implementation — see
+the note there. §3's evidence audit was run
 the same day against one real workspace and is the reason the build order in
 §7 is what it is rather than what the session first proposed. Graduates to a
 numbered `RFC.md` entry (and a `ROADMAP.md` slice) once it is referenced
@@ -270,7 +275,13 @@ parent reference. See §10 Q3.
 
 ---
 
-## 6. Evidence tiering: reuse RFC-073's Observed/Endorsed
+## 6. Evidence tiering: who is vouching
+
+**Corrected during v0's implementation.** This section originally said
+"reuse RFC-073's Observed/Endorsed", and that was wrong on semantics. The
+correction is recorded rather than quietly rewritten, because the mistake is
+instructive: two tier vocabularies can look interchangeable and be about
+completely different things.
 
 The only influence evidence in the audited workspace came from LinkedIn
 recommendations — "revolutionized the way we do business", "effective manager
@@ -278,19 +289,30 @@ and mentor". That is real evidence and it should be citable. It is also
 somebody else's unfalsifiable praise, and it must not be weighed like a
 shipped artifact.
 
-RFC-073 already introduced exactly this distinction for relationship-log
-entries. A reading should reuse the same two tiers rather than inventing a
-parallel vocabulary:
+RFC-073's tiers do **not** express that. `OBSERVED` vs `ENDORSED` describes
+**how a note was produced** — the person's own words versus a model-drafted
+synthesis they reviewed and confirmed. That is orthogonal to who is
+vouching: a testimonial is verbatim, so it is `OBSERVED` under RFC-073 while
+being exactly the third-party praise this distinction exists to hold at arm's
+length. Borrowing the enum would have made every gap map claim something
+untrue about its own evidence. (RFC-073 itself rejected reusing
+`ClaimClassification` for the same class of reason.)
 
-- **Observed** — achievements, roles, corpus documents, and the person's own
-  elaborations. Things with an artifact or a first-person account behind them.
-- **Endorsed** — testimonials and recommendations. Cited, visibly tiered,
-  and never sufficient on their own to move a dimension.
+So the axis is **voice**, and it gets its own vocabulary
+(`domain.rubric.EvidenceVoice`):
 
-A dimension carried **only** by Endorsed evidence must say so in the reading.
-"Three people say you're a great mentor" and "you rewrote how two teams
-ship" are not the same claim, and a reading that renders them identically is
-polished fiction.
+- **First-party** — achievements, roles, corpus documents, and the person's
+  own elaborations. Things with an artifact or a first-person account behind
+  them.
+- **Third-party** — testimonials and recommendations. Cited, visibly
+  distinguished, and never sufficient on their own to move a dimension.
+
+A dimension carried **only** by third-party evidence must say so in the
+reading — `Coverage.THIRD_PARTY_ONLY` is a distinct verdict from `THIN` for
+this reason, since the fix differs: thin wants more of the same, third-party-
+only wants a different kind. "Three people say you're a great mentor" and
+"you rewrote how two teams ship" are not the same claim, and a reading that
+renders them identically is polished fiction.
 
 ---
 

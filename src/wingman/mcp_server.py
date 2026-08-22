@@ -441,6 +441,91 @@ def completeness(as_html: bool = False) -> str:
 
 
 @server.tool()
+def gap_map(rubric: str = "") -> str:
+    """What this workspace can and cannot evidence against an external
+    standard — an engineering ladder, a competency matrix (issue #436,
+    docs/QUESTION-BLOCKS-DESIGN.md).
+
+    CALL THIS for "how do I measure up against X's ladder", "what level am
+    I", "am I a staff engineer", "assess my seniority" — and read the reply
+    carefully before answering, because it will not answer that question
+    directly and you must not answer it on the tool's behalf.
+
+    WHAT IT RETURNS. Per rubric dimension: how much evidence the profile
+    and corpus actually hold, split into first-party (the person's own
+    achievements, roles, writing) and third-party (testimonials — somebody
+    else vouching), and the exact items that matched. Dimensions with
+    NOTHING are listed first, because they are the finding.
+
+    WHAT IT REFUSES. It never places the person on a rung, and there is no
+    score. That is deliberate, not a limitation to work around: the audit
+    behind this feature found most dimensions unevidenced in a real, rich
+    workspace, so a level derived from them would be mostly invention. Do
+    NOT infer one yourself, do not average the coverage verdicts into a
+    grade, and do not tell somebody they "look like an L6" on the strength
+    of this report. Relay what is evidenced, what is missing, and the probe
+    question that would close each gap.
+
+    TWO TRAPS THE REPORT NAMES, and you should repeat rather than smooth
+    over. A dimension may carry a 'Careful:' line — most importantly that
+    outcome magnitude ($100B processed, 267% growth) is the size of a
+    SYSTEM, not organisational reach, and reading one as the other
+    over-positions strong individual contributors. And a dimension marked
+    'Only somebody else's word for it' is carried entirely by
+    testimonials: real evidence, but not the same claim as an artifact.
+
+    PROVENANCE. Every rubric declares whether it is first-party (published
+    by the organisation, or a job posting's own levelling language) or a
+    reconstruction from public sources. The disclaimer is in the report —
+    relay it, and never describe a reconstruction as a company's own
+    document.
+
+    No model call, no network, and nothing is written: a rubric is the
+    ruler, and measuring must not change what is measured. `rubric` is
+    optional while only one ships; `rubrics` lists them.
+    """
+    from wingman.application.gap_map import build_gap_map, render_gap_map
+    from wingman.application.rubrics import RubricError, load_rubric, resolve_rubric_id
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        loaded = load_rubric(resolve_rubric_id(rubric))
+    except RubricError as exc:
+        return str(exc)
+    with Storage(config.db_path) as storage:
+        return render_gap_map(build_gap_map(loaded, storage))
+
+
+@server.tool()
+def rubrics() -> str:
+    """The external standards this build can measure a profile against
+    (issue #436) — id, version, provenance tier, and dimensions.
+
+    A rubric is the ruler, never a measurement: nothing here is a claim
+    about the person, and no workspace is required to answer. Use it to
+    name a `rubric` for `gap_map`, and to check what a standard actually
+    claims to be before citing it — a reconstruction is not the
+    organisation's own document and must never be relayed as one.
+    """
+    from wingman.application.rubrics import load_all_rubrics
+
+    loaded = load_all_rubrics()
+    if not loaded:
+        return "No rubrics are packaged with this build."
+    lines: list[str] = []
+    for entry in loaded:
+        lines.append(f"{entry.id}  v{entry.version}  [{entry.provenance.tier.value}]")
+        lines.append(f"  {entry.title}")
+        lines.append(f"  dimensions: {', '.join(item.name for item in entry.dimensions)}")
+        lines.append(f"  {entry.provenance.disclaimer}")
+        for source in entry.provenance.sources:
+            lines.append(f"  source: {source}")
+    return "\n".join(lines)
+
+
+@server.tool()
 def action_triage(action: str, key: str = "", days: int = 7) -> str:
     """Triage the morning digest's action list: the user's verdicts persist (RFC-031).
 

@@ -1,0 +1,156 @@
+# A composite individual-contributor engineering ladder, assembled from
+# publicly published career frameworks.
+#
+# This is deliberately NOT branded with any single employer's name. Q1 of
+# docs/QUESTION-BLOCKS-DESIGN.md — where rubric content comes from, and how
+# a reconstruction stays honest — is still open, and shipping a rubric
+# carrying a specific company's name before that is settled would be the
+# polished fiction the design exists to avoid. The dimensions below are the
+# ones essentially every published IC ladder shares; the rung descriptors
+# are generic and are not read by the v0 gap map at all.
+
+[rubric]
+id      = "ic-engineering-composite"
+title   = "Individual-contributor engineering ladder (composite)"
+version = "2026-08-22"
+
+[rubric.provenance]
+tier = "reconstruction"
+sources = [
+  "https://progression.fyi/ — aggregator of publicly published engineering career frameworks",
+  "https://www.dropbox.com/careerframework — Dropbox's own published framework",
+  "https://www.levels.fyi/ — public levelling aggregator",
+]
+disclaimer = """\
+Assembled from publicly published career frameworks. This is NOT any single \
+employer's internal document — not Google's, not any other named company's — \
+and must not be described as one. It is a common-denominator reading of what \
+public IC ladders measure."""
+
+[[dimension]]
+id   = "scope"
+name = "Scope of impact"
+asks = "How far does the effect of your work reach?"
+probe = "Who outside your own team changed what they were doing because of this?"
+confusable_with = """\
+Outcome magnitude. A big number ($100B processed, 267% growth) is the size of \
+a SYSTEM, which one person can build alone — it is not organisational reach. \
+Matching one for the other systematically over-positions strong individual \
+contributors."""
+signals = [
+  "across teams", "cross-team", "cross-functional", "multiple teams",
+  "company-wide", "org-wide", "organization-wide", "organisation-wide",
+  "every team", "other teams", "department",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "Your own projects; effects land inside your team."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "Your team's roadmap; other teams consume what you build."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "Multiple teams change what they do because of your work."
+
+[[dimension]]
+id   = "autonomy"
+name = "Autonomy and direction-setting"
+asks = "How much of the problem was already decided when it reached you?"
+probe = "When you took this on, how much was already decided — and by whom?"
+confusable_with = """\
+Leadership verbs. 'Defined', 'led', and 'set the roadmap' describe the work \
+done, not who chose it. A profile full of them can still say nothing about \
+whether the problem was selected or handed over."""
+signals = [
+  "set the direction", "chose to", "decided to", "my own initiative",
+  "from scratch", "greenfield", "founded", "co-founded", "initiated",
+  "proposed", "identified the", "first to",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "Problems arrive scoped; you decide how, not what."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "You shape the problem inside a direction someone else set."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "You choose which problems are worth solving at all."
+
+[[dimension]]
+id   = "ambiguity"
+name = "Ambiguity absorbed"
+asks = "How defined was the problem when it reached you?"
+probe = "What did people think the problem was, before you started?"
+signals = [
+  "ambiguous", "ill-defined", "ill defined", "undefined", "unclear",
+  "no clear", "nobody knew", "no one knew", "uncharted", "exploratory",
+  "first of its kind", "no precedent", "open-ended",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "The problem is stated; the path is known."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "The problem is stated; you find the path."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "Nobody agrees what the problem is; you settle that first."
+
+[[dimension]]
+id   = "technical_depth"
+name = "Technical depth"
+asks = "How hard is the technical substance of what you build?"
+signals = [
+  "architected", "architecture", "algorithm", "distributed", "latency",
+  "throughput", "patent", "framework", "protocol", "data model",
+  "optimiz", "optimis", "reconciliation", "pipeline", "schema",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "Applies known techniques competently."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "Designs systems whose failure modes you anticipated."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "Invents the technique, or knows why none of the known ones fit."
+
+[[dimension]]
+id   = "influence"
+name = "Influence and multiplier effect"
+asks = "How much better is everyone else because you were there?"
+probe = "Name something other engineers do differently because of you."
+confusable_with = """\
+Managing people. Headcount is an org fact; influence is whether anybody's \
+work actually changed. A manager with reports may evidence none of it, and a \
+non-manager may evidence a great deal."""
+signals = [
+  "mentored", "mentoring", "mentor", "coached", "taught", "trained",
+  "evangelism", "adopted by", "standard for", "set the standard",
+  "onboarded", "hired", "spoke at", "published", "wrote the book",
+  "workshop", "curriculum",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "Helps teammates when asked."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "Raises the standard of the team around you."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "Engineers you have never met work differently because of you."
