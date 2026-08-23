@@ -28,7 +28,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 #: The version of the DETERMINISTIC rule that turns matched evidence into a
 #: `Coverage` verdict — the signal-matching, the first-party/third-party
@@ -42,6 +42,10 @@ from pydantic import BaseModel, Field
 #: that shaped this has since moved" has to be answerable without
 #: re-deriving it.
 GAP_MAP_CONTRACT_VERSION = "gap-map-1"
+
+#: The honest answer for a rubric whose content may not be redistributed:
+#: link to it, do not reproduce it. Never a synonym for "probably fine".
+UNSPECIFIED_LICENSE = "unspecified"
 
 
 class ProvenanceTier(StrEnum):
@@ -187,6 +191,41 @@ class RubricProvenance(BaseModel):
     sources: list[str] = Field(default_factory=list)
     disclaimer: str = Field(min_length=1)
     license: str = Field(min_length=1)
+    #: Path, relative to the packaged `wingman/rubrics/` directory, of the
+    #: retained licence text for content this rubric carries. Required
+    #: whenever `license` is anything but `unspecified` — see
+    #: `_licence_text_is_retained`.
+    license_file: str = ""
+    #: Attribution notice to retain verbatim, e.g. "Copyright (c) 2021
+    #: Dropbox, Inc." Most licences that permit redistribution require this,
+    #: and it is the line a reader needs in order to know whose words these
+    #: are.
+    attribution: str = ""
+
+    @model_validator(mode="after")
+    def _licence_text_is_retained(self) -> RubricProvenance:
+        """A licence that permits redistribution also imposes conditions —
+        Apache-2.0 wants the licence text and the notices carried along,
+        CC BY wants attribution. Naming a licence while shipping neither is
+        the failure this guards: it looks compliant in the metadata and is
+        not compliant on disk.
+
+        `unspecified` is exempt because it is a declaration that nothing is
+        being redistributed in the first place.
+        """
+        if self.license.strip().lower() == UNSPECIFIED_LICENSE:
+            return self
+        if not self.license_file.strip():
+            raise ValueError(
+                f"license {self.license!r} permits redistribution, so license_file must "
+                "name the retained licence text (or declare 'unspecified' and link instead)."
+            )
+        if not self.attribution.strip():
+            raise ValueError(
+                f"license {self.license!r} requires attribution, so attribution must carry "
+                "the copyright notice verbatim."
+            )
+        return self
 
 
 class Rubric(BaseModel):

@@ -3,7 +3,10 @@
 **Status.** Design recorded 2026-08-20 from an ideation session (issue #436).
 **v0 is built** (2026-08-22): rubrics as packaged data, and the gap map —
 `wingman gap-map` / `wingman rubrics`, and the `gap_map` / `rubrics` MCP
-tools. It emits coverage and gaps, never a rung, and calls no model. v1 (the
+tools. It emits coverage and gaps, never a rung, and calls no model. **One
+rubric ships**: Dropbox's own framework (`first_party`, Apache-2.0, quoted
+verbatim). An inferred composite of our own axes shipped alongside it briefly
+and was retired the same day — see the note at the end of §3.1. v1 (the
 block, and the elaboration capture mechanic) and v2 (the registry and flow
 wiring) are not started. §6 was corrected during v0's implementation — see
 the note there. §3's evidence audit was run
@@ -230,14 +233,36 @@ GitLab's, but the phrasing — "organisational reach versus outcome size" — is
 this document's inference and not a quotation from either. The rubric data
 says so where the warning is authored.
 
-**And a note on what "validated" bought.** Retro-validation is corroboration,
-not sourcing. These axes were written from judgement and *then* found to line
-up with published frameworks; they were not derived from them. That ordering
-is why the composite rubric ships at `ProvenanceTier.INFERRED` rather than
-`RECONSTRUCTION`, and why its sources are listed as "consistent with" rather
-than as material it was assembled from. Calling it a reconstruction would
-claim a derivation that never happened — the same overclaim this feature
-exists to prevent, made by the feature itself.
+**And a note on what "validated" bought — which ended in retiring the
+composite.** Retro-validation is corroboration, not sourcing. These six axes
+were written from judgement and *then* found to line up with published
+frameworks; they were not derived from them. That ordering first demoted the
+composite rubric from `RECONSTRUCTION` to `ProvenanceTier.INFERRED`, since
+calling it a reconstruction claimed a derivation that never happened — the
+overclaim this feature exists to prevent, committed by the feature itself.
+
+It was then **retired entirely** (2026-08-22), and the argument for keeping
+it collapsed from two directions at once:
+
+1. **Authority.** An `inferred` rubric's answer to "says who?" is "says us".
+   Once a `first_party`, Apache-2.0 framework was available, keeping a
+   home-made ladder beside it meant offering a measuring stick with nothing
+   behind it.
+2. **Its own best argument stopped holding.** The case for keeping it was
+   resolution: it split `ambiguity` and `autonomy` into their own axes, where
+   Dropbox folds both inside Scope, and those were the two emptiest areas in
+   §3's audit. But measuring the signals against a real 240-line profile
+   (issue #451) found `ambiguity` matched **nothing at all** — its signals
+   are words nobody writes in a CV. An axis that cannot fire provides no
+   resolution; it provides a reliable zero.
+
+**What retiring it costs, stated plainly.** `ambiguity` and `autonomy` are no
+longer separately visible: Dropbox reads both through Scope, so a thin Scope
+result says something is missing without saying which. That is a real loss of
+granularity, accepted on the grounds that a granular axis which never fires is
+worse than an honest coarse one. Recovering it means either a first-party
+framework that separates them, or fixing the matcher (#451) and reintroducing
+axes that can actually be evidenced — not restoring an unsourced file.
 
 ---
 

@@ -105,24 +105,38 @@ def load_rubric(rubric_id: str) -> Rubric:
     return rubric
 
 
+#: The rubric used when a caller names none. An EXPLICIT choice, not the
+#: first entry of a sorted list: what a person is measured against must
+#: never change because somebody added a file whose name sorts earlier.
+#: It is the Dropbox framework because that is the only first-party,
+#: redistributable ladder available (design doc Q1) — a publisher's own
+#: words beat our paraphrase of several publishers.
+DEFAULT_RUBRIC_ID = "dbx-swe-ladder"
+
+
 def resolve_rubric_id(requested: str = "") -> str:
     """The rubric id to use when the caller did not name one.
 
-    An empty request resolves to the only packaged rubric when there is
-    exactly one, and is an error naming the choices as soon as there are
-    two. Picking a default alphabetically the moment a second rubric ships
-    would silently change what every existing caller measures against —
-    the one thing a rubric must never do quietly.
+    Falls back to `DEFAULT_RUBRIC_ID`, then — only if that is not packaged
+    — to the sole rubric when exactly one exists. Never picks
+    alphabetically among several: that would silently change what an
+    existing caller measures against the moment a file is added, which is
+    the one thing a rubric must not do quietly.
     """
     requested = requested.strip()
     if requested:
         return requested
     available = list_rubric_ids()
-    if len(available) == 1:
-        return available[0]
     if not available:
         raise RubricError("no rubrics are packaged with this build.")
-    raise RubricError(f"more than one rubric is available; name one of: {', '.join(available)}.")
+    if DEFAULT_RUBRIC_ID in available:
+        return DEFAULT_RUBRIC_ID
+    if len(available) == 1:
+        return available[0]
+    raise RubricError(
+        f"the default rubric {DEFAULT_RUBRIC_ID!r} is not packaged in this build; "
+        f"name one of: {', '.join(available)}."
+    )
 
 
 def load_all_rubrics() -> list[Rubric]:
