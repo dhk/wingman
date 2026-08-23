@@ -1,0 +1,163 @@
+# Dropbox Engineering Career Framework — software-engineering IC track.
+#
+# FIRST-PARTY. Dimension names, their definitions (`asks`), and every rung
+# descriptor below are Dropbox's own words, taken verbatim from the
+# Dropbox-owned repository named in `sources`, at the commit pinned in
+# `version`. They are NOT paraphrased, reordered, or "improved" — the whole
+# point of a first_party rubric is that it says what the publisher says.
+#
+# WHAT IS OURS, and must not be read as Dropbox's: `signals` (matcher
+# configuration for this tool, not part of the framework), `probe`
+# (the question v1 would ask to close a gap), and `confusable_with`
+# (our warning). Dropbox authored none of those three.
+#
+# Redistributed under Apache-2.0. The licence text is retained at the path
+# in `license_file` and the copyright notice in `attribution`; see
+# licenses/dbx-career-framework/NOTICE.md for the modifications made.
+
+[rubric]
+id      = "dbx-swe-ladder"
+title   = "Dropbox Engineering Career Framework — Software Engineer (IC)"
+version = "6469a45"
+
+[rubric.provenance]
+tier         = "first_party"
+license      = "Apache-2.0"
+license_file = "licenses/dbx-career-framework/LICENSE"
+attribution  = "Copyright (c) 2021 Dropbox, Inc."
+sources = [
+  "https://github.com/dropbox/dbx-career-framework — Dropbox-owned repository, Apache-2.0, at commit 6469a45a10cd61f9ce399e1c4ee1e57f26f0084d (2023-04-08)",
+  "https://dropbox.github.io/dbx-career-framework/ — the published site built from that repository",
+]
+disclaimer = """\
+Dropbox's own published engineering career framework, redistributed under \
+Apache-2.0 and quoted verbatim. Dropbox wrote the dimensions and the level \
+descriptors; the search signals, gap probes and trap warnings in this file \
+are Wingman's and are not Dropbox's words. Dropbox does not endorse this \
+tool. Levels are Dropbox's own IC1-IC7 and do not map onto any other \
+employer's ladder."""
+
+
+[[dimension]]
+id   = "scope"
+name = "Scope"
+asks = "Area of ownership and level of autonomy / ambiguity"
+probe = "When you took this on, how much was already decided — and by whom?"
+signals = [
+  "owned", "ownership", "autonomously",
+  "independently", "ambiguous", "open-ended",
+  "ill-defined", "prioritis", "prioritiz",
+  "roadmap", "multi-year", "from scratch",
+  "defined the", "scoped",
+]
+
+  [[dimension.rungs]]
+  level      = "IC1"
+  descriptor = "I execute on defined tasks and contribute to solving problems with defined solutions."
+
+  [[dimension.rungs]]
+  level      = "IC2"
+  descriptor = "I execute on defined projects to achieve team-level goals. I independently define the right solutions or use existing approaches to solve defined problems."
+
+  [[dimension.rungs]]
+  level      = "IC3"
+  descriptor = "I own and deliver projects in service of quarterly goals on the team I independently identify the right solutions to solve ambiguous, open-ended problems"
+
+  [[dimension.rungs]]
+  level      = "IC4"
+  descriptor = "I own and deliver semi-annual/annual goals for my team. I am an expert at identifying the right solutions to solve ambiguous, open-ended problems that require tough prioritization. I define technical solutions or efficient operational processes that level up my team."
+
+  [[dimension.rungs]]
+  level      = "IC5"
+  descriptor = "I deliver multi-year, multi-team product or platform goals I exhibit a very high standard of technical judgement, innovation and execution to tackle open-ended problems that require difficult prioritization, defining both the what and how of things to be done"
+
+  [[dimension.rungs]]
+  level      = "IC6"
+  descriptor = "I own and deliver org/company-wide multi-year, multi-team goals I take a multi-year, industry-leading perspective, ensuring that our products adapt to scale, usage, and/or business needs well beyond Dropbox’s current scope."
+
+  [[dimension.rungs]]
+  level      = "IC7"
+  descriptor = "I own and deliver company-wide product or platform goals with multi-year, multi-team effect I take a multi-year, industry-leading perspective when building products and systems, ensuring they adapt to scale, usage and/or business needs well beyond Dropbox’s current scope."
+
+[[dimension]]
+id   = "collaborative_reach"
+name = "Collaborative Reach"
+asks = "Organizational reach and extent of influence"
+probe = "Whose roadmap changed because of you — outside your own team?"
+confusable_with = "Outcome magnitude. Dropbox scores organisational reach here and business impact under Impact Levers. A large number is the size of a system, which one person can build alone; it is not reach."
+signals = [
+  "across teams", "cross-team", "cross-functional",
+  "cross-discipline", "other teams", "company-wide",
+  "org-wide", "organization-wide", "organisation-wide",
+  "influenced", "partnered", "stakeholder",
+  "every team",
+]
+
+  [[dimension.rungs]]
+  level      = "IC1"
+  descriptor = "I work within the scope of my team with specific guidance from my manager/TL"
+
+  [[dimension.rungs]]
+  level      = "IC2"
+  descriptor = "I work primarily within the scope of my team with high level guidance from my manager/TL"
+
+  [[dimension.rungs]]
+  level      = "IC3"
+  descriptor = "I work primarily with my direct team and cross-functional partners while driving cross-team collaboration for my project"
+
+  [[dimension.rungs]]
+  level      = "IC4"
+  descriptor = "I am a strong leader for my team with my impact beginning to extend outside my team I increasingly optimize beyond just my team by driving cross-team or cross-discipline initiatives"
+
+  [[dimension.rungs]]
+  level      = "IC5"
+  descriptor = "I am increasingly influencing the roadmaps of other Dropbox teams to achieve business impacting goals I exercise judgement that favors the priorities of the wider engineering org rather than favoring locally optimal outcomes"
+
+  [[dimension.rungs]]
+  level      = "IC6"
+  descriptor = "I typically influence the technical strategy of a group. I am often partnering closely with Directors/senior EPD leadership to ensure the health of EPD as a whole and influence the overall direction of EPD I transcend organizational boundaries and proactively identify the best ways to leverage myself"
+
+  [[dimension.rungs]]
+  level      = "IC7"
+  descriptor = "I typically influence EPD and company-wide strategy to achieve business-impacting goals. I transcend organizational boundaries and proactively identify the best way to leverage myself"
+
+[[dimension]]
+id   = "impact_levers"
+name = "Impact Levers"
+asks = "Technical levers typically exercised to achieve business impact"
+probe = "Which lever did you actually pull — craft, strategy, project leadership, domain depth, or growing other people?"
+signals = [
+  "technical strategy", "architected", "architecture",
+  "platform", "framework", "mentored",
+  "mentoring", "mentorship", "domain expertise",
+  "craft", "project leadership", "product expertise",
+  "designed",
+]
+
+  [[dimension.rungs]]
+  level      = "IC1"
+  descriptor = "Craft - I primarily focus on improving my craft as an engineer"
+
+  [[dimension.rungs]]
+  level      = "IC2"
+  descriptor = "Craft - I am increasingly mastering my craft and leverage it for higher impact (e.g. software design) Mentorship - I may mentor new hires, interns, or more junior engineers."
+
+  [[dimension.rungs]]
+  level      = "IC3"
+  descriptor = "Project Leadership - I define and deliver well-scoped milestones for a project. I may be a technical lead for projects on my team Product Expertise - I actively keep customer needs in mind and leverage input from product stakeholders as available to determine the right technical solutions to deliver customer value quickly Mentorship - I actively level up less-experienced members of my team by helping them with their craft, providing guidance, and setting a good example"
+
+  [[dimension.rungs]]
+  level      = "IC4"
+  descriptor = "Technical Strategy - I play a key role in setting medium-to-long term strategy for business-impacting projects. Project Leadership - I autonomously define and deliver technical roadmaps of larger projects, often involving cross-team dependencies. Product Expertise - I actively keep customer needs in mind and leverage input from product stakeholders as available to determine the right technical solutions to deliver customer value quickly Mentorship - I actively level up less-experienced members of my team by helping them with their craft, providing guidance, and setting a good example"
+
+  [[dimension.rungs]]
+  level      = "IC5"
+  descriptor = "Domain Expertise - I demonstrate a high level of depth in a particular platform or product category that brings unique business value Technical Strategy - I excel at defining the vision for and delivering large business-impacting projects with multiple constraints Product Expertise - I increasingly influence or make product decisions/scope and determine the right technical tradeoffs to deliver customer value quickly. Mentorship - I serve as a role model for other Dropbox engineers"
+
+  [[dimension.rungs]]
+  level      = "IC6"
+  descriptor = "Domain Expertise - I demonstrate a high level of depth in a particular platform or product category that brings unique business value Technical Strategy - I align the technical strategy for several projects in my group to broader initiatives across EPD Product Expertise - I consistently influence product decisions/scope and determine the right technical tradeoffs to deliver customer value quickly with high quality. Innovation - I partner with cross-functional stakeholders to identify major new business opportunities unlocked by technical capabilities."
+
+  [[dimension.rungs]]
+  level      = "IC7"
+  descriptor = "Domain Expertise - I demonstrate a high level of depth in a particular platform or product category that brings unique business value Technical Strategy - I align the technical strategy for several projects in the engineering org to broader initiatives across EPD Product Expertise - I consistently influence product decisions/scope and determine the right technical tradeoffs to deliver customer value quickly with high quality. Innovation - I partner with cross-functional stakeholders to identify major new business opportunities unlocked by technical capabilities."

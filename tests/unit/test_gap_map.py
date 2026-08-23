@@ -5,6 +5,7 @@ is required for the behavioural tests, so a change to the shipped rubric's
 wording can never silently change what these assert.
 """
 
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,15 @@ from wingman.application.gap_map import (
     build_gap_map,
     render_gap_map,
 )
-from wingman.application.rubrics import RubricError, list_rubric_ids, load_all_rubrics, load_rubric
+from wingman.application.rubrics import (
+    DEFAULT_RUBRIC_ID,
+    RUBRIC_PACKAGE,
+    RubricError,
+    list_rubric_ids,
+    load_all_rubrics,
+    load_rubric,
+    resolve_rubric_id,
+)
 from wingman.domain.profile import (
     ClaimClassification,
     EvidenceSpan,
@@ -24,7 +33,13 @@ from wingman.domain.profile import (
     ProfileItem,
     ProfileItemKind,
 )
-from wingman.domain.rubric import Coverage, EvidenceVoice, ProvenanceTier, Rubric
+from wingman.domain.rubric import (
+    UNSPECIFIED_LICENSE,
+    Coverage,
+    EvidenceVoice,
+    ProvenanceTier,
+    Rubric,
+)
 from wingman.domain.source_record import SourceRecord
 from wingman.infrastructure.config import load_config
 from wingman.infrastructure.storage import Storage
@@ -262,14 +277,71 @@ def test_cli_rubrics_lists_provenance() -> None:
 
     result = CliRunner().invoke(app, ["rubrics"])
     assert result.exit_code == 0, result.output
-    assert "inferred" in result.output
-    assert "NOT any single" in result.output
+    assert "first_party" in result.output
+    assert "Apache-2.0" in result.output
+    assert "not Dropbox's words" in result.output
 
 
 def test_unknown_rubric_names_what_is_available() -> None:
     with pytest.raises(RubricError) as excinfo:
         load_rubric("no-such-rubric")
     assert "available:" in str(excinfo.value)
+
+
+def test_a_redistributable_licence_must_retain_its_text_and_attribution() -> None:
+    """Naming Apache-2.0 while shipping neither the licence text nor the
+    copyright notice looks compliant in metadata and is not compliant on
+    disk. The model refuses it rather than trusting anyone to remember."""
+    payload = _rubric().model_dump()
+    payload["provenance"]["license"] = "Apache-2.0"
+    with pytest.raises(ValidationError):
+        Rubric.model_validate(payload)
+
+    payload["provenance"]["license_file"] = "licenses/x/LICENSE"
+    with pytest.raises(ValidationError):  # licence text, but no attribution
+        Rubric.model_validate(payload)
+
+    payload["provenance"]["attribution"] = "Copyright (c) 2021 Someone, Inc."
+    assert Rubric.model_validate(payload).provenance.license == "Apache-2.0"
+
+
+def test_every_retained_licence_file_actually_exists() -> None:
+    """The obligation is a file on disk, not a string in a field."""
+    for rubric in load_all_rubrics():
+        if rubric.provenance.license.strip().lower() == UNSPECIFIED_LICENSE:
+            continue
+        path = files(RUBRIC_PACKAGE).joinpath(rubric.provenance.license_file)
+        assert path.is_file(), (
+            f"{rubric.id} declares {rubric.provenance.license} and names "
+            f"{rubric.provenance.license_file}, which is not packaged"
+        )
+        assert "Apache License" in path.read_text(encoding="utf-8") or path.stat().st_size > 0
+
+
+def test_the_default_rubric_is_named_not_sorted() -> None:
+    """A person's measuring stick must not change because a file was added
+    whose name happens to sort earlier."""
+    assert DEFAULT_RUBRIC_ID in list_rubric_ids()
+    assert resolve_rubric_id() == DEFAULT_RUBRIC_ID
+
+
+def test_the_first_party_rubric_keeps_dropbox_wording_and_flags_what_is_ours() -> None:
+    """A first_party rubric's value IS that it says what the publisher says.
+    Its disclaimer must also separate the publisher's words from ours, since
+    signals/probes/warnings in the same file are not theirs."""
+    rubric = load_rubric(DEFAULT_RUBRIC_ID)
+    assert rubric.provenance.tier is ProvenanceTier.FIRST_PARTY
+    assert rubric.provenance.attribution == "Copyright (c) 2021 Dropbox, Inc."
+    # Dropbox's own axis definitions, verbatim.
+    asks = {dimension.id: dimension.asks for dimension in rubric.dimensions}
+    assert asks["scope"] == "Area of ownership and level of autonomy / ambiguity"
+    assert asks["collaborative_reach"] == "Organizational reach and extent of influence"
+    assert (
+        asks["impact_levers"] == "Technical levers typically exercised to achieve business impact"
+    )
+    disclaimer = rubric.provenance.disclaimer.lower()
+    assert "not dropbox's words" in disclaimer
+    assert "does not endorse" in disclaimer
 
 
 def test_a_rubric_without_a_licence_is_refused() -> None:
