@@ -273,6 +273,58 @@ def setup_guide_cmd() -> None:
     acknowledge_delivery(config, report.operator_action)
 
 
+@app.command("rubrics")
+def rubrics_cmd() -> None:
+    """The external standards this build can measure you against (#436).
+
+    A rubric is the ruler, never a measurement — nothing listed here is a
+    claim about you. Each line says where its content came from, because a
+    reconstruction must never be read as the organisation's own document.
+    """
+    from wingman.application.rubrics import load_all_rubrics
+
+    configure_logging()
+    for rubric in load_all_rubrics():
+        typer.echo(
+            f"{rubric.id}  v{rubric.version}  "
+            f"[{rubric.provenance.tier.value} · {rubric.provenance.license}]"
+        )
+        typer.echo(f"  {rubric.title}")
+        typer.echo(f"  dimensions: {', '.join(item.name for item in rubric.dimensions)}")
+        typer.echo(f"  {rubric.provenance.disclaimer}")
+
+
+@app.command("gap-map")
+def gap_map_cmd(
+    rubric_id: str = typer.Option(
+        "", "--rubric", help="Rubric id. Optional while only one ships; see 'wingman rubrics'."
+    ),
+) -> None:
+    """What your profile can and cannot answer against a rubric (#436).
+
+    Reports, per dimension, the evidence this workspace holds — and which
+    dimensions hold none. It does NOT place you on a rung: three of five
+    dimensions having nothing to read is the normal case, and a level
+    derived from that would be mostly invention (design doc Q2). No model
+    is called; every match is a rubric's own declared signal, so a wrong
+    one is visible in the output and fixable in the data file.
+    """
+    from wingman.application.gap_map import build_gap_map, render_gap_map
+    from wingman.application.rubrics import RubricError, load_rubric, resolve_rubric_id
+
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "read")
+    try:
+        rubric = load_rubric(resolve_rubric_id(rubric_id))
+    except RubricError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    with Storage(config.db_path) as storage:
+        report = build_gap_map(rubric, storage)
+    typer.echo(render_gap_map(report))
+
+
 motd_app = typer.Typer(
     help="The operator's box-wide message — one shared file, delivered once per account "
     "as a thing to do rather than a banner (#224)."

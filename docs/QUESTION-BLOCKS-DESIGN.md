@@ -1,7 +1,12 @@
 # Question Blocks — interview modules that read against an external rubric (proposal, not yet an RFC)
 
 **Status.** Design recorded 2026-08-20 from an ideation session (issue #436).
-Nothing is implemented; no code, no slice started, no tests. §3's evidence audit was run
+**v0 is built** (2026-08-22): rubrics as packaged data, and the gap map —
+`wingman gap-map` / `wingman rubrics`, and the `gap_map` / `rubrics` MCP
+tools. It emits coverage and gaps, never a rung, and calls no model. v1 (the
+block, and the elaboration capture mechanic) and v2 (the registry and flow
+wiring) are not started. §6 was corrected during v0's implementation — see
+the note there. §3's evidence audit was run
 the same day against one real workspace and is the reason the build order in
 §7 is what it is rather than what the session first proposed. Graduates to a
 numbered `RFC.md` entry (and a `ROADMAP.md` slice) once it is referenced
@@ -196,6 +201,44 @@ least this workspace, and the design must not depend on it.
 read. A reading that emitted a level today would be inventing two fifths of
 it. So v0's deliverable is the **gap map**, not the positioning — see §7.
 
+### 3.1 The dimensions, checked against published frameworks
+
+The five dimensions above were this document's own invention until a prior-art
+pass checked them
+([`research/career-ladder-rubrics/`](research/career-ladder-rubrics/README.md),
+2026-08-22). They hold — scope, autonomy, ambiguity, technical depth and
+influence all appear as named axes in Dropbox's and GitLab's public
+frameworks — **with one correction that changed the shipped rubric.**
+
+Dropbox separates three things this document had merged into "scope of
+impact": **Scope** (area of ownership, and level of autonomy/ambiguity),
+**Collaborative Reach** (organisational reach and extent of influence), and
+**Impact Levers** (the technical means to business impact). GitLab's public
+product-manager ladder makes the same split unmissable — Scope counted in
+teams (1–2, 3–5, 5+) in one column, Outcomes stated as metrics, adoption and
+ARR in another.
+
+So "scope of impact" was carrying reach and magnitude in a single axis —
+**precisely the conflation this document's own trap warning describes.** The
+rubric now has separate `reach` and `impact` dimensions, and a test refuses
+any shipped rubric that has one without the other. The trap warning survives
+on both, pointing in opposite directions: don't read magnitude as reach, and
+don't claim a magnitude you cannot attribute.
+
+One honest note on that warning: the underlying separation is Dropbox's and
+GitLab's, but the phrasing — "organisational reach versus outcome size" — is
+this document's inference and not a quotation from either. The rubric data
+says so where the warning is authored.
+
+**And a note on what "validated" bought.** Retro-validation is corroboration,
+not sourcing. These axes were written from judgement and *then* found to line
+up with published frameworks; they were not derived from them. That ordering
+is why the composite rubric ships at `ProvenanceTier.INFERRED` rather than
+`RECONSTRUCTION`, and why its sources are listed as "consistent with" rather
+than as material it was assembled from. Calling it a reconstruction would
+claim a derivation that never happened — the same overclaim this feature
+exists to prevent, made by the feature itself.
+
 ---
 
 ## 4. The hard problem: a block asks about the person
@@ -270,7 +313,13 @@ parent reference. See §10 Q3.
 
 ---
 
-## 6. Evidence tiering: reuse RFC-073's Observed/Endorsed
+## 6. Evidence tiering: who is vouching
+
+**Corrected during v0's implementation.** This section originally said
+"reuse RFC-073's Observed/Endorsed", and that was wrong on semantics. The
+correction is recorded rather than quietly rewritten, because the mistake is
+instructive: two tier vocabularies can look interchangeable and be about
+completely different things.
 
 The only influence evidence in the audited workspace came from LinkedIn
 recommendations — "revolutionized the way we do business", "effective manager
@@ -278,19 +327,30 @@ and mentor". That is real evidence and it should be citable. It is also
 somebody else's unfalsifiable praise, and it must not be weighed like a
 shipped artifact.
 
-RFC-073 already introduced exactly this distinction for relationship-log
-entries. A reading should reuse the same two tiers rather than inventing a
-parallel vocabulary:
+RFC-073's tiers do **not** express that. `OBSERVED` vs `ENDORSED` describes
+**how a note was produced** — the person's own words versus a model-drafted
+synthesis they reviewed and confirmed. That is orthogonal to who is
+vouching: a testimonial is verbatim, so it is `OBSERVED` under RFC-073 while
+being exactly the third-party praise this distinction exists to hold at arm's
+length. Borrowing the enum would have made every gap map claim something
+untrue about its own evidence. (RFC-073 itself rejected reusing
+`ClaimClassification` for the same class of reason.)
 
-- **Observed** — achievements, roles, corpus documents, and the person's own
-  elaborations. Things with an artifact or a first-person account behind them.
-- **Endorsed** — testimonials and recommendations. Cited, visibly tiered,
-  and never sufficient on their own to move a dimension.
+So the axis is **voice**, and it gets its own vocabulary
+(`domain.rubric.EvidenceVoice`):
 
-A dimension carried **only** by Endorsed evidence must say so in the reading.
-"Three people say you're a great mentor" and "you rewrote how two teams
-ship" are not the same claim, and a reading that renders them identically is
-polished fiction.
+- **First-party** — achievements, roles, corpus documents, and the person's
+  own elaborations. Things with an artifact or a first-person account behind
+  them.
+- **Third-party** — testimonials and recommendations. Cited, visibly
+  distinguished, and never sufficient on their own to move a dimension.
+
+A dimension carried **only** by third-party evidence must say so in the
+reading — `Coverage.THIRD_PARTY_ONLY` is a distinct verdict from `THIN` for
+this reason, since the fix differs: thin wants more of the same, third-party-
+only wants a different kind. "Three people say you're a great mentor" and
+"you rewrote how two teams ship" are not the same claim, and a reading that
+renders them identically is polished fiction.
 
 ---
 
@@ -375,15 +435,42 @@ Deferred to v2, listed here so the seams are known while v0/v1 are built.
 ## 10. Open questions
 
 **Q1 — Where does rubric content come from, and how is its provenance
-honest?**
-A well-known employer's internal ladder is not published in full; what
-circulates publicly is reconstruction. A rubric must carry that on its face —
-"reconstructed from these public sources, not the employer's own document" —
-or it is polished fiction with a company's name on it (invariant 9).
-A strong alternative worth costing: source rubrics from **job postings' own
-levelling language**, which is first-party, already flows through the
-opportunity pipeline, and carries its own URL. Possibly both, with the tier
-visible in every reading that cites the rubric.
+honest? — RESOLVED 2026-08-22.**
+A research pass (prior-art scan, sources in `docs/research/`) settled this,
+and better than the question assumed.
+
+*Finding 1: there is no first-party public engineering ladder for Google,
+Meta, Amazon, Apple, Netflix or Microsoft.* Career-site job qualifications
+and culture posts ("larger scope and real impact"; "no set bands and
+grades") are not frameworks. So a rubric branded with any of those names can
+never rise above `reconstruction`, and the original worked example — "the
+Google ladder" — has no honest first-party form. It is not going to get one
+by trying harder.
+
+*Finding 2: it does not need one.* Dropbox publishes its **complete**
+engineering career framework, from a Dropbox-owned repository, under
+**Apache-2.0** — verified at the repository itself, not taken from a
+catalogue. GitLab publishes its handbook matrix and job-family descriptors
+openly. Several smaller frameworks are CC BY or CC BY-SA. So the honest
+question was never "how do we dress up a reconstruction"; it was "why ship
+one at all", and the answer is that we should not when a first-party,
+redistributable framework exists.
+
+**Resolution.** Prefer `first_party` and redistributable. Ship
+reconstructions only where nothing better exists, and never branded with a
+company's name. `RubricProvenance.license` is a required field (SPDX
+identifier, or the literal `unspecified` meaning *link, do not reproduce*),
+because "publicly readable" is not "ours to redistribute". Verify every
+licence at its primary source: a public framework catalogue listed Dropbox's
+framework as unlicensed when the Dropbox repository it came from is
+Apache-2.0, and metadata wrong about a checkable case cannot be trusted on
+the rest.
+
+**Still open under Q1:** job postings' own levelling language as a
+first-party per-employer source. It remains attractive — it is genuinely
+first-party, already flows through the opportunity pipeline, and carries its
+own URL — but the research found postings state years-of-experience far more
+often than they describe scope, so the yield is probably thin. Not blocking.
 
 **Q2 — Does a reading ever emit a rung?**
 "You are an L6" that is wrong is worse than no answer, and the audit shows

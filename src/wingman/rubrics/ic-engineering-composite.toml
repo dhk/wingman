@@ -1,0 +1,202 @@
+# A composite individual-contributor engineering ladder, assembled from
+# publicly published career frameworks.
+#
+# This is deliberately NOT branded with any single employer's name. Q1 of
+# docs/QUESTION-BLOCKS-DESIGN.md — where rubric content comes from, and how
+# a reconstruction stays honest — is still open, and shipping a rubric
+# carrying a specific company's name before that is settled would be the
+# polished fiction the design exists to avoid. The dimensions below are the
+# ones essentially every published IC ladder shares; the rung descriptors
+# are generic and are not read by the v0 gap map at all.
+
+[rubric]
+id      = "ic-engineering-composite"
+title   = "Individual-contributor engineering ladder (composite)"
+version = "2026-08-22"
+
+[rubric.provenance]
+tier = "inferred"
+license = "unspecified"
+# CONSISTENT WITH, not derived from. These dimensions were written first,
+# from judgement, and a prior-art pass afterwards found they line up with the
+# axes these frameworks name (docs/research/career-ladder-rubrics/). That is
+# corroboration, not sourcing — which is why the tier is `inferred` rather
+# than `reconstruction`, and why these are listed as comparisons rather than
+# as the material this was assembled from.
+sources = [
+  "consistent with https://dropbox.github.io/dbx-career-framework/ — Dropbox's published framework",
+  "consistent with https://handbook.gitlab.com/handbook/engineering/careers/matrix/ — GitLab's public handbook",
+]
+disclaimer = """\
+Wingman's own axes, written from judgement and afterwards found consistent \
+with published frameworks — corroborated, not sourced. This is NOT any single \
+employer's internal document — not Google's, not any other named company's — \
+and must not be described as one. No first-party public engineering ladder \
+exists for Google, Meta, Amazon, Apple, Netflix or Microsoft. This rubric's \
+own wording is ours, so it is licensed as unspecified: link to it, and cite \
+the frameworks below rather than this paraphrase."""
+
+# Dropbox separates three things a single "scope of impact" axis merges:
+# Scope (ownership, autonomy, ambiguity), Collaborative Reach
+# (organisational reach and influence), and Impact Levers (the technical
+# means to business impact). GitLab's public PM ladder makes the same split
+# unmissable — Scope counted in teams (1-2, 3-5, 5+) in one column, Outcomes
+# stated as metrics/adoption/ARR in another. This rubric follows that split
+# rather than scoring reach and magnitude as one number.
+
+[[dimension]]
+id   = "reach"
+name = "Organisational reach"
+asks = "How far does the effect of your work reach, in people and teams?"
+probe = "Who outside your own team changed what they were doing because of this?"
+confusable_with = """\
+Outcome magnitude. A big number ($100B processed, 267% growth) is the size of \
+a SYSTEM, which one person can build alone — it is not organisational reach. \
+Reading one as the other over-positions strong individual contributors. \
+Dropbox and GitLab both assess these as separate axes; the wording of this \
+warning is ours, not a quotation from either."""
+signals = [
+  "across teams", "cross-team", "cross-functional", "multiple teams",
+  "company-wide", "org-wide", "organization-wide", "organisation-wide",
+  "every team", "other teams", "department",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "Your own projects; effects land inside your team."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "Your team's roadmap; other teams consume what you build."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "Multiple teams change what they do because of your work."
+
+[[dimension]]
+id   = "impact"
+name = "Business impact"
+asks = "What measurably changed in the business because of your work?"
+probe = "What would have happened if you had not done this — and how do you know?"
+confusable_with = """\
+Attribution. A number is only yours to the extent you can say what changed \
+BECAUSE of you: a platform may have processed $100B before you touched it. \
+Reach and impact are separate axes here, and a large number evidences this \
+one, not reach."""
+signals = [
+  "reduced", "increased", "improved", "grew", "drove", "saved",
+  "revenue", "adoption", "retention", "conversion",
+  "faster", "cheaper", "roi", "x reduction", "% growth",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "Your work ships; impact is measured at the project level."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "You move a metric the team is held to."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "You move a metric the business is held to."
+
+[[dimension]]
+id   = "autonomy"
+name = "Autonomy and direction-setting"
+asks = "How much of the problem was already decided when it reached you?"
+probe = "When you took this on, how much was already decided — and by whom?"
+confusable_with = """\
+Leadership verbs. 'Defined', 'led', and 'set the roadmap' describe the work \
+done, not who chose it. A profile full of them can still say nothing about \
+whether the problem was selected or handed over."""
+signals = [
+  "set the direction", "chose to", "decided to", "my own initiative",
+  "from scratch", "greenfield", "founded", "co-founded", "initiated",
+  "proposed", "identified the", "first to",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "Problems arrive scoped; you decide how, not what."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "You shape the problem inside a direction someone else set."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "You choose which problems are worth solving at all."
+
+[[dimension]]
+id   = "ambiguity"
+name = "Ambiguity absorbed"
+asks = "How defined was the problem when it reached you?"
+probe = "What did people think the problem was, before you started?"
+signals = [
+  "ambiguous", "ill-defined", "ill defined", "undefined", "unclear",
+  "no clear", "nobody knew", "no one knew", "uncharted", "exploratory",
+  "first of its kind", "no precedent", "open-ended",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "The problem is stated; the path is known."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "The problem is stated; you find the path."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "Nobody agrees what the problem is; you settle that first."
+
+[[dimension]]
+id   = "technical_depth"
+name = "Technical depth"
+asks = "How hard is the technical substance of what you build?"
+signals = [
+  "architected", "architecture", "algorithm", "distributed", "latency",
+  "throughput", "patent", "framework", "protocol", "data model",
+  "optimiz", "optimis", "reconciliation", "pipeline", "schema",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "Applies known techniques competently."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "Designs systems whose failure modes you anticipated."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "Invents the technique, or knows why none of the known ones fit."
+
+[[dimension]]
+id   = "influence"
+name = "Influence and multiplier effect"
+asks = "How much better is everyone else because you were there?"
+probe = "Name something other engineers do differently because of you."
+confusable_with = """\
+Managing people. Headcount is an org fact; influence is whether anybody's \
+work actually changed. A manager with reports may evidence none of it, and a \
+non-manager may evidence a great deal."""
+signals = [
+  "mentored", "mentoring", "mentor", "coached", "taught", "trained",
+  "evangelism", "adopted by", "standard for", "set the standard",
+  "onboarded", "hired", "spoke at", "published", "wrote the book",
+  "workshop", "curriculum",
+]
+
+  [[dimension.rungs]]
+  level = "contributor"
+  descriptor = "Helps teammates when asked."
+
+  [[dimension.rungs]]
+  level = "owner"
+  descriptor = "Raises the standard of the team around you."
+
+  [[dimension.rungs]]
+  level = "multiplier"
+  descriptor = "Engineers you have never met work differently because of you."
