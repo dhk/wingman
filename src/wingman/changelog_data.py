@@ -10,6 +10,52 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-08-23", 455, "Restore the Codex hooks removed during beads setup"),
+    ("2026-08-22", 454, "bd init: initialize beads issue tracking"),
+    (
+        "2026-08-21",
+        448,
+        "feat: save an artifact as a good or bad example, typed and reasoned (#438)",
+    ),
+    (
+        "2026-08-21",
+        447,
+        "fix: 'wg keys --all-tenants' died in a login shell, and had the wrong HOME",
+    ),
+    (
+        "2026-08-21",
+        446,
+        "fix: wingman-ctl refuses stray arguments, and gains 'wg keys' (#443, #444)",
+    ),
+    ("2026-08-21", 445, "fix: a tier we could not read is not a tier without a key (#442)"),
+    (
+        "2026-08-21",
+        437,
+        "docs: question blocks — interview modules that read against an external rubric",
+    ),
+    ("2026-08-21", 441, "chore: pin the toolchain to Python 3.12, matching CI"),
+    (
+        "2026-08-21",
+        439,
+        "feat: wingman keys where / validate — find the key that is actually spent",
+    ),
+    (
+        "2026-08-21",
+        440,
+        "fix: repair three dangling doc links and restore the website's missing build plugin",
+    ),
+    ("2026-08-18", 432, "feat: wingman_demo — a zero-setup, zero-network walkthrough (#428)"),
+    (
+        "2026-08-18",
+        431,
+        "feat: relationship_log evidence tier — Observed or Endorsed (RFC-073, #430)",
+    ),
+    ("2026-08-16", 429, "Add Wingman product strategy and guardrails"),
+    (
+        "2026-08-15",
+        427,
+        "feat: wingman_flow — front-door orientation tool before perspectives_start",
+    ),
     ("2026-08-13", 419, "Enshrine the findings: one guard, three rules, one honest read_token"),
     ("2026-08-13", 418, "my_urls: read the live funnel, never guess the prefix (#417)"),
     ("2026-08-13", 416, "redeploy-shared: wait for the port instead of racing it (#415)"),
@@ -689,7 +735,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "197a35ea10b7c5821294ddf10e7b1c26c0dbd9a5"
+GENERATED_FROM_COMMIT = "f1b92745c7887a621b0edd1c2d5d53e0b14889c6"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -699,4 +745,4 @@ GENERATED_FROM_COMMIT = "197a35ea10b7c5821294ddf10e7b1c26c0dbd9a5"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 23
+GENERATED_FROM_DISTANCE = 38
