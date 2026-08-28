@@ -74,7 +74,7 @@ HOST_SETTINGS = frozenset(
         "WINGMAN_TENANT_REGISTRY",
         "WINGMAN_GDRIVE_CLIENT_ID",
         "WINGMAN_GDRIVE_CLIENT_SECRET",
-        "WINGMAN_WOVEN_NETWORKS",
+        "WINGMAN_WOVEN_CLUTTERS",
     }
 )
 
@@ -87,12 +87,12 @@ def operator_name(home: Path | None = None) -> str | None:
     return read_host_settings(home).get("WINGMAN_OPERATOR_NAME")
 
 
-def woven_networks(home: Path | None = None) -> tuple[str, ...]:
-    """The named network groups this box may reason about (WINGMAN_WOVEN_NETWORKS).
+def woven_clutters(home: Path | None = None) -> tuple[str, ...]:
+    """The named clutters this box may reason about (WINGMAN_WOVEN_CLUTTERS).
 
-    A "network group" is a working group whose members pooled their
-    LinkedIn exports into one Woven graph — Dave's and Trent's connections
-    in one snapshot, say. Woven itself has no notion of this: one running
+    A **clutter** — the collective noun for spiders, Woven being a web — is
+    a working group whose members pooled their LinkedIn exports into one
+    Woven graph: Dave's and Trent's connections in one snapshot, say. Woven itself has no notion of this: one running
     Woven serves exactly one `WOVEN_GRAPH_PATH`, its nodes carry no group
     label, and a warm path it returns says nothing about whose pooled data
     produced it. That is fine while a single graph exists and everyone in
@@ -106,28 +106,28 @@ def woven_networks(home: Path | None = None) -> tuple[str, ...]:
 
     The rule this exists to make possible:
 
-    - **no names declared** — warm-path material is unattributed. Usable in
-      conversation, but nothing may record it as evidence, because there is
-      no answer to "whose network said so".
-    - **exactly one name** — attribution is unambiguous and automatic.
-      Today's state, and nothing changes for it.
-    - **two or more names** — an answer must say which group it came from.
-      Silence is not a default here: two working groups are two different
-      sets of people who consented to two different pools, and quietly
-      merging them is the privacy failure this flag is built to prevent.
+    - **no clutters declared** — warm-path material is unattributed. Usable
+      in conversation, but nothing may record it as evidence, because there
+      is no answer to "whose network said so".
+    - **exactly one** — attribution is unambiguous and automatic. Today's
+      state, and nothing changes for it.
+    - **two or more** — an answer must say which clutter it came from.
+      Silence is not a default here: two clutters are two different sets of
+      people who consented to two different pools, and quietly merging them
+      is the privacy failure this flag is built to prevent.
 
     Comma-separated, order preserved, blanks dropped, duplicates removed.
     This file's parser is shlex-strict, so an unquoted value may not contain
     spaces — both of these are accepted, and a stray unquoted space gets the
     usual file:line error rather than being silently misread:
 
-        WINGMAN_WOVEN_NETWORKS=personal,sanderson
-        WINGMAN_WOVEN_NETWORKS="personal, sanderson"
+        WINGMAN_WOVEN_CLUTTERS=personal,sanderson
+        WINGMAN_WOVEN_CLUTTERS="personal, sanderson"
 
     Returns an empty tuple when unset — inert, never an error, the same
     posture every other optional host setting takes.
     """
-    raw = read_host_settings(home).get("WINGMAN_WOVEN_NETWORKS", "")
+    raw = read_host_settings(home).get("WINGMAN_WOVEN_CLUTTERS", "")
     seen: dict[str, None] = {}
     for part in raw.split(","):
         name = part.strip()
@@ -137,11 +137,11 @@ def woven_networks(home: Path | None = None) -> tuple[str, ...]:
 
 
 def woven_attribution(home: Path | None = None) -> str | None:
-    """The one group a warm-path answer belongs to, or None when the caller
-    has to say which — the two ambiguous cases (none declared, several
-    declared) are deliberately the same answer here, because both mean
-    "wingman cannot name the source on its own"."""
-    names = woven_networks(home)
+    """The one clutter a warm-path answer belongs to, or None when the
+    caller has to say which — the two ambiguous cases (none declared,
+    several declared) are deliberately the same answer here, because both
+    mean "wingman cannot name the source on its own"."""
+    names = woven_clutters(home)
     return names[0] if len(names) == 1 else None
 
 

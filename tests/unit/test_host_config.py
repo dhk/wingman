@@ -16,7 +16,7 @@ from wingman.infrastructure.host_config import (
     read_host_settings,
     wingman_env_path,
     woven_attribution,
-    woven_networks,
+    woven_clutters,
 )
 from wingman.infrastructure.keys import host_keys_path, read_host_keys
 
@@ -264,53 +264,53 @@ def _write_settings(home: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def test_woven_networks_unset_is_inert(tmp_path: Path) -> None:
+def test_woven_clutters_unset_is_inert(tmp_path: Path) -> None:
     """Absent config is not an error — the same posture as every other
     optional host setting."""
     home = tmp_path / "home"
-    assert woven_networks(home) == ()
+    assert woven_clutters(home) == ()
     assert woven_attribution(home) is None
 
 
-def test_woven_networks_parses_a_comma_separated_list(tmp_path: Path) -> None:
+def test_woven_clutters_parses_a_comma_separated_list(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    _write_settings(home, "WINGMAN_WOVEN_NETWORKS=personal,sanderson,,personal\n")
+    _write_settings(home, "WINGMAN_WOVEN_CLUTTERS=personal,sanderson,,personal\n")
     # order preserved, blanks dropped, duplicates removed
-    assert woven_networks(home) == ("personal", "sanderson")
+    assert woven_clutters(home) == ("personal", "sanderson")
 
 
-def test_woven_networks_accepts_a_quoted_list_with_spaces(tmp_path: Path) -> None:
+def test_woven_clutters_accepts_a_quoted_list_with_spaces(tmp_path: Path) -> None:
     """wingman.env is shlex-strict: spaces need quoting. Both forms work."""
     home = tmp_path / "home"
-    _write_settings(home, 'WINGMAN_WOVEN_NETWORKS="personal, sanderson"\n')
-    assert woven_networks(home) == ("personal", "sanderson")
+    _write_settings(home, 'WINGMAN_WOVEN_CLUTTERS="personal, sanderson"\n')
+    assert woven_clutters(home) == ("personal", "sanderson")
 
 
 def test_unquoted_spaces_say_where_the_problem_is(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    _write_settings(home, "WINGMAN_WOVEN_NETWORKS=personal, sanderson\n")
+    _write_settings(home, "WINGMAN_WOVEN_CLUTTERS=personal, sanderson\n")
     with pytest.raises(HostEnvironmentError, match="must be quoted"):
-        woven_networks(home)
+        woven_clutters(home)
 
 
-def test_one_declared_group_attributes_automatically(tmp_path: Path) -> None:
+def test_one_declared_clutter_attributes_automatically(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    _write_settings(home, "WINGMAN_WOVEN_NETWORKS=personal\n")
+    _write_settings(home, "WINGMAN_WOVEN_CLUTTERS=personal\n")
     assert woven_attribution(home) == "personal"
 
 
-def test_several_declared_groups_refuse_to_guess(tmp_path: Path) -> None:
-    """Two working groups are two different sets of people who consented to
-    two different pools. Picking one silently is the failure this prevents."""
+def test_several_declared_clutters_refuse_to_guess(tmp_path: Path) -> None:
+    """Two clutters are two different sets of people who consented to two
+    different pools. Picking one silently is the failure this prevents."""
     home = tmp_path / "home"
-    _write_settings(home, "WINGMAN_WOVEN_NETWORKS=personal,sanderson\n")
-    assert woven_networks(home) == ("personal", "sanderson")
+    _write_settings(home, "WINGMAN_WOVEN_CLUTTERS=personal,sanderson\n")
+    assert woven_clutters(home) == ("personal", "sanderson")
     assert woven_attribution(home) is None
 
 
-def test_woven_networks_is_a_recognized_setting(tmp_path: Path) -> None:
+def test_woven_clutters_is_a_recognized_setting(tmp_path: Path) -> None:
     """Unrecognized names are silently ignored by read_host_settings, so a
     setting that is not in HOST_SETTINGS would read as permanently unset."""
     home = tmp_path / "home"
-    _write_settings(home, "WINGMAN_WOVEN_NETWORKS=personal\n")
-    assert read_host_settings(home) == {"WINGMAN_WOVEN_NETWORKS": "personal"}
+    _write_settings(home, "WINGMAN_WOVEN_CLUTTERS=personal\n")
+    assert read_host_settings(home) == {"WINGMAN_WOVEN_CLUTTERS": "personal"}
