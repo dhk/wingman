@@ -22,6 +22,7 @@ type when something is wrong.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import urllib.error
@@ -74,6 +75,25 @@ class HostFact:
 
 def _short(version: str) -> str:
     return version.strip() or "unknown"
+
+
+#: hatch-vcs appends this to the local version segment when the working tree
+#: was dirty at build time (e.g. '...+g72478e2e8.d20260828').
+_DIRTY_BUILD_STAMP = re.compile(r"\.d\d{8}$")
+
+
+def _same_commit(left: str, right: str) -> bool:
+    """Do these two versions name the same commit, ignoring dirty-build stamps?
+
+    Two builds of one commit differ as strings whenever either was built from
+    a dirty tree — and on the deployed box the operator's checkout is
+    permanently a little dirty, because '.beads' tracker state churns on every
+    command. Comparing full strings therefore called every healthy box drift
+    (#471). Comparison only: every message still prints the versions actually
+    seen, because a dirty build did contain uncommitted changes and saying
+    otherwise would trade a false alarm for a quiet lie.
+    """
+    return _DIRTY_BUILD_STAMP.sub("", left) == _DIRTY_BUILD_STAMP.sub("", right)
 
 
 def entry_point_fact(
@@ -195,11 +215,24 @@ def shared_process_fact(
         return HostFact("shared process", f"nothing answering on 127.0.0.1:{port}")
     running = _short(str(payload.get("version", "")))
     started = str(payload.get("started_at", "")) or "unknown"
-    if running == _short(this_version):
+    mine = _short(this_version)
+    if running == mine:
         return HostFact("shared process", f"up on {running} (since {started}), same as this build")
+    if _same_commit(running, mine):
+        # Same commit, differing only by a dirty-tree build stamp. Not the
+        # drift this fact exists to catch — tenants ARE running this commit —
+        # so it must not be notable. Still stated rather than hidden: a dirty
+        # build really did carry uncommitted changes, so the two are not
+        # bit-identical, and that is a different sentence from "tenants are
+        # behind".
+        return HostFact(
+            "shared process",
+            f"up on {running} (since {started}); this build is {mine} — same commit, "
+            "differing only by a dirty-tree build stamp, so not bit-identical",
+        )
     return HostFact(
         "shared process",
-        f"up on {running} (since {started}); this build is {_short(this_version)} — they "
+        f"up on {running} (since {started}); this build is {mine} — they "
         "DIFFER, so tenants are not running what you just shipped",
         notable=True,
     )
