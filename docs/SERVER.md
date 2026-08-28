@@ -59,8 +59,9 @@ wg status   # confirms the alias resolved
 Linux. On a server host, two files under one directory are canonical
 (RFC-019/034/046, #122), mirroring `dhk/alexandria`'s `alexandria.env` /
 `secrets.env` split: `~/.config/wingman/secrets.env` (API keys, mode 600)
-and `~/.config/wingman/wingman.env` (non-secret host settings — today,
-just `WINGMAN_REPO`, mode 600). Wingman itself reads `secrets.env`
+and `~/.config/wingman/wingman.env` (non-secret host settings, mode 600 —
+`WINGMAN_REPO` and the handful of others in `host_config.HOST_SETTINGS`,
+including `WINGMAN_WOVEN_CLUTTERS`, below). Wingman itself reads `secrets.env`
 directly — CLI and MCP server alike, on a fresh shell with zero exports —
 so this one file is the thing to create or copy when migrating a box or
 debugging "which key file is actually in effect":
@@ -76,6 +77,10 @@ EOF
 install -m 600 /dev/null ~/.config/wingman/wingman.env
 cat >> ~/.config/wingman/wingman.env <<'EOF'
 WINGMAN_REPO=/home/you/src/wingman
+# Named Woven clutters this box may reason about (RFC-077). A clutter is
+# a group whose members pooled their LinkedIn exports into one graph.
+# Optional; omit entirely if you do not use Woven.
+WINGMAN_WOVEN_CLUTTERS=personal
 EOF
 ```
 

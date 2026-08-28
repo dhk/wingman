@@ -74,6 +74,7 @@ HOST_SETTINGS = frozenset(
         "WINGMAN_TENANT_REGISTRY",
         "WINGMAN_GDRIVE_CLIENT_ID",
         "WINGMAN_GDRIVE_CLIENT_SECRET",
+        "WINGMAN_WOVEN_CLUTTERS",
     }
 )
 
@@ -84,6 +85,64 @@ def operator_name(home: Path | None = None) -> str | None:
     submitted it, since a shared GITHUB_API_ISSUES_KEY can no longer let
     GitHub's own 'opened by' field answer that question."""
     return read_host_settings(home).get("WINGMAN_OPERATOR_NAME")
+
+
+def woven_clutters(home: Path | None = None) -> tuple[str, ...]:
+    """The named clutters this box may reason about (WINGMAN_WOVEN_CLUTTERS).
+
+    A **clutter** — the collective noun for spiders, Woven being a web — is
+    a working group whose members pooled their LinkedIn exports into one
+    Woven graph: Dave's and Trent's connections in one snapshot, say. Woven itself has no notion of this: one running
+    Woven serves exactly one `WOVEN_GRAPH_PATH`, its nodes carry no group
+    label, and a warm path it returns says nothing about whose pooled data
+    produced it. That is fine while a single graph exists and everyone in
+    it is a trusted handful. It stops being fine the moment there are two.
+
+    So this is NOT connection configuration — wingman does not dial Woven
+    (RFC-043's server-to-server bridge is retired; the agent is the
+    integration point). It is a provenance and consent declaration: the
+    groups whose pooled data this workspace is entitled to reason about,
+    named, so an answer can be attributed to one of them.
+
+    The rule this exists to make possible:
+
+    - **no clutters declared** — warm-path material is unattributed. Usable
+      in conversation, but nothing may record it as evidence, because there
+      is no answer to "whose network said so".
+    - **exactly one** — attribution is unambiguous and automatic. Today's
+      state, and nothing changes for it.
+    - **two or more** — an answer must say which clutter it came from.
+      Silence is not a default here: two clutters are two different sets of
+      people who consented to two different pools, and quietly merging them
+      is the privacy failure this flag is built to prevent.
+
+    Comma-separated, order preserved, blanks dropped, duplicates removed.
+    This file's parser is shlex-strict, so an unquoted value may not contain
+    spaces — both of these are accepted, and a stray unquoted space gets the
+    usual file:line error rather than being silently misread:
+
+        WINGMAN_WOVEN_CLUTTERS=personal,sanderson
+        WINGMAN_WOVEN_CLUTTERS="personal, sanderson"
+
+    Returns an empty tuple when unset — inert, never an error, the same
+    posture every other optional host setting takes.
+    """
+    raw = read_host_settings(home).get("WINGMAN_WOVEN_CLUTTERS", "")
+    seen: dict[str, None] = {}
+    for part in raw.split(","):
+        name = part.strip()
+        if name:
+            seen.setdefault(name, None)
+    return tuple(seen)
+
+
+def woven_attribution(home: Path | None = None) -> str | None:
+    """The one clutter a warm-path answer belongs to, or None when the
+    caller has to say which — the two ambiguous cases (none declared,
+    several declared) are deliberately the same answer here, because both
+    mean "wingman cannot name the source on its own"."""
+    names = woven_clutters(home)
+    return names[0] if len(names) == 1 else None
 
 
 # The pre-#122-split flat file this migration retires: '~/.config/keys.env'.
