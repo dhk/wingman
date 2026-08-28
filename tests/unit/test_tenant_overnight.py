@@ -8,7 +8,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from wingman.application.focus import follow_company
+from wingman.application.focus import OvernightReport, follow_company
 from wingman.application.people import add_person
 from wingman.cli.main import app
 from wingman.infrastructure.storage import Storage
@@ -62,7 +62,7 @@ def test_tenant_with_nothing_enrolled_is_reported_not_fatal(tmp_path: Path) -> N
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
     assert result.exit_code == 1  # the one tenant failed
     assert "jason: failed" in result.output
-    assert "0/1 tenants completed cleanly" in result.output
+    assert "0/1 tenants completed" in result.output
 
 
 def test_one_tenants_failure_never_blocks_another(tmp_path: Path) -> None:
@@ -76,7 +76,7 @@ def test_one_tenants_failure_never_blocks_another(tmp_path: Path) -> None:
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
     assert "jason: failed" in result.output
     assert "bob: failed" in result.output
-    assert "0/2 tenants completed cleanly" in result.output
+    assert "0/2 tenants completed" in result.output
 
 
 def test_tenant_missing_workspace_is_skipped_not_crashed(tmp_path: Path) -> None:
@@ -124,7 +124,7 @@ def test_a_corrupt_workspace_does_not_abort_the_tenants_after_it(
     assert "broken: failed" in result.output
     assert "jason: 1 targets" in result.output
     assert (jason_dir / "reports" / "digests").exists()
-    assert "1/2 tenants completed cleanly" in result.output
+    assert "1/2 tenants completed" in result.output
     assert result.exit_code == 1
 
 
@@ -159,7 +159,7 @@ def test_a_bad_registry_entry_fails_only_its_own_tenant(tmp_path: Path, monkeypa
 
     assert "cursed: failed" in result.output
     assert "jason: failed" in result.output  # reached at all — nothing enrolled
-    assert "0/2 tenants completed cleanly" in result.output
+    assert "0/2 tenants completed" in result.output
 
 
 def test_tenant_with_enrolled_target_produces_a_real_digest(tmp_path: Path, monkeypatch) -> None:
@@ -182,5 +182,60 @@ def test_tenant_with_enrolled_target_produces_a_real_digest(tmp_path: Path, monk
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
     assert result.exit_code == 0
     assert "jason: 1 targets" in result.output
-    assert "1/1 tenants completed cleanly" in result.output
+    assert "1/1 tenants completed" in result.output
     assert (jason_dir / "reports" / "digests").exists()
+
+
+def _partly_failed_run(failing_dir: Path):  # noqa: ANN202 — test double factory
+    """Every tenant's run completes; the one at failing_dir has bad targets."""
+
+    def run(config, storage, out_dir=None):  # noqa: ANN001, ANN202 — test double
+        digest = config.data_dir / "digest-2026-08-05.md"
+        digest.write_text("# digest", encoding="utf-8")
+        return OvernightReport(
+            targets=[],
+            processed=3,
+            failed=2 if config.data_dir == failing_dir else 0,
+            actions=[],
+            digest_path=str(digest),
+        )
+
+    return run
+
+
+def test_a_tenants_failed_targets_do_not_fail_the_roster(tmp_path: Path, monkeypatch) -> None:
+    """wingman-8kj: a tenant whose run completed with some bad targets got
+    their night's work and a digest naming what is thin. Only a tenant that
+    got NOTHING is this command's failure — which is what the docstring above
+    has always claimed, and what the exit status used to contradict. The same
+    conflation put the single-workspace unit into 'failed' on 2026-08-05."""
+    import wingman.application.focus as focus_module
+
+    jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
+    bob_dir = _make_tenant(tmp_path, "bob", "tok-bob")
+    registry = _write_registry(tmp_path, ("jason", jason_dir), ("bob", bob_dir))
+    monkeypatch.setattr(focus_module, "overnight_run", _partly_failed_run(jason_dir))
+
+    result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
+
+    assert result.exit_code == 0, result.output
+    assert "2/2 tenants completed" in result.output
+    # Still named, still counted: succeeding quietly is the opposite error.
+    assert "jason: 3 targets, 2 with failures" in result.output
+    assert "1 of them had failed targets" in result.output
+
+
+def test_strict_makes_failed_targets_fail_the_roster(tmp_path: Path, monkeypatch) -> None:
+    """--strict restores the old status for callers that want it, matching the
+    flag on 'wingman overnight'."""
+    import wingman.application.focus as focus_module
+
+    jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
+    bob_dir = _make_tenant(tmp_path, "bob", "tok-bob")
+    registry = _write_registry(tmp_path, ("jason", jason_dir), ("bob", bob_dir))
+    monkeypatch.setattr(focus_module, "overnight_run", _partly_failed_run(jason_dir))
+
+    result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry), "--strict"])
+
+    assert result.exit_code == 1, result.output
+    assert "2/2 tenants completed" in result.output
