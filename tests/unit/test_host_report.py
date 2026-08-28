@@ -198,6 +198,44 @@ def test_a_matching_shared_process_is_quiet() -> None:
     assert not fact.notable
 
 
+def test_a_dirty_local_build_of_the_same_commit_is_not_drift() -> None:
+    """hatch-vcs appends '.dYYYYMMDD' when the tree was dirty at build time,
+    and this checkout is permanently a little dirty because .beads tracker
+    state churns on every bd command. Comparing full strings therefore called
+    every healthy box drift and told the reader tenants were behind when they
+    were running that exact commit (#471) — the warning that fires when
+    nothing is wrong, which is how a real one gets ignored.
+    """
+    fact = shared_process_fact(
+        THIS + ".d20260828", health=lambda _url: {"version": THIS, "started_at": "x"}
+    )
+
+    assert not fact.notable
+    assert "tenants are not running what you just shipped" not in fact.detail
+
+
+def test_a_dirty_local_build_still_says_the_tree_was_dirty() -> None:
+    """Not silence: a .dYYYYMMDD build really did contain uncommitted changes,
+    so it is not bit-identical to a clean build of that commit. Equating them
+    outright would trade a false alarm for a quiet lie."""
+    fact = shared_process_fact(
+        THIS + ".d20260828", health=lambda _url: {"version": THIS, "started_at": "x"}
+    )
+
+    assert "same commit" in fact.detail
+    assert "dirty" in fact.detail
+
+
+def test_a_dirty_build_of_a_DIFFERENT_commit_is_still_drift() -> None:
+    """The dirty marker must not become a way to hide real drift."""
+    fact = shared_process_fact(
+        THIS + ".d20260828", health=lambda _url: {"version": OTHER, "started_at": "x"}
+    )
+
+    assert fact.notable
+    assert "tenants are not running what you just shipped" in fact.detail
+
+
 # --------------------------------------------------------------------------
 # The whole set
 # --------------------------------------------------------------------------
