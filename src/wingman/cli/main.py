@@ -3660,6 +3660,12 @@ def overnight(
         help="Push the finished digest to Drive once authorized ('wingman drive auth'). "
         "A no-op before authorization; a push failure never affects the local digest.",
     ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Exit non-zero if any target had a failed step. Off by default: a run that "
+        "wrote its digest completed, and the failures are recorded in it.",
+    ),
 ) -> None:
     """Deep-refresh every followed company and person; write the dated digest (RFC-018).
 
@@ -3675,6 +3681,10 @@ def overnight(
     traffic listed above. Wingman still never sends anything ON YOUR
     BEHALF: no message, no application, no external write except this
     upload of your own artifact (RFC-006).
+
+    A target whose fetch, news query or export fails is marked and carried
+    into the digest; the command still exits 0, because the run itself
+    completed. Pass --strict to exit non-zero on any such failure.
     """
     configure_logging()
     config = load_config()
@@ -3699,7 +3709,19 @@ def overnight(
     if drive:
         typer.echo(push_digest(Path(report.digest_path)).detail)
     if report.failed:
-        raise typer.Exit(code=1)
+        # A failed feed fetch, news query or export is one target's bad step,
+        # not a failed run: the digest is written and every other target is
+        # done. Exiting non-zero here is what put the systemd unit into
+        # 'failed' on 2026-08-05 after a run that produced everything it
+        # promised — which teaches the reader to ignore the one signal that
+        # should mean "nothing came back". Say what did not happen, and let
+        # --strict restore the old status for callers that want it.
+        typer.echo(
+            "Run completed; the failures above are recorded in the digest. "
+            "(--strict exits non-zero on them instead.)"
+        )
+        if strict:
+            raise typer.Exit(code=1)
 
 
 @app.command()
@@ -5007,6 +5029,12 @@ def tenant_overnight_cmd(
         "--registry",
         help="Tenant registry path (default: WINGMAN_TENANT_REGISTRY host setting).",
     ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Exit non-zero if any tenant's run had a failed target. Off by default: a "
+        "tenant whose run completed got their night's work, however thin.",
+    ),
 ) -> None:
     """Deep-refresh every tenant in the registry, one after another
     (RFC-048's overnight-loop gap — tenants under the shared process have
@@ -5025,6 +5053,11 @@ def tenant_overnight_cmd(
     'upgrade_all.py's same per-user isolation, and catches as broadly as
     that does, because a roster this command abandons half way through is
     a night's work silently missing for everyone after the break.
+
+    Exits non-zero when a tenant got NOTHING, not when a tenant's run
+    completed with some failed targets — that tenant has their digest, and
+    it says which parts are thin. Pass --strict to exit non-zero on those
+    too.
     """
     configure_logging()
     from wingman.application.focus import overnight_run
@@ -5038,7 +5071,14 @@ def tenant_overnight_cmd(
         typer.echo(f"no tenants in the registry ({registry_path}) — nothing to do.")
         return
 
-    failures = 0
+    # Two different things, deliberately counted apart. A tenant whose run
+    # could not happen got nothing, and that is this command's failure. A
+    # tenant whose run completed with some bad targets got their night's
+    # work and a digest naming what is thin. Summing them is what made a
+    # good night exit non-zero (#469), the same conflation fixed in
+    # 'wingman overnight'.
+    unrunnable = 0
+    degraded = 0
     for tenant in tenants:
         # Everything from config resolution onwards is guarded, not just the
         # run itself (#387). The isolation this docstring promises is only
@@ -5053,7 +5093,7 @@ def tenant_overnight_cmd(
             config = tenant.config()
             if not config.db_path.exists():
                 typer.echo(f"{tenant.slug}: no workspace yet ({config.db_path} missing) — skipped.")
-                failures += 1
+                unrunnable += 1
                 continue
             with Storage(config.db_path) as storage:
                 report = overnight_run(config, storage)
@@ -5062,17 +5102,23 @@ def tenant_overnight_cmd(
             # unattended on other people's behalf, so a tenant who got
             # nothing has to be nameable in the morning.
             typer.echo(f"{tenant.slug}: failed — {type(exc).__name__}: {exc}")
-            failures += 1
+            unrunnable += 1
             continue
         typer.echo(
             f"{tenant.slug}: {report.processed} targets, {report.failed} with failures, "
             f"{len(report.actions)} actions. Digest: {report.digest_path}"
         )
         if report.failed:
-            failures += 1
+            degraded += 1
 
-    typer.echo(f"{len(tenants) - failures}/{len(tenants)} tenants completed cleanly.")
-    if failures:
+    # "completed", not "completed cleanly": a tenant carrying failed targets
+    # did complete, and the next line is where that gets said. Claiming
+    # cleanliness for a roster with seven bad targets in it is the polished
+    # fiction this codebase keeps choosing against.
+    typer.echo(f"{len(tenants) - unrunnable}/{len(tenants)} tenants completed.")
+    if degraded:
+        typer.echo(f"{degraded} of them had failed targets, recorded in that tenant's own digest.")
+    if unrunnable or (degraded and strict):
         raise typer.Exit(code=1)
 
 
