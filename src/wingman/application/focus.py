@@ -166,8 +166,30 @@ def render_follow_report(report: FollowReport) -> str:
 class OvernightTarget(BaseModel):
     name: str
     kind: str  # "person" | "company"
-    status: str  # "ok" | "failed"
+    #: "ok" | "attention" | "failed".
+    #:
+    #: "attention" is work the OPERATOR has to do before this target can be
+    #: complete — a prerequisite that was never set up, not something that
+    #: broke. Following a company whose writing nobody has attributed yet is
+    #: the case it exists for (#473): every run for a week said "7 with
+    #: failures" and six of the seven were that, which is how the seventh —
+    #: a genuinely dead source — stopped being read. Reporting it as "ok"
+    #: would be the opposite error, since the gap is real and the operator
+    #: asked for that company deliberately.
+    status: str = "ok"
     lines: list[str] = Field(default_factory=list)
+
+
+#: One mark per target state, shared by every surface that renders a digest
+#: (markdown here, HTML, the MCP tool, the CLI) so they cannot drift apart.
+#: Mirrors the per-STEP map that already exists in cli/main.py and mcp_server.
+TARGET_MARKS = {"ok": "✓", "attention": "⚠", "failed": "✗"}
+
+
+def target_mark(status: str) -> str:
+    """The mark for a target state; unknown states read as failure rather
+    than silently rendering as fine."""
+    return TARGET_MARKS.get(status, "✗")
 
 
 class ActionItem(BaseModel):
@@ -189,6 +211,10 @@ class OvernightReport(BaseModel):
     digest_path: str
     processed: int
     failed: int
+    #: Targets needing operator action rather than repair (#473). Separate
+    #: from `failed` because the summary line reports them separately and
+    #: because only `failed` may influence exit status.
+    needs_attention: int = 0
     targets: list[OvernightTarget] = Field(default_factory=list)
     actions: list[ActionItem] = Field(default_factory=list)
 
@@ -513,6 +539,14 @@ def _company_deep(
         target.lines.append(f"themes refreshed: {len(themes.card.stances)} stances")
     except ModelConfigError as exc:
         target.lines.append(f"themes skipped: {exc}")
+    except IngestError as exc:
+        # "nothing in the workspace is attributable to X" — the company was
+        # followed, but no writing has been attributed to it yet. That is
+        # setup the operator still owes, not a break (#473). Never downgrade
+        # a target that has already failed for a real reason.
+        if target.status == "ok":
+            target.status = "attention"
+        target.lines.append(f"themes needs attention: {exc}")
     except Exception as exc:  # noqa: BLE001 — every failure is reported, none is fatal
         target.status = "failed"
         target.lines.append(f"themes failed: {exc}")
@@ -687,17 +721,20 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     actions = actions[:_MAX_ACTIONS]
 
     failed = sum(1 for target in targets if target.status == "failed")
+    attention = sum(1 for target in targets if target.status == "attention")
     now = datetime.now(UTC)
+    # Counted separately in the sentence a reader sees first: "7 with
+    # failures" every night for a week is what taught them to skip it.
+    tally = f"{len(targets)} targets processed, {failed} failed"
+    if attention:
+        tally += f", {attention} need attention"
     lines = [
         f"# Overnight digest — {now.date().isoformat()}",
         "",
-        (
-            f"{len(targets)} targets processed, {failed} with failures. "
-            f"Generated {now.strftime('%Y-%m-%d %H:%M UTC')}."
-        ),
+        f"{tally}. Generated {now.strftime('%Y-%m-%d %H:%M UTC')}.",
     ]
     for target in targets:
-        marker = "✓" if target.status == "ok" else "✗"
+        marker = target_mark(target.status)
         lines.extend(["", f"## {marker} {target.name} ({target.kind})", ""])
         lines.extend(f"- {entry}" for entry in target.lines)
     suggestion_lines = _suggestions(storage, companies)
@@ -742,11 +779,18 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     html_content = render_digest_html(now, targets, actions, suppressed, suggestion_lines)
     digest_path.with_suffix(".html").write_text(html_content, encoding="utf-8")
     (digest_dir / "latest.html").write_text(html_content, encoding="utf-8")
-    _logger.info("overnight targets=%d failed=%d digest=%s", len(targets), failed, digest_path)
+    _logger.info(
+        "overnight targets=%d failed=%d attention=%d digest=%s",
+        len(targets),
+        failed,
+        attention,
+        digest_path,
+    )
     return OvernightReport(
         digest_path=str(digest_path),
         processed=len(targets),
         failed=failed,
+        needs_attention=attention,
         targets=targets,
         actions=actions,
     )

@@ -70,7 +70,7 @@ def test_overnight_completes_despite_failed_targets(
     # Succeeding quietly would be the opposite error: the failures still have
     # to be legible to whoever reads the journal in the morning.
     assert "✗ OpenAI (company)" in result.output
-    assert "3 targets, 2 with failures" in result.output
+    assert "3 targets, 2 failed" in result.output
 
 
 def test_overnight_strict_still_exits_nonzero(
@@ -89,7 +89,7 @@ def test_overnight_strict_still_exits_nonzero(
     result = runner.invoke(app, ["overnight", "--no-drive", "--strict"])
 
     assert result.exit_code == 1, result.output
-    assert "3 targets, 2 with failures" in result.output
+    assert "3 targets, 2 failed" in result.output
 
 
 def test_overnight_still_fails_when_the_run_itself_cannot_complete(
