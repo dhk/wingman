@@ -3,6 +3,12 @@
 Entirely deterministic — no model calls. Files (Markdown, plain text, HTML,
 or a Substack-style export zip of HTML posts) become immutable SourceRecords
 plus CorpusDocuments indexed for full-text search (RFC-007).
+
+The records are immutable; the POOL of documents they back is not (RFC-078).
+Re-adding an edited piece supersedes the version it replaces through ordinary
+RFC-028 lineage, and `remove_from_corpus` takes one out of the pool
+altogether — because a person's own writing evolves, and a store with no
+drain makes every correction an addition.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ from pydantic import BaseModel, Field
 from wingman.application.ingest import IngestError
 from wingman.domain import SourceRecord
 from wingman.domain.corpus import CorpusDocument, EvidenceHit
+from wingman.domain.source_record import derive_document_key
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -39,6 +46,8 @@ class FileFailure(BaseModel):
 class CorpusAddReport(BaseModel):
     added: int
     skipped_duplicates: int
+    # Earlier versions of the documents just added, dropped from the pool.
+    replaced: int = 0
     skipped_unsupported: list[str] = Field(default_factory=list)
     failures: list[FileFailure] = Field(default_factory=list)
     titles: list[str] = Field(default_factory=list)
@@ -214,10 +223,25 @@ def _iter_inputs(path: Path) -> tuple[list[_Candidate], list[str], list[FileFail
 def add_to_corpus(
     path: Path, source_type: str, config: Config, storage: Storage
 ) -> CorpusAddReport:
+    """Ingest writing, superseding the versions it replaces (RFC-007, RFC-078).
+
+    Each document carries the RFC-028 `document_key` its filename implies —
+    the stamp every other ingest path already writes — so re-adding an
+    edited essay drops the earlier version's document from the pool instead
+    of leaving both to be quoted against each other. The records and the
+    archived bytes stay; it is the searchable pool that gets the correction.
+
+    Documents added in the SAME run never supersede each other. Two files
+    sharing a basename in one directory are two documents, and a single
+    `corpus add <dir>` that silently kept one of them would be the worst
+    possible reading of "latest version wins".
+    """
     supported, unsupported, failures = _iter_inputs(path)
     added = 0
     skipped = 0
+    replaced = 0
     titles: list[str] = []
+    batch_record_ids: set[str] = set()
     for candidate in supported:
         name, raw = candidate.name, candidate.raw
         if not raw.strip():
@@ -232,6 +256,7 @@ def add_to_corpus(
             failures.append(FileFailure(name=name, reason="no text could be extracted"))
             continue
         content_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        document_key = derive_document_key(name)
         record = storage.get_source_record_by_hash(content_hash)
         if record is not None and storage.find_corpus_document_by_source(record.record_id):
             skipped += 1
@@ -246,8 +271,10 @@ def add_to_corpus(
                 if stored.is_relative_to(config.data_dir.resolve())
                 else str(stored),
                 content_hash=content_hash,
+                document_key=document_key,
             )
             storage.add_source_record(record)
+        batch_record_ids.add(record.record_id)
         document = CorpusDocument(
             source_record_id=record.record_id,
             source_type=source_type,
@@ -258,11 +285,16 @@ def add_to_corpus(
         storage.add_corpus_document(document, body)
         added += 1
         titles.append(title)
+        replaced += storage.delete_corpus_documents_for_records(
+            storage.record_ids_for_document(document_key) - batch_record_ids
+        )
     _logger.info(
-        "corpus_add path=%s source_type=%s added=%d skipped=%d unsupported=%d failures=%d",
+        "corpus_add path=%s source_type=%s added=%d replaced=%d skipped=%d unsupported=%d"
+        " failures=%d",
         path,
         source_type,
         added,
+        replaced,
         skipped,
         len(unsupported),
         len(failures),
@@ -270,6 +302,7 @@ def add_to_corpus(
     return CorpusAddReport(
         added=added,
         skipped_duplicates=skipped,
+        replaced=replaced,
         skipped_unsupported=unsupported,
         failures=failures,
         titles=titles,
@@ -289,3 +322,47 @@ def find_evidence(query: str, storage: Storage, limit: int = 10) -> list[Evidenc
             )
         )
     return hits
+
+
+def find_document(doc_id_prefix: str, storage: Storage) -> CorpusDocument:
+    """Resolve a corpus document by id or unambiguous prefix."""
+    prefix = doc_id_prefix.strip()
+    if not prefix:
+        raise IngestError("document id is empty; see 'wingman corpus list' for ids.")
+    matches = [doc for doc in storage.list_corpus_documents() if doc.doc_id.startswith(prefix)]
+    if not matches:
+        raise IngestError(f"no corpus document with id {prefix!r}; see 'wingman corpus list'.")
+    if len(matches) > 1:
+        shorts = ", ".join(doc.doc_id[:8] for doc in matches)
+        raise IngestError(f"id {prefix!r} is ambiguous ({shorts}); use more characters.")
+    return matches[0]
+
+
+def remove_from_corpus(doc_id_prefix: str, storage: Storage) -> CorpusDocument:
+    """Take one document out of the pool: it stops being quotable (RFC-078).
+
+    The drain the corpus never had. Its SourceRecord and the bytes archived
+    in the inbox stay — the ingest happened, and rewriting that would be
+    forging the past rather than recording a change to it — but nothing can
+    cite the document again: the row, its full-text index entry and its
+    embedding all go. A stance or brief written earlier that quoted it keeps
+    its own stored text; this is not a retraction of what was already said.
+    """
+    document = find_document(doc_id_prefix, storage)
+    storage.delete_corpus_document(document.doc_id)
+    _logger.info(
+        "corpus_removed doc_id=%s source_record_id=%s title=%r",
+        document.doc_id,
+        document.source_record_id,
+        document.title,
+    )
+    return document
+
+
+def describe_document(document: CorpusDocument) -> str:
+    """One line: what a surface echoes back before or after touching a document."""
+    when = document.published_at.date().isoformat() if document.published_at else "undated"
+    return (
+        f"[{document.doc_id[:8]}] {document.title} — {document.source_type}, {when}, "
+        f"{document.word_count} words"
+    )

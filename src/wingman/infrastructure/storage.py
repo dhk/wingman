@@ -281,6 +281,7 @@ class Storage:
         self._conn = sqlite3.connect(db_path)
         self._conn.executescript(_SCHEMA)
         self._migrate_document_key()
+        self._migrate_corpus_document_key()
         self._migrate_value_profile_view()
         self._conn.commit()
 
@@ -298,6 +299,30 @@ class Storage:
             "ALTER TABLE source_records ADD COLUMN document_key TEXT NOT NULL DEFAULT ''"
         )
         rows = self._conn.execute("SELECT record_id, source_locator FROM source_records").fetchall()
+        for record_id, locator in rows:
+            self._conn.execute(
+                "UPDATE source_records SET document_key = ? WHERE record_id = ?",
+                (derive_document_key(locator), record_id),
+            )
+
+    def _migrate_corpus_document_key(self) -> None:
+        """Corpus source records predating RFC-078 carry no document_key: backfill.
+
+        Every other ingest path stamped one; `corpus add` never did, so the
+        records behind the user's own writing are the one set with no
+        lineage. The derivation is the locator's basename — what
+        `_migrate_document_key` uses, and what `add_to_corpus` now writes —
+        so a re-add of an essay ingested before this change supersedes it
+        instead of landing beside it. Scoped to records that actually back a
+        corpus document: an empty key means "unknown or inapplicable"
+        elsewhere (`persona_carveoff` sets it deliberately), and inventing
+        lineage for those is not this migration's business.
+        """
+        rows = self._conn.execute(
+            "SELECT record_id, source_locator FROM source_records"
+            " WHERE document_key = ''"
+            " AND record_id IN (SELECT source_record_id FROM corpus_documents)"
+        ).fetchall()
         for record_id, locator in rows:
             self._conn.execute(
                 "UPDATE source_records SET document_key = ? WHERE record_id = ?",
@@ -616,6 +641,45 @@ class Storage:
         cursor = self._conn.execute("SELECT COUNT(*) FROM corpus_documents")
         count: int = cursor.fetchone()[0]
         return count
+
+    def get_corpus_document(self, doc_id: str) -> CorpusDocument | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM corpus_documents WHERE doc_id = ?", (doc_id,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return CorpusDocument.model_validate_json(row[0]) if row else None
+
+    def delete_corpus_document(self, doc_id: str) -> bool:
+        """Drop one document from the pool: its text, its index, its embedding.
+
+        The SourceRecord and the archived bytes in the inbox stay. "Stop
+        quoting this" is not "this was never ingested", and the record is
+        insert-only provenance either way.
+        """
+        cursor = self._conn.execute("DELETE FROM corpus_documents WHERE doc_id = ?", (doc_id,))
+        self._conn.execute("DELETE FROM corpus_fts WHERE doc_id = ?", (doc_id,))
+        self._conn.execute("DELETE FROM embeddings WHERE doc_id = ?", (doc_id,))
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_corpus_documents_for_records(self, source_record_ids: Iterable[str]) -> int:
+        """Drop the documents derived from these source records; return how many.
+
+        The corpus-side twin of `delete_external_documents_for_records`, and
+        it exists for the same RFC-028 reason: when a newer version of the
+        same document arrives, the older version's derived document is
+        replaced rather than left in the pool to be quoted alongside its own
+        successor. That the user's own writing was the last store without
+        this is RFC-078's subject.
+        """
+        removed = 0
+        for record_id in source_record_ids:
+            document = self.find_corpus_document_by_source(record_id)
+            if document is None:
+                continue
+            if self.delete_corpus_document(document.doc_id):
+                removed += 1
+        return removed
 
     def add_person(self, person: Person) -> None:
         try:

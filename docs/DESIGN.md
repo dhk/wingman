@@ -67,7 +67,7 @@ Entities:
 - **CareerProfile** — the canonical profile: achievements, skills, roles, each carrying evidence references to source records.
 - **Company** — researched company facts and signals, each labeled fact / inference / hypothesis.
 - **Opportunity** — a role under consideration: extracted requirements, fit assessment, status, next action.
-- **CorpusDocument** — one document of the user's own writing (essay, README, export entry), backed by a SourceRecord and indexed for full-text search (RFC-007); the unit of quotation for drafting and evidence lookup.
+- **CorpusDocument** — one document of the user's own writing (essay, README, export entry), backed by a SourceRecord and indexed for full-text search (RFC-007); the unit of quotation for drafting and evidence lookup. The record behind it is immutable, but the pool is not: re-adding an edited document supersedes the version it replaces through RFC-028 lineage, and `corpus remove` takes one out of the pool entirely — the record and the archived bytes stay either way (RFC-078).
 - **Person** and **Interaction** — relationship records built from explicit imports.
 - **ExternalDocument** — one stored post of a watched person's public writing (or an org-attributed feed's), the unit of quotation for POV validation; kept strictly separate from news mentions about a person (RFC-014).
 - **PovCard** — validated stances (verbatim quote + source doc each, dimensioned values/attitude/technical/strategy) for a person, the user's corpus (`__corpus__`), or a company's document pool (`__company__<key>`, RFC-016).

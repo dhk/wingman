@@ -1762,9 +1762,15 @@ def corpus_add(
         typer.echo(f"corpus add failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(
-        f"Added: {report.added}  Duplicates skipped: {report.skipped_duplicates}  "
+        f"Added: {report.added}  Replaced: {report.replaced}  "
+        f"Duplicates skipped: {report.skipped_duplicates}  "
         f"Unsupported: {len(report.skipped_unsupported)}  Failures: {len(report.failures)}"
     )
+    if report.replaced:
+        typer.echo(
+            f"  {report.replaced} earlier version(s) of the same document left the corpus; "
+            "their source records and archived files stay."
+        )
     for title in report.titles:
         typer.echo(f"  + {title}")
     for failure in report.failures:
@@ -1788,6 +1794,29 @@ def corpus_list() -> None:
             f"{document.doc_id}  [{document.source_type}]  {when}  {document.title}"
             f"  ({document.word_count} words)"
         )
+
+
+@corpus_app.command("remove")
+def corpus_remove(
+    doc_id: str = typer.Argument(..., help="Document id (or a prefix), from 'corpus list'."),
+) -> None:
+    """Take one document out of the corpus so nothing can quote it (RFC-078)."""
+    configure_logging()
+    from wingman.application.corpus import describe_document, remove_from_corpus
+
+    config = load_config()
+    _require_workspace(config, "removed")
+    try:
+        with Storage(config.db_path) as storage:
+            removed = remove_from_corpus(doc_id, storage)
+    except IngestError as exc:
+        typer.echo(f"corpus remove failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Removed {describe_document(removed)}")
+    typer.echo(
+        "It is out of evidence search, similarity and every stance built from now on. "
+        "Its source record and the archived file stay — the ingest still happened."
+    )
 
 
 @people_app.command("add")

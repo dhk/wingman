@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from wingman.application.corpus import add_to_corpus, find_evidence
+from wingman.application.corpus import add_to_corpus, find_evidence, remove_from_corpus
 from wingman.application.ingest import IngestError
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.storage import CorpusSearchError, Storage
@@ -149,3 +149,102 @@ def test_empty_file_reported_not_stored(workspace: Config, tmp_path: Path) -> No
         assert report.added == 0
         assert [f.reason for f in report.failures] == ["file is empty"]
         assert storage.count_source_records() == 0
+
+
+# RFC-078: the corpus is the user's own writing, and their own writing evolves.
+
+
+def test_edited_essay_supersedes_the_version_it_replaces(workspace: Config, tmp_path: Path) -> None:
+    essay = tmp_path / "essay.md"
+    essay.write_text(ESSAY, encoding="utf-8")
+    with Storage(workspace.db_path) as storage:
+        add_to_corpus(essay, "writing", workspace, storage)
+        essay.write_text(
+            ESSAY.replace("Apache Kafka", "Redpanda").replace("24 hours", "36 hours"),
+            encoding="utf-8",
+        )
+        report = add_to_corpus(essay, "writing", workspace, storage)
+
+        assert report.added == 1
+        assert report.replaced == 1
+        # One document in the pool, both records kept: the ingests both happened.
+        assert storage.count_corpus_documents() == 1
+        assert storage.count_source_records() == 2
+        # The superseded wording is no longer quotable...
+        assert find_evidence("kafka", storage) == []
+        # ...and the current one is.
+        hits = find_evidence("redpanda", storage)
+        assert len(hits) == 1
+        assert "36 hours" in hits[0].snippet
+    # The archived bytes of both versions stay on disk.
+    assert len(list(workspace.inbox_dir.iterdir())) == 2
+
+
+def test_one_add_never_supersedes_its_own_siblings(workspace: Config, tmp_path: Path) -> None:
+    """Two files sharing a basename in one tree are two documents, not one lineage."""
+    root = tmp_path / "writing"
+    (root / "billing").mkdir(parents=True)
+    (root / "wingman").mkdir(parents=True)
+    (root / "billing" / "README.md").write_text(ESSAY, encoding="utf-8")
+    (root / "wingman" / "README.md").write_text(README, encoding="utf-8")
+    with Storage(workspace.db_path) as storage:
+        report = add_to_corpus(root, "writing", workspace, storage)
+        assert (report.added, report.replaced) == (2, 0)
+        assert storage.count_corpus_documents() == 2
+        assert len(find_evidence("kafka", storage)) == 1
+        assert len(find_evidence("python", storage)) == 1
+
+
+def test_remove_takes_a_document_out_of_the_pool_and_keeps_the_record(
+    workspace: Config, tmp_path: Path
+) -> None:
+    essay = tmp_path / "essay.md"
+    essay.write_text(ESSAY, encoding="utf-8")
+    with Storage(workspace.db_path) as storage:
+        add_to_corpus(essay, "writing", workspace, storage)
+        document = storage.list_corpus_documents()[0]
+        storage.upsert_embedding(document.doc_id, "corpus", "voyage", "v1", [0.1, 0.2])
+
+        removed = remove_from_corpus(document.doc_id[:8], storage)
+
+        assert removed.doc_id == document.doc_id
+        assert storage.count_corpus_documents() == 0
+        assert find_evidence("kafka", storage) == []
+        assert storage.get_embedding(document.doc_id) is None
+        # Insert-only provenance: the record and the archived file survive.
+        assert storage.count_source_records() == 1
+        record = storage.get_source_record(document.source_record_id)
+        assert record is not None
+        assert (workspace.data_dir / record.source_locator).read_text(encoding="utf-8") == ESSAY
+
+
+def test_remove_reports_an_unknown_or_ambiguous_id(workspace: Config, tmp_path: Path) -> None:
+    essay = tmp_path / "essay.md"
+    essay.write_text(ESSAY, encoding="utf-8")
+    with Storage(workspace.db_path) as storage:
+        add_to_corpus(essay, "writing", workspace, storage)
+        with pytest.raises(IngestError, match="no corpus document"):
+            remove_from_corpus("deadbeef", storage)
+        with pytest.raises(IngestError, match="document id is empty"):
+            remove_from_corpus("  ", storage)
+
+
+def test_pre_rfc078_records_gain_lineage_on_open(workspace: Config, tmp_path: Path) -> None:
+    """A corpus ingested before this change is still supersedable afterwards."""
+    essay = tmp_path / "essay.md"
+    essay.write_text(ESSAY, encoding="utf-8")
+    with Storage(workspace.db_path) as storage:
+        add_to_corpus(essay, "writing", workspace, storage)
+        record_id = storage.list_corpus_documents()[0].source_record_id
+        # Put the record back the way `corpus add` used to leave it.
+        storage._conn.execute(  # noqa: SLF001 — simulating an older database
+            "UPDATE source_records SET document_key = '' WHERE record_id = ?", (record_id,)
+        )
+        storage._conn.commit()  # noqa: SLF001
+
+    with Storage(workspace.db_path) as storage:
+        assert storage.get_source_record(record_id).document_key == "essay.md"
+        essay.write_text(ESSAY.replace("Apache Kafka", "Redpanda"), encoding="utf-8")
+        report = add_to_corpus(essay, "writing", workspace, storage)
+        assert (report.added, report.replaced) == (1, 1)
+        assert storage.count_corpus_documents() == 1

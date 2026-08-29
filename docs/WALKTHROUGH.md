@@ -125,6 +125,12 @@ wingman corpus add substack-export.zip --source-type substack_post
 wingman evidence "a topic you write about"    # cited quotes back, instantly
 ```
 
+Your writing keeps moving, so the corpus does too. Re-add an edited file and
+the version it replaces leaves the pool by itself; `wingman corpus list` and
+`wingman corpus remove <id>` take out anything you would rather nothing
+quoted. Both keep the source record and the archived file — the ingest
+happened — they just stop the text being cited again (RFC-078).
+
 ## Step 7 — Add people
 
 Pick someone you actually read and might want to reach:

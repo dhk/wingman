@@ -36,6 +36,7 @@ def test_all_tools_are_registered() -> None:
     assert tools == {
         "status",
         "evidence",
+        "corpus",
         "career_profile",
         "completeness",
         "gap_map",

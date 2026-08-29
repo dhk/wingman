@@ -358,6 +358,62 @@ def evidence(query: str, limit: int = 10) -> str:
 
 
 @server.tool()
+def corpus(action: str = "list", doc_id: str = "") -> str:
+    """The user's own writing, and the drain it needs (RFC-078).
+
+    action is 'list' (every document the corpus can quote, newest ids
+    shown as prefixes) or 'remove' (`doc_id`, a prefix from 'list').
+
+    Removal takes one document out of the pool: `evidence`, `search`,
+    similarity and every stance built afterwards stop seeing it. Its
+    SourceRecord and the file archived in the inbox stay, because the
+    ingest happened and the record is provenance, not content. Anything
+    already written that quoted the document keeps its own stored text —
+    this is not a retraction of what was said, it is the document no
+    longer being available to say it again.
+
+    Why this exists: a person's own writing evolves. An essay they have
+    since rewritten, a note that was wrong, a draft that was never meant
+    to be evidence — before this there was no way out, and every
+    correction could only be an addition, leaving both versions in the
+    pool to be quoted against each other. Superseding by re-add is the
+    other half: `wingman corpus add <path>` (CLI only — it takes a
+    filesystem path or a zip export) now drops the earlier version of the
+    same document by itself, so ask whether the user has an edited file
+    to add BEFORE reaching for remove.
+
+    Protocol — confirm before removing, the same shape as every
+    destructive act here: echo the exact document ('list' gives you the
+    line — title, source type, date, word count), say what removal does
+    and does not undo, and call remove only after the user says yes.
+    Never remove a document on your own reading of what looks stale, and
+    never remove more than the one they named.
+    """
+    from wingman.application.corpus import describe_document, remove_from_corpus
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "list":
+                documents = storage.list_corpus_documents()
+                if not documents:
+                    return "Corpus is empty — add writing with 'wingman corpus add <path>'."
+                return "\n".join(describe_document(document) for document in documents)
+            if action == "remove":
+                removed = remove_from_corpus(doc_id, storage)
+                return (
+                    f"Removed {describe_document(removed)}\n"
+                    "Out of evidence search, similarity and every stance built from now on. "
+                    "Its source record and the archived file stay — the ingest still happened."
+                )
+    except IngestError as exc:
+        return f"corpus {action} failed: {exc}"
+    return f"unknown action {action!r}; use list or remove."
+
+
+@server.tool()
 def career_profile() -> str:
     """Return the current cited career profile (career.md), including roles, achievements, skills, and testimonials with their evidence."""
     config = _ready_config()
