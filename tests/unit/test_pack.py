@@ -19,6 +19,7 @@ from wingman.domain.pov import PovCard, Stance, StanceDimension
 from wingman.domain.profile import (
     ClaimClassification,
     EvidenceSpan,
+    ItemStatus,
     ProfileItem,
     ProfileItemKind,
 )
@@ -71,7 +72,7 @@ def test_fetch_job_posting_fails_visibly(workspace: Path) -> None:
         fetch_job_posting("https://acme.example.com/jobs", config, fetcher=boom)
 
 
-def _seed_opportunity(storage: Storage) -> None:
+def _seed_opportunity(storage: Storage) -> ProfileItem:
     item = ProfileItem(
         kind=ProfileItemKind.ACHIEVEMENT,
         name="Kafka migration",
@@ -115,6 +116,7 @@ def _seed_opportunity(storage: Storage) -> None:
             ],
         )
     )
+    return item
 
 
 def test_pack_composes_fit_fodder_and_company(workspace: Path) -> None:
@@ -170,6 +172,43 @@ def test_pack_errors_are_actionable(workspace: Path) -> None:
         # unknown company: pack still builds, says how to attach intelligence
         report = build_application_pack("staff mle", config, storage, company="Nowhere Co")
         assert "no synthesized themes yet" in report.markdown
+
+
+def test_pack_refuses_when_cited_evidence_is_superseded(workspace: Path) -> None:
+    """#490: a correction landing after the assessment ran must not let pack
+    silently compose from the stale (or now-removed) evidence it cited."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        item = _seed_opportunity(storage)
+        storage.update_profile_item(item.model_copy(update={"status": ItemStatus.SUPERSEDED}))
+        with pytest.raises(IngestError, match="Streaming pipelines"):
+            build_application_pack("staff mle", config, storage)
+        with pytest.raises(IngestError, match="re-run 'wingman assess'"):
+            build_application_pack("staff mle", config, storage)
+
+
+def test_pack_refuses_when_cited_evidence_is_deleted(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        item = _seed_opportunity(storage)
+        storage.delete_profile_item(item.item_id)
+        with pytest.raises(IngestError, match="Streaming pipelines"):
+            build_application_pack("staff mle", config, storage)
+
+
+def test_pack_timestamps_are_minute_granularity(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _seed_opportunity(storage)
+        report = build_application_pack("staff mle", config, storage)
+    # a bare date (no time) would mean two packs generated hours apart in
+    # the same working session are indistinguishable in the header (#490)
+    header = next(line for line in report.markdown.splitlines() if line.startswith("Generated "))
+    assert "assessed " in header
+    # 'Generated <date>T<time> · assessed <date>T<time> · next action: ...'
+    # -- both timestamps carry a time-of-day component, not just a date
+    assert header.split(" · ")[0].count(":") >= 1
+    assert header.split(" · ")[1].count(":") >= 1
 
 
 def test_fetch_job_posting_rejects_error_redirect(

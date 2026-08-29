@@ -20,7 +20,8 @@ from pydantic import BaseModel
 from wingman.application.ingest import IngestError
 from wingman.application.pov import company_card_id
 from wingman.application.similarity import company_key, infer_company_from_title
-from wingman.domain.opportunity import FitVerdict, Opportunity
+from wingman.domain.opportunity import FitVerdict, Opportunity, Requirement
+from wingman.domain.profile import ItemStatus, ProfileItem
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
@@ -45,6 +46,29 @@ class PackReport(BaseModel):
 def _slug(text: str) -> str:
     cleaned = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return cleaned[:60] or "pack"
+
+
+def _stale_citations(
+    opportunity: Opportunity, items: dict[str, ProfileItem], requirements: dict[str, Requirement]
+) -> list[str]:
+    """Requirement names whose cited evidence no longer resolves to an
+    ACTIVE profile item — superseded (a correction landed since this
+    assessment ran) or deleted outright (#490). A pack quoting stale or
+    gone evidence into a document going to an employer, with nothing
+    saying so, is exactly the "polished fiction" AGENTS.md invariant 9
+    rules out — this is the check that makes refusing possible instead
+    of silently composing from it."""
+    stale: list[str] = []
+    for assessment in opportunity.assessments:
+        requirement = requirements.get(assessment.requirement_id)
+        if requirement is None or not assessment.evidence_item_ids:
+            continue
+        for item_id in assessment.evidence_item_ids:
+            item = items.get(item_id)
+            if item is None or item.status is not ItemStatus.ACTIVE:
+                stale.append(requirement.name)
+                break
+    return stale
 
 
 def _find_opportunity(query: str, storage: Storage) -> Opportunity:
@@ -76,12 +100,28 @@ def build_application_pack(
     requirements = {req.requirement_id: req for req in opportunity.requirements}
     now = datetime.now(UTC)
 
+    # Refuse rather than silently compose from stale evidence (#490): a
+    # correction landed since this assessment ran (the cited item was
+    # superseded) or an item was deleted outright. Either way the stored
+    # verdict counts and cited quotes no longer reflect the current
+    # profile, and the pack is a document going to an employer — the
+    # AGENTS.md invariant 9 case, refuse rather than warn.
+    stale = _stale_citations(opportunity, items, requirements)
+    if stale:
+        named = ", ".join(sorted(set(stale)))
+        raise IngestError(
+            f"the assessment for {opportunity.title!r} cites evidence that's since been "
+            f"superseded or removed ({named}) — re-run 'wingman assess' for this role "
+            "before packing, so the pack reflects the current profile."
+        )
+
     lines = [
         f"# Application pack: {opportunity.title}",
         "",
         (
-            f"Generated {now.date().isoformat()} · assessed "
-            f"{opportunity.created_at.date().isoformat()} · next action: {opportunity.next_action}"
+            f"Generated {now.isoformat(timespec='minutes')} · assessed "
+            f"{opportunity.created_at.isoformat(timespec='minutes')} · "
+            f"next action: {opportunity.next_action}"
         ),
         "",
         "## Fit, requirement by requirement",
