@@ -4,12 +4,19 @@ from pathlib import Path
 
 import pytest
 
+import wingman.application.people as people_module
 from wingman.application.ingest import IngestError
 from wingman.application.people import add_person, fetch_person_feed
 from wingman.application.similarity import embed_missing, people_like, similar_people
 from wingman.infrastructure.config import load_config
 from wingman.infrastructure.storage import Storage
 from wingman.providers.embeddings import HashedEmbeddingProvider
+
+# add_person now verifies a passed substack_url's feed before storing it
+# (#483) -- a minimal valid feed so the workspace fixture's blanket patch
+# lets that verification pass; add_writer's own fetch_person_feed call
+# still supplies the real per-test content via its explicit fetcher.
+_VALID_FEED = b'<?xml version="1.0"?><rss version="2.0"><channel><title>t</title></channel></rss>'
 
 FEED_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
@@ -31,6 +38,7 @@ def feed(title: str, slug: str, body: str) -> bytes:
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: _VALID_FEED)
     config = load_config()
     for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
         directory.mkdir(parents=True)

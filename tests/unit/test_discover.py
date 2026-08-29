@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import wingman.application.people as people_module
 from wingman.application.people import (
     add_person,
     discover_recommendations,
@@ -20,6 +21,11 @@ PAGE_TEMPLATE = """<html><body>
 </body></html>
 """
 
+# add_person now verifies a passed substack_url's feed before storing it
+# (#483) -- a minimal valid feed so that verification passes; these tests
+# are about discover_recommendations, not feed content.
+VALID_FEED = b'<?xml version="1.0"?><rss version="2.0"><channel><title>t</title></channel></rss>'
+
 
 def page(*publications: str) -> bytes:
     links = "\n".join(f'<a href="https://{pub}.substack.com/">{pub}</a>' for pub in publications)
@@ -29,6 +35,7 @@ def page(*publications: str) -> bytes:
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: VALID_FEED)
     config = load_config()
     for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
         directory.mkdir(parents=True)

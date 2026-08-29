@@ -64,12 +64,15 @@ def seed_demo_watchlist(storage: Storage) -> tuple[DemoSeedReport, list[Person]]
     Intended for the isolated demo workspace: re-seeding upserts the demo
     entries in place (add_person updates a person whose name already exists),
     which is why the demo never runs against the user's real workspace.
+    strict=False: a demo publication's feed being temporarily unreachable
+    shouldn't drop them from the watchlist outright — the demo's own next
+    step (fetching) already discovers and reports that gracefully (#483).
     """
     added = 0
     already = 0
     people: list[Person] = []
     for name, url in DEMO_WATCHLIST:
-        person, created = add_person(name, storage, substack_url=url)
+        person, created = add_person(name, storage, substack_url=url, strict=False)
         people.append(person)
         added += int(created)
         already += int(not created)

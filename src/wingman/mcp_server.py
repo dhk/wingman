@@ -2928,7 +2928,12 @@ def people_add(
     email: str = "",
 ) -> str:
     """Add a person to the watchlist (or update them), optionally with their Substack URL,
-    LinkedIn URL, and email (manual entry only — imports never read emails)."""
+    LinkedIn URL, and email (manual entry only — imports never read emails).
+
+    substack_url is for a Substack blog specifically — its feed is verified at
+    <url>/feed before being stored, and the call fails loudly (nothing is written) if
+    that isn't a real, fetchable feed. For any other blog, use feed_attach (or
+    feed_discover first to find its real feed URL) instead of guessing here."""
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED

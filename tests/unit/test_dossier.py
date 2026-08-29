@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import wingman.application.people as people_module
 from wingman.application.corpus import add_to_corpus
 from wingman.application.dossier import DossierReport, build_company_dossier
 from wingman.application.ingest import IngestError
@@ -41,6 +42,17 @@ class ScriptedProvider:
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
+    # add_person verifies a passed substack_url's feed before storing it
+    # (#483) -- a default valid feed so that verification never hits the
+    # real network; tests that care about specific feed content patch
+    # fetch_url again afterward.
+    monkeypatch.setattr(
+        people_module,
+        "fetch_url",
+        lambda url: (
+            b'<?xml version="1.0"?><rss version="2.0"><channel><title>t</title></channel></rss>'
+        ),
+    )
     config = load_config()
     for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
         directory.mkdir(parents=True)
