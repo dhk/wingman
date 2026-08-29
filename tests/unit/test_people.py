@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import wingman.application.people as people_module
 from wingman.application.ingest import IngestError
 from wingman.application.people import (
     add_person,
@@ -18,6 +19,7 @@ from wingman.application.people import (
 )
 from wingman.domain.person import PersonOrigin
 from wingman.infrastructure.config import load_config
+from wingman.infrastructure.fetch import FetchError
 from wingman.infrastructure.storage import Storage
 
 RSS_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -48,6 +50,11 @@ RSS_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
+    # add_person verifies a passed substack_url's feed before storing it
+    # (#483) -- a default valid feed so that verification never hits the
+    # real network; tests that care about specific feed content patch
+    # fetch_url again afterward.
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
     config = load_config()
     for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
         directory.mkdir(parents=True)
@@ -87,6 +94,56 @@ def test_add_person_rejects_non_https_feed(workspace: Path) -> None:
     with Storage(config.db_path) as storage:
         with pytest.raises(IngestError, match="https://"):
             add_person("Jane", storage, substack_url="http://example.substack.com")
+
+
+def test_add_person_rejects_a_substack_url_whose_feed_404s(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#483: a blog that isn't actually a Substack (its /feed 404s) must be
+    rejected at write time, not silently stored and discovered dead hours
+    later at overnight-fetch time."""
+
+    def not_found(url: str) -> bytes:
+        raise FetchError(f"HTTP Error 404: Not Found ({url})")
+
+    monkeypatch.setattr(people_module, "fetch_url", not_found)
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        with pytest.raises(IngestError, match="add-feed"):
+            add_person("Peter Hazlehurst", storage, substack_url="https://www.synctera.com/blog")
+        assert storage.find_person_by_name_key("peter hazlehurst") is None
+
+
+def test_add_person_rejects_a_substack_url_whose_feed_is_not_xml(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A feed URL that fetches fine but isn't RSS/Atom (e.g. a JS app's
+    index.html served at /feed) is rejected the same way as a 404."""
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: b"<html>not a feed</html>")
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        with pytest.raises(IngestError, match="doesn't look like RSS/Atom"):
+            add_person("Someone", storage, substack_url="https://someone.example.com")
+        assert storage.find_person_by_name_key("someone") is None
+
+
+def test_add_person_strict_false_stores_despite_unverifiable_feed(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The narrow escape hatch demo seeding uses: store anyway when the
+    caller's own next step already discovers and reports the failure."""
+
+    def not_found(url: str) -> bytes:
+        raise FetchError("HTTP Error 404: Not Found")
+
+    monkeypatch.setattr(people_module, "fetch_url", not_found)
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person, created = add_person(
+            "Someone", storage, substack_url="https://someone.example.com", strict=False
+        )
+        assert created
+        assert person.substack_url == "https://someone.example.com"
 
 
 def test_seed_from_connections_keeps_names_never_emails(workspace: Path, tmp_path: Path) -> None:
@@ -166,12 +223,20 @@ def test_fetch_person_feed_indexes_new_posts(workspace: Path) -> None:
         assert again.skipped_duplicates == 2
 
 
-def test_fetch_requires_feed_url_and_valid_xml(workspace: Path) -> None:
+def test_fetch_requires_feed_url_and_valid_xml(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
         person, _ = add_person("No Feed", storage)
         with pytest.raises(IngestError, match="no sources"):
             fetch_person_feed(person, config, storage, fetcher=lambda url: b"")
+        # add_person verifies a substack_url's feed before storing it
+        # (#483) -- give it a real feed for the add, then test the
+        # separate fetch_person_feed call against bad content.
+        import wingman.application.people as people_module
+
+        monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
         watched, _ = add_person("Bad Feed", storage, substack_url="https://bad.substack.com")
         with pytest.raises(IngestError, match="not parseable"):
             fetch_person_feed(watched, config, storage, fetcher=lambda url: b"<html>nope")

@@ -1794,7 +1794,10 @@ def corpus_list() -> None:
 def people_add(
     name: str = typer.Argument(..., help="The person's name."),
     substack: str | None = typer.Option(
-        None, "--substack", help="Their public Substack URL, e.g. https://example.substack.com"
+        None,
+        "--substack",
+        help="Their Substack URL, e.g. https://example.substack.com — verified against "
+        "<url>/feed before it's stored. For any other blog, use 'people add-feed' instead.",
     ),
     company: str | None = typer.Option(None, "--company", help="Where they work."),
     position: str | None = typer.Option(None, "--position", help="What they do."),

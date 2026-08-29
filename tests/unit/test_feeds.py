@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import wingman.application.people as people_module
 from wingman.application.ingest import IngestError
 from wingman.application.people import (
     add_person,
@@ -58,6 +59,11 @@ POST_PAGE = b"""<html><head><title>The Most Important Investment</title></head>
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
+    # add_person verifies a passed substack_url's feed before storing it
+    # (#483) -- a default valid feed so that verification never hits the
+    # real network; tests that care about specific feed content patch
+    # fetch_url again afterward.
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
     config = load_config()
     for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
         directory.mkdir(parents=True)
@@ -187,12 +193,17 @@ def test_attach_enforces_invariants(workspace: Path) -> None:
             )
 
 
-def test_custom_domain_substack_is_labeled_substack(workspace: Path) -> None:
+def test_custom_domain_substack_is_labeled_substack(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     substack = b"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel><title>Custom</title>
 <item><title>A Post</title><link>https://www.custom-domain.blog/p/a-post</link>
 <description>&lt;p&gt;custom domain content&lt;/p&gt;</description></item></channel></rss>"""
     config = load_config()
+    import wingman.application.people as people_module
+
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: substack)
     with Storage(config.db_path) as storage:
         person, _ = add_person("Custom", storage, substack_url="https://www.custom-domain.blog")
         report = fetch_person_feed(person, config, storage, fetcher=lambda url: substack)

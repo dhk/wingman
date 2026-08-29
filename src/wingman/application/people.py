@@ -76,6 +76,39 @@ class FeedFetchReport(BaseModel):
     failed_sources: list[str] = Field(default_factory=list)
 
 
+def _verify_substack_feed(url: str, fetcher: Callable[[str], bytes]) -> None:
+    """Confirm <url>/feed is a real, fetchable, parseable RSS/Atom feed
+    before storing it as someone's substack_url (#483). Wrongly guessing
+    a non-Substack blog has its feed at /feed used to be discovered only
+    hours later, at overnight-fetch time, as a 404 — this fails loud at
+    write time instead, and points at the right tool for anything that
+    isn't actually a Substack blog."""
+    feed_url = url.rstrip("/") + "/feed"
+    hint = (
+        f"If {url!r} isn't a Substack blog, its feed probably isn't at /feed — use "
+        "'wingman people add-feed \"<name>\" <url>' (or feed_discover) instead, which "
+        "finds and validates the real feed URL."
+    )
+    try:
+        feed_bytes = fetcher(feed_url)
+    except FetchError as exc:
+        raise IngestError(f"the feed at {feed_url} could not be fetched ({exc}). {hint}") from exc
+    try:
+        root = ET.fromstring(feed_bytes)
+    except ET.ParseError as exc:
+        raise IngestError(
+            f"the feed at {feed_url} is not parseable RSS/Atom ({exc}). {hint}"
+        ) from exc
+    # A root tag check, not an item-count check: zero items is a real,
+    # legitimate feed (a brand-new blog with nothing posted yet) and must
+    # not be rejected; well-formed XML that isn't RSS/Atom at all (e.g. an
+    # HTML page that happens to parse) must be.
+    if root.tag != "rss" and root.tag != f"{_ATOM_NS}feed":
+        raise IngestError(
+            f"the feed at {feed_url} doesn't look like RSS/Atom (root element {root.tag!r}). {hint}"
+        )
+
+
 def add_person(
     name: str,
     storage: Storage,
@@ -84,12 +117,21 @@ def add_person(
     position: str | None = None,
     linkedin_url: str | None = None,
     email: str | None = None,
+    fetcher: Callable[[str], bytes] | None = None,
+    strict: bool = True,
 ) -> tuple[Person, bool]:
     """Add a person to the watchlist; updates the existing record if the name is known.
 
     Returns (person, created) — created is False when an existing person was
     updated. email is a manual-entry field only: imports never read email
-    addresses.
+    addresses. A passed substack_url's derived feed (<url>/feed) is verified
+    real and parseable before it's stored — nothing is written if it isn't
+    (#483); fetcher exists only as the test seam, matching every other feed
+    function in this module (fetch_person_feed, discover_feed, ...). strict
+    is the one narrow escape hatch: False stores the URL even if it doesn't
+    verify, for a caller (demo seeding) whose own next step already
+    discovers and reports an unreachable feed gracefully rather than
+    rejecting the person outright — never for a live person typing a URL.
     """
     if substack_url is not None:
         substack_url = substack_url.rstrip("/")
@@ -97,6 +139,11 @@ def add_person(
             raise IngestError(
                 f"Substack URL must start with https:// (RFC-009); got {substack_url!r}"
             )
+        try:
+            _verify_substack_feed(substack_url, fetcher if fetcher is not None else fetch_url)
+        except IngestError:
+            if strict:
+                raise
     if linkedin_url is not None:
         linkedin_url = linkedin_url.rstrip("/")
         if not linkedin_url.startswith("https://"):

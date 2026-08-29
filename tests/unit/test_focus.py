@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import wingman.application.people as people_module
 from wingman.application.focus import (
     OVERNIGHT_LIST,
     follow_company,
@@ -32,6 +33,11 @@ CAREERS_PAGE = b'<html><body><a href="/jobs/researcher">Researcher</a></body></h
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
+    # add_person verifies a passed substack_url's feed before storing it
+    # (#483) -- a default valid feed so that verification never hits the
+    # real network; tests that care about specific feed content patch
+    # fetch_url again afterward.
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: FEED)
     config = load_config()
     for directory in (config.data_dir, config.inbox_dir, config.reports_dir):
         directory.mkdir(parents=True)
@@ -145,11 +151,15 @@ def test_overnight_reports_failures_without_dying(
         raise FetchError("network down")
 
     config = load_config()
-    monkeypatch.setattr(people_module, "fetch_url", boom)
-    monkeypatch.setattr(news_module, "fetch_url", boom)
-    monkeypatch.setattr(research_module, "fetch_url", boom)
     with Storage(config.db_path) as storage:
+        # add_person verifies a substack_url's feed before storing it
+        # (#483) -- give it a real feed for the add itself, then switch to
+        # the universally-failing fetcher this test is actually about.
+        monkeypatch.setattr(people_module, "fetch_url", lambda url: FEED)
         add_person("Jane Author", storage, substack_url="https://jane.substack.com", company="Acme")
+        monkeypatch.setattr(people_module, "fetch_url", boom)
+        monkeypatch.setattr(news_module, "fetch_url", boom)
+        monkeypatch.setattr(research_module, "fetch_url", boom)
         follow_company("Acme", storage)  # no url: no sources approved
         report = overnight_run(config, storage)
     text = Path(report.digest_path).read_text(encoding="utf-8")
