@@ -36,8 +36,14 @@ JUDGE_PROMPT_VERSION = "job-judge-v1"
 # Recall and judge budgets per company per overnight run: enough to cover a
 # normal careers-page diff, small enough that a bulk repost can't burn the
 # night's tokens. Overflow is reported, never silent (RFC-031 discipline).
-MAX_FETCHED_PER_COMPANY = 8
-MAX_JUDGED_PER_COMPANY = 4
+# Raised from 8/4 (#480): a hiring-burst company (22 links in one run) was
+# routinely burning its entire fetch budget, and skipped links are not
+# merely delayed -- the research snapshot they're diffed against advances
+# unconditionally to every link seen this run, so a budget-skipped link
+# never reappears as "new" and is silently never scored. Widening the
+# budget is a stopgap, not a fix for that underlying loss (see #481).
+MAX_FETCHED_PER_COMPANY = 50
+MAX_JUDGED_PER_COMPANY = 20
 _MIN_POSTING_CHARS = 200
 _MAX_QUOTES = 3
 _MAX_REASONS = 3
