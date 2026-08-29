@@ -30,6 +30,11 @@ RSS_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     data_dir = tmp_path / "workspace"
     monkeypatch.setenv(ENV_DATA_DIR, str(data_dir))
+    # add_person verifies a passed substack_url's feed before storing it
+    # (#483) -- a default valid feed so that verification never hits the
+    # real network; tests that care about specific feed content patch
+    # fetch_url again afterward.
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
     runner.invoke(app, ["init"])
     return data_dir
 

@@ -17,6 +17,16 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     data_dir = tmp_path / "workspace"
     monkeypatch.setenv(ENV_DATA_DIR, str(data_dir))
     runner.invoke(app, ["init"])
+    # add_person verifies a substack_url's feed before storing it (#483) --
+    # give it a real feed for the add itself, then switch to the
+    # recommendations-page content this fixture is actually about.
+    monkeypatch.setattr(
+        people_module,
+        "fetch_url",
+        lambda url: (
+            b'<?xml version="1.0"?><rss version="2.0"><channel><title>t</title></channel></rss>'
+        ),
+    )
     runner.invoke(app, ["people", "add", "Alpha", "--substack", "https://alpha.substack.com"])
 
     def fake_fetch(url: str) -> bytes:
