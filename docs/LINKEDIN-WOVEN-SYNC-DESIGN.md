@@ -221,34 +221,59 @@ point to be merged against history.
 
 ## Open questions
 
-- **Exact policy for `connected_on`.** Does it ever update on a
-  collision, or is first-seen always authoritative (it shouldn't
-  meaningfully change for an already-known connection, but a thinner
-  export might be missing it entirely — fill-blank covers that case
-  already)?
-- **Woven contributor identity vs. wingman tenant identity.** Is every
-  wingman tenant automatically also a Woven contributor 1:1, or does
-  Woven stay scoped to whichever subset of tenants actually opted into
-  the shared graph (today: dave, trent — not necessarily every wingman
-  tenant that exists or will exist)?
-- **Local vs. remote dispatch.** Does the wrapper need to reach tenants
-  hosted elsewhere (lobster) over SSH the way this session's key-file fix
-  did, or is v1 scoped to whichever tenants run locally on this machine?
-- **Does the thinness-guard warning block by default, or just report?**
-  Leaning toward block-by-default (report + require `--force` or an
-  explicit confirmation) to match AGENTS.md's "human approval before
-  external action" posture, but worth confirming against how this gets
-  invoked in practice (interactive vs. scripted).
+Resolved 2026-08-29 from a scoping discussion:
+
+- ~~**Exact policy for `connected_on`.**~~ **Resolved: first-seen wins,
+  always** — except when the stored value looks invalid (e.g. an
+  impossible date). An insane existing value is never silently kept or
+  silently overwritten; it's surfaced for a human to confirm.
+- ~~**Woven contributor identity vs. wingman tenant identity.**~~
+  **Resolved: 1:1, in their own space.** Every wingman tenant is assumed
+  to eventually get their own Woven presence, but never by silently
+  merging them into an existing combined graph — a new tenant gets their
+  own separate single-user graph. Combining specific people's networks
+  (today: dave and trent) stays a deliberate, separate, manual action.
+- ~~**Local vs. remote dispatch.**~~ **Resolved, and this reframed the
+  whole shape of Phase 4 — see below.** Wingman is never local: every
+  tenant (dave, trent, jason, bob) lives on lobster's one shared
+  multi-tenant instance (RFC-048), addressed by tenant slug/data_dir, not
+  a separate login per person. Woven stays local to the operator's own
+  machine. **wingman and Woven stay architecturally separate — no
+  automated bridge gets built.** Integration is manual and session-driven
+  (a Claude session drives both, by hand, coordinated in-session) until a
+  real migration/shared-infrastructure plan for Woven exists, which is
+  explicitly a separate, later decision, not scoped here.
+- ~~**Does the thinness-guard warning block by default, or just
+  report?**~~ **Resolved: block by default, but as a separate dry-run
+  step, not an in-band prompt.** A blocking interactive confirmation
+  doesn't work over a non-interactive channel (e.g. a scripted SSH
+  invocation against the shared lobster instance). The workable shape:
+  the tool always runs a read-only dry-run first ("here's what would be
+  retired"), that's shown to the human, and only a second, explicit,
+  already-confirmed invocation actually retires anything.
 
 ## Phasing
 
-- **Phase 1 (wingman).** `seed_from_connections` upsert.
+- **Phase 1 (wingman).** `seed_from_connections` upsert. Tracked:
+  [#478](https://github.com/dhk/wingman/issues/478).
 - **Phase 2 (wingman).** `import_linkedin` thinness guard + before/after
-  surfacing — this *is* issue #420, not a separate follow-on.
-- **Phase 3 (woven).** The headless Node upsert script, net-new.
-- **Phase 4.** The unifying wrapper: name → (tenant target, Woven
-  contributor) dispatch, driving both phases 1-2 and phase 3 from one
-  reproducible input.
+  surfacing — this *is* issue
+  [#420](https://github.com/dhk/wingman/issues/420), not a separate
+  follow-on.
+- **Phase 3 (woven).** The headless Node upsert script, net-new. Tracked:
+  [dhk/woven#92](https://github.com/dhk/woven/issues/92). Still needs to
+  correctly preserve dual-owner nodes in the *existing* combined
+  `graph/seed.json` (dave+trent) even though this phase never performs a
+  fresh combine of its own — the file it's upserting into already merges
+  two contributors' data today.
+- **No automated Phase 4.** Originally scoped as a unifying dispatch
+  wrapper; superseded by the resolved local-vs-remote question above —
+  wingman and Woven stay separate, integration is manual/session-driven.
+  [#479](https://github.com/dhk/wingman/issues/479) now tracks documenting
+  that manual procedure, not building automated dispatch.
+- **Deferred, out of this document's scope.** Moving Woven to lobster and
+  giving it real multi-user hosting (identity, auth, tenant isolation) —
+  a separate, later design effort, not scoped or scheduled here.
 
 ## Revisit if
 
