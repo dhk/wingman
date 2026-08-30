@@ -16,6 +16,8 @@ never applied silently.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -47,6 +49,12 @@ MAX_JUDGED_PER_COMPANY = 20
 _MIN_POSTING_CHARS = 200
 _MAX_QUOTES = 3
 _MAX_REASONS = 3
+# Ashby-hosted postings (#486) never server-render posting text to a plain
+# GET -- the body is a JS shell, so the length check below would otherwise
+# misreport every one of them as a login wall. Ashby publishes a public,
+# unauthenticated job-board API per org that lists every open job with a
+# plain-text description; verified live against jobs.ashbyhq.com/notion.
+_ASHBY_JOB_URL_RE = re.compile(r"^https://jobs\.ashbyhq\.com/(?P<org>[^/?#]+)/(?P<job_id>[^/?#]+)")
 
 
 def criteria_path(config: Config) -> Path:
@@ -305,6 +313,28 @@ def rank_candidates(
     return [key for key, _ in scored]
 
 
+def _ashby_posting_text(url: str, fetch: Callable[[str], bytes]) -> str | None:
+    """Route an Ashby job URL through Ashby's public job-board API (#486).
+
+    Returns the posting's plain-text description, or None on any mismatch
+    or failure — never raises. This is a best-effort shortcut: the caller
+    falls back to the ordinary plain-GET path (and its ordinary error) on
+    None, so a wrong guess here costs nothing.
+    """
+    match = _ASHBY_JOB_URL_RE.match(url)
+    if match is None:
+        return None
+    api_url = f"https://api.ashbyhq.com/posting-api/job-board/{match['org']}"
+    try:
+        board = json.loads(fetch(api_url))
+        jobs = board["jobs"] if isinstance(board, dict) else []
+        job = next((j for j in jobs if j.get("id") == match["job_id"]), None)
+        text = str(job["descriptionPlain"]).strip() if job else ""
+    except Exception:  # noqa: BLE001 — best-effort shortcut, caller falls back on any failure
+        return None
+    return text or None
+
+
 def _posting_text(url: str, fetcher: Callable[[str], bytes] | None) -> str:
     """Fetch one posting to judgeable text — read-only, no inbox archive.
 
@@ -319,6 +349,11 @@ def _posting_text(url: str, fetcher: Callable[[str], bytes] | None) -> str:
     if not url.startswith("https://"):
         raise IngestError(f"only https:// postings are fetched (RFC-009); got {url!r}")
     fetch = fetcher if fetcher is not None else fetch_url
+
+    ashby_text = _ashby_posting_text(url, fetch)
+    if ashby_text is not None and len(ashby_text) >= _MIN_POSTING_CHARS:
+        return ashby_text
+
     try:
         data = fetch(url)
     except FetchError as exc:
@@ -326,10 +361,19 @@ def _posting_text(url: str, fetcher: Callable[[str], bytes] | None) -> str:
     text, _links = extract_page(data, url)
     text = text.strip()
     if len(text) < _MIN_POSTING_CHARS:
-        raise IngestError(
-            f"almost no readable text ({len(text)} chars) — likely a login wall "
-            "or JavaScript-only page"
-        )
+        if _ASHBY_JOB_URL_RE.match(url) is not None:
+            hint = (
+                "this is an Ashby-hosted posting, and its public job-board API lookup "
+                "also failed (org may not publish a public board, or the job was "
+                "removed) — the page itself is JavaScript-rendered and not fetchable "
+                "via plain GET"
+            )
+        else:
+            hint = (
+                "likely a login wall, or a JavaScript-rendered job board (Ashby, "
+                "etc.) that never server-renders posting text to a plain GET"
+            )
+        raise IngestError(f"almost no readable text ({len(text)} chars) — {hint}")
     return text
 
 

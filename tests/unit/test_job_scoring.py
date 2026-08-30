@@ -9,6 +9,7 @@ from wingman.application.ingest import IngestError
 from wingman.application.job_scoring import (
     CRITERIA_FILENAME,
     MAX_JUDGED_PER_COMPANY,
+    _posting_text,
     criteria_path,
     judge_posting,
     load_criteria,
@@ -131,6 +132,53 @@ def test_score_company_openings_end_to_end(workspace: Config) -> None:
     with Storage(workspace.db_path) as storage, pytest.raises(IngestError, match="judge against"):
         criteria_path(workspace).unlink()
         score_company_openings("Acme", [], workspace, storage, RecordedProvider("{}"))
+
+
+def test_ashby_posting_routed_through_public_job_board_api() -> None:
+    """#486: an Ashby posting page is a JS shell, so the plain-GET path must
+    never be tried — the fetcher below has no entry for the job URL itself,
+    only for Ashby's public job-board API, and text still comes back."""
+    job_url = "https://jobs.ashbyhq.com/notion/1fc309c8-da20-4ff2-84c7-8b863ece2b0a"
+    api_url = "https://api.ashbyhq.com/posting-api/job-board/notion"
+    board = {
+        "jobs": [
+            {
+                "id": "1fc309c8-da20-4ff2-84c7-8b863ece2b0a",
+                "descriptionPlain": POSTING * 3,  # comfortably over _MIN_POSTING_CHARS
+            },
+            {"id": "some-other-job", "descriptionPlain": "irrelevant"},
+        ]
+    }
+
+    def fetch(url: str) -> bytes:
+        assert url == api_url  # never falls through to the JS page itself
+        return json.dumps(board).encode()
+
+    assert _posting_text(job_url, fetch) == (POSTING * 3).strip()
+
+
+def test_ashby_lookup_miss_falls_back_to_plain_get_with_a_specific_error() -> None:
+    """When the API has no matching job (removed posting, org not public,
+    API unreachable), scoring falls back to the ordinary plain GET — and,
+    since that's the JS shell, the failure names Ashby specifically rather
+    than the generic 'login wall' catch-all."""
+    job_url = "https://jobs.ashbyhq.com/notion/does-not-exist"
+
+    def fetch(url: str) -> bytes:
+        if url == "https://api.ashbyhq.com/posting-api/job-board/notion":
+            return json.dumps({"jobs": []}).encode()
+        assert url == job_url
+        return b"<html><body>Loading...</body></html>"
+
+    with pytest.raises(IngestError, match="public job-board API lookup also failed"):
+        _posting_text(job_url, fetch)
+
+
+def test_non_ashby_thin_page_keeps_generic_js_rendered_hint() -> None:
+    """A non-Ashby JS-only page still gets a named, honest hint rather than
+    a bare 'login wall' verdict — it just can't be Ashby-specific."""
+    with pytest.raises(IngestError, match="JavaScript-rendered job board"):
+        _posting_text("https://example.com/careers/1", lambda url: b"<html>tiny</html>")
 
 
 def test_over_budget_is_ranked_and_reported(workspace: Config) -> None:
