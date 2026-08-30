@@ -10,7 +10,7 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
-    ("2026-08-29", 489, "fix: make job-criteria.md reachable by requirement resolution"),
+    ("2026-08-30", 509, "fix: make job-criteria.md reachable by requirement resolution"),
     ("2026-08-29", 494, "fix: a budget-skipped job link carries forward instead of vanishing"),
     (
         "2026-08-29",
@@ -770,7 +770,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "82fc93931ca97cb5d40ae3ada22e7b5bf226d226"
+GENERATED_FROM_COMMIT = "c8881e28dff35e5281845b532ce1bf70cee4bcb6"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
