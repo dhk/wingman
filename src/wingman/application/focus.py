@@ -278,7 +278,14 @@ def _scored_opening_actions(
 ) -> bool:
     """Judge new openings against job-criteria.md (RFC-035) into per-opening
     scored actions. Returns False — leaving the generic 'assess' action to
-    the caller — when there is no criteria doc or scoring failed entirely."""
+    the caller — when there is no criteria doc or scoring failed entirely.
+
+    `jobish` may include links carried forward from a previous run's budget
+    skip (see `_company_deep`), not only ones freshly diffed this run. Every
+    link that gets an actual outcome here — scored, filtered, or a per-link
+    failure noted by `score_company_openings` — is resolved out of the
+    pending backlog; anything the budget skips again (`outcome.pending`)
+    stays there for the next run (#481)."""
     from wingman.application.job_scoring import (
         CRITERIA_FILENAME,
         load_criteria,
@@ -299,6 +306,8 @@ def _scored_opening_actions(
     except Exception as exc:  # noqa: BLE001 — overnight reports failures, never dies on them
         target.lines.append(f"opening scoring failed: {exc}")
         return False
+    handled = [link for link in jobish if link not in outcome.pending]
+    storage.resolve_pending_job_links(company_key(name), handled)
     for opening in outcome.scored:
         label = opening.title or "opening"
         actions.append(
@@ -416,15 +425,34 @@ def _company_deep(
     target = OvernightTarget(name=name, kind="company", status="ok")
     try:
         research = research_company(name, config, storage)
+        key = company_key(name)
         for result in research.results:
             target.lines.append(f"research {result.url}: {result.detail}")
             target.lines.extend(f"  new: [link]({link})" for link in result.new_links)
-            if result.new_links:
-                jobish = [
-                    link
-                    for link in result.new_links
-                    if any(word in link.lower() for word in _JOBISH)
-                ]
+            if result.status == "failed":
+                actions.append(
+                    ActionItem(
+                        what=f"Fix the research source for {name}",
+                        why=result.detail,
+                        who=name,
+                        key=f"fix-source:{company_key(name)}:{result.url}",
+                        evidence=[result.url],
+                    )
+                )
+                continue
+            fresh_jobish = [
+                link for link in result.new_links if any(word in link.lower() for word in _JOBISH)
+            ]
+            # A link the fetch/judge budget skipped last run never re-enters
+            # result.new_links — the research snapshot's baseline already
+            # absorbed it — so it has to be carried forward out-of-band
+            # (#481). Carried links go first: they've waited longest, so
+            # they get first claim on this run's budget.
+            carried = storage.list_pending_job_links(key, result.url)
+            jobish = carried + [link for link in fresh_jobish if link not in carried]
+            if jobish:
+                storage.add_pending_job_links(key, result.url, jobish, datetime.now(UTC))
+            if jobish or result.new_links:
                 if jobish and _scored_opening_actions(
                     name, jobish, config, storage, target, actions
                 ):
@@ -451,16 +479,6 @@ def _company_deep(
                         who=name,
                         evidence=evidence,
                         key=f"research:{company_key(name)}:{result.url}",
-                    )
-                )
-            elif result.status == "failed":
-                actions.append(
-                    ActionItem(
-                        what=f"Fix the research source for {name}",
-                        why=result.detail,
-                        who=name,
-                        key=f"fix-source:{company_key(name)}:{result.url}",
-                        evidence=[result.url],
                     )
                 )
     except IngestError as exc:

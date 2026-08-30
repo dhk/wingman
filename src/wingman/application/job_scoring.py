@@ -35,13 +35,14 @@ CRITERIA_FILENAME = "job-criteria.md"
 JUDGE_PROMPT_VERSION = "job-judge-v1"
 # Recall and judge budgets per company per overnight run: enough to cover a
 # normal careers-page diff, small enough that a bulk repost can't burn the
-# night's tokens. Overflow is reported, never silent (RFC-031 discipline).
+# night's tokens. Overflow is reported, never silent (RFC-031 discipline),
+# and — since #481 — never lost either: OpeningScores.pending names exactly
+# the links this budget skipped (never fetched, or fetched but never
+# judged), and the caller (focus.py) persists that list as still-pending so
+# the next run's scoring sees these links again regardless of what the
+# research snapshot's baseline has already absorbed them into.
 # Raised from 8/4 (#480): a hiring-burst company (22 links in one run) was
-# routinely burning its entire fetch budget, and skipped links are not
-# merely delayed -- the research snapshot they're diffed against advances
-# unconditionally to every link seen this run, so a budget-skipped link
-# never reappears as "new" and is silently never scored. Widening the
-# budget is a stopgap, not a fix for that underlying loss (see #481).
+# routinely burning its entire fetch budget.
 MAX_FETCHED_PER_COMPANY = 50
 MAX_JUDGED_PER_COMPANY = 20
 _MIN_POSTING_CHARS = 200
@@ -198,6 +199,12 @@ class OpeningScores(BaseModel):
     scored: list[ScoredOpening] = Field(default_factory=list)  # judge survivors, best first
     filtered: list[ScoredOpening] = Field(default_factory=list)  # hard-filter failures
     notes: list[str] = Field(default_factory=list)  # fetch failures, budget overflow
+    # Input links that got no outcome at all this run because the fetch or
+    # judge budget cut them off first — never fetched, or fetched but never
+    # judged. Distinct from a fetch/judge failure (those DID get an attempt
+    # and are reported in notes instead): a budget skip is the one case the
+    # caller must keep pending rather than treat as resolved (#481).
+    pending: list[str] = Field(default_factory=list)
 
 
 JUDGE_SYSTEM_PROMPT = (
@@ -358,16 +365,19 @@ def score_company_openings(
     if criteria is None:
         raise IngestError(f"no {CRITERIA_FILENAME} in the workspace — nothing to judge against.")
     result = OpeningScores()
+    handled: set[str] = set()  # links that got a real attempt this run, any outcome
     if len(links) > MAX_FETCHED_PER_COMPANY:
         result.notes.append(
             f"{len(links) - MAX_FETCHED_PER_COMPANY} of {len(links)} new job link(s) "
-            f"not fetched (budget {MAX_FETCHED_PER_COMPANY}/run)"
+            f"not fetched (budget {MAX_FETCHED_PER_COMPANY}/run) — carried forward to "
+            "the next run"
         )
     postings: list[tuple[str, str]] = []
     for url in links[:MAX_FETCHED_PER_COMPANY]:
         try:
             postings.append((url, _posting_text(url, fetcher)))
         except IngestError as exc:
+            handled.add(url)
             result.notes.append(f"not scored [link]({url}): {exc}")
     if len(postings) > MAX_JUDGED_PER_COMPANY:
         try:
@@ -382,10 +392,11 @@ def score_company_openings(
             result.notes.append(f"recall ranking unavailable ({exc}); judging in page order")
         result.notes.append(
             f"{len(postings) - MAX_JUDGED_PER_COMPANY} opening(s) beyond the judge budget "
-            f"({MAX_JUDGED_PER_COMPANY}/run) left unscored"
+            f"({MAX_JUDGED_PER_COMPANY}/run) left unscored — carried forward to the next run"
         )
         postings = postings[:MAX_JUDGED_PER_COMPANY]
     for url, text in postings:
+        handled.add(url)
         try:
             opening = judge_posting(text, criteria, provider, url=url, company=company)
         except IngestError as exc:
@@ -393,11 +404,13 @@ def score_company_openings(
             continue
         (result.filtered if opening.filtered else result.scored).append(opening)
     result.scored.sort(key=lambda opening: opening.score, reverse=True)
+    result.pending = [url for url in links if url not in handled]
     _logger.info(
-        "scored company=%s judged=%d filtered=%d notes=%d",
+        "scored company=%s judged=%d filtered=%d notes=%d pending=%d",
         company,
         len(result.scored),
         len(result.filtered),
         len(result.notes),
+        len(result.pending),
     )
     return result
