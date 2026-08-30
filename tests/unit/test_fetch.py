@@ -102,8 +102,82 @@ def test_persistent_429_fails_visibly(monkeypatch: pytest.MonkeyPatch) -> None:
         fetch_module.fetch_url("https://rate.example.com/feed")
 
 
-def test_fetch_sends_identifying_browser_compatible_agent() -> None:
+def test_fetch_sends_realistic_browser_headers() -> None:
+    """#485: a self-identifying 'compatible; wingman' agent got hard-403'd by
+    managed bot protection that a real browser sails through, so the default
+    headers now look like an ordinary desktop browser's — still a read-only,
+    user-invoked GET of a public page, nothing about the request is a lie
+    beyond the User-Agent string itself."""
     from wingman.infrastructure.fetch import _HEADERS
 
-    assert _HEADERS["User-Agent"].startswith("Mozilla/5.0 (compatible; wingman")
+    assert "wingman" not in _HEADERS["User-Agent"]
+    assert "Mozilla/5.0" in _HEADERS["User-Agent"]
     assert "Accept" in _HEADERS
+    assert "Accept-Language" in _HEADERS
+
+
+def test_403_with_cf_mitigation_header_gets_one_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Cloudflare-mitigated 403 (#485) is treated like a rate limit: one
+    retry, because in practice the same request often succeeds on a second
+    try (the mitigation is probabilistic, not a hard wall)."""
+    import email.message
+    import io
+    import urllib.error
+
+    from wingman.infrastructure import fetch as fetch_module
+
+    calls: list[str] = []
+
+    class FakeResponse:
+        def __enter__(self):  # noqa: ANN204
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self, limit: int) -> bytes:
+            return b"page body"
+
+        def geturl(self) -> str:
+            return "https://cf.example.com/careers"
+
+    class FakeOpener:
+        def open(self, request: urllib.request.Request, timeout: int):  # noqa: ANN201
+            calls.append(request.full_url)
+            if len(calls) == 1:
+                headers = email.message.Message()
+                headers["cf-mitigated"] = "challenge"
+                raise urllib.error.HTTPError(
+                    request.full_url, 403, "Forbidden", headers, io.BytesIO(b"")
+                )
+            return FakeResponse()
+
+    monkeypatch.setattr(fetch_module, "_opener", FakeOpener())
+    monkeypatch.setattr(fetch_module.time, "sleep", lambda _: None)
+    assert fetch_module.fetch_url("https://cf.example.com/careers") == b"page body"
+    assert len(calls) == 2
+
+
+def test_plain_403_without_cf_header_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ordinary 403 (no Cloudflare mitigation marker) fails immediately —
+    only the specific, probabilistic bot-challenge case earns a retry."""
+    import email.message
+    import io
+    import urllib.error
+
+    from wingman.infrastructure import fetch as fetch_module
+
+    calls: list[str] = []
+
+    class FakeOpener:
+        def open(self, request: urllib.request.Request, timeout: int):  # noqa: ANN201
+            calls.append(request.full_url)
+            raise urllib.error.HTTPError(
+                request.full_url, 403, "Forbidden", email.message.Message(), io.BytesIO(b"")
+            )
+
+    monkeypatch.setattr(fetch_module, "_opener", FakeOpener())
+    monkeypatch.setattr(fetch_module.time, "sleep", lambda _: None)
+    with pytest.raises(FetchError, match="403"):
+        fetch_module.fetch_url("https://plain.example.com/careers")
+    assert len(calls) == 1

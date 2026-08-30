@@ -1,12 +1,13 @@
 """Approved-source research (RFC-015): user-named pages, deterministic diffs."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from wingman.application.ingest import IngestError
 from wingman.application.research import (
+    RESEARCH_FAILURE_STALE_AFTER_DAYS,
     add_company_source,
     delete_company,
     extract_page,
@@ -16,6 +17,7 @@ from wingman.application.research import (
     render_research_report,
     research_company,
 )
+from wingman.domain.research import CompanySource, ResearchSnapshot
 from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.fetch import FetchError
 from wingman.infrastructure.storage import Storage
@@ -117,9 +119,60 @@ def test_research_failure_keeps_previous_snapshot(config: Config, storage: Stora
     report = research_company("Acme", config, storage, fetcher=boom)
     assert report.failed == 1 and report.results[0].status == "failed"
     assert "previous snapshot was kept" in report.results[0].detail
+    # A single bad night is not yet "stale" — no escalation on the first miss.
+    assert "has not fetched successfully" not in report.results[0].detail
     # the kept snapshot still diffs correctly on the next good fetch
     recovered = research_company("Acme", config, storage, fetcher=lambda url: PAGE_V2)
     assert "1 new link since" in recovered.results[0].detail
+
+
+def test_research_failure_escalates_once_snapshot_goes_stale(
+    config: Config, storage: Storage
+) -> None:
+    """#485: a source stuck failing for days reads louder than a fresh miss,
+    so it is less likely to get silently buried by the digest's action cap."""
+    add_company_source("Acme", "https://acme.example.com/careers", storage)
+    old_fetch = datetime.now(UTC) - timedelta(days=RESEARCH_FAILURE_STALE_AFTER_DAYS + 1)
+    storage.save_research_snapshot(
+        ResearchSnapshot(
+            company_key="acme",
+            url="https://acme.example.com/careers",
+            text_hash="deadbeef",
+            links=[],
+            fetched_at=old_fetch,
+        )
+    )
+
+    def boom(url: str) -> bytes:
+        raise FetchError("HTTP Error 403: Forbidden")
+
+    report = research_company("Acme", config, storage, fetcher=boom)
+    detail = report.results[0].detail
+    assert "previous snapshot was kept" in detail
+    assert "has not fetched successfully" in detail
+    assert old_fetch.date().isoformat() in detail
+
+
+def test_research_failure_escalates_when_never_succeeded(config: Config, storage: Storage) -> None:
+    """A source that has NEVER had a successful fetch (no snapshot to diff
+    the age of) escalates off its approval date instead."""
+    old_approval = datetime.now(UTC) - timedelta(days=RESEARCH_FAILURE_STALE_AFTER_DAYS + 5)
+    storage.add_company_source(
+        CompanySource(
+            company_key="acme",
+            company_name="Acme",
+            url="https://acme.example.com/careers",
+            added_at=old_approval,
+        )
+    )
+
+    def boom(url: str) -> bytes:
+        raise FetchError("HTTP Error 403: Forbidden")
+
+    report = research_company("Acme", config, storage, fetcher=boom)
+    detail = report.results[0].detail
+    assert "has not fetched successfully" in detail
+    assert "it was approved" in detail
 
 
 def test_dossier_renders_research_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

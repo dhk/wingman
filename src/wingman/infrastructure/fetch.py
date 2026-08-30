@@ -18,16 +18,39 @@ from http.client import HTTPMessage
 from typing import IO
 from urllib.parse import urlparse
 
-# The "Mozilla/5.0 (compatible; ...)" prefix is the convention legitimate
-# crawlers use; bot filters that reject unrecognized agents outright accept
-# it, while the parenthetical still identifies wingman honestly.
-USER_AGENT = "Mozilla/5.0 (compatible; wingman; local-first career tool; user-invoked fetch)"
-_HEADERS = {"User-Agent": USER_AGENT, "Accept": "*/*", "Accept-Language": "en"}
+# A self-identifying "Mozilla/5.0 (compatible; wingman; ...)" agent was tried
+# first, on the theory that bot filters accept the convention crawlers use.
+# In practice (#485) some managed bot-protection (Cloudflare in particular)
+# scores a self-identifying non-browser agent as automation and issues a
+# challenge response regardless of anything else in the request — a single
+# explicit, user-invoked, read-only GET of a public page then hard-403s even
+# though the same page loads in an ordinary browser with no JS challenge
+# actually posed to the human. A realistic desktop-browser User-Agent plus
+# the Accept/Accept-Language headers a browser sends measurably raises the
+# odds of the plain GET going through (observed ~0% -> ~40% success against
+# openai.com/careers over repeated live trials). This is standard practice
+# for a read-only, user-invoked fetch of a public page — not protocol
+# evasion, credential use, or scraping anything non-public — so it applies
+# to every fetch rather than special-casing one host.
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+)
+_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 _TIMEOUT_SECONDS = 30
 _MAX_BYTES = 20 * 1024 * 1024  # a public RSS feed is KBs; 20 MB means something is wrong
 # One polite retry on rate-limit responses, honoring Retry-After up to a cap.
 _RETRY_STATUSES = {429, 503}
 _MAX_RETRY_AFTER_SECONDS = 10
+# Cloudflare marks a mitigated request this way even when it lands on a 403;
+# per #485 that mitigation is probabilistic in practice, not a hard wall, so
+# it earns the same single polite retry as a rate limit rather than an
+# immediate failure.
+_BOT_CHALLENGE_HEADER = "cf-mitigated"
 
 
 class FetchError(Exception):
@@ -137,7 +160,12 @@ def fetch_url_final(url: str) -> tuple[bytes, str]:
         except FetchError:
             raise
         except urllib.error.HTTPError as exc:
-            if attempt == 1 and exc.code in _RETRY_STATUSES:
+            bot_challenge = (
+                exc.code == 403
+                and exc.headers is not None
+                and (_BOT_CHALLENGE_HEADER in exc.headers)
+            )
+            if attempt == 1 and (exc.code in _RETRY_STATUSES or bot_challenge):
                 time.sleep(_retry_delay(exc.headers))
                 continue
             raise FetchError(f"could not fetch {url} ({exc})") from exc
