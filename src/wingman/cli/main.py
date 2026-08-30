@@ -4226,7 +4226,7 @@ def feature_request_cmd(
     """
     configure_logging()
     config = load_config()
-    body = stamp_operator(body)
+    body = stamp_operator(body, config=config)
     typer.echo(render_preview(get_feature_repo(config), title, body))
     if not yes and not typer.confirm("File this issue?", default=False):
         typer.echo("Nothing was filed.")

@@ -4027,7 +4027,7 @@ def feature_request(title: str = "", body: str = "", confirmed: bool = False) ->
         return _NOT_INITIALIZED
     if not title.strip():
         return "feature_request needs a title. Gather the idea first (see the protocol)."
-    body = stamp_operator(body)
+    body = stamp_operator(body, config=config)
     if not confirmed:
         return (
             render_preview(get_feature_repo(config), title, body)
@@ -5174,8 +5174,13 @@ def main(argv: list[str] | None = None) -> None:
         # — each tenant's Anthropic/Voyage keys are resolved strictly from
         # their OWN workspace file at request time (Tenant.config's
         # strict_provider_keys), never from process env. Keychain/host/
-        # global tiers still get hydrated normally (e.g. GITHUB_API_ISSUES_KEY,
-        # RFC-047's deliberately-shared credential).
+        # global tiers still get hydrated normally (e.g.
+        # GITHUB_SHARED_ISSUES_KEY, RFC-047's deliberately-shared
+        # credential). Hydration alone was never enough to make that
+        # credential reachable, though: until #506 the tenant path refused
+        # every tier below its own workspace file, so this ran and was then
+        # ignored. feature_request._resolve_github_key now reads the
+        # declared files directly rather than trusting this hydration.
         ensure_env()
     else:
         # Hydrate missing API keys: Keychain (RFC-019), then the workspace
