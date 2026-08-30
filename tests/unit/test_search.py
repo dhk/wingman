@@ -129,6 +129,7 @@ def test_search_sweeps_every_store(loaded: Storage) -> None:
         "research",
         "digests",
         "briefs",
+        "criteria",
         "answers",
     ]
     by_kind = {hit.kind: hit for hit in report.hits}
@@ -142,6 +143,34 @@ def test_search_sweeps_every_store(loaded: Storage) -> None:
     # every store's rank-1 precedes any rank-2 (interleaving)
     first_six = report.hits[:6]
     assert all(hit.rank == 1 for hit in first_six)
+
+
+def test_search_reaches_job_criteria_doc(loaded: Storage) -> None:
+    """job-criteria.md (RFC-035) is a searchable store like any other (#489):
+    a standing preference stated there, and nowhere else, is still found."""
+    from wingman.application.job_scoring import save_criteria
+
+    config = load_config()
+    save_criteria(
+        config,
+        "## Hard filters\n"
+        "Location is deliberately not a filter: remote-first, hybrid up to "
+        "~25%, and 2-3 days a week in an office are all acceptable.\n",
+    )
+    report = search_workspace("remote hybrid office", loaded, config, limit=20)
+    hits = [hit for hit in report.hits if hit.kind == "criteria"]
+    assert len(hits) == 1
+    assert hits[0].title == "Hard filters"
+    assert "Location is deliberately not a filter" in hits[0].snippet
+    assert hits[0].source == "job-criteria.md"
+    assert hits[0].who == "you (job-criteria.md)"
+
+    # a doc with no headings is still one whole-file section (#489)
+    save_criteria(config, "Anti-signal: any posting that mentions crunch culture.")
+    prose_report = search_workspace("crunch culture", loaded, config, limit=20)
+    prose_hits = [hit for hit in prose_report.hits if hit.kind == "criteria"]
+    assert len(prose_hits) == 1
+    assert prose_hits[0].title == "job-criteria.md"
 
 
 def test_search_is_selective_and_honest_when_empty(loaded: Storage) -> None:
