@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
@@ -134,15 +135,48 @@ INTERVIEW_AREAS: list[tuple[str, str]] = [
 REVIEW_EVERY_DAYS = 30
 
 
-def criteria_age_days(config: Config) -> int | None:
-    """Whole days since the criteria doc was last saved, or None when absent."""
+def criteria_modified_at(config: Config) -> datetime | None:
+    """When the criteria doc was last saved, or None when absent."""
     path = criteria_path(config)
     if not path.exists():
         return None
-    from datetime import UTC, datetime
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
 
-    modified = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+
+def criteria_age_days(config: Config) -> int | None:
+    """Whole days since the criteria doc was last saved, or None when absent."""
+    modified = criteria_modified_at(config)
+    if modified is None:
+        return None
     return max(0, (datetime.now(UTC) - modified).days)
+
+
+def criteria_sections(text: str) -> list[tuple[str, str]]:
+    """(heading, body) pairs from the doc's own '## ' headings (#489).
+
+    The interview flow (INTERVIEW_AREAS) writes headed sections — 'Hard
+    filters', 'Wants', and so on — but a doc edited by hand may carry none.
+    Content before the first heading, or a headingless doc entirely, is one
+    section under the file's own name, so a standing preference stated in
+    plain prose is still reachable rather than silently unsearchable.
+    """
+    sections: list[tuple[str, list[str]]] = []
+    title = CRITERIA_FILENAME
+    body: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if body:
+                sections.append((title, body))
+            title = line[3:].strip() or CRITERIA_FILENAME
+            body = []
+        else:
+            body.append(line)
+    sections.append((title, body))
+    return [
+        (section_title, joined)
+        for section_title, section_body in sections
+        if (joined := "\n".join(section_body).strip())
+    ]
 
 
 def criteria_review_due(config: Config, every_days: int = REVIEW_EVERY_DAYS) -> int | None:

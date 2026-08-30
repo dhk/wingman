@@ -2201,7 +2201,11 @@ def resolve_requirement(requirement: str, limit: int = 5) -> str:
 
     Returns similar banked answers (RFC-030) plus unified workspace search
     hits (RFC-022) for the requirement — the recall step before anyone is
-    asked anything.
+    asked anything. Workspace search's own 'criteria' column (#489) reaches
+    job-criteria.md, so a requirement the user already answered as a
+    standing preference in their own words there — "remote-first, hybrid
+    up to ~25%... are all acceptable" for an office-presence requirement —
+    surfaces as evidence here instead of coming back Unknown.
 
     Protocol when working an assessed opportunity's Unknown/Partial
     requirements: go one requirement at a time, and for each one

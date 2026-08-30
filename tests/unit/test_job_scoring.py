@@ -11,6 +11,7 @@ from wingman.application.job_scoring import (
     MAX_JUDGED_PER_COMPANY,
     _posting_text,
     criteria_path,
+    criteria_sections,
     judge_posting,
     load_criteria,
     rank_candidates,
@@ -62,6 +63,18 @@ def test_criteria_roundtrip_and_empty_refusal(workspace: Config) -> None:
         save_criteria(workspace, "   \n")
     criteria_path(workspace).write_text("", encoding="utf-8")
     assert load_criteria(workspace) is None  # empty file counts as absent
+
+
+def test_criteria_sections_splits_by_heading_with_headingless_fallback() -> None:
+    assert criteria_sections(CRITERIA) == [
+        ("Hard filters", "- Remote or SF only\n- No crypto"),
+        ("Wants", "- ML platform scope\n- Staff level"),
+    ]
+    # no '## ' headings at all: the whole doc is one section under the
+    # file's own name, so hand-written prose stays reachable (#489)
+    prose = "Location is deliberately not a filter: remote-first or hybrid."
+    assert criteria_sections(prose) == [(CRITERIA_FILENAME, prose)]
+    assert criteria_sections("   \n\n  ") == []  # blank doc: no sections
 
 
 def test_judge_verifies_quotes_and_clamps_score() -> None:
