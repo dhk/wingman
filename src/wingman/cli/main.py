@@ -4057,6 +4057,36 @@ def company_research_cmd(
         raise typer.Exit(code=1)
 
 
+@company_app.command("score-board")
+def company_score_board_cmd(
+    name: str = typer.Argument(..., help="Company whose full current job board to score."),
+) -> None:
+    """Score EVERY current jobish link on a company's watched pages (#488).
+
+    Unlike overnight scoring, which only ever judges links NEW since the
+    last research diff, this sweeps every link a watched page currently
+    shows — including postings older than when scoring existed, or older
+    than when you started watching this company — against job-criteria.md
+    (RFC-035). A deliberate, explicit, more-expensive pass: it is not
+    subject to overnight's per-run fetch/judge budgets, only to its own
+    sweep cap (reported if it fires). Requires job-criteria.md; seed it
+    via 'wingman criteria review' or the job_criteria tool first.
+    """
+    configure_logging()
+    from wingman.application.job_scoring import render_opening_scores, score_full_board
+
+    config = load_config()
+    _require_workspace(config, "scored")
+    try:
+        provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+        with Storage(config.db_path) as storage:
+            outcome = score_full_board(name, config, storage, provider)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        typer.echo(f"score-board failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_opening_scores(name, outcome))
+
+
 @company_app.command("like")
 def company_like(
     names: list[str] = typer.Argument(..., help="Two or more companies, e.g. 'Supersimple' 'Hex'."),
