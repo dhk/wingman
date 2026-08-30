@@ -19,7 +19,7 @@ from wingman.infrastructure.keys import (
 _KNOWN_ENV_VARS = (
     "ANTHROPIC_API_KEY",
     "VOYAGE_API_KEY",
-    "GITHUB_API_ISSUES_KEY",
+    "GITHUB_SHARED_ISSUES_KEY",
     "OPENROUTER_API_KEY",
 )
 
@@ -170,7 +170,7 @@ def test_test_keys_covers_every_known_key(
     monkeypatch.setattr(keys_module, "_test_openrouter", lambda _key: (True, "working"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
     monkeypatch.setenv("VOYAGE_API_KEY", "pa-x")
-    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "ghp-x")
+    monkeypatch.setenv("GITHUB_SHARED_ISSUES_KEY", "ghp-x")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-x")
     rows = keys_module.test_keys(runner=chain)
     assert {row[0] for row in rows} == set(KNOWN_KEYS)
@@ -180,7 +180,7 @@ def test_test_keys_covers_every_known_key(
 def test_test_key_github_reports_provider_result(
     chain: FakeKeychain, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "ghp-whatever")
+    monkeypatch.setenv("GITHUB_SHARED_ISSUES_KEY", "ghp-whatever")
     seen: list[str] = []
 
     def fake_github(api_key: str) -> tuple[bool, str]:
@@ -405,17 +405,17 @@ def test_global_keys_file_fills_gaps_below_the_host_file(
     home = tmp_path / "home"
     global_file = tmp_path / "etc" / "global-secrets.env"
     monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
-    monkeypatch.delenv("GITHUB_API_ISSUES_KEY", raising=False)
+    monkeypatch.delenv("GITHUB_SHARED_ISSUES_KEY", raising=False)
 
     assert read_global_keys(global_file) == {}
 
     global_file.parent.mkdir(parents=True)
-    global_file.write_text("GITHUB_API_ISSUES_KEY=ghp-shared\n", encoding="utf-8")
-    assert read_global_keys(global_file) == {"GITHUB_API_ISSUES_KEY": "ghp-shared"}
+    global_file.write_text("GITHUB_SHARED_ISSUES_KEY=ghp-shared\n", encoding="utf-8")
+    assert read_global_keys(global_file) == {"GITHUB_SHARED_ISSUES_KEY": "ghp-shared"}
 
     hydrated = ensure_env(home=home, global_path=global_file)
-    assert "GITHUB_API_ISSUES_KEY" in hydrated
-    assert os.environ["GITHUB_API_ISSUES_KEY"] == "ghp-shared"
+    assert "GITHUB_SHARED_ISSUES_KEY" in hydrated
+    assert os.environ["GITHUB_SHARED_ISSUES_KEY"] == "ghp-shared"
 
 
 def test_unreadable_file_is_treated_as_empty_not_a_crash(
@@ -430,7 +430,7 @@ def test_unreadable_file_is_treated_as_empty_not_a_crash(
     from wingman.infrastructure.keys import read_global_keys
 
     global_file = tmp_path / "global-secrets.env"
-    global_file.write_text("GITHUB_API_ISSUES_KEY=ghp-shared\n", encoding="utf-8")
+    global_file.write_text("GITHUB_SHARED_ISSUES_KEY=ghp-shared\n", encoding="utf-8")
 
     real_exists = Path.exists
 
@@ -451,17 +451,17 @@ def test_host_file_outranks_global_file(tmp_path: Path, monkeypatch: pytest.Monk
     home = tmp_path / "home"
     global_file = tmp_path / "etc" / "global-secrets.env"
     monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
-    monkeypatch.delenv("GITHUB_API_ISSUES_KEY", raising=False)
+    monkeypatch.delenv("GITHUB_SHARED_ISSUES_KEY", raising=False)
 
     global_file.parent.mkdir(parents=True)
-    global_file.write_text("GITHUB_API_ISSUES_KEY=ghp-global\n", encoding="utf-8")
+    global_file.write_text("GITHUB_SHARED_ISSUES_KEY=ghp-global\n", encoding="utf-8")
 
     host_file = host_keys_path(home)
     host_file.parent.mkdir(parents=True)
-    host_file.write_text("GITHUB_API_ISSUES_KEY=ghp-per-account\n", encoding="utf-8")
+    host_file.write_text("GITHUB_SHARED_ISSUES_KEY=ghp-per-account\n", encoding="utf-8")
 
     ensure_env(home=home, global_path=global_file)
-    assert os.environ["GITHUB_API_ISSUES_KEY"] == "ghp-per-account"
+    assert os.environ["GITHUB_SHARED_ISSUES_KEY"] == "ghp-per-account"
 
 
 def test_resolve_key_sources_names_the_global_file(
@@ -472,7 +472,7 @@ def test_resolve_key_sources_names_the_global_file(
     monkeypatch.setattr(keys_module, "keychain_available", lambda: False)
     global_file = tmp_path / "etc" / "global-secrets.env"
     global_file.parent.mkdir(parents=True)
-    global_file.write_text("GITHUB_API_ISSUES_KEY=ghp-shared\n", encoding="utf-8")
+    global_file.write_text("GITHUB_SHARED_ISSUES_KEY=ghp-shared\n", encoding="utf-8")
 
     sources = resolve_key_sources(
         {}, data_dir=tmp_path / "ws", home=tmp_path / "home", global_path=global_file

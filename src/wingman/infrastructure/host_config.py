@@ -82,7 +82,7 @@ HOST_SETTINGS = frozenset(
 def operator_name(home: Path | None = None) -> str | None:
     """The WINGMAN_OPERATOR_NAME setting, or None when unset — the label
     feature_request.py stamps into a filed issue's body to say who actually
-    submitted it, since a shared GITHUB_API_ISSUES_KEY can no longer let
+    submitted it, since a shared GITHUB_SHARED_ISSUES_KEY can no longer let
     GitHub's own 'opened by' field answer that question."""
     return read_host_settings(home).get("WINGMAN_OPERATOR_NAME")
 

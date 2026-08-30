@@ -7,18 +7,21 @@ issue for confirmation — and the gate is structural, not behavioral: the
 filing function refuses to run until confirmation is explicit, and the CLI
 previews and prompts unless --yes. Filing uses `gh`, authenticated either
 by whatever the invoking account already has set up (its own `gh auth
-login`), or by GITHUB_API_ISSUES_KEY (issue #205) when an account shares a
+login`), or by GITHUB_SHARED_ISSUES_KEY (issue #205) when an account shares a
 single fine-grained PAT rather than holding its own GitHub identity — in
 that case GitHub's own "opened by" field can no longer say who actually
 submitted it, so 'stamp_operator' appends a WINGMAN_OPERATOR_NAME line to
 the body instead, before the issue is ever previewed or filed.
 
-GITHUB_API_ISSUES_KEY resolves the same way the three provider keys do
-under a shared multi-tenant process (RFC-048): a tenant's own
-Config.github_api_issues_key first, falling back to process env only
-outside strict_provider_keys mode — see _resolve_github_key. Otherwise
-a tenant with no key of their own would silently file under whichever
-key happens to be set for the account running the shared process.
+GITHUB_SHARED_ISSUES_KEY deliberately does NOT resolve the way the three
+provider keys do (#506). Those are metered, so a tenant without one must
+fail loud rather than spend the operator's money; this one is access to a
+repo every tenant is already pointed at by construction, and RFC-047
+specifies it as "one fine-grained PAT ... shared by every account".
+Giving it the metered keys' isolation stopped every tenant from filing at
+all. See _resolve_github_key for the ladder that replaced it, and why
+"the operator's declared files" and "the process environment" have to be
+different answers under a shared process.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from wingman.application.ingest import IngestError
-from wingman.infrastructure import host_config
+from wingman.infrastructure import host_config, keys
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.telemetry import record_event
@@ -45,26 +48,56 @@ FEATURE_LABEL = "feature-request"
 Runner = Callable[[list[str]], tuple[int, str, str]]
 
 
-def _resolve_github_key(config: Config) -> str | None:
+def _declared_shared_key(home: Path | None = None, global_path: Path | None = None) -> str | None:
+    """The shared issues key as the OPERATOR provisioned it: the per-account
+    host file first, then the box-wide global file — RFC-047's ladder order,
+    where an account's own secrets.env overrides the shared default and
+    never the reverse. Reads the files themselves, never os.environ.
+
+    'home'/'global_path' are injectable exactly as keys.read_host_keys and
+    keys.read_global_keys are, so a test can point at a fixture instead of
+    silently resolving the real operator's credential."""
+    env_var = keys.KNOWN_KEYS["github"]
+    for tier in (keys.read_host_keys(home), keys.read_global_keys(global_path)):
+        value = tier.get(env_var, "").strip()
+        if value:
+            return value
+    return None
+
+
+def _resolve_github_key(
+    config: Config, home: Path | None = None, global_path: Path | None = None
+) -> str | None:
     """The credential _default_runner translates to GH_TOKEN.
 
-    Mirrors providers.router's exact resolution shape for the three
-    provider keys (RFC-048): the tenant's own config value first; under
-    strict_provider_keys (a shared-process tenant), stop there — never
-    fall back to process env, which under a shared process belongs to
-    whichever account runs it, not any particular tenant. Outside strict
-    mode (shape-B/CLI, config.github_api_issues_key normally unset),
-    read os.environ directly, exactly as before this function existed.
+    The ladder: this workspace's own key (BYOK) first, then the operator's
+    DECLARED file tiers, then nothing. Under strict_provider_keys the
+    ambient process environment is still refused — and that distinction is
+    the whole fix (#506).
+
+    'ensure_env' hydrates the keychain, host, and global tiers INTO
+    os.environ, so by the time anything reads the env it can no longer tell
+    a credential the operator provisioned box-wide from whatever the
+    account that happens to run a shared process exported. RFC-046's
+    objection is only true of the ambient case, but with the tiers
+    flattened together the only way to refuse ambient env was to refuse the
+    operator's declared files along with it — which is what left every
+    tenant unable to file. Reading the files directly keeps RFC-048's
+    guarantee exactly (a tenant still cannot inherit the launching
+    account's environment) while restoring RFC-047's shared credential.
+
+    strict_provider_keys still governs the three metered keys unchanged: it
+    is load-bearing for billing isolation and is not weakened here.
     """
-    if config.github_api_issues_key is not None:
-        return config.github_api_issues_key
+    if config.github_shared_issues_key is not None:
+        return config.github_shared_issues_key
     if config.strict_provider_keys:
-        return None
-    return os.environ.get("GITHUB_API_ISSUES_KEY", "").strip() or None
+        return _declared_shared_key(home, global_path)
+    return keys.env_key(keys.KNOWN_KEYS["github"]) or _declared_shared_key(home, global_path)
 
 
 def _default_runner(argv: list[str], github_key: str | None = None) -> tuple[int, str, str]:
-    # GITHUB_API_ISSUES_KEY is wingman's own name for this credential; gh
+    # GITHUB_SHARED_ISSUES_KEY is wingman's own name for this credential; gh
     # itself only recognizes GH_TOKEN/GITHUB_TOKEN natively, so translate it
     # here rather than making every caller know both names. When absent, gh
     # falls back to whatever it already had configured (e.g. 'gh auth
@@ -78,13 +111,20 @@ def _default_runner(argv: list[str], github_key: str | None = None) -> tuple[int
     return result.returncode, result.stdout, result.stderr
 
 
-def stamp_operator(body: str, home: Path | None = None) -> str:
-    """Append 'Submitted by: <name>' when WINGMAN_OPERATOR_NAME is set,
-    unchanged otherwise (an account with its own GitHub identity has no
-    need for this — GitHub's own 'opened by' field already answers it).
-    Callers stamp ONCE and pass the same body to both render_preview and
-    file_feature_request, so what's previewed is exactly what gets filed."""
-    name = host_config.operator_name(home)
+def stamp_operator(body: str, home: Path | None = None, config: Config | None = None) -> str:
+    """Append 'Submitted by: <name>', unchanged when there is no name to
+    stamp (an account with its own GitHub identity has no need for this —
+    GitHub's own 'opened by' field already answers it). Callers stamp ONCE
+    and pass the same body to both render_preview and file_feature_request,
+    so what's previewed is exactly what gets filed.
+
+    'config.operator_name' wins over the WINGMAN_OPERATOR_NAME host setting
+    because the host setting is one file per BOX (#506): under a shared
+    multi-tenant process every tenant reads the same value, so the moment
+    one shared PAT makes GitHub's 'opened by' say the operator for
+    everybody, the stamp meant to recover who actually asked would say the
+    same thing for everybody too. The tenant registry sets this per entry."""
+    name = (config.operator_name if config is not None else None) or host_config.operator_name(home)
     if not name:
         return body
     separator = "\n\n" if body.strip() else ""
