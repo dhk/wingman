@@ -161,6 +161,19 @@ CREATE TABLE IF NOT EXISTS new_link_events (
     discovered_at TEXT NOT NULL,
     PRIMARY KEY (company_key, url)
 );
+-- Job-ish links diffed as new but not yet given a scoring outcome (#481):
+-- a link skipped by job_scoring's fetch/judge budget stays here so the next
+-- run's scoring sees it again, instead of the research snapshot's baseline
+-- (which absorbs every link seen regardless of budget) silently losing it.
+-- Cleared the run a link is actually judged, fetch-fails, or judge-fails —
+-- only a budget skip keeps a row here.
+CREATE TABLE IF NOT EXISTS pending_job_links (
+    company_key TEXT NOT NULL,
+    url TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    PRIMARY KEY (company_key, url)
+);
 CREATE TABLE IF NOT EXISTS dossier_state (
     company_key TEXT PRIMARY KEY,
     last_generated_at TEXT NOT NULL
@@ -1347,6 +1360,10 @@ class Storage:
             "DELETE FROM new_link_events WHERE company_key = ? AND source_url = ?",
             (company_key, url),
         )
+        self._conn.execute(
+            "DELETE FROM pending_job_links WHERE company_key = ? AND source_url = ?",
+            (company_key, url),
+        )
         self._conn.commit()
         return cursor.rowcount > 0
 
@@ -1424,6 +1441,48 @@ class Storage:
             for url, source_url, discovered_at in cursor.fetchall()
         ]
 
+    def add_pending_job_links(
+        self, company_key: str, source_url: str, links: list[str], seen_at: datetime
+    ) -> None:
+        """Record job-ish links not yet given a scoring outcome (#481). Idempotent
+        per (company_key, url): first sighting wins, so a link still pending after
+        several runs keeps its original first_seen_at rather than looking freshly
+        discovered."""
+        if not links:
+            return
+        for link in links:
+            self._conn.execute(
+                "INSERT INTO pending_job_links (company_key, url, source_url, first_seen_at)"
+                " VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(company_key, url) DO NOTHING",
+                (company_key, link, source_url, seen_at.isoformat()),
+            )
+        self._conn.commit()
+
+    def list_pending_job_links(self, company_key: str, source_url: str) -> list[str]:
+        """Job-ish links carried forward from a prior run's budget skip, oldest
+        first — a scoring pass should look at these before whatever the current
+        run's diff surfaces, so a link does not wait indefinitely behind a
+        never-ending stream of fresher ones."""
+        cursor = self._conn.execute(
+            "SELECT url FROM pending_job_links"
+            " WHERE company_key = ? AND source_url = ? ORDER BY first_seen_at",
+            (company_key, source_url),
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+    def resolve_pending_job_links(self, company_key: str, links: list[str]) -> None:
+        """Drop links that received an actual outcome this run — scored,
+        filtered, or a per-link fetch/judge failure. Only a budget skip is
+        meant to leave a row behind."""
+        if not links:
+            return
+        self._conn.executemany(
+            "DELETE FROM pending_job_links WHERE company_key = ? AND url = ?",
+            [(company_key, link) for link in links],
+        )
+        self._conn.commit()
+
     def get_dossier_generated_at(self, company_key: str) -> datetime | None:
         cursor = self._conn.execute(
             "SELECT last_generated_at FROM dossier_state WHERE company_key = ?", (company_key,)
@@ -1480,6 +1539,17 @@ class Storage:
                 (new_key, url, source_url, discovered_at),
             )
         self._conn.execute("DELETE FROM new_link_events WHERE company_key = ?", (old_key,))
+        for url, source_url, first_seen_at in self._conn.execute(
+            "SELECT url, source_url, first_seen_at FROM pending_job_links WHERE company_key = ?",
+            (old_key,),
+        ).fetchall():
+            self._conn.execute(
+                "INSERT INTO pending_job_links (company_key, url, source_url, first_seen_at)"
+                " VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(company_key, url) DO NOTHING",
+                (new_key, url, source_url, first_seen_at),
+            )
+        self._conn.execute("DELETE FROM pending_job_links WHERE company_key = ?", (old_key,))
         dossier_row: tuple[str] | None = self._conn.execute(
             "SELECT last_generated_at FROM dossier_state WHERE company_key = ?", (old_key,)
         ).fetchone()
@@ -1495,13 +1565,14 @@ class Storage:
         return moved
 
     def delete_company_sources(self, company_key: str) -> int:
-        """Delete every approved source, research snapshot, new-link history, and
-        dossier cursor for a company."""
+        """Delete every approved source, research snapshot, new-link history,
+        pending-job-link backlog, and dossier cursor for a company."""
         cursor = self._conn.execute(
             "DELETE FROM company_sources WHERE company_key = ?", (company_key,)
         )
         self._conn.execute("DELETE FROM research_snapshots WHERE company_key = ?", (company_key,))
         self._conn.execute("DELETE FROM new_link_events WHERE company_key = ?", (company_key,))
+        self._conn.execute("DELETE FROM pending_job_links WHERE company_key = ?", (company_key,))
         self._conn.execute("DELETE FROM dossier_state WHERE company_key = ?", (company_key,))
         self._conn.commit()
         return cursor.rowcount

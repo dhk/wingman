@@ -201,6 +201,40 @@ def test_over_budget_is_ranked_and_reported(workspace: Config) -> None:
         )
     assert len(outcome.scored) == MAX_JUDGED_PER_COMPANY
     assert any("judge budget" in note for note in outcome.notes)
+    # #481: the 2 postings the judge budget cut off are named as pending —
+    # a caller must be able to carry them forward, not treat them as done.
+    assert outcome.pending == list(pages)[MAX_JUDGED_PER_COMPANY:]
+
+
+def test_pending_names_exactly_the_budget_skipped_links(workspace: Config) -> None:
+    """#481: a link only counts as 'pending' when the budget cut it off
+    before it got any outcome. A fetch failure or a judge failure DID get a
+    real attempt (and is reported in notes), so it must NOT come back as
+    pending — retrying an unfixably-broken link forever would be its own
+    kind of silent-loss-shaped bug."""
+    save_criteria(workspace, CRITERIA)
+    Storage(workspace.db_path).close()
+    ok_url = "https://acme.example/jobs/ok"
+    fetch_fail_url = "https://acme.example/jobs/thin"
+    beyond_fetch_budget_url = "https://acme.example/jobs/beyond"
+    pages = {
+        ok_url: _page(POSTING.replace("\n", " ")),
+        fetch_fail_url: b"<html><body>tiny</body></html>",  # too short: fetch "fails"
+    }
+    links = [ok_url, fetch_fail_url, beyond_fetch_budget_url]
+    with Storage(workspace.db_path) as storage, pytest.MonkeyPatch.context() as patch:
+        patch.setattr("wingman.application.job_scoring.MAX_FETCHED_PER_COMPANY", 2)
+        outcome = score_company_openings(
+            "Acme",
+            links,
+            workspace,
+            storage,
+            RecordedProvider(_judgment(quotes=["own the training platform end to end"])),
+            fetcher=lambda url: pages[url],
+        )
+    assert [opening.url for opening in outcome.scored] == [ok_url]
+    assert any("not scored" in note for note in outcome.notes)  # the fetch failure, visibly
+    assert outcome.pending == [beyond_fetch_budget_url]
 
 
 def test_scored_opening_actions_write_keys_and_evidence(workspace: Config) -> None:

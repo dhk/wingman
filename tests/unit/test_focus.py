@@ -601,3 +601,76 @@ def test_titled_link_resolves_sanitizes_and_degrades(monkeypatch: pytest.MonkeyP
     assert budget.remaining == 0
     monkeypatch.setattr(research_module, "fetch_url", lambda url: page)
     assert _titled_link("https://a.example/m", budget) == "[link](https://a.example/m)"  # spent
+
+
+def test_budget_skipped_job_link_is_scored_on_a_later_run(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#481: a link the fetch/judge budget skips this run must be delayed to
+    a later run, not lost forever. The research snapshot's baseline absorbs
+    every link seen on a page regardless of whether the budget let it be
+    fetched or judged — so on run 2 the page is left completely UNCHANGED
+    (the diff finds zero new links, exactly reproducing the bug's
+    precondition) and the previously budget-skipped link must still get
+    scored via the pending-link carry-forward, not via a fresh diff."""
+    import json
+
+    import wingman.application.job_scoring as job_scoring_module
+    import wingman.application.research as research_module
+    import wingman.infrastructure.fetch as fetch_module
+    import wingman.providers.router as router_module
+    from wingman.application.focus import _company_deep
+    from wingman.application.job_scoring import save_criteria
+    from wingman.application.research import add_company_source
+    from wingman.providers.recorded import RecordedProvider
+
+    config = load_config()
+    save_criteria(config, "## Hard filters\n- none\n\n## Wants\n- anything\n")
+
+    judgment = json.dumps(
+        {"title": "Opening", "score": 70, "hard_filter_failed": "", "reasons": [], "quotes": []}
+    )
+    monkeypatch.setattr(
+        router_module, "get_provider", lambda capability, cfg: RecordedProvider(judgment)
+    )
+    empty_page = b"<html><body>no openings yet</body></html>"
+    careers_page = (
+        b'<html><body><a href="/jobs/one">One</a><a href="/jobs/two">Two</a></body></html>'
+    )
+    posting = (
+        b"<html><body><main><p>"
+        + b"A role with real responsibilities and scope. " * 10
+        + b"</p></main></body></html>"
+    )
+    monkeypatch.setattr(fetch_module, "fetch_url", lambda url: posting)
+
+    def _scored_urls(actions: list) -> set[str]:
+        return {a.key.split(":", 2)[-1] for a in actions if a.key.startswith("opening:")}
+
+    with Storage(config.db_path) as storage:
+        add_company_source("Acme", "https://acme.example.com/careers", storage)
+
+        # run 1: an empty baseline snapshot -- a first fetch is never "new".
+        monkeypatch.setattr(research_module, "fetch_url", lambda url: empty_page)
+        _company_deep("Acme", config, storage, [])
+
+        # run 2: both job links appear at once; the fetch budget only lets
+        # one through, so the other should become pending, not lost.
+        monkeypatch.setattr(research_module, "fetch_url", lambda url: careers_page)
+        monkeypatch.setattr(job_scoring_module, "MAX_FETCHED_PER_COMPANY", 1)
+        actions: list = []
+        _company_deep("Acme", config, storage, actions)
+        assert _scored_urls(actions) == {"https://acme.example.com/jobs/one"}
+        assert storage.list_pending_job_links("acme", "https://acme.example.com/careers") == [
+            "https://acme.example.com/jobs/two"
+        ]
+
+        # run 3: page unchanged -- research's diff surfaces NO new links at
+        # all (both links are already baked into the snapshot's baseline,
+        # exactly the scenario that used to lose a budget-skipped link
+        # forever). Widen the budget so the carried link clears this time.
+        monkeypatch.setattr(job_scoring_module, "MAX_FETCHED_PER_COMPANY", 50)
+        actions2: list = []
+        _company_deep("Acme", config, storage, actions2)
+        assert _scored_urls(actions2) == {"https://acme.example.com/jobs/two"}
+        assert storage.list_pending_job_links("acme", "https://acme.example.com/careers") == []
