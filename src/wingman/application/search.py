@@ -29,6 +29,12 @@ from pydantic import BaseModel, Field
 
 from wingman.application.corpus import find_evidence
 from wingman.application.ingest import IngestError
+from wingman.application.job_scoring import (
+    CRITERIA_FILENAME,
+    criteria_modified_at,
+    criteria_sections,
+    load_criteria,
+)
 from wingman.application.people import find_people_evidence
 from wingman.application.pov import COMPANY_POV_PREFIX, CORPUS_PERSON_ID
 from wingman.application.similarity import _dot, _normalize, _require_one_model
@@ -370,6 +376,34 @@ def search_workspace(query: str, storage: Storage, config: Config, limit: int = 
                 )
     report.searched.append("briefs")
     columns.append(brief_hits[:per_store])
+
+    # Job criteria doc (RFC-035, #489): the user's own standing preferences,
+    # searched the same deterministic keyword way as every other free-text
+    # store here — never a model asked to interpret or answer from it. This
+    # is what makes resolve_requirement's recall reach a stated preference
+    # ("Location is deliberately not a filter: ...") instead of coming back
+    # Unknown when the workspace already has the answer, just not as a
+    # profile item or a banked answer.
+    criteria_hits: list[SearchHit] = []
+    criteria_text = load_criteria(config)
+    if criteria_text:
+        criteria_when = _when(criteria_modified_at(config))
+        for section_title, section_body in criteria_sections(criteria_text):
+            haystack = f"{section_title} {section_body}"
+            if _matches(tokens, haystack):
+                criteria_hits.append(
+                    SearchHit(
+                        kind="criteria",
+                        title=section_title,
+                        snippet=_clip(section_body),
+                        who="you (job-criteria.md)",
+                        when=criteria_when,
+                        source=CRITERIA_FILENAME,
+                        rank=len(criteria_hits) + 1,
+                    )
+                )
+    report.searched.append("criteria")
+    columns.append(criteria_hits[:per_store])
 
     # Banked application answers (RFC-030)
     answer_hits: list[SearchHit] = []

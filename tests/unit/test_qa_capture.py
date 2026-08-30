@@ -92,6 +92,28 @@ def test_mcp_qa_capture_and_resolve_requirement(workspace: Config) -> None:
     assert "failed" in qa_capture_tool("", "")
 
 
+def test_resolve_requirement_reaches_job_criteria(workspace: Config) -> None:
+    """A requirement resolvable ONLY via job-criteria.md — nothing in the
+    profile, nothing in the answer bank — still surfaces through
+    resolve_requirement's recall (#489). Before the fix, search_workspace
+    never consulted the criteria doc at all, so this requirement would
+    come back with no mention of the location language whatsoever."""
+    from wingman.application.job_scoring import save_criteria
+    from wingman.mcp_server import resolve_requirement
+
+    save_criteria(
+        workspace,
+        "## Hard filters\n"
+        "Location is deliberately not a filter: remote-first, hybrid up to "
+        "~25%, and 2-3 days a week in an office are all acceptable.\n\n"
+        "## Wants\n- Staff-level scope\n",
+    )
+    recall = resolve_requirement("remote hybrid office days")
+    assert "Location is deliberately not a filter" in recall
+    assert "job-criteria.md" in recall
+    assert "Hard filters" in recall
+
+
 SCREENING = "Have you shipped an AI/LLM product?"
 SHIPPED = "Shipping Praxis, Wingman, Skill-Map and Tricorder."
 
