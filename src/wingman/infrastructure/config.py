@@ -29,13 +29,24 @@ class Config(BaseModel):
     anthropic_api_key: str | None = None
     voyage_api_key: str | None = None
     openrouter_api_key: str | None = None
-    # Same shape as the three provider keys above, resolved the same way —
-    # but this one isn't a model provider at all: application.feature_request
-    # reads it directly to authenticate 'gh' (RFC-025). Kept alongside the
-    # provider keys rather than off in feature_request.py's own module so a
-    # tenant's credential isolation (below) covers it too, not just the
-    # three keys that happen to be providers.router's concern.
-    github_api_issues_key: str | None = None
+    # Same shape as the three provider keys above, but NOT resolved the same
+    # way, and the difference is the whole point (#506). This one isn't a
+    # model provider: application.feature_request reads it to authenticate
+    # 'gh' (RFC-025). The three provider keys are metered — falling back to
+    # a shared one spends the operator's money on a tenant's behalf, so a
+    # tenant without their own must fail loud. This key is access to an
+    # operator-owned resource that every tenant is ALREADY pointed at by
+    # construction ('[defaults] feature_repo'), so a shared fallback is the
+    # service, not a leak. See feature_request._resolve_github_key: BYOK
+    # first, then the operator's own declared file tiers, never ambient
+    # process env.
+    github_shared_issues_key: str | None = None
+    #: Who this workspace files as, when one shared PAT means GitHub's own
+    #: 'opened by' field says the operator for everybody (#506). None falls
+    #: back to the box-wide WINGMAN_OPERATOR_NAME host setting, which is one
+    #: file per box and therefore cannot tell two tenants apart — so the
+    #: tenant registry sets this explicitly from each entry's own slug.
+    operator_name: str | None = None
     # True only for a per-tenant Config built by a shared multi-tenant
     # process (RFC-048, infrastructure.tenants.Tenant.config()). Tells
     # providers.router to resolve keys from these two fields ALONE — never

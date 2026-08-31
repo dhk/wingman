@@ -9,7 +9,9 @@ from wingman.application.ingest import IngestError
 from wingman.application.job_scoring import (
     CRITERIA_FILENAME,
     MAX_JUDGED_PER_COMPANY,
+    _posting_text,
     criteria_path,
+    criteria_sections,
     judge_posting,
     load_criteria,
     rank_candidates,
@@ -61,6 +63,18 @@ def test_criteria_roundtrip_and_empty_refusal(workspace: Config) -> None:
         save_criteria(workspace, "   \n")
     criteria_path(workspace).write_text("", encoding="utf-8")
     assert load_criteria(workspace) is None  # empty file counts as absent
+
+
+def test_criteria_sections_splits_by_heading_with_headingless_fallback() -> None:
+    assert criteria_sections(CRITERIA) == [
+        ("Hard filters", "- Remote or SF only\n- No crypto"),
+        ("Wants", "- ML platform scope\n- Staff level"),
+    ]
+    # no '## ' headings at all: the whole doc is one section under the
+    # file's own name, so hand-written prose stays reachable (#489)
+    prose = "Location is deliberately not a filter: remote-first or hybrid."
+    assert criteria_sections(prose) == [(CRITERIA_FILENAME, prose)]
+    assert criteria_sections("   \n\n  ") == []  # blank doc: no sections
 
 
 def test_judge_verifies_quotes_and_clamps_score() -> None:
@@ -133,6 +147,53 @@ def test_score_company_openings_end_to_end(workspace: Config) -> None:
         score_company_openings("Acme", [], workspace, storage, RecordedProvider("{}"))
 
 
+def test_ashby_posting_routed_through_public_job_board_api() -> None:
+    """#486: an Ashby posting page is a JS shell, so the plain-GET path must
+    never be tried — the fetcher below has no entry for the job URL itself,
+    only for Ashby's public job-board API, and text still comes back."""
+    job_url = "https://jobs.ashbyhq.com/notion/1fc309c8-da20-4ff2-84c7-8b863ece2b0a"
+    api_url = "https://api.ashbyhq.com/posting-api/job-board/notion"
+    board = {
+        "jobs": [
+            {
+                "id": "1fc309c8-da20-4ff2-84c7-8b863ece2b0a",
+                "descriptionPlain": POSTING * 3,  # comfortably over _MIN_POSTING_CHARS
+            },
+            {"id": "some-other-job", "descriptionPlain": "irrelevant"},
+        ]
+    }
+
+    def fetch(url: str) -> bytes:
+        assert url == api_url  # never falls through to the JS page itself
+        return json.dumps(board).encode()
+
+    assert _posting_text(job_url, fetch) == (POSTING * 3).strip()
+
+
+def test_ashby_lookup_miss_falls_back_to_plain_get_with_a_specific_error() -> None:
+    """When the API has no matching job (removed posting, org not public,
+    API unreachable), scoring falls back to the ordinary plain GET — and,
+    since that's the JS shell, the failure names Ashby specifically rather
+    than the generic 'login wall' catch-all."""
+    job_url = "https://jobs.ashbyhq.com/notion/does-not-exist"
+
+    def fetch(url: str) -> bytes:
+        if url == "https://api.ashbyhq.com/posting-api/job-board/notion":
+            return json.dumps({"jobs": []}).encode()
+        assert url == job_url
+        return b"<html><body>Loading...</body></html>"
+
+    with pytest.raises(IngestError, match="public job-board API lookup also failed"):
+        _posting_text(job_url, fetch)
+
+
+def test_non_ashby_thin_page_keeps_generic_js_rendered_hint() -> None:
+    """A non-Ashby JS-only page still gets a named, honest hint rather than
+    a bare 'login wall' verdict — it just can't be Ashby-specific."""
+    with pytest.raises(IngestError, match="JavaScript-rendered job board"):
+        _posting_text("https://example.com/careers/1", lambda url: b"<html>tiny</html>")
+
+
 def test_over_budget_is_ranked_and_reported(workspace: Config) -> None:
     save_criteria(workspace, CRITERIA)
     Storage(workspace.db_path).close()
@@ -153,6 +214,40 @@ def test_over_budget_is_ranked_and_reported(workspace: Config) -> None:
         )
     assert len(outcome.scored) == MAX_JUDGED_PER_COMPANY
     assert any("judge budget" in note for note in outcome.notes)
+    # #481: the 2 postings the judge budget cut off are named as pending —
+    # a caller must be able to carry them forward, not treat them as done.
+    assert outcome.pending == list(pages)[MAX_JUDGED_PER_COMPANY:]
+
+
+def test_pending_names_exactly_the_budget_skipped_links(workspace: Config) -> None:
+    """#481: a link only counts as 'pending' when the budget cut it off
+    before it got any outcome. A fetch failure or a judge failure DID get a
+    real attempt (and is reported in notes), so it must NOT come back as
+    pending — retrying an unfixably-broken link forever would be its own
+    kind of silent-loss-shaped bug."""
+    save_criteria(workspace, CRITERIA)
+    Storage(workspace.db_path).close()
+    ok_url = "https://acme.example/jobs/ok"
+    fetch_fail_url = "https://acme.example/jobs/thin"
+    beyond_fetch_budget_url = "https://acme.example/jobs/beyond"
+    pages = {
+        ok_url: _page(POSTING.replace("\n", " ")),
+        fetch_fail_url: b"<html><body>tiny</body></html>",  # too short: fetch "fails"
+    }
+    links = [ok_url, fetch_fail_url, beyond_fetch_budget_url]
+    with Storage(workspace.db_path) as storage, pytest.MonkeyPatch.context() as patch:
+        patch.setattr("wingman.application.job_scoring.MAX_FETCHED_PER_COMPANY", 2)
+        outcome = score_company_openings(
+            "Acme",
+            links,
+            workspace,
+            storage,
+            RecordedProvider(_judgment(quotes=["own the training platform end to end"])),
+            fetcher=lambda url: pages[url],
+        )
+    assert [opening.url for opening in outcome.scored] == [ok_url]
+    assert any("not scored" in note for note in outcome.notes)  # the fetch failure, visibly
+    assert outcome.pending == [beyond_fetch_budget_url]
 
 
 def test_scored_opening_actions_write_keys_and_evidence(workspace: Config) -> None:

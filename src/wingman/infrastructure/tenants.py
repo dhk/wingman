@@ -136,21 +136,33 @@ class Tenant:
         return value or None
 
     def config(self) -> Config:
-        """This tenant's Config, with keys resolved ONLY from this
-        tenant's own workspace file — never process env, never the
-        host/global secrets tiers (RFC-046/047), which are shared by
-        whichever account runs the process and would otherwise leak one
-        tenant's key to every tenant lacking their own. A tenant with no
-        key configured gets 'strict_provider_keys=True' and fails loud
-        instead of silently inheriting a shared-process env var.
+        """This tenant's Config, with the three METERED provider keys
+        resolved ONLY from this tenant's own workspace file — never process
+        env, never the host/global secrets tiers (RFC-046/047), which are
+        shared by whichever account runs the process and would otherwise
+        leak one tenant's key to every tenant lacking their own. A tenant
+        with no key of their own gets 'strict_provider_keys=True' and fails
+        loud instead of silently inheriting a shared-process env var.
 
-        github_api_issues_key gets the exact same treatment, not just the
-        three provider keys — application.feature_request's default runner
-        otherwise reads GITHUB_API_ISSUES_KEY straight from os.environ,
-        which under a shared process is whichever account runs it, not any
-        particular tenant's own credential. Same isolation guarantee either
-        way: a tenant with none of their own fails loud rather than filing
-        under a key they never configured.
+        The shared issues key is the ONE exception, and #506 is the bug
+        report for having made it the rule. It was given the metered keys'
+        treatment on the reasoning that os.environ under a shared process
+        belongs to whichever account runs it — true of the AMBIENT
+        environment, but RFC-047 defines this credential as "one
+        fine-grained PAT ... shared by every account", provisioned by the
+        operator in /etc/wingman/global-secrets.env precisely so tenants
+        with no GitHub identity of their own (#167) can still file. The
+        metered keys are isolated because a fallback spends the operator's
+        money; this one costs nothing and points at a repo the registry has
+        already aimed every tenant at ('[defaults] feature_repo'), so
+        isolating it bought no safety and cost every tenant the feature.
+
+        A tenant's OWN issues key still wins when they have one (BYOK) —
+        that much is unchanged. It is simply no longer the only thing they
+        may have: application.feature_request._resolve_github_key falls
+        back to the operator's declared FILES, never to ambient process
+        env, so the isolation this docstring was written to guarantee still
+        holds where it was actually protecting something.
 
         'privileged' is passed through explicitly from this entry's own
         flag (RFC-068) — never omitted and left to Config's class default.
@@ -168,9 +180,16 @@ class Tenant:
             anthropic_api_key=workspace_keys.get(KNOWN_KEYS["anthropic"]),
             voyage_api_key=workspace_keys.get(KNOWN_KEYS["voyage"]),
             openrouter_api_key=workspace_keys.get(KNOWN_KEYS["openrouter"]),
-            github_api_issues_key=workspace_keys.get(KNOWN_KEYS["github"]),
+            github_shared_issues_key=workspace_keys.get(KNOWN_KEYS["github"]),
             strict_provider_keys=True,
             privileged=self.privileged,
+            # One shared PAT means GitHub's own 'opened by' says the
+            # operator for every tenant, and the WINGMAN_OPERATOR_NAME
+            # host setting that exists to recover the real submitter is
+            # one file per box — the same answer for everybody, which is
+            # no answer at all (#506). The registry already names each
+            # tenant exactly once; that slug is the attribution.
+            operator_name=self.slug,
         )
 
 

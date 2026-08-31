@@ -46,7 +46,12 @@ from wingman.infrastructure.storage import Storage
 
 _logger = get_logger("application.research")
 
-# Shown per source in reports; the stored snapshot keeps the full link set.
+# Printed per source in the rendered CLI report only (render_research_report).
+# SourceResult.new_links itself carries the FULL diffed list — capping it
+# there was the other half of #481: a source with 22 new links in one run
+# handed only 10 of them to the caller (focus.py, which filters to "jobish"
+# and scores them), and since the snapshot's baseline absorbs every link
+# seen regardless, the other 12 were never fetchable-as-new again either.
 MAX_NEW_LINKS_SHOWN = 10
 # A research snapshot older than this is flagged in the dossier, not hidden.
 RESEARCH_STALE_AFTER_DAYS = 30
@@ -485,7 +490,7 @@ def research_company(
                 label=source.label,
                 status="ok",
                 detail=detail,
-                new_links=new_links[:MAX_NEW_LINKS_SHOWN],
+                new_links=new_links,
                 total_links=len(links),
                 retained=retained,
             )
@@ -513,7 +518,11 @@ def render_research_report(report: ResearchReport) -> str:
         marker = "✓" if result.status == "ok" else "✗"
         lines.append(f"{marker} {result.url}{label}")
         lines.append(f"  {result.detail}")
-        lines.extend(f"  + {link}" for link in result.new_links)
+        shown = result.new_links[:MAX_NEW_LINKS_SHOWN]
+        lines.extend(f"  + {link}" for link in shown)
+        hidden = len(result.new_links) - len(shown)
+        if hidden:
+            lines.append(f"  (+{hidden} more not shown)")
         if result.retained:
             lines.append(f"  retained text: {_RETAINED_DETAIL[result.retained]}")
     return "\n".join(lines)

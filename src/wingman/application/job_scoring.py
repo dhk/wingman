@@ -16,7 +16,10 @@ never applied silently.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
@@ -35,18 +38,25 @@ CRITERIA_FILENAME = "job-criteria.md"
 JUDGE_PROMPT_VERSION = "job-judge-v1"
 # Recall and judge budgets per company per overnight run: enough to cover a
 # normal careers-page diff, small enough that a bulk repost can't burn the
-# night's tokens. Overflow is reported, never silent (RFC-031 discipline).
+# night's tokens. Overflow is reported, never silent (RFC-031 discipline),
+# and — since #481 — never lost either: OpeningScores.pending names exactly
+# the links this budget skipped (never fetched, or fetched but never
+# judged), and the caller (focus.py) persists that list as still-pending so
+# the next run's scoring sees these links again regardless of what the
+# research snapshot's baseline has already absorbed them into.
 # Raised from 8/4 (#480): a hiring-burst company (22 links in one run) was
-# routinely burning its entire fetch budget, and skipped links are not
-# merely delayed -- the research snapshot they're diffed against advances
-# unconditionally to every link seen this run, so a budget-skipped link
-# never reappears as "new" and is silently never scored. Widening the
-# budget is a stopgap, not a fix for that underlying loss (see #481).
+# routinely burning its entire fetch budget.
 MAX_FETCHED_PER_COMPANY = 50
 MAX_JUDGED_PER_COMPANY = 20
 _MIN_POSTING_CHARS = 200
 _MAX_QUOTES = 3
 _MAX_REASONS = 3
+# Ashby-hosted postings (#486) never server-render posting text to a plain
+# GET -- the body is a JS shell, so the length check below would otherwise
+# misreport every one of them as a login wall. Ashby publishes a public,
+# unauthenticated job-board API per org that lists every open job with a
+# plain-text description; verified live against jobs.ashbyhq.com/notion.
+_ASHBY_JOB_URL_RE = re.compile(r"^https://jobs\.ashbyhq\.com/(?P<org>[^/?#]+)/(?P<job_id>[^/?#]+)")
 
 
 def criteria_path(config: Config) -> Path:
@@ -125,15 +135,48 @@ INTERVIEW_AREAS: list[tuple[str, str]] = [
 REVIEW_EVERY_DAYS = 30
 
 
-def criteria_age_days(config: Config) -> int | None:
-    """Whole days since the criteria doc was last saved, or None when absent."""
+def criteria_modified_at(config: Config) -> datetime | None:
+    """When the criteria doc was last saved, or None when absent."""
     path = criteria_path(config)
     if not path.exists():
         return None
-    from datetime import UTC, datetime
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
 
-    modified = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+
+def criteria_age_days(config: Config) -> int | None:
+    """Whole days since the criteria doc was last saved, or None when absent."""
+    modified = criteria_modified_at(config)
+    if modified is None:
+        return None
     return max(0, (datetime.now(UTC) - modified).days)
+
+
+def criteria_sections(text: str) -> list[tuple[str, str]]:
+    """(heading, body) pairs from the doc's own '## ' headings (#489).
+
+    The interview flow (INTERVIEW_AREAS) writes headed sections — 'Hard
+    filters', 'Wants', and so on — but a doc edited by hand may carry none.
+    Content before the first heading, or a headingless doc entirely, is one
+    section under the file's own name, so a standing preference stated in
+    plain prose is still reachable rather than silently unsearchable.
+    """
+    sections: list[tuple[str, list[str]]] = []
+    title = CRITERIA_FILENAME
+    body: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if body:
+                sections.append((title, body))
+            title = line[3:].strip() or CRITERIA_FILENAME
+            body = []
+        else:
+            body.append(line)
+    sections.append((title, body))
+    return [
+        (section_title, joined)
+        for section_title, section_body in sections
+        if (joined := "\n".join(section_body).strip())
+    ]
 
 
 def criteria_review_due(config: Config, every_days: int = REVIEW_EVERY_DAYS) -> int | None:
@@ -198,6 +241,12 @@ class OpeningScores(BaseModel):
     scored: list[ScoredOpening] = Field(default_factory=list)  # judge survivors, best first
     filtered: list[ScoredOpening] = Field(default_factory=list)  # hard-filter failures
     notes: list[str] = Field(default_factory=list)  # fetch failures, budget overflow
+    # Input links that got no outcome at all this run because the fetch or
+    # judge budget cut them off first — never fetched, or fetched but never
+    # judged. Distinct from a fetch/judge failure (those DID get an attempt
+    # and are reported in notes instead): a budget skip is the one case the
+    # caller must keep pending rather than treat as resolved (#481).
+    pending: list[str] = Field(default_factory=list)
 
 
 JUDGE_SYSTEM_PROMPT = (
@@ -305,6 +354,28 @@ def rank_candidates(
     return [key for key, _ in scored]
 
 
+def _ashby_posting_text(url: str, fetch: Callable[[str], bytes]) -> str | None:
+    """Route an Ashby job URL through Ashby's public job-board API (#486).
+
+    Returns the posting's plain-text description, or None on any mismatch
+    or failure — never raises. This is a best-effort shortcut: the caller
+    falls back to the ordinary plain-GET path (and its ordinary error) on
+    None, so a wrong guess here costs nothing.
+    """
+    match = _ASHBY_JOB_URL_RE.match(url)
+    if match is None:
+        return None
+    api_url = f"https://api.ashbyhq.com/posting-api/job-board/{match['org']}"
+    try:
+        board = json.loads(fetch(api_url))
+        jobs = board["jobs"] if isinstance(board, dict) else []
+        job = next((j for j in jobs if j.get("id") == match["job_id"]), None)
+        text = str(job["descriptionPlain"]).strip() if job else ""
+    except Exception:  # noqa: BLE001 — best-effort shortcut, caller falls back on any failure
+        return None
+    return text or None
+
+
 def _posting_text(url: str, fetcher: Callable[[str], bytes] | None) -> str:
     """Fetch one posting to judgeable text — read-only, no inbox archive.
 
@@ -319,6 +390,11 @@ def _posting_text(url: str, fetcher: Callable[[str], bytes] | None) -> str:
     if not url.startswith("https://"):
         raise IngestError(f"only https:// postings are fetched (RFC-009); got {url!r}")
     fetch = fetcher if fetcher is not None else fetch_url
+
+    ashby_text = _ashby_posting_text(url, fetch)
+    if ashby_text is not None and len(ashby_text) >= _MIN_POSTING_CHARS:
+        return ashby_text
+
     try:
         data = fetch(url)
     except FetchError as exc:
@@ -326,10 +402,19 @@ def _posting_text(url: str, fetcher: Callable[[str], bytes] | None) -> str:
     text, _links = extract_page(data, url)
     text = text.strip()
     if len(text) < _MIN_POSTING_CHARS:
-        raise IngestError(
-            f"almost no readable text ({len(text)} chars) — likely a login wall "
-            "or JavaScript-only page"
-        )
+        if _ASHBY_JOB_URL_RE.match(url) is not None:
+            hint = (
+                "this is an Ashby-hosted posting, and its public job-board API lookup "
+                "also failed (org may not publish a public board, or the job was "
+                "removed) — the page itself is JavaScript-rendered and not fetchable "
+                "via plain GET"
+            )
+        else:
+            hint = (
+                "likely a login wall, or a JavaScript-rendered job board (Ashby, "
+                "etc.) that never server-renders posting text to a plain GET"
+            )
+        raise IngestError(f"almost no readable text ({len(text)} chars) — {hint}")
     return text
 
 
@@ -358,16 +443,19 @@ def score_company_openings(
     if criteria is None:
         raise IngestError(f"no {CRITERIA_FILENAME} in the workspace — nothing to judge against.")
     result = OpeningScores()
+    handled: set[str] = set()  # links that got a real attempt this run, any outcome
     if len(links) > MAX_FETCHED_PER_COMPANY:
         result.notes.append(
             f"{len(links) - MAX_FETCHED_PER_COMPANY} of {len(links)} new job link(s) "
-            f"not fetched (budget {MAX_FETCHED_PER_COMPANY}/run)"
+            f"not fetched (budget {MAX_FETCHED_PER_COMPANY}/run) — carried forward to "
+            "the next run"
         )
     postings: list[tuple[str, str]] = []
     for url in links[:MAX_FETCHED_PER_COMPANY]:
         try:
             postings.append((url, _posting_text(url, fetcher)))
         except IngestError as exc:
+            handled.add(url)
             result.notes.append(f"not scored [link]({url}): {exc}")
     if len(postings) > MAX_JUDGED_PER_COMPANY:
         try:
@@ -382,10 +470,11 @@ def score_company_openings(
             result.notes.append(f"recall ranking unavailable ({exc}); judging in page order")
         result.notes.append(
             f"{len(postings) - MAX_JUDGED_PER_COMPANY} opening(s) beyond the judge budget "
-            f"({MAX_JUDGED_PER_COMPANY}/run) left unscored"
+            f"({MAX_JUDGED_PER_COMPANY}/run) left unscored — carried forward to the next run"
         )
         postings = postings[:MAX_JUDGED_PER_COMPANY]
     for url, text in postings:
+        handled.add(url)
         try:
             opening = judge_posting(text, criteria, provider, url=url, company=company)
         except IngestError as exc:
@@ -393,11 +482,13 @@ def score_company_openings(
             continue
         (result.filtered if opening.filtered else result.scored).append(opening)
     result.scored.sort(key=lambda opening: opening.score, reverse=True)
+    result.pending = [url for url in links if url not in handled]
     _logger.info(
-        "scored company=%s judged=%d filtered=%d notes=%d",
+        "scored company=%s judged=%d filtered=%d notes=%d pending=%d",
         company,
         len(result.scored),
         len(result.filtered),
         len(result.notes),
+        len(result.pending),
     )
     return result

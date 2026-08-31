@@ -10,6 +10,30 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-08-30", 509, "fix: make job-criteria.md reachable by requirement resolution"),
+    ("2026-08-29", 494, "fix: a budget-skipped job link carries forward instead of vanishing"),
+    (
+        "2026-08-29",
+        492,
+        "fix: route Ashby job postings through Ashby's public job-board API (#486)",
+    ),
+    ("2026-08-29", 491, "fix: pack refuses to compose from superseded or deleted evidence (#490)"),
+    ("2026-08-29", 484, "fix: validate a substack_url's feed before storing it"),
+    ("2026-08-29", 482, "fix: raise job scoring fetch/judge budgets from 8/4 to 50/20"),
+    ("2026-08-28", 472, "fix: doctor called a dirty-tree build of the same commit drift (#471)"),
+    ("2026-08-28", 470, "fix: overnight exits 0 on partial success, in both commands (#469)"),
+    (
+        "2026-08-27",
+        468,
+        "Personalised surface groundwork: dashboard_state() contract design (RFC-075) and Woven clutters (RFC-077)",
+    ),
+    ("2026-08-25", 458, "Ignore .scratch/"),
+    ("2026-08-23", 457, "fix: restamp changelog_data at a commit that exists on main"),
+    (
+        "2026-08-23",
+        450,
+        "feat: ship Dropbox's own engineering ladder as a first-party rubric (#436)",
+    ),
     (
         "2026-08-23",
         449,
@@ -746,7 +770,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "5257e595a8ef590fab89668737d828307e8a0546"
+GENERATED_FROM_COMMIT = "c8881e28dff35e5281845b532ce1bf70cee4bcb6"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -756,4 +780,4 @@ GENERATED_FROM_COMMIT = "5257e595a8ef590fab89668737d828307e8a0546"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 41
+GENERATED_FROM_DISTANCE = 57

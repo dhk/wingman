@@ -107,6 +107,34 @@ def test_research_diffs_snapshots(config: Config, storage: Storage) -> None:
     assert "+ https://acme.example.com/jobs/staff-mle" in rendered
 
 
+def test_new_links_uncapped_for_callers_capped_for_the_rendered_report(
+    config: Config, storage: Storage
+) -> None:
+    """#481: MAX_NEW_LINKS_SHOWN used to cap SourceResult.new_links itself —
+    the same field job scoring reads to decide what to score — so a source
+    with more new links than the display cap silently lost the rest before
+    they ever reached a budget check, the research snapshot's baseline
+    having already absorbed them as 'seen'. The cap belongs to the rendered
+    text only now; the data a caller acts on is the full diffed list."""
+    from wingman.application.research import MAX_NEW_LINKS_SHOWN
+
+    add_company_source("Acme", "https://acme.example.com/careers", storage)
+    research_company("Acme", config, storage, fetcher=lambda url: b"<html><body></body></html>")
+
+    total = MAX_NEW_LINKS_SHOWN + 5
+    links_html = "".join(f'<a href="/jobs/{i}">{i}</a>' for i in range(total))
+    grown = f"<html><body>{links_html}</body></html>".encode()
+
+    report = research_company("Acme", config, storage, fetcher=lambda url: grown)
+    result = report.results[0]
+    assert len(result.new_links) == total  # nothing dropped from the data
+
+    rendered = render_research_report(report)
+    shown = [link for link in result.new_links if f"  + {link}" in rendered]
+    assert len(shown) == MAX_NEW_LINKS_SHOWN  # display stays capped
+    assert "(+5 more not shown)" in rendered
+
+
 def test_research_failure_keeps_previous_snapshot(config: Config, storage: Storage) -> None:
     add_company_source("Acme", "https://acme.example.com/careers", storage)
     research_company("Acme", config, storage, fetcher=lambda url: PAGE_V1)
@@ -256,6 +284,65 @@ def test_delete_company_purges_new_link_history_and_dossier_cursor(
 
     assert storage.list_new_links_since("acme", None) == []
     assert storage.get_dossier_generated_at("acme") is None
+
+
+def test_pending_job_links_roundtrip_and_resolve(storage: Storage) -> None:
+    url = "https://acme.example.com/careers"
+    storage.add_pending_job_links(
+        "acme", url, ["https://acme.example.com/jobs/a"], datetime.now(UTC)
+    )
+    storage.add_pending_job_links(
+        "acme",
+        url,
+        ["https://acme.example.com/jobs/a", "https://acme.example.com/jobs/b"],
+        datetime.now(UTC),
+    )
+    # idempotent: re-adding an already-pending link doesn't duplicate it
+    assert storage.list_pending_job_links("acme", url) == [
+        "https://acme.example.com/jobs/a",
+        "https://acme.example.com/jobs/b",
+    ]
+    storage.resolve_pending_job_links("acme", ["https://acme.example.com/jobs/a"])
+    assert storage.list_pending_job_links("acme", url) == ["https://acme.example.com/jobs/b"]
+
+
+def test_remove_company_source_purges_pending_job_links(storage: Storage) -> None:
+    add_company_source("Acme", "https://acme.example.com/careers", storage)
+    storage.add_pending_job_links(
+        "acme",
+        "https://acme.example.com/careers",
+        ["https://acme.example.com/jobs/a"],
+        datetime.now(UTC),
+    )
+    remove_company_source("Acme", "https://acme.example.com/careers", storage)
+    assert storage.list_pending_job_links("acme", "https://acme.example.com/careers") == []
+
+
+def test_rename_company_moves_pending_job_links(storage: Storage) -> None:
+    add_company_source("Synctera", "https://synctera.com/careers", storage)
+    storage.add_pending_job_links(
+        "synctera",
+        "https://synctera.com/careers",
+        ["https://synctera.com/jobs/a"],
+        datetime.now(UTC),
+    )
+    rename_company("Synctera", "Synctera Inc.", storage)
+    assert storage.list_pending_job_links("synctera", "https://synctera.com/careers") == []
+    assert storage.list_pending_job_links("synctera inc.", "https://synctera.com/careers") == [
+        "https://synctera.com/jobs/a"
+    ]
+
+
+def test_delete_company_purges_pending_job_links(storage: Storage) -> None:
+    add_company_source("Acme", "https://acme.example.com/careers", storage)
+    storage.add_pending_job_links(
+        "acme",
+        "https://acme.example.com/careers",
+        ["https://acme.example.com/jobs/a"],
+        datetime.now(UTC),
+    )
+    delete_company("Acme", storage)
+    assert storage.list_pending_job_links("acme", "https://acme.example.com/careers") == []
 
 
 def test_rename_company_same_key_is_rejected(storage: Storage) -> None:
