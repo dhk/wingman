@@ -1,4 +1,4 @@
-"""Career-profile management: list, remove, resolve, amend, clear (RFC-027).
+"""Career-profile management: list, remove, resolve, amend, correct, clear (RFC-027).
 
 The manual correction workflow Phase 1 promised and never got: re-ingesting
 an evolving source-of-truth document accumulates items — the same skill
@@ -13,6 +13,15 @@ prefix (git-style), because nobody types a full UUID.
 claim SAYS rather than how it is filed, and it is deliberately confined to
 interview captures — see its docstring for where that line is and why it
 sits there.
+
+`correct_item` (issue #487) is amend's mirror image: for the achievements,
+skills, roles and testimonials amend refuses, whose evidence is quoted
+verbatim from a document. It does not reopen the "editing a quote" question
+amend's docstring settles — it exists for the narrower, real gap that
+settlement left: a transcription or voice-dictation error in evidence that
+WAS captured correctly, with no path to fix it short of filesystem access to
+the workspace inbox (which a hosted tenant does not have). See its docstring
+for the guard that keeps it from becoming a second `amend`.
 """
 
 from __future__ import annotations
@@ -495,6 +504,276 @@ def describe_amendment(amended: ProfileItem, before: ProfileItem) -> str:
     return "; ".join(parts)
 
 
+CORRECTION_SOURCE_TYPE = "evidence_correction"
+
+
+def _refuse_interview_sourced(item: ProfileItem) -> None:
+    """The line `correct` holds, the mirror image of `_refuse_document_sourced`.
+
+    An interview capture already has a path for "that came out wrong" —
+    `amend` — and it keeps the RFC-050/RFC-057 scale fields (`intensity`,
+    `company_reason`, `value_statement`) `correct` knows nothing about.
+    Letting `correct` also touch an INTERVIEW item would give the same
+    capture two mutation paths writing two different kinds of note into two
+    different lineages, for no reader-visible benefit.
+    """
+    if item.kind is ProfileItemKind.INTERVIEW:
+        raise IngestError(
+            f"{item.item_id[:8]} is an interview capture, not a document-sourced item — use "
+            "'profile amend' to revise your own answer instead; it also keeps the "
+            "intensity/company_reason/value_statement fields 'correct' doesn't touch."
+        )
+
+
+def _find_correctable_span(item: ProfileItem, old_text: str) -> int:
+    """The index of the ONE evidence span old_text names, exactly.
+
+    old_text must match a stored quote verbatim — not a substring, not
+    modulo whitespace — because the caller has to be pointing at a real,
+    specific span, not hoping one contains something like it. Zero matches
+    means the caller has the wording wrong (or is looking at a different
+    item); more than one means the same quote appears twice on this item,
+    which correct refuses rather than guess which one the caller meant.
+    """
+    matches = [index for index, span in enumerate(item.evidence) if span.quote == old_text]
+    if not matches:
+        quotes = "; ".join(f'"{span.quote}"' for span in item.evidence)
+        raise IngestError(
+            f"{item.item_id[:8]}'s evidence does not contain {old_text!r} verbatim; "
+            f"current evidence: {quotes}"
+        )
+    if len(matches) > 1:
+        raise IngestError(
+            f"{old_text!r} appears in {len(matches)} evidence spans on {item.item_id[:8]}; "
+            "correct can only fix one at a time — give the full sentence around it if that "
+            "still doesn't disambiguate, or fix the other occurrence in a second call."
+        )
+    return matches[0]
+
+
+def _validate_correction(
+    item_id_prefix: str, old_text: str, new_text: str, storage: Storage
+) -> tuple[ProfileItem, int, str, str]:
+    """Everything `preview_correction` and `correct_item` must agree on,
+    shared so the diff shown in preview is exactly the diff `correct_item`
+    would apply — never two implementations that could drift apart.
+    """
+    item = find_item(item_id_prefix, storage)
+    _refuse_interview_sourced(item)
+    if item.status is ItemStatus.SUPERSEDED:
+        raise IngestError(
+            f"{item.item_id[:8]} was superseded by a later capture of the same target, so "
+            "correcting it would change nothing anybody reads; correct the active item "
+            "instead (see 'wingman profile list')."
+        )
+    old = old_text.strip()
+    new = new_text.strip()
+    if not old:
+        raise IngestError("old_text is empty; give the exact evidence text to correct.")
+    if not new:
+        raise IngestError("new_text is empty; give the corrected wording.")
+    index = _find_correctable_span(item, old)
+    if new == item.evidence[index].quote:
+        raise IngestError(f"{item.item_id[:8]} already reads exactly that; nothing to correct.")
+    return item, index, old, new
+
+
+def preview_correction(item_id_prefix: str, old_text: str, new_text: str, storage: Storage) -> str:
+    """The exact diff `correct_item` would apply — read-only, no write.
+
+    The preview half of the two-call confirm gate `profile_manage(action=
+    'correct', ..., confirmed=...)` uses, the same shape company_deep_dive,
+    people_deep_dive and feature_request already use for an irreversible or
+    evidence-altering write: call this (confirmed=false) first, show the
+    diff to the user verbatim, and only call `correct_item` (confirmed=true)
+    after they explicitly approve it. Raises the same IngestError
+    `correct_item` would for an item/text that can't be corrected, so a
+    caller never sees a clean preview for a correction that would then fail.
+    """
+    item, _index, old, new = _validate_correction(item_id_prefix, old_text, new_text, storage)
+    return f'{item.kind.value} {item.name!r} ({item.item_id[:8]}):\n  - "{old}"\n  + "{new}"'
+
+
+def _correction_note(
+    item: ProfileItem,
+    previous_record_id: str,
+    old_text: str,
+    new_text: str,
+    corrected_at: datetime,
+) -> str:
+    """The inbox note a corrected evidence span resolves against.
+
+    Exactly `_amendment_note`'s reasoning, transplanted: the corrected quote
+    needs somewhere it was actually written, or the profile asserts a quote
+    that exists nowhere. The original note cannot be touched — its content
+    hash IS the source record's identity — so the correction gets a note of
+    its own, naming the record it corrects and the text it replaces.
+    """
+    lines = [
+        "# Evidence correction",
+        "",
+        f"Item: {item.item_id}",
+        f"Corrects record: {previous_record_id}",
+        f"Corrected at: {corrected_at.isoformat()}",
+        "",
+        f"Evidence: {new_text}",
+        "",
+        f"Previously: {old_text}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _correction_record(
+    config: Config,
+    storage: Storage,
+    item: ProfileItem,
+    previous_record_id: str,
+    old_text: str,
+    new_text: str,
+    corrected_at: datetime,
+) -> SourceRecord:
+    """Write the correction note to the inbox and record it as a source.
+
+    Reuses the corrected span's own record's `document_key`, exactly as an
+    interview amendment reuses its original's — so the correction belongs
+    to the SAME RFC-028 lineage as the claim it fixes: a later re-ingest of
+    the (fixed, or unrelated) source document under the same filename
+    supersedes the corrected item through ordinary lineage rather than
+    landing as a rival source.
+    """
+    content = _correction_note(item, previous_record_id, old_text, new_text, corrected_at)
+    config.inbox_dir.mkdir(parents=True, exist_ok=True)
+    stamp = corrected_at.strftime("%Y%m%dT%H%M%S%f")
+    path = config.inbox_dir / f"{stamp}-evidence-correction-note.md"
+    path.write_text(content, encoding="utf-8")
+    data_root = config.data_dir.resolve()
+    resolved = path.resolve()
+    locator = (
+        str(resolved.relative_to(data_root))
+        if resolved.is_relative_to(data_root)
+        else str(resolved)
+    )
+    previous = storage.get_source_record(previous_record_id)
+    record = SourceRecord(
+        source_type=CORRECTION_SOURCE_TYPE,
+        source_locator=locator,
+        content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        document_key=previous.document_key if previous is not None else "",
+    )
+    storage.add_source_record(record)
+    return record
+
+
+def correct_item(
+    item_id_prefix: str,
+    old_text: str,
+    new_text: str,
+    config: Config,
+    storage: Storage,
+) -> tuple[ProfileItem, ProfileItem]:
+    """Fix a transcription/mishearing error in one evidence span (issue #487).
+
+    `amend`'s mirror image, for exactly the items amend refuses. Their
+    evidence is quoted verbatim from a document, and letting anyone edit
+    that quote would let the profile assert a claim no document makes —
+    amend's refusal protects a real invariant and this tool does not
+    reopen it. What it fixes instead is narrower: evidence that WAS
+    captured correctly from wherever it came from (a document, or the
+    person's own dictated words), but arrived with a transcription error —
+    a misheard name, a dropped word — with no path to fix short of
+    filesystem access to the workspace inbox, which a hosted tenant does
+    not have (RFC-028's "correct the document and re-ingest it" answer
+    assumes exactly the access this closes a gap for).
+
+    `old_text` must match one evidence span's stored quote VERBATIM — this
+    is deliberately stricter than a substring match, so the caller is
+    naming a real, specific span rather than hoping something like it
+    exists. Ambiguous (the same quote on two spans) and not-found are both
+    refused rather than guessed at (`_find_correctable_span`).
+
+    **The item and its source record are corrected atomically.** A
+    correction note is written to the inbox exactly as an interview
+    amendment writes one (`_correction_note`/`_correction_record`), the
+    corrected span's `source_record_id` is repointed at the new record, and
+    both that repointing and the new quote text land in the SAME
+    `storage.update_profile_item` call — so nothing observing the item
+    between the note write and the item write can see a quote that no
+    longer matches its own source record. The corrected span's index is
+    the only thing that changes on `evidence`; every other span (a
+    multi-quote achievement, say) is untouched.
+
+    **The prior wording is kept, not replaced** — `ItemRevision`,
+    `ProfileItem.revisions`, the exact mechanism `amend` already uses, not
+    a parallel one: the full evidence list as it stood, the detail, and the
+    RFC-050/057 scale fields are all snapshotted before the change. The
+    listing then reads '(corrected)' rather than amend's '(revised)' —
+    `_revision_note` tells the two apart by the item's own kind, since
+    amend and correct never touch the same kind.
+
+    **`detail` is corrected too, when it held the same text.** A
+    `qa_capture`/voice-dictated item stores its answer in both `detail` and
+    `evidence[0].quote` (the same string, by construction) — correcting
+    only the evidence span there would leave the listing (which renders
+    `detail`) still showing the mistranscribed name. A document-extracted
+    item's `detail` is a separate model-written summary that need not equal
+    any quote; it is left alone unless it happens to equal `old_text`
+    exactly, so a correction never accidentally rewrites unrelated prose.
+
+    **No character-count or edit-distance gate.** The issue this closes is
+    explicit that the protection worth having is the visible diff
+    (`preview_correction`) plus the retained revision, not an automated
+    length rule — a rule like that would refuse a legitimately short fix
+    ("Erica" -> "Arika", 2 characters) exactly as readily as it would wave
+    through a long one, and it would teach nothing a human reading the diff
+    doesn't already see for free.
+
+    Returns (corrected item, the item as it was before). Callers own the
+    confirm gate — see `preview_correction`.
+    """
+    item, index, old, new = _validate_correction(item_id_prefix, old_text, new_text, storage)
+    corrected_at = datetime.now(UTC)
+    revisions = [
+        *item.revisions,
+        ItemRevision(
+            revised_at=corrected_at,
+            detail=item.detail,
+            evidence=list(item.evidence),
+            intensity=item.intensity,
+            company_reason=item.company_reason,
+            value_statement=item.value_statement,
+        ),
+    ]
+    original_record_id = item.evidence[index].source_record_id
+    record = _correction_record(config, storage, item, original_record_id, old, new, corrected_at)
+    new_evidence = list(item.evidence)
+    new_evidence[index] = EvidenceSpan(source_record_id=record.record_id, quote=new)
+    changes: dict[str, object] = {"evidence": new_evidence, "revisions": revisions}
+    if item.detail == old:
+        changes["detail"] = new
+    corrected = item.model_copy(update=changes)
+    storage.update_profile_item(corrected)
+    _rerender(config, storage)
+    _logger.info(
+        "profile correct id=%s span=%d revisions=%d", corrected.item_id, index, len(revisions)
+    )
+    return corrected, item
+
+
+def describe_correction(corrected: ProfileItem, before: ProfileItem) -> str:
+    """What a correction actually changed — the same reporting job
+    `describe_amendment` does for amend, echoed by both the CLI and the MCP
+    tool: 'Corrected.' on its own cannot tell somebody whether the span
+    that changed is the one they meant to fix.
+    """
+    parts: list[str] = []
+    for old_span, new_span in zip(before.evidence, corrected.evidence, strict=True):
+        if old_span.quote != new_span.quote:
+            parts.append(f'evidence is now "{new_span.quote}" (was "{old_span.quote}")')
+    if corrected.detail != before.detail:
+        parts.append(f'detail is now "{corrected.detail}" (was "{before.detail}")')
+    return "; ".join(parts)
+
+
 def clear_profile(config: Config, storage: Storage) -> int:
     """Delete every profile item and re-render the (now empty) career artifacts.
 
@@ -542,17 +821,26 @@ def _arrival_note(item: ProfileItem) -> str:
 
 
 def _revision_note(item: ProfileItem) -> str:
-    """' (revised)' for a capture whose author amended their own answer
-    (RFC-071, issue #381) — empty for everything else.
+    """' (revised)' for an interview capture whose author amended their own
+    answer (RFC-071, issue #381), ' (corrected)' for anything else with a
+    fixed transcription error (issue #487) — empty for everything else.
+
+    `amend` and `correct` are mutually exclusive by kind (amend refuses
+    every kind but INTERVIEW; correct refuses INTERVIEW), so an item with a
+    non-empty `revisions` list got there by exactly one of the two paths,
+    and its own kind says which marker is honest — no second field needed
+    to remember which tool touched it.
 
     Sits alongside `(answered in a form)` rather than replacing it: a form
     answer that was later reworded still ARRIVED in a form, and both facts
     are load-bearing for a reader deciding how much weight the sentence
     carries. What is shown is the current wording; that it has a superseded
     predecessor is exactly what this marker says out loud, so nobody has to
-    read the database to learn the person changed their mind.
+    read the database to learn the wording changed.
     """
-    return " (revised)" if item.revisions else ""
+    if not item.revisions:
+        return ""
+    return " (revised)" if item.kind is ProfileItemKind.INTERVIEW else " (corrected)"
 
 
 def render_profile_listing(items: list[ProfileItem]) -> str:

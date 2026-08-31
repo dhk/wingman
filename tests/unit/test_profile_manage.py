@@ -1,4 +1,4 @@
-"""Career-profile management (RFC-027): list, rm, resolve, amend, clear."""
+"""Career-profile management (RFC-027): list, rm, resolve, amend, correct, clear."""
 
 import json
 from pathlib import Path
@@ -14,10 +14,14 @@ from wingman.application.interview import (
     capture_interview_reaction,
 )
 from wingman.application.profile_manage import (
+    CORRECTION_SOURCE_TYPE,
     amend_item,
     clear_profile,
+    correct_item,
     describe_amendment,
+    describe_correction,
     find_item,
+    preview_correction,
     rekind_item,
     remove_item,
     rename_item,
@@ -784,3 +788,400 @@ def test_cli_profile_amend(workspace: Config) -> None:
 
     failed = CliRunner().invoke(app, ["profile", "amend", "zzzzzzzz", "--why", "Nope."])
     assert failed.exit_code == 1
+
+
+def _active_skill(storage: Storage) -> ProfileItem:
+    """The BigQuery skill's active row (single evidence span): _ingest_twice's
+    two documents disagree on its *detail*, so it lands as a genuine
+    RFC-027 conflict rather than an evidence-merge — unlike 'Search
+    rewrite', whose identical detail on both documents merges into ONE
+    item with TWO evidence spans (see test_correct_refuses_an_ambiguous_
+    quote_across_multiple_spans below, which relies on exactly that)."""
+    return next(
+        item
+        for item in storage.list_profile_items()
+        if item.name == "BigQuery" and item.status is ItemStatus.ACTIVE
+    )
+
+
+def test_correct_updates_the_item_and_source_record_atomically(
+    workspace: Config, tmp_path: Path
+) -> None:
+    """The core acceptance criterion from #487: fixing a transcription error
+    in document-sourced evidence moves the item's quote AND its source
+    record together, so the two never diverge."""
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        skill = _active_skill(storage)
+        original_record_id = skill.evidence[0].source_record_id
+
+        corrected, before = correct_item(
+            skill.item_id[:8],
+            "Skills: BigQuery daily.",
+            "Skills: BigQuery weekly.",
+            workspace,
+            storage,
+        )
+
+        assert before.item_id == skill.item_id
+        assert corrected.item_id == skill.item_id
+        assert corrected.evidence[0].quote == "Skills: BigQuery weekly."
+        assert corrected.evidence[0].source_record_id != original_record_id
+        # detail didn't equal the old quote on this item, so it's untouched —
+        # correct only rewrites what it was actually told to rewrite.
+        assert corrected.detail == before.detail
+
+        new_record = storage.get_source_record(corrected.evidence[0].source_record_id)
+        assert new_record is not None
+        assert new_record.source_type == CORRECTION_SOURCE_TYPE
+        original_record = storage.get_source_record(original_record_id)
+        assert original_record is not None
+        # Same RFC-028 lineage as the claim it fixes.
+        assert new_record.document_key == original_record.document_key
+
+        # The original note is untouched — the point of not rewriting it.
+        original_note = (workspace.data_dir / original_record.source_locator).read_text(
+            encoding="utf-8"
+        )
+        assert "Skills: BigQuery daily." in original_note
+        assert "Skills: BigQuery weekly." not in original_note
+        # The new note names the record it corrects and the text it replaced.
+        new_note = (workspace.data_dir / new_record.source_locator).read_text(encoding="utf-8")
+        assert original_record_id in new_note
+        assert "Skills: BigQuery daily." in new_note
+
+        stored = storage.get_profile_item(skill.item_id)
+        assert stored is not None
+        assert stored.evidence[0].quote == corrected.evidence[0].quote
+        assert stored.evidence[0].source_record_id == corrected.evidence[0].source_record_id
+
+
+def test_correct_syncs_detail_when_it_held_the_same_text(workspace: Config) -> None:
+    """A qa_capture/voice-dictated item stores its answer in BOTH `detail`
+    and `evidence[0].quote` (the same string, by construction) — exactly
+    the #487 concrete case (a Wispr mishearing in a voice-dictated
+    capture). Correcting only the evidence span there would leave the
+    listing, which renders `detail`, still showing the mistranscribed
+    word."""
+    from wingman.application.qa_capture import capture_qa
+
+    with Storage(workspace.db_path) as storage:
+        capture_qa(
+            "Who led the Infinitus rollout?",
+            "Erica Chen led the rollout end to end.",
+            workspace,
+            storage,
+        )
+        item = next(
+            item
+            for item in storage.list_profile_items()
+            if item.name == "Who led the Infinitus rollout?"
+        )
+        assert item.detail == item.evidence[0].quote == "Erica Chen led the rollout end to end."
+
+        corrected, before = correct_item(
+            item.item_id[:8],
+            "Erica Chen led the rollout end to end.",
+            "Arika Chen led the rollout end to end.",
+            workspace,
+            storage,
+        )
+
+        assert before.detail == "Erica Chen led the rollout end to end."
+        assert corrected.detail == "Arika Chen led the rollout end to end."
+        assert corrected.evidence[0].quote == "Arika Chen led the rollout end to end."
+
+
+def test_correct_retains_the_old_wording_as_a_revision(workspace: Config, tmp_path: Path) -> None:
+    """The prior wording is kept, not replaced — the same ItemRevision
+    mechanism amend uses, never a parallel one."""
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        skill = _active_skill(storage)
+
+        corrected, _before = correct_item(
+            skill.item_id[:8],
+            "Skills: BigQuery daily.",
+            "Skills: BigQuery every day.",
+            workspace,
+            storage,
+        )
+
+        assert len(corrected.revisions) == 1
+        revision = corrected.revisions[0]
+        assert revision.detail == skill.detail
+        assert revision.evidence[0].quote == "Skills: BigQuery daily."
+        assert revision.evidence[0].source_record_id == skill.evidence[0].source_record_id
+        # Not a second evidence span (#336's rule, exactly as amend's revisions).
+        assert len(corrected.evidence) == 1
+
+
+def test_correct_marks_the_item_corrected_in_listing(workspace: Config, tmp_path: Path) -> None:
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        skill = _active_skill(storage)
+        listing_before = render_profile_listing(storage.list_profile_items())
+        assert "(corrected)" not in listing_before
+
+        correct_item(
+            skill.item_id[:8],
+            "Skills: BigQuery daily.",
+            "Skills: BigQuery constantly.",
+            workspace,
+            storage,
+        )
+
+        listing_after = render_profile_listing(storage.list_profile_items())
+        assert "(corrected)" in listing_after
+        # amend's marker, not correct's — the two never share an item's kind.
+        assert "(revised)" not in listing_after
+
+
+def test_preview_correction_does_not_mutate_anything(workspace: Config, tmp_path: Path) -> None:
+    """The confirmation gate actually gates: an uncommitted preview call
+    reports the diff but writes nothing."""
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        skill = _active_skill(storage)
+        before_count = len(storage.list_profile_items())
+
+        preview = preview_correction(
+            skill.item_id[:8],
+            "Skills: BigQuery daily.",
+            "Skills: BigQuery frequently.",
+            storage,
+        )
+
+        assert "Skills: BigQuery daily." in preview
+        assert "Skills: BigQuery frequently." in preview
+        assert len(storage.list_profile_items()) == before_count
+        stored = storage.get_profile_item(skill.item_id)
+        assert stored is not None
+        assert stored.evidence[0].quote == "Skills: BigQuery daily."
+        assert stored.revisions == []
+
+
+def test_correct_refuses_an_interview_item_and_points_at_amend(workspace: Config) -> None:
+    """correct is amend's mirror image: an interview capture has its own
+    path, and letting correct also touch it would be a second, competing
+    mutation mechanism for the same capture."""
+    with Storage(workspace.db_path) as storage:
+        item = _form_capture(workspace, storage, "Machines can do more than sums.")
+
+        with pytest.raises(IngestError) as excinfo:
+            correct_item(
+                item.item_id[:8],
+                "Machines can do more than sums.",
+                "Machines can compute more than sums.",
+                workspace,
+                storage,
+            )
+
+        message = str(excinfo.value)
+        assert "interview capture" in message
+        assert "profile amend" in message
+        untouched = storage.get_profile_item(item.item_id)
+        assert untouched is not None and untouched.revisions == []
+
+
+def test_correct_refuses_text_not_found_verbatim(workspace: Config, tmp_path: Path) -> None:
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        skill = _active_skill(storage)
+
+        with pytest.raises(IngestError, match="does not contain"):
+            correct_item(skill.item_id[:8], "Something never said.", "Fixed.", workspace, storage)
+
+
+def test_correct_refuses_an_ambiguous_quote_across_multiple_spans(
+    workspace: Config, tmp_path: Path
+) -> None:
+    """'Search rewrite' is asserted identically by both ingested documents,
+    so persist_items merges them into ONE item with TWO evidence spans
+    citing the same quote (real corroboration, unlike a revision) — correct
+    refuses rather than guess which span the caller meant."""
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        achievement = next(
+            item
+            for item in storage.list_profile_items()
+            if item.name == "Search rewrite" and item.status is ItemStatus.ACTIVE
+        )
+        assert len(achievement.evidence) == 2
+
+        with pytest.raises(IngestError, match="appears in 2 evidence spans"):
+            correct_item(
+                achievement.item_id[:8],
+                "Shipped the search rewrite.",
+                "Shipped the search-rewrite project.",
+                workspace,
+                storage,
+            )
+
+
+def test_correct_refuses_a_no_op(workspace: Config, tmp_path: Path) -> None:
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        skill = _active_skill(storage)
+
+        with pytest.raises(IngestError, match="already reads exactly that"):
+            correct_item(
+                skill.item_id[:8],
+                "Skills: BigQuery daily.",
+                "Skills: BigQuery daily.",
+                workspace,
+                storage,
+            )
+
+
+def test_correct_refuses_empty_old_or_new_text(workspace: Config, tmp_path: Path) -> None:
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        skill = _active_skill(storage)
+
+        with pytest.raises(IngestError, match="old_text is empty"):
+            correct_item(skill.item_id[:8], "   ", "Fixed.", workspace, storage)
+        with pytest.raises(IngestError, match="new_text is empty"):
+            correct_item(
+                skill.item_id[:8],
+                "Skills: BigQuery daily.",
+                "  ",
+                workspace,
+                storage,
+            )
+
+
+def test_correct_refuses_a_superseded_item(workspace: Config, tmp_path: Path) -> None:
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        skill = _active_skill(storage)
+        storage.update_profile_item(skill.model_copy(update={"status": ItemStatus.SUPERSEDED}))
+
+        with pytest.raises(IngestError, match="superseded"):
+            correct_item(
+                skill.item_id[:8],
+                "Skills: BigQuery daily.",
+                "Skills: BigQuery constantly.",
+                workspace,
+                storage,
+            )
+
+
+def test_correct_echoes_exactly_what_it_changed(workspace: Config, tmp_path: Path) -> None:
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        skill = _active_skill(storage)
+
+        corrected, before = correct_item(
+            skill.item_id[:8],
+            "Skills: BigQuery daily.",
+            "Skills: BigQuery every single day.",
+            workspace,
+            storage,
+        )
+
+    summary = describe_correction(corrected, before)
+    assert (
+        'evidence is now "Skills: BigQuery every single day." (was "Skills: BigQuery daily.")'
+        in summary
+    )
+    # detail was untouched on this item, so it does not appear in the diff.
+    assert "detail is now" not in summary
+
+
+def test_mcp_profile_manage_correct_roundtrip(workspace: Config, tmp_path: Path) -> None:
+    from wingman.mcp_server import profile_manage
+
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        item_id = _active_skill(storage).item_id[:8]
+
+    preview = profile_manage(
+        "correct",
+        item_id,
+        old_text="Skills: BigQuery daily.",
+        new_text="Skills: BigQuery weekly.",
+    )
+    assert "Not corrected" in preview
+    assert "Skills: BigQuery weekly." in preview
+    # confirmed defaults to false: nothing was written.
+    assert "(corrected)" not in profile_manage("list")
+
+    applied = profile_manage(
+        "correct",
+        item_id,
+        old_text="Skills: BigQuery daily.",
+        new_text="Skills: BigQuery weekly.",
+        confirmed=True,
+    )
+    assert "Corrected" in applied
+    assert "(corrected)" in profile_manage("list")
+    assert "failed" in profile_manage(
+        "correct", item_id, old_text="Skills: BigQuery daily.", confirmed=True
+    )
+    assert "correct" in profile_manage("nope")
+
+
+def test_correct_docstring_carries_the_confirm_protocol() -> None:
+    from wingman.mcp_server import profile_manage as profile_manage_tool
+
+    doc = (profile_manage_tool.__doc__ or "").lower()
+    assert "confirmed=false first" in doc
+    assert "confirmed=true after they explicitly approve" in doc
+
+
+def test_cli_profile_correct(workspace: Config, tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        item_id = _active_skill(storage).item_id[:8]
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "profile",
+            "correct",
+            item_id,
+            "Skills: BigQuery daily.",
+            "Skills: BigQuery routinely.",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Corrected" in result.output
+    assert "BigQuery routinely" in result.output
+
+    failed = CliRunner().invoke(app, ["profile", "correct", "zzzzzzzz", "Nope.", "Fixed.", "--yes"])
+    assert failed.exit_code == 1
+
+
+def test_cli_profile_correct_declined_prompt_does_not_mutate(
+    workspace: Config, tmp_path: Path
+) -> None:
+    with Storage(workspace.db_path) as storage:
+        _ingest_twice(workspace, storage, tmp_path)
+        item_id = _active_skill(storage).item_id
+
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "profile",
+            "correct",
+            item_id[:8],
+            "Skills: BigQuery daily.",
+            "Skills: BigQuery routinely.",
+        ],
+        input="n\n",
+    )
+    assert result.exit_code != 0
+
+    with Storage(workspace.db_path) as storage:
+        stored = storage.get_profile_item(item_id)
+        assert stored is not None and stored.revisions == []
