@@ -615,7 +615,10 @@ def test_validate_keys_tests_the_winning_tier_not_the_environment(
     monkeypatch.setitem(module._LIVE_TESTS, "anthropic", fake_test)
 
     rows = validate_keys(
-        {"ANTHROPIC_API_KEY": "sk-ant-healthy"}, data_dir=tmp_path, home=tmp_path / "home"
+        {"ANTHROPIC_API_KEY": "sk-ant-healthy"},
+        data_dir=tmp_path,
+        home=tmp_path / "home",
+        global_path=tmp_path / "none.env",
     )
     row = next(r for r in rows if r.short_name == "anthropic")
     assert tested == ["sk-ant-expired"]
@@ -638,7 +641,9 @@ def test_validate_keys_makes_no_call_for_an_unset_key(
     for name in module.KNOWN_KEYS:
         monkeypatch.setitem(module._LIVE_TESTS, name, explode)
 
-    rows = validate_keys({}, data_dir=tmp_path, home=tmp_path / "home")
+    rows = validate_keys(
+        {}, data_dir=tmp_path, home=tmp_path / "home", global_path=tmp_path / "none.env"
+    )
     assert all(row.tier == "not set" and row.message == "not set" for row in rows)
     assert all(row.fingerprint is None for row in rows)
 
@@ -653,7 +658,10 @@ def test_validate_keys_never_returns_the_value(
     monkeypatch.setitem(module._LIVE_TESTS, "voyage", lambda value: (True, "working"))
 
     rows = validate_keys(
-        {"VOYAGE_API_KEY": "pa-SECRET-TAIL-VALUE"}, data_dir=tmp_path, home=tmp_path / "home"
+        {"VOYAGE_API_KEY": "pa-SECRET-TAIL-VALUE"},
+        data_dir=tmp_path,
+        home=tmp_path / "home",
+        global_path=tmp_path / "none.env",
     )
     row = next(r for r in rows if r.short_name == "voyage")
     assert row.ok is True

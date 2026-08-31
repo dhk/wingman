@@ -97,7 +97,7 @@ def test_tenant_with_no_key_never_inherits_a_sibling_tenants_key(
 
     jason_provider = get_provider(CapabilityClass.EXTRACT_FAST, jason.config())
     assert jason_provider._client.api_key == "sk-ant-jason-real"
-    with pytest.raises(ProviderError, match="ANTHROPIC_API_KEY"):
+    with pytest.raises(ProviderError, match="no Anthropic key configured"):
         get_provider(CapabilityClass.EXTRACT_FAST, bob.config())
 
 

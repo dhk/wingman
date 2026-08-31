@@ -245,3 +245,31 @@ def test_the_rendered_report_leads_with_things_to_do(workspace: Path) -> None:
     assert html.index("Things to do") < html.index("Career Profile")
     assert "let's set up my job criteria" in markdown
     assert "let&#x27;s set up my job criteria" in html or "let's set up my job criteria" in html
+
+
+def test_next_actions_do_not_recommend_a_values_profile_without_inference(
+    workspace: Path,
+) -> None:
+    """#514, reported by a hosted tenant: 13 captures across 6 kinds, well
+    clear of the floor, and the top recommendation was 'Build your values
+    profile' — the one call that could not succeed, because the workspace
+    had no model key and nobody had funded it. Evidence readiness and
+    inference availability are different questions and the list has to ask
+    both."""
+    from wingman.application.completeness import next_actions
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        report = compute_completeness(storage, config)
+    report.values.captures = report.values.min_items
+    report.values.subtypes = report.values.min_subtypes
+    report.values.profile_built = False
+    assert report.values.ready
+
+    report.inference_available = True
+    assert "Build your values profile" in [action.title for action in next_actions(report)]
+
+    report.inference_available = False
+    titles = [action.title for action in next_actions(report)]
+    assert "Build your values profile" not in titles
+    assert "Add a model key to unlock your values profile" in titles

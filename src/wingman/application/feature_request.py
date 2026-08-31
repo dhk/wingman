@@ -48,23 +48,6 @@ FEATURE_LABEL = "feature-request"
 Runner = Callable[[list[str]], tuple[int, str, str]]
 
 
-def _declared_shared_key(home: Path | None = None, global_path: Path | None = None) -> str | None:
-    """The shared issues key as the OPERATOR provisioned it: the per-account
-    host file first, then the box-wide global file — RFC-047's ladder order,
-    where an account's own secrets.env overrides the shared default and
-    never the reverse. Reads the files themselves, never os.environ.
-
-    'home'/'global_path' are injectable exactly as keys.read_host_keys and
-    keys.read_global_keys are, so a test can point at a fixture instead of
-    silently resolving the real operator's credential."""
-    env_var = keys.KNOWN_KEYS["github"]
-    for tier in (keys.read_host_keys(home), keys.read_global_keys(global_path)):
-        value = tier.get(env_var, "").strip()
-        if value:
-            return value
-    return None
-
-
 def _resolve_github_key(
     config: Config, home: Path | None = None, global_path: Path | None = None
 ) -> str | None:
@@ -86,14 +69,19 @@ def _resolve_github_key(
     guarantee exactly (a tenant still cannot inherit the launching
     account's environment) while restoring RFC-047's shared credential.
 
-    strict_provider_keys still governs the three metered keys unchanged: it
-    is load-bearing for billing isolation and is not weakened here.
+    strict_provider_keys still governs the three metered keys: it is
+    load-bearing for billing isolation and is not weakened here. Those
+    keys reach the same declared tiers only for a tenant the operator has
+    explicitly marked 'funded' (#514) — see providers.router.metered_key,
+    which makes the same distinction this function does, for money instead
+    of access.
     """
     if config.github_shared_issues_key is not None:
         return config.github_shared_issues_key
+    env_var = keys.KNOWN_KEYS["github"]
     if config.strict_provider_keys:
-        return _declared_shared_key(home, global_path)
-    return keys.env_key(keys.KNOWN_KEYS["github"]) or _declared_shared_key(home, global_path)
+        return keys.declared_shared_key(env_var, home, global_path)
+    return keys.env_key(env_var) or keys.declared_shared_key(env_var, home, global_path)
 
 
 def _default_runner(argv: list[str], github_key: str | None = None) -> tuple[int, str, str]:

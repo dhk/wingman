@@ -78,6 +78,19 @@ class Config(BaseModel):
     # machine, their own workspace), and 'Tenant.config()' from the
     # registry's own 'privileged' flag.
     privileged: bool = False
+    # Whether the OPERATOR pays for this workspace's metered inference
+    # (#514). False means strict_provider_keys is absolute: no key of your
+    # own, no model calls. True lets the three metered keys fall back to
+    # the operator's DECLARED file tiers — never the ambient environment,
+    # exactly as the shared issues key does (#506).
+    #
+    # False at the class level for the same reason as 'privileged' above,
+    # and more sharply: this one spends real money. A Config built without
+    # thinking about funding costs a refusal, not a bill. It is also
+    # deliberately per-tenant rather than box-wide — see
+    # tenants._refuse_funded_default — so adding a tenant never silently
+    # adds them to the operator's invoice.
+    funded: bool = False
 
     @property
     def db_path(self) -> Path:

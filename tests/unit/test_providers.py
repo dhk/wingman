@@ -74,7 +74,7 @@ def test_router_strict_mode_never_falls_back_to_process_env(
     config.models_config_path.write_text(
         '[models.extract_fast]\nprovider = "anthropic"\nmodel = "claude-x"\n', encoding="utf-8"
     )
-    with pytest.raises(ProviderError, match="ANTHROPIC_API_KEY"):
+    with pytest.raises(ProviderError, match="no Anthropic key configured"):
         get_provider(CapabilityClass.EXTRACT_FAST, config)
 
 
@@ -108,3 +108,88 @@ def test_router_rejects_unknown_provider(tmp_path: Path) -> None:
 def test_default_config_covers_every_capability_class() -> None:
     for capability in CapabilityClass:
         assert f"[models.{capability.value}]" in DEFAULT_MODELS_TOML
+
+
+def _funded_config(tmp_path: Path, funded: bool) -> Config:
+    """A registry tenant's Config: strict always, funded on request."""
+    config = Config(
+        data_dir=tmp_path,
+        data_dir_source="test",
+        strict_provider_keys=True,
+        funded=funded,
+    )
+    config.models_config_path.write_text(
+        '[models.extract_fast]\nprovider = "anthropic"\nmodel = "claude-x"\n', encoding="utf-8"
+    )
+    return config
+
+
+def test_a_funded_tenant_spends_the_operators_declared_key(tmp_path: Path) -> None:
+    """#514: 'funded = true' is the operator saying, per tenant and in a
+    root-owned file, that they pay for this person's inference."""
+    from wingman.providers.router import metered_key
+
+    global_file = tmp_path / "global-secrets.env"
+    global_file.write_text("ANTHROPIC_API_KEY=sk-ant-operator\n", encoding="utf-8")
+
+    key = metered_key(
+        _funded_config(tmp_path, funded=True),
+        "anthropic",
+        home=tmp_path / "nohome",
+        global_path=global_file,
+    )
+    assert key == "sk-ant-operator"
+
+
+def test_an_unfunded_tenant_gets_nothing_even_when_the_operator_has_a_key(
+    tmp_path: Path,
+) -> None:
+    """The refusal strict_provider_keys exists for. The operator's key is
+    right there and readable; not being named 'funded' is the whole reason
+    it is not spent."""
+    from wingman.providers.router import metered_key
+
+    global_file = tmp_path / "global-secrets.env"
+    global_file.write_text("ANTHROPIC_API_KEY=sk-ant-operator\n", encoding="utf-8")
+
+    key = metered_key(
+        _funded_config(tmp_path, funded=False),
+        "anthropic",
+        home=tmp_path / "nohome",
+        global_path=global_file,
+    )
+    assert key is None
+
+
+def test_a_funded_tenant_still_never_inherits_the_ambient_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-048's actual guarantee, unweakened by #514. Funding says the
+    operator pays for what they DECLARED in a file; it says nothing about
+    whatever the account launching the shared process happened to export,
+    which is the cross-tenant leak strict mode closed."""
+    from wingman.providers.router import metered_key
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-shared-process-env")
+
+    key = metered_key(
+        _funded_config(tmp_path, funded=True),
+        "anthropic",
+        home=tmp_path / "nohome",
+        global_path=tmp_path / "none.env",
+    )
+    assert key is None
+
+
+def test_byok_outranks_the_operators_key_for_a_funded_tenant(tmp_path: Path) -> None:
+    """A tenant who supplied a key spends their own money, funded or not —
+    nothing below BYOK is consulted."""
+    from wingman.providers.router import metered_key
+
+    global_file = tmp_path / "global-secrets.env"
+    global_file.write_text("ANTHROPIC_API_KEY=sk-ant-operator\n", encoding="utf-8")
+    config = _funded_config(tmp_path, funded=True)
+    config.anthropic_api_key = "sk-ant-tenants-own"
+
+    key = metered_key(config, "anthropic", home=tmp_path / "nohome", global_path=global_file)
+    assert key == "sk-ant-tenants-own"

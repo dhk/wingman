@@ -262,6 +262,32 @@ def read_global_keys(path: Path | None = None) -> dict[str, str]:
     return _parse_known_keys_file(path if path is not None else GLOBAL_KEYS_PATH)
 
 
+def declared_shared_key(
+    env_var: str, home: Path | None = None, global_path: Path | None = None
+) -> str | None:
+    """A key exactly as the OPERATOR provisioned it: the per-account host
+    file first, then the box-wide global file — RFC-046/047's ladder order,
+    where an account's own secrets.env overrides the shared default and
+    never the reverse.
+
+    Reads the files themselves, never os.environ. That distinction is the
+    whole point: ensure_env flattens every tier INTO the environment, so
+    once flattened there is no telling an operator-provisioned credential
+    from a launching account's stray export. Callers that must refuse the
+    ambient case (a shared multi-tenant process, RFC-048) can still honour
+    what the operator actually declared by coming through here.
+
+    'home'/'global_path' are injectable exactly as read_host_keys and
+    read_global_keys are, so a test can point at a fixture instead of
+    silently resolving the real operator's credential.
+    """
+    for tier in (read_host_keys(home), read_global_keys(global_path)):
+        value = tier.get(env_var, "").strip()
+        if value:
+            return value
+    return None
+
+
 def store_workspace_key(data_dir: Path, name: str, value: str) -> bool:
     """Store one key in the workspace file (0600).
 

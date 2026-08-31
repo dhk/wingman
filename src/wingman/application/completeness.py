@@ -36,6 +36,7 @@ from wingman.infrastructure.broadcast import (
 )
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.storage import Storage
+from wingman.providers.router import metered_key
 
 
 class CareerProfileCompleteness(BaseModel):
@@ -196,6 +197,14 @@ class CompletenessReport(BaseModel):
     # "delivered once" — it stands until answered, like every computed
     # action, because a question nobody saw is worse than one asked twice.
     operator_question: OperatorQuestion | None = None
+    # Can this workspace make a model call at all (#514)? False for a
+    # hosted tenant with no key of its own that the operator has not
+    # funded. Kept on the report rather than recomputed in next_actions
+    # because it changes what the whole list is allowed to recommend: the
+    # original bug was telling somebody to "build your values profile" —
+    # the one call that could not succeed — as their top next step, on
+    # evidence that comfortably cleared the floor.
+    inference_available: bool = True
 
 
 def _interview_completeness(storage: Storage) -> list[InterviewCompleteness]:
@@ -344,7 +353,21 @@ def next_actions(report: CompletenessReport) -> list[NextAction]:
         )
     values = report.values
     if not values.profile_built:
-        if values.ready:
+        if values.ready and not report.inference_available:
+            actions.append(
+                NextAction(
+                    title="Add a model key to unlock your values profile",
+                    why=(
+                        f"You have {values.captures} captures across {values.subtypes} kinds — "
+                        "more than enough to infer what you actually value. Inferring it takes "
+                        "a model call, and this workspace has no model key, so the profile and "
+                        "its chart are the one thing your evidence cannot buy yet."
+                    ),
+                    how="add your own key under Manage → Keys, or ask the operator to enable "
+                    "shared inference for this workspace",
+                )
+            )
+        elif values.ready:
             actions.append(
                 NextAction(
                     title="Build your values profile",
@@ -503,4 +526,5 @@ def compute_completeness(storage: Storage, config: Config) -> CompletenessReport
         opportunities=_opportunity_completeness(storage),
         operator_action=pending_operator_message(config),
         operator_question=pending_question(config, storage),
+        inference_available=metered_key(config, "anthropic") is not None,
     )

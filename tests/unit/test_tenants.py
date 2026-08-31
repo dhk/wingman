@@ -341,3 +341,49 @@ def test_an_absent_registry_still_returns_no_tenants(tmp_path: Path) -> None:
 
     assert load_registry(directory / "tenants.toml") == []
     assert load_registry(tmp_path / "no" / "such" / "dir" / "tenants.toml") == []
+
+
+def test_load_registry_defaults_funded_to_false_and_reads_an_explicit_true(
+    tmp_path: Path,
+) -> None:
+    """#514: an entry that says nothing is on nobody's invoice. The default
+    is what keeps every registry written before this flag existed meaning
+    exactly what it meant."""
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(
+        f'[[tenant]]\nslug = "jason"\ndata_dir = "{tmp_path / "jason"}"\nfunded = true\n\n'
+        f'[[tenant]]\nslug = "trent"\ndata_dir = "{tmp_path / "trent"}"\n',
+        encoding="utf-8",
+    )
+    by_slug = {tenant.slug: tenant for tenant in load_registry(registry)}
+    assert by_slug["jason"].funded is True
+    assert by_slug["trent"].funded is False
+    assert by_slug["jason"].config().funded is True
+    assert by_slug["trent"].config().funded is False
+
+
+def test_load_registry_rejects_a_funded_value_that_is_not_a_boolean(tmp_path: Path) -> None:
+    """Refused, not coerced — same reasoning as 'privileged', and the same
+    stakes in the other direction: a quoted 'funded = "false"' that read as
+    true would put somebody on the bill who was never meant to be."""
+    registry = tmp_path / "tenants.toml"
+    for bad in ('"true"', "1", '"yes"'):
+        registry.write_text(
+            f'[[tenant]]\nslug = "jason"\ndata_dir = "{tmp_path / "jason"}"\nfunded = {bad}\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(TenantRegistryError, match="malformed 'funded'"):
+            load_registry(registry)
+
+
+def test_load_registry_refuses_a_box_wide_funded_default(tmp_path: Path) -> None:
+    """A box-wide default would put every tenant added later on the
+    operator's invoice without anyone deciding to — and, refused rather
+    than ignored, so an operator who wrote it is told while they are still
+    looking at the file. Same for the bare top-level form."""
+    registry = tmp_path / "tenants.toml"
+    entry = f'[[tenant]]\nslug = "jason"\ndata_dir = "{tmp_path / "jason"}"\n'
+    for header in ("[defaults]\nfunded = true\n\n", "funded = false\n\n"):
+        registry.write_text(header + entry, encoding="utf-8")
+        with pytest.raises(TenantRegistryError, match="one named tenant at a time"):
+            load_registry(registry)
