@@ -54,6 +54,53 @@ def _head_commit() -> str:
     ).stdout.strip()
 
 
+#: Where the mainline lives, best guess first. 'origin/main' is what a clone
+#: has; a bare 'main' covers a checkout with no remote configured.
+_MAINLINE_REFS = ("origin/main", "main")
+
+
+def _stamp_commit(repo: Path = _REPO_ROOT) -> str:
+    """The commit to stamp: HEAD's newest ancestor that is also on the mainline.
+
+    NOT HEAD, and that distinction is the whole point of this function.
+    Regenerating on a feature branch used to stamp the branch's own head —
+    a commit GitHub's squash merge DISCARDS, so the moment the PR landed,
+    'GENERATED_FROM_COMMIT' named a sha that exists in nobody's clone of
+    main. Both freshness tests then died with 'git ... returned non-zero
+    exit status 128' on every subsequent PR, not just the guilty one, and
+    the failure reads like a broken harness rather than a bad stamp. This
+    happened twice in one week (#513, #519) before anyone named the trap,
+    because each occurrence looks like a fresh mystery.
+
+    The merge-base is immune: it is already ON the mainline, so it survives
+    whatever shape the merge takes, and it is the honest answer anyway —
+    a branch's own commits are not merged PRs and contribute no entries.
+    On an up-to-date main the merge-base IS head, so the ordinary
+    regenerate-then-commit flow is unchanged.
+
+    Falls back to HEAD when no mainline ref can be found (a detached build
+    box, a clone with no remote), which is the historical behaviour and no
+    worse than it was.
+
+    'repo' is injectable so a test can build the squash-merge shape in a
+    throwaway repository rather than asserting against this one's history,
+    which changes with every merge.
+    """
+    for ref in _MAINLINE_REFS:
+        result = subprocess.run(
+            ["git", "merge-base", "HEAD", ref],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
 def _entries(ref: str = "HEAD") -> list[tuple[str, int, str]]:
     raw = subprocess.run(
         ["git", "log", "--first-parent", f"--format={_LOG_FORMAT}", ref],
@@ -156,13 +203,13 @@ def _render(
 
 
 def main() -> None:
-    head = _head_commit()
-    entries = _entries(head)
-    _OUTPUT.write_text(_render(entries, head, _generated_from_distance(head)), encoding="utf-8")
+    stamp = _stamp_commit()
+    entries = _entries(stamp)
+    _OUTPUT.write_text(_render(entries, stamp, _generated_from_distance(stamp)), encoding="utf-8")
     # Long titles need Black-style wrapping to respect the repo's line length;
     # `ruff format` is the same tool the rest of the codebase is formatted with.
     subprocess.run(["ruff", "format", str(_OUTPUT)], cwd=_REPO_ROOT, check=False)
-    print(f"Wrote {len(entries)} entries to {_OUTPUT.relative_to(_REPO_ROOT)} (as of {head[:9]})")
+    print(f"Wrote {len(entries)} entries to {_OUTPUT.relative_to(_REPO_ROOT)} (as of {stamp[:9]})")
 
 
 if __name__ == "__main__":
