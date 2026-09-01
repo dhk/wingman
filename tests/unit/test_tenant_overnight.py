@@ -221,7 +221,7 @@ def test_a_tenants_failed_targets_do_not_fail_the_roster(tmp_path: Path, monkeyp
     assert result.exit_code == 0, result.output
     assert "2/2 tenants completed" in result.output
     # Still named, still counted: succeeding quietly is the opposite error.
-    assert "jason: 3 targets, 2 with failures" in result.output
+    assert "jason: 3 targets, 2 failed" in result.output
     assert "1 of them had failed targets" in result.output
 
 

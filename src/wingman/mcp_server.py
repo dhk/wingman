@@ -83,6 +83,7 @@ from wingman.application.focus import (
     latest_digest,
     overnight_run,
     render_follow_report,
+    target_mark,
 )
 from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
@@ -3968,10 +3969,12 @@ def overnight(drive: bool = True) -> str:
     except IngestError as exc:
         return f"overnight failed: {exc}"
     lines = [
-        f"{'✓' if target.status == 'ok' else '✗'} {target.name} ({target.kind})"
-        for target in report.targets
+        f"{target_mark(target.status)} {target.name} ({target.kind})" for target in report.targets
     ]
-    lines.append(f"{report.processed} targets, {report.failed} with failures.")
+    tally = f"{report.processed} targets, {report.failed} failed"
+    if report.needs_attention:
+        tally += f", {report.needs_attention} need attention"
+    lines.append(f"{tally}.")
     lines.append(f"Digest: {report.digest_path}")
     if drive:
         lines.append(push_digest(Path(report.digest_path)).detail)

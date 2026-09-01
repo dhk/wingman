@@ -57,10 +57,12 @@ from wingman.application.feature_request import (
     stamp_operator,
 )
 from wingman.application.focus import (
+    OvernightReport,
     follow_company,
     latest_digest,
     overnight_run,
     render_follow_report,
+    target_mark,
 )
 from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
@@ -3652,6 +3654,20 @@ def drive_auth_cmd() -> None:
         raise typer.Exit(code=1)
 
 
+def _overnight_tally(report: OvernightReport) -> str:
+    """The first line a reader sees, with the two states kept apart.
+
+    "N with failures" lumped a company awaiting setup together with a target
+    that genuinely broke, and printed the same number every night for a week
+    (#473). Attention is only mentioned when there is some, so a clean run
+    still reads as one short sentence.
+    """
+    tally = f"{report.processed} targets, {report.failed} failed"
+    if report.needs_attention:
+        tally += f", {report.needs_attention} need attention"
+    return f"{tally}, {len(report.actions)} actions."
+
+
 @app.command()
 def overnight(
     out: Path | None = typer.Option(
@@ -3702,11 +3718,9 @@ def overnight(
         typer.echo(f"overnight failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     for target in report.targets:
-        marker = "✓" if target.status == "ok" else "✗"
+        marker = target_mark(target.status)
         typer.echo(f"{marker} {target.name} ({target.kind})")
-    typer.echo(
-        f"{report.processed} targets, {report.failed} with failures, {len(report.actions)} actions."
-    )
+    typer.echo(_overnight_tally(report))
     typer.echo(f"Digest: {report.digest_path}")
     pretty = Path(report.digest_path).with_suffix(".html")
     if pretty.exists():
@@ -5141,7 +5155,7 @@ def tenant_overnight_cmd(
             unrunnable += 1
             continue
         typer.echo(
-            f"{tenant.slug}: {report.processed} targets, {report.failed} with failures, "
+            f"{tenant.slug}: {report.processed} targets, {report.failed} failed, "
             f"{len(report.actions)} actions. Digest: {report.digest_path}"
         )
         if report.failed:

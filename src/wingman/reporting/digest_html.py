@@ -14,6 +14,7 @@ import re
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from wingman.application.focus import target_mark
 from wingman.reporting.export import WINGMAN_PDF_CSS
 
 if TYPE_CHECKING:
@@ -54,8 +55,10 @@ def _chip(label: str, kind: str = "fact") -> str:
 
 
 def _target_section(target: OvernightTarget) -> list[str]:
-    mark = "✓" if target.status == "ok" else "✗"
-    tone = "fact" if target.status == "ok" else "warn"
+    mark = target_mark(target.status)
+    # "attention" is the operator's to-do, not a break, so it must not wear
+    # the same tone as a failure (#473).
+    tone = {"ok": "fact", "attention": "warn"}.get(target.status, "bad")
     parts = [
         '<div class="card">',
         f"<h3>{mark} {_e(target.name)} {_chip(target.kind, tone)}</h3>",

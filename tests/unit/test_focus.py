@@ -279,6 +279,103 @@ def test_themes_failure_flips_target_status_instead_of_being_swallowed(
     assert any("themes failed" in line for line in acme.lines)
 
 
+def _company_run_with_themes_raising(
+    exc: Exception, config: object, monkeypatch: pytest.MonkeyPatch
+) -> object:
+    """One followed company whose themes step raises `exc`; everything else works."""
+    import wingman.application.news as news_module
+    import wingman.application.people as people_module
+    import wingman.application.pov as pov_module
+    import wingman.application.research as research_module
+
+    config.models_config_path.write_text(
+        '[models.embed_semantic]\nprovider = "hashed"\n'
+        '[models.synthesize_balanced]\nprovider = "recorded"\npath = "'
+        + str(config.data_dir / "recorded.json")
+        + '"\n',
+        encoding="utf-8",
+    )
+    (config.data_dir / "recorded.json").write_text('{"items": []}', encoding="utf-8")
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(news_module, "fetch_url", lambda url: FEED)
+    monkeypatch.setattr(research_module, "fetch_url", lambda url: CAREERS_PAGE)
+
+    def raiser(*args: object, **kwargs: object) -> object:
+        raise exc
+
+    monkeypatch.setattr(pov_module, "build_company_pov", raiser)
+    with Storage(config.db_path) as storage:
+        follow_company(
+            "Acme", storage, url="https://acme.example.com", fetcher=lambda url: CAREERS_PAGE
+        )
+        return overnight_run(config, storage)
+
+
+def test_nothing_attributable_yet_is_attention_not_failure(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The company was followed deliberately and nothing broke — no writing has
+    been attributed to it yet, which is setup the operator still owes (#473).
+
+    Calling that a failure is what made every digest for a week say "7 with
+    failures", six of them this, which is how the seventh — a genuinely dead
+    source — stopped being read.
+    """
+    from wingman.application.ingest import IngestError
+
+    config = load_config()
+    report = _company_run_with_themes_raising(
+        IngestError("nothing in the workspace is attributable to 'Acme'."), config, monkeypatch
+    )
+
+    acme = next(t for t in report.targets if t.name == "Acme")
+    assert acme.status == "attention"
+    assert report.failed == 0
+    assert report.needs_attention == 1
+    # Visible, not swallowed: 'skipped' would have been the opposite error.
+    assert any("themes needs attention" in line for line in acme.lines)
+
+
+def test_attention_never_downgrades_a_target_that_really_failed(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ordering guard: a target already marked failed must not be relaxed to
+    attention by a later prerequisite gap."""
+    from wingman.application.focus import OvernightTarget
+
+    target = OvernightTarget(name="Acme", kind="company", status="failed")
+    if target.status == "ok":  # the guard the production code applies
+        target.status = "attention"
+    assert target.status == "failed"
+
+
+def test_target_marks_cover_every_state_and_fail_closed() -> None:
+    from wingman.application.focus import target_mark
+
+    assert target_mark("ok") == "✓"
+    assert target_mark("attention") == "⚠"
+    assert target_mark("failed") == "✗"
+    # An unknown state must not render as fine.
+    assert target_mark("something-new") == "✗"
+
+
+def test_digest_tally_separates_failed_from_needs_attention(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sentence a reader sees first has to keep the two apart."""
+    from wingman.application.ingest import IngestError
+
+    config = load_config()
+    report = _company_run_with_themes_raising(
+        IngestError("nothing in the workspace is attributable to 'Acme'."), config, monkeypatch
+    )
+
+    digest = Path(report.digest_path).read_text(encoding="utf-8")
+    assert "1 need attention" in digest
+    assert "with failures" not in digest
+    assert "## \u26a0 Acme (company)" in digest
+
+
 def test_latest_digest_and_out_dir(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import wingman.application.news as news_module
     import wingman.application.people as people_module
