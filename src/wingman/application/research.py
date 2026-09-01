@@ -55,6 +55,11 @@ _logger = get_logger("application.research")
 MAX_NEW_LINKS_SHOWN = 10
 # A research snapshot older than this is flagged in the dossier, not hidden.
 RESEARCH_STALE_AFTER_DAYS = 30
+# A source that has gone this many days without a successful fetch gets an
+# escalated failure message (#485) — one bad night reads the same as always,
+# but a source stuck failing run after run should not read the same as one
+# that just started, or the digest's per-run cap can quietly bury it forever.
+RESEARCH_FAILURE_STALE_AFTER_DAYS = 3
 # source_type on records and documents kept from an approved research page.
 RETAINED_SOURCE_TYPE = "research_page"
 
@@ -436,12 +441,24 @@ def research_company(
             data = fetch(source.url)
         except FetchError as exc:
             failed += 1
+            detail = f"fetch failed: {exc}. The previous snapshot was kept."
+            previous = storage.get_research_snapshot(key, source.url)
+            reference = previous.fetched_at if previous is not None else source.added_at
+            age_days = (datetime.now(UTC) - reference).days
+            if age_days >= RESEARCH_FAILURE_STALE_AFTER_DAYS:
+                since = reference.date().isoformat()
+                what = "the last successful fetch" if previous is not None else "it was approved"
+                detail += (
+                    f" ⚠ This source has not fetched successfully in {age_days} day(s), "
+                    f"since {what} on {since} — check the source or the fetch mechanism, "
+                    "not just tonight's run."
+                )
             results.append(
                 SourceResult(
                     url=source.url,
                     label=source.label,
                     status="failed",
-                    detail=f"fetch failed: {exc}. The previous snapshot was kept.",
+                    detail=detail,
                 )
             )
             continue
