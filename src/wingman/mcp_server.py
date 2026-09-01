@@ -190,7 +190,12 @@ from wingman.infrastructure.telemetry import record_event
 from wingman.infrastructure.tenants import Tenant
 from wingman.providers.base import CapabilityClass, ProviderError
 from wingman.providers.embeddings import EmbeddingError
-from wingman.providers.router import ModelConfigError, get_embedding_provider, get_provider
+from wingman.providers.router import (
+    ModelConfigError,
+    get_embedding_provider,
+    get_provider,
+    metered_key,
+)
 from wingman.reporting.completeness import render_completeness_markdown, write_completeness
 from wingman.reporting.completeness_html import render_completeness_html
 from wingman.reporting.export import (
@@ -287,21 +292,45 @@ def my_urls() -> str:
 
 @server.tool()
 def status() -> str:
-    """Workspace status: counts of source records, profile items, opportunities, and corpus documents."""
+    """Workspace status: counts of source records, profile items, opportunities,
+    and corpus documents — plus whether this workspace can call a model at all.
+
+    That last line exists because of the state it was reported in: seven
+    healthy counts and every model-backed tool failing (#514). Status is the
+    first thing anybody calls when something is wrong, and it was the one
+    surface that said nothing about the only thing that was. Printed only
+    when there is no key — a workspace that has one does not need telling,
+    and an "all fine" line is what pushes the broken one off the screen.
+
+    The same question 'completeness' asks, through the same
+    'providers.router.metered_key', so the two can never disagree about
+    whether this workspace can spend.
+    """
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
     with Storage(config.db_path) as storage:
-        return (
-            f"Wingman: {wingman_version()}\n"
-            f"Workspace: {config.data_dir}\n"
-            f"Source records: {storage.count_source_records()}\n"
-            f"Profile items: {storage.count_profile_items()}\n"
-            f"Opportunities: {storage.count_opportunities()}\n"
-            f"Corpus documents: {storage.count_corpus_documents()}\n"
-            f"Commentary entries: {storage.count_commentary_entries()}"
-            " (the assistant's readings — never evidence)"
+        lines = [
+            f"Wingman: {wingman_version()}",
+            f"Workspace: {config.data_dir}",
+            f"Source records: {storage.count_source_records()}",
+            f"Profile items: {storage.count_profile_items()}",
+            f"Opportunities: {storage.count_opportunities()}",
+            f"Corpus documents: {storage.count_corpus_documents()}",
+            (
+                f"Commentary entries: {storage.count_commentary_entries()}"
+                " (the assistant's readings — never evidence)"
+            ),
+        ]
+    if metered_key(config, "anthropic") is None:
+        lines.append(
+            "Model calls: UNAVAILABLE — no model key for this workspace, so values, "
+            "assessments, briefs and every other model-backed step will fail. Everything "
+            "above is read from local data and is unaffected. Add a key on your own "
+            "Wingman page under Manage → Keys (my_urls gives you the address), or ask "
+            "whoever runs this Wingman."
         )
+    return "\n".join(lines)
 
 
 @server.tool()

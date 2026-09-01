@@ -110,3 +110,37 @@ say "issuing first token and reloading the running server"
 # wingman-provision-shared.sh's '--set-path'): the printed tunnel URL
 # needs it even though the shared process's own local bind never does.
 sudo -iu "$SERVICE_USER" bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\"; wingman tenant rotate-token $SLUG --port $PORT --tunnel-prefix $TAILSCALE_PATH"
+
+# A tenant reaches no metered key until somebody decides which of the two
+# ways they get one (#514, RFC-080): their own, or yours. This script writes
+# neither, and until #514 there was nothing that said so — every tenant it
+# has ever created started life with local tools working and every
+# model-backed tool failing, which is how it was reported from the hosted
+# instance. The workspace is not finished until this is settled, so say
+# which way is still open rather than printing a URL and stopping.
+if [ -s "$DATA_DIR/keys.env" ] && grep -q '^ANTHROPIC_API_KEY=.' "$DATA_DIR/keys.env"; then
+  say "'$SLUG' has their own ANTHROPIC_API_KEY in $DATA_DIR/keys.env"
+elif grep -A2 "slug = \"$SLUG\"" "$REGISTRY_PATH" | grep -q '^funded = true'; then
+  say "'$SLUG' is marked funded — metered calls fall back to your declared key"
+else
+  cat <<NOTE
+
+==> '$SLUG' can make NO model call yet, so values, assessments and briefs
+    will all fail for them while everything that only reads local data
+    works. A tenant never inherits this box's keys by accident; somebody
+    has to choose. Two ways, either is fine:
+
+      - THEY pay: they add their own key on their Wingman page (the URL
+        above), under Manage -> Keys. Nothing on the box changes.
+
+      - YOU pay: put the key in a tier you declare — /etc/wingman/global-secrets.env
+        or the service account's ~/.config/wingman/secrets.env — then add
+        'funded = true' to this tenant's entry in $REGISTRY_PATH and
+        restart the shared process (wg redeploy-shared).
+
+    See "Operator-funded inference" in docs/SERVER.md. Either way, tell
+    them which — from inside their session the only symptom is a tool that
+    refuses. 'wingman keys where --all-tenants' shows where each stands.
+
+NOTE
+fi
