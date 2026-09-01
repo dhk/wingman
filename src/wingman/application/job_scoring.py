@@ -58,6 +58,23 @@ _MAX_REASONS = 3
 # plain-text description; verified live against jobs.ashbyhq.com/notion.
 _ASHBY_JOB_URL_RE = re.compile(r"^https://jobs\.ashbyhq\.com/(?P<org>[^/?#]+)/(?P<job_id>[^/?#]+)")
 
+# Shared with focus.py's overnight diff path (#488): a link is worth judging
+# against job-criteria.md only if it looks jobish. One list, so the overnight
+# "new links" filter and the full-board sweep below can never drift apart.
+JOBISH_KEYWORDS = ("job", "career", "opening", "position", "role")
+
+# The full-board sweep (#488) is deliberately NOT bounded by
+# MAX_FETCHED_PER_COMPANY/MAX_JUDGED_PER_COMPANY -- that budget exists to
+# keep the automatic overnight run cheap, and the sweep is the opposite: a
+# user-triggered, explicitly-more-expensive pass over EVERY current link,
+# the RFC-018 "explicitly asked, allowed to be slower" reasoning. It still
+# needs some ceiling -- a malformed or enormous careers page could otherwise
+# queue thousands of fetch+judge model calls from one invocation -- so this
+# is a distinctly-named sanity cap, never the overnight budget silently
+# reapplied, and firing it is always reported (RFC-031 visible-suppression
+# discipline).
+SWEEP_LINK_CAP = 300
+
 
 def criteria_path(config: Config) -> Path:
     return config.data_dir / CRITERIA_FILENAME
@@ -431,6 +448,7 @@ def score_company_openings(
     provider: ModelProvider,
     fetcher: Callable[[str], bytes] | None = None,
     embedder: EmbeddingProvider | None = None,
+    apply_budget: bool = True,
 ) -> OpeningScores:
     """Fetch, recall-rank when over budget, and judge one company's openings.
 
@@ -438,26 +456,36 @@ def score_company_openings(
     it is absent. Per-link failures become notes, never exceptions — this
     runs inside overnight, where every failure is reported and none is
     fatal.
+
+    apply_budget defaults to True: MAX_FETCHED_PER_COMPANY/MAX_JUDGED_PER_COMPANY
+    are read fresh from the module globals at call time (not bound as
+    parameter defaults), so a caller can still monkeypatch either constant
+    and see it take effect. Pass apply_budget=False to lift both caps
+    entirely — the full-board sweep (#488, score_full_board) does this; it
+    has its own, separately-named ceiling upstream rather than this
+    function's overnight budget.
     """
     criteria = load_criteria(config)
     if criteria is None:
         raise IngestError(f"no {CRITERIA_FILENAME} in the workspace — nothing to judge against.")
     result = OpeningScores()
     handled: set[str] = set()  # links that got a real attempt this run, any outcome
-    if len(links) > MAX_FETCHED_PER_COMPANY:
+    max_fetched = MAX_FETCHED_PER_COMPANY if apply_budget else None
+    max_judged = MAX_JUDGED_PER_COMPANY if apply_budget else None
+    if max_fetched is not None and len(links) > max_fetched:
         result.notes.append(
-            f"{len(links) - MAX_FETCHED_PER_COMPANY} of {len(links)} new job link(s) "
-            f"not fetched (budget {MAX_FETCHED_PER_COMPANY}/run) — carried forward to "
-            "the next run"
+            f"{len(links) - max_fetched} of {len(links)} job link(s) "
+            f"not fetched (budget {max_fetched}/run) — carried forward to the next run"
         )
+    fetch_candidates = links if max_fetched is None else links[:max_fetched]
     postings: list[tuple[str, str]] = []
-    for url in links[:MAX_FETCHED_PER_COMPANY]:
+    for url in fetch_candidates:
         try:
             postings.append((url, _posting_text(url, fetcher)))
         except IngestError as exc:
             handled.add(url)
             result.notes.append(f"not scored [link]({url}): {exc}")
-    if len(postings) > MAX_JUDGED_PER_COMPANY:
+    if max_judged is not None and len(postings) > max_judged:
         try:
             if embedder is None:
                 from wingman.providers.router import get_embedding_provider
@@ -469,10 +497,10 @@ def score_company_openings(
         except (EmbeddingError, IngestError) as exc:
             result.notes.append(f"recall ranking unavailable ({exc}); judging in page order")
         result.notes.append(
-            f"{len(postings) - MAX_JUDGED_PER_COMPANY} opening(s) beyond the judge budget "
-            f"({MAX_JUDGED_PER_COMPANY}/run) left unscored — carried forward to the next run"
+            f"{len(postings) - max_judged} opening(s) beyond the judge budget "
+            f"({max_judged}/run) left unscored — carried forward to the next run"
         )
-        postings = postings[:MAX_JUDGED_PER_COMPANY]
+        postings = postings[:max_judged]
     for url, text in postings:
         handled.add(url)
         try:
@@ -492,3 +520,101 @@ def score_company_openings(
         len(result.pending),
     )
     return result
+
+
+def score_full_board(
+    name: str,
+    config: Config,
+    storage: Storage,
+    provider: ModelProvider,
+    fetcher: Callable[[str], bytes] | None = None,
+    embedder: EmbeddingProvider | None = None,
+) -> OpeningScores:
+    """Score EVERY jobish link currently on a company's watched pages (#488).
+
+    Overnight scoring only ever judges links NEW since the last research
+    diff (research_company/_scored_opening_actions): a posting already on
+    the page before scoring existed, or before the tenant started watching,
+    is structurally invisible to it forever, however well it matches. This
+    is the deliberate, user-triggered "score everything currently open"
+    sweep instead.
+
+    Reuses research_company's own fetch rather than adding a second one:
+    research_company already does one GET per approved source and saves the
+    page's FULL current link set to its ResearchSnapshot (extract_page's
+    complete `links`, not just the diffed-new subset a ResearchReport
+    surfaces) — this reads those just-refreshed snapshots for every link
+    currently on the page, instead of re-fetching the source pages itself.
+    Each individual job posting is still fetched once here, same as
+    overnight, via score_company_openings.
+
+    Bypasses the overnight per-run budgets (MAX_FETCHED_PER_COMPANY,
+    MAX_JUDGED_PER_COMPANY) entirely — see score_company_openings — but is
+    bounded by the separately-named SWEEP_LINK_CAP, reported visibly if it
+    fires (RFC-031 discipline: nothing here is silently dropped).
+    """
+    from wingman.application.research import research_company
+    from wingman.application.similarity import company_key
+
+    key = company_key(name)
+    if not key:
+        raise IngestError("company name is empty — nothing to score.")
+    research_company(name, config, storage, fetcher)
+    links: list[str] = []
+    seen: set[str] = set()
+    for source in storage.list_company_sources(key):
+        snapshot = storage.get_research_snapshot(key, source.url)
+        if snapshot is None:
+            continue
+        for link in snapshot.links:
+            if link in seen:
+                continue
+            if any(word in link.lower() for word in JOBISH_KEYWORDS):
+                seen.add(link)
+                links.append(link)
+    capped_note: str | None = None
+    if len(links) > SWEEP_LINK_CAP:
+        capped_note = (
+            f"{len(links) - SWEEP_LINK_CAP} of {len(links)} jobish link(s) on the board "
+            f"not swept (sweep cap {SWEEP_LINK_CAP}/invocation)"
+        )
+        links = links[:SWEEP_LINK_CAP]
+    result = score_company_openings(
+        name,
+        links,
+        config,
+        storage,
+        provider,
+        fetcher=fetcher,
+        embedder=embedder,
+        apply_budget=False,
+    )
+    if capped_note:
+        result.notes.insert(0, capped_note)
+    _logger.info("full board sweep company=%s links=%d", name, len(links))
+    return result
+
+
+def render_opening_scores(company: str, outcome: OpeningScores) -> str:
+    """Plain-text report for the CLI/MCP surfaces: scored, filtered, notes —
+    RFC-031's visible-suppression discipline (nothing here vanishes quietly)."""
+    lines = [
+        (
+            f"Score board: {company} — {len(outcome.scored)} scored, "
+            f"{len(outcome.filtered)} filtered, {len(outcome.notes)} note(s)"
+        )
+    ]
+    for opening in outcome.scored:
+        title = opening.title or "opening"
+        lines.append(f"\n{opening.score}/100 — {title}")
+        lines.append(f"  {opening.url}")
+        lines.extend(f"  - {reason}" for reason in opening.reasons)
+        lines.extend(f'  quote: "{quote}"' for quote in opening.quotes)
+    if outcome.filtered:
+        lines.append("\nFiltered by criteria:")
+        for opening in outcome.filtered:
+            lines.append(f"  - ({opening.hard_filter_failed}) {opening.url}")
+    if outcome.notes:
+        lines.append("\nNotes:")
+        lines.extend(f"  - {note}" for note in outcome.notes)
+    return "\n".join(lines)

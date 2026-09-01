@@ -131,11 +131,12 @@ def test_tenant_config_is_strict_and_workspace_scoped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """RFC-048: a per-tenant Config resolves keys ONLY from that tenant's
-    own workspace file — never process env, even when set. Covers
-    github_api_issues_key alongside the three provider keys — same
-    isolation guarantee, not just providers.router's concern."""
+    own workspace file — never process env, even when set. The shared
+    issues key still prefers a tenant's OWN value here (BYOK); what #506
+    changed is only what happens when they have none — see
+    test_feature_request's declared-tier coverage."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-shared-process-env")
-    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "ghp-shared-process-env")
+    monkeypatch.setenv("GITHUB_SHARED_ISSUES_KEY", "ghp-shared-process-env")
     data_dir = tmp_path / "jason"
     store_workspace_key(data_dir, "anthropic", "sk-ant-jasons-own")
     store_workspace_key(data_dir, "github", "ghp-jasons-own")
@@ -144,7 +145,7 @@ def test_tenant_config_is_strict_and_workspace_scoped(
     assert config.strict_provider_keys is True
     assert config.anthropic_api_key == "sk-ant-jasons-own"  # workspace file, not env
     assert config.voyage_api_key is None  # no workspace value for voyage
-    assert config.github_api_issues_key == "ghp-jasons-own"  # workspace file, not env
+    assert config.github_shared_issues_key == "ghp-jasons-own"  # workspace file, not env
 
 
 def test_tenant_index_resolves_token_to_correct_tenant(tmp_path: Path) -> None:

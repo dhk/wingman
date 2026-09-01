@@ -115,7 +115,10 @@ from wingman.application.pov import (
 from wingman.application.profile_manage import (
     amend_item,
     clear_profile,
+    correct_item,
     describe_amendment,
+    describe_correction,
+    preview_correction,
     rekind_item,
     remove_item,
     rename_item,
@@ -2696,12 +2699,15 @@ def profile_manage(
     intensity: str = "",
     company_reason: str = "",
     value_statement: str = "",
+    old_text: str = "",
+    new_text: str = "",
+    confirmed: bool = False,
 ) -> str:
-    """List, remove, resolve, re-kind, rename, amend, or clear career-profile items (RFC-027).
+    """List, remove, resolve, re-kind, rename, amend, correct, or clear career-profile items (RFC-027).
 
-    action is 'list', 'rm', 'resolve', 'rekind', 'rename', 'amend', or
-    'clear'. 'list' shows every item with its id — active by kind, then
-    unresolved conflicts.
+    action is 'list', 'rm', 'resolve', 'rekind', 'rename', 'amend',
+    'correct', or 'clear'. 'list' shows every item with its id — active by
+    kind, then unresolved conflicts.
     'rm' deletes the one item whose id starts with item_id (any unambiguous
     prefix). 'resolve' settles a duplicate/conflict: the item_id item is
     kept and promoted to active, every rival with the same kind and name is
@@ -2735,6 +2741,37 @@ def profile_manage(
     and call amend only after they confirm it. Never save your own tidied,
     shortened or reworded version of what they said. If they dictate a
     replacement sentence, store their sentence.
+
+    'correct' fixes a transcription/mishearing error in an achievement's,
+    skill's, role's, or testimonial's evidence (issue #487) — the gap
+    'amend' deliberately leaves open, since THEIR evidence is quoted
+    verbatim from a document and letting anyone edit that quote would let
+    the profile assert a claim no document makes. correct does not reopen
+    that: it is for evidence that WAS captured correctly but arrived with a
+    voice-dictation or typing error (a misheard name is the common case),
+    with no path to fix it short of filesystem access to the workspace
+    inbox — which a hosted tenant does not have. Give `old_text` (the exact
+    evidence text as currently stored — verbatim; run action='list' or
+    check the item's evidence if you're not sure of the exact wording) and
+    `new_text` (the corrected wording).
+
+    PROTOCOL for 'correct' — a two-call confirm gate, the same shape
+    company_deep_dive/people_deep_dive/feature_request already use: call
+    with confirmed=false first (the default) — no write happens, and the
+    response is the exact diff (old text -> new text) to show the user;
+    only call again with confirmed=true after they explicitly approve
+    applying it. Never set confirmed=true without that explicit approval.
+
+    The prior wording is kept as a revision — the same `ItemRevision`/
+    `ProfileItem.revisions` mechanism 'amend' uses, not a second one — and
+    the item then reads '(corrected)' in the listing. The underlying
+    source record is corrected atomically alongside the item: a new inbox
+    note is written and the item's evidence is repointed at it in the same
+    write, so the two never diverge. 'correct' refuses an INTERVIEW capture
+    (use 'amend' there) and an item superseded by a newer document version.
+    There is no length/edit-distance limit — the guard is the visible diff
+    plus the retained revision, not a character-count rule, so use
+    judgement: this is for a small correction, not a rewrite of the claim.
     """
     config = _ready_config()
     if config is None:
@@ -2778,6 +2815,20 @@ def profile_manage(
                     f"The previous answer is kept as revision {len(amended.revisions)}; "
                     "the item id, source record and provenance are unchanged."
                 )
+            if action == "correct":
+                if not confirmed:
+                    preview = preview_correction(item_id, old_text, new_text, storage)
+                    return (
+                        f"{preview}\n\nNot corrected. Show this diff to the user; call again "
+                        "with confirmed=true only after they explicitly approve."
+                    )
+                corrected, before = correct_item(item_id, old_text, new_text, config, storage)
+                changed = describe_correction(corrected, before)
+                return (
+                    f"Corrected {corrected.name!r} ({corrected.item_id[:8]}): {changed}. "
+                    f"The previous wording is kept as revision {len(corrected.revisions)}; "
+                    "the item id and provenance are unchanged."
+                )
             if action == "clear":
                 removed = clear_profile(config, storage)
                 return (
@@ -2786,7 +2837,10 @@ def profile_manage(
                 )
     except IngestError as exc:
         return f"profile {action} failed: {exc}"
-    return f"unknown action {action!r}; use list, rm, resolve, rekind, rename, amend, or clear."
+    return (
+        f"unknown action {action!r}; use list, rm, resolve, rekind, rename, amend, correct, "
+        "or clear."
+    )
 
 
 @server.tool()
@@ -4027,7 +4081,7 @@ def feature_request(title: str = "", body: str = "", confirmed: bool = False) ->
         return _NOT_INITIALIZED
     if not title.strip():
         return "feature_request needs a title. Gather the idea first (see the protocol)."
-    body = stamp_operator(body)
+    body = stamp_operator(body, config=config)
     if not confirmed:
         return (
             render_preview(get_feature_repo(config), title, body)
@@ -4248,6 +4302,37 @@ def company_research(name: str) -> str:
     except IngestError as exc:
         return f"research failed: {exc}"
     return render_research_report(report)
+
+
+@server.tool()
+def company_score_board(name: str) -> str:
+    """Score EVERY current jobish link on a company's watched pages against
+    job-criteria.md (RFC-035), not just what's new since the last research
+    diff (#488).
+
+    Overnight scoring is structurally diff-only: a posting already on a
+    page before scoring existed, or before you started watching a company,
+    is invisible to it forever however well it matches. This is the
+    deliberate, explicitly-more-expensive sweep instead — one read-only GET
+    per approved source (reusing company_research's own fetch and its
+    saved snapshot of every current link), then one fetch and one judge
+    call per jobish link found. Bypasses overnight's per-run fetch/judge
+    budgets entirely; bounded only by its own sweep cap, which is reported
+    if it fires. Requires job-criteria.md (job_criteria tool, or 'wingman
+    criteria review' to seed it).
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    from wingman.application.job_scoring import render_opening_scores, score_full_board
+
+    try:
+        provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+        with Storage(config.db_path) as storage:
+            outcome = score_full_board(name, config, storage, provider)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        return f"score-board failed: {exc}"
+    return render_opening_scores(name, outcome)
 
 
 @server.tool()
@@ -5174,8 +5259,13 @@ def main(argv: list[str] | None = None) -> None:
         # — each tenant's Anthropic/Voyage keys are resolved strictly from
         # their OWN workspace file at request time (Tenant.config's
         # strict_provider_keys), never from process env. Keychain/host/
-        # global tiers still get hydrated normally (e.g. GITHUB_API_ISSUES_KEY,
-        # RFC-047's deliberately-shared credential).
+        # global tiers still get hydrated normally (e.g.
+        # GITHUB_SHARED_ISSUES_KEY, RFC-047's deliberately-shared
+        # credential). Hydration alone was never enough to make that
+        # credential reachable, though: until #506 the tenant path refused
+        # every tier below its own workspace file, so this ran and was then
+        # ignored. feature_request._resolve_github_key now reads the
+        # declared files directly rather than trusting this hydration.
         ensure_env()
     else:
         # Hydrate missing API keys: Keychain (RFC-019), then the workspace

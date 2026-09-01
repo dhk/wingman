@@ -93,7 +93,10 @@ from wingman.application.pov import (
 from wingman.application.profile_manage import (
     amend_item,
     clear_profile,
+    correct_item,
     describe_amendment,
+    describe_correction,
+    preview_correction,
     rekind_item,
     remove_item,
     rename_item,
@@ -4057,6 +4060,36 @@ def company_research_cmd(
         raise typer.Exit(code=1)
 
 
+@company_app.command("score-board")
+def company_score_board_cmd(
+    name: str = typer.Argument(..., help="Company whose full current job board to score."),
+) -> None:
+    """Score EVERY current jobish link on a company's watched pages (#488).
+
+    Unlike overnight scoring, which only ever judges links NEW since the
+    last research diff, this sweeps every link a watched page currently
+    shows — including postings older than when scoring existed, or older
+    than when you started watching this company — against job-criteria.md
+    (RFC-035). A deliberate, explicit, more-expensive pass: it is not
+    subject to overnight's per-run fetch/judge budgets, only to its own
+    sweep cap (reported if it fires). Requires job-criteria.md; seed it
+    via 'wingman criteria review' or the job_criteria tool first.
+    """
+    configure_logging()
+    from wingman.application.job_scoring import render_opening_scores, score_full_board
+
+    config = load_config()
+    _require_workspace(config, "scored")
+    try:
+        provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+        with Storage(config.db_path) as storage:
+            outcome = score_full_board(name, config, storage, provider)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        typer.echo(f"score-board failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_opening_scores(name, outcome))
+
+
 @company_app.command("like")
 def company_like(
     names: list[str] = typer.Argument(..., help="Two or more companies, e.g. 'Supersimple' 'Hex'."),
@@ -4226,7 +4259,7 @@ def feature_request_cmd(
     """
     configure_logging()
     config = load_config()
-    body = stamp_operator(body)
+    body = stamp_operator(body, config=config)
     typer.echo(render_preview(get_feature_repo(config), title, body))
     if not yes and not typer.confirm("File this issue?", default=False):
         typer.echo("Nothing was filed.")
@@ -6061,6 +6094,50 @@ def profile_amend(
         "source record and provenance are unchanged."
     )
     typer.echo("  Re-run 'wingman values --refresh' if this changes your value profile.")
+
+
+@profile_app.command("correct")
+def profile_correct(
+    item_id: str = typer.Argument(
+        ..., help="Achievement/skill/role/testimonial id (any unambiguous prefix)."
+    ),
+    old_text: str = typer.Argument(..., help="The exact evidence text as currently stored."),
+    new_text: str = typer.Argument(..., help="The corrected text."),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
+) -> None:
+    """Fix a transcription/mishearing error in quoted evidence, in place (#487).
+
+    The gap 'amend' deliberately leaves for achievements, skills, roles and
+    testimonials: their evidence is quoted verbatim from a document, so
+    amend refuses them outright rather than let anyone edit a quote no
+    document makes. correct is for the narrower case where the evidence WAS
+    captured correctly but arrived with a transcription or voice-dictation
+    error — a misheard name is the common case.
+
+    old_text must match the stored evidence verbatim; run 'wingman profile
+    list' first if you're not sure of the exact wording. The previous
+    wording is kept as a revision, the item id and provenance are
+    unchanged, and the item then reads '(corrected)'.
+    """
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "corrected")
+    try:
+        with Storage(config.db_path) as storage:
+            preview = preview_correction(item_id, old_text, new_text, storage)
+            if not yes:
+                typer.echo(preview)
+                typer.confirm("Apply this correction?", abort=True)
+            corrected, before = correct_item(item_id, old_text, new_text, config, storage)
+    except IngestError as exc:
+        typer.echo(f"profile correct failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Corrected {corrected.name!r} ({corrected.item_id[:8]}).")
+    typer.echo(f"  {describe_correction(corrected, before)}")
+    typer.echo(
+        f"  The previous wording is kept as revision {len(corrected.revisions)}; the item id "
+        "and provenance are unchanged."
+    )
 
 
 @profile_app.command("clear")

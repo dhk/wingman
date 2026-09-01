@@ -74,7 +74,11 @@ quote-by-quote (RFC-016), and approved-source research — you name the
 careers page or newsroom, `wingman company research` diffs it, and new
 links are the hiring signal (RFC-015). Add `--retain` to a source and that
 page's prose is kept as citable evidence too, so a values page can be
-quoted rather than only hashed (RFC-060) — same page, same one GET.
+quoted rather than only hashed (RFC-060) — same page, same one GET. New
+job links get judged against `job-criteria.md` automatically (RFC-035);
+`wingman company score-board "Acme"` scores EVERY link a watched page
+currently shows, not just what's new since the last diff, for the postings
+that predate the criteria doc or the watch itself (RFC-078, #488).
 
 **Outreach support.** `wingman people brief` builds purpose-shaped talking
 points (introduction / reconnection / job / advice) that must cite a POV

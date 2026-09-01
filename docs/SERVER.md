@@ -107,7 +107,7 @@ means it was left alone on purpose — see RFC-046 — and needs a human's
 eyes, not another automatic pass).
 
 **A credential shared by every account on the box** (RFC-047) — today
-that's `GITHUB_API_ISSUES_KEY`, one fine-grained GitHub PAT (scoped to
+that's `GITHUB_SHARED_ISSUES_KEY`, one fine-grained GitHub PAT (scoped to
 Issues only, on whichever repo(s) should accept feature requests) used by
 every account that files `wingman feature-request` issues, for an account
 that has no GitHub identity of its own. One-time setup:
@@ -119,7 +119,7 @@ sudo usermod -aG wingman dhk && sudo usermod -aG wingman trent   # per account t
 
 sudo install -d -m 750 -o root -g wingman /etc/wingman
 sudo install -m 640 -o root -g wingman /dev/null /etc/wingman/global-secrets.env
-echo "GITHUB_API_ISSUES_KEY=github_pat_..." | sudo tee -a /etc/wingman/global-secrets.env
+echo "GITHUB_SHARED_ISSUES_KEY=github_pat_..." | sudo tee -a /etc/wingman/global-secrets.env
 ```
 
 Sits below each account's own `secrets.env` in the resolution ladder — an
@@ -1004,8 +1004,17 @@ had not. Write the bare boolean `true`/`false`, unquoted; `"true"` is
 refused rather than guessed at.
 
 Filing itself already runs through the shared credential
-(`GITHUB_API_ISSUES_KEY`, RFC-047) with attribution-by-body-stamp, so no
-tenant needs their own `gh auth login`. RFC-025's confirmation gate is
+(`GITHUB_SHARED_ISSUES_KEY`, RFC-047) with attribution-by-body-stamp, so
+no tenant needs their own `gh auth login`. That stamp is the tenant's own
+registry slug, not the box-wide `WINGMAN_OPERATOR_NAME` — one shared PAT
+means GitHub's 'opened by' says the operator for everybody, and a host
+setting is one file per box, so it could not tell two tenants apart
+(#506).
+
+If this file was never created, no tenant can file at all: a tenant with
+no `keys.env` of their own has nothing else to fall back to, and the
+failure surfaces as `gh` asking for an auth the account does not have.
+`sudo test -r /etc/wingman/global-secrets.env` is the one-line check. RFC-025's confirmation gate is
 untouched: the preview still shows the exact issue and nothing is filed
 without an explicit yes.
 

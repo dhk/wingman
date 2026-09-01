@@ -8,6 +8,7 @@ import pytest
 from wingman.application.ingest import IngestError
 from wingman.application.job_scoring import (
     CRITERIA_FILENAME,
+    MAX_FETCHED_PER_COMPANY,
     MAX_JUDGED_PER_COMPANY,
     _posting_text,
     criteria_path,
@@ -17,7 +18,9 @@ from wingman.application.job_scoring import (
     rank_candidates,
     save_criteria,
     score_company_openings,
+    score_full_board,
 )
+from wingman.application.research import add_company_source, research_company
 from wingman.infrastructure.config import ENV_DATA_DIR, Config, load_config
 from wingman.infrastructure.storage import Storage
 from wingman.providers.embeddings import HashedEmbeddingProvider
@@ -248,6 +251,96 @@ def test_pending_names_exactly_the_budget_skipped_links(workspace: Config) -> No
     assert [opening.url for opening in outcome.scored] == [ok_url]
     assert any("not scored" in note for note in outcome.notes)  # the fetch failure, visibly
     assert outcome.pending == [beyond_fetch_budget_url]
+
+
+def test_full_board_sweep_scores_links_never_flagged_new(workspace: Config) -> None:
+    """#488: a posting present since the very first snapshot -- and so never
+    once surfaced by research_company's new-links diff -- is still picked up
+    by the full-board sweep, because the sweep reads the snapshot's FULL
+    current link set rather than the diffed 'new' subset."""
+    save_criteria(workspace, CRITERIA)
+    Storage(workspace.db_path).close()
+    job_url = "https://acme.example/jobs/ml"
+    careers_url = "https://acme.example/careers"
+    careers_page = (
+        f'<html><body><main><a href="{job_url}">ML role</a></main></body></html>'
+    ).encode()
+    pages = {careers_url: careers_page, job_url: _page(POSTING.replace("\n", " "))}
+    with Storage(workspace.db_path) as storage:
+        add_company_source("Acme", careers_url, storage)
+        # Baseline fetch: job_url is present from the very first snapshot,
+        # so research_company's diff never once calls it "new".
+        first = research_company("Acme", workspace, storage, fetcher=lambda url: pages[url])
+        assert first.results[0].new_links == []
+        second = research_company("Acme", workspace, storage, fetcher=lambda url: pages[url])
+        assert second.results[0].new_links == []  # unchanged page, still never "new"
+
+        outcome = score_full_board(
+            "Acme",
+            workspace,
+            storage,
+            RecordedProvider(_judgment(quotes=["own the training platform end to end"])),
+            fetcher=lambda url: pages[url],
+        )
+    assert [opening.url for opening in outcome.scored] == [job_url]
+    assert outcome.scored[0].score == 84
+
+
+def test_full_board_sweep_bypasses_overnight_budgets(workspace: Config) -> None:
+    """#488: the sweep must judge every jobish link, not the overnight
+    MAX_FETCHED_PER_COMPANY/MAX_JUDGED_PER_COMPANY-capped subset -- proven
+    here with more links than either budget allows."""
+    save_criteria(workspace, CRITERIA)
+    Storage(workspace.db_path).close()
+    total = MAX_FETCHED_PER_COMPANY + MAX_JUDGED_PER_COMPANY  # over BOTH budgets
+    job_urls = [f"https://acme.example/jobs/{index}" for index in range(total)]
+    careers_url = "https://acme.example/careers"
+    links_html = "".join(f'<a href="{url}">role {i}</a>' for i, url in enumerate(job_urls))
+    careers_page = f"<html><body><main>{links_html}</main></body></html>".encode()
+    body = POSTING.replace("\n", " ")
+    pages: dict[str, bytes] = {careers_url: careers_page}
+    pages.update({url: _page(f"{body} variant {i}") for i, url in enumerate(job_urls)})
+    with Storage(workspace.db_path) as storage:
+        add_company_source("Acme", careers_url, storage)
+        outcome = score_full_board(
+            "Acme",
+            workspace,
+            storage,
+            RecordedProvider(_judgment(quotes=[])),
+            fetcher=lambda url: pages[url],
+        )
+    assert len(outcome.scored) == total  # every link judged, no overnight budget applied
+    assert not any("budget" in note for note in outcome.notes)
+
+
+def test_full_board_sweep_reports_its_own_cap_when_it_fires(workspace: Config) -> None:
+    """The sweep's own SWEEP_LINK_CAP still bounds one invocation -- distinct
+    from (and visibly reported like) the overnight budgets, never silent."""
+    import wingman.application.job_scoring as job_scoring_module
+
+    save_criteria(workspace, CRITERIA)
+    Storage(workspace.db_path).close()
+    cap = 3
+    total = cap + 2
+    job_urls = [f"https://acme.example/jobs/{index}" for index in range(total)]
+    careers_url = "https://acme.example/careers"
+    links_html = "".join(f'<a href="{url}">role {i}</a>' for i, url in enumerate(job_urls))
+    careers_page = f"<html><body><main>{links_html}</main></body></html>".encode()
+    body = POSTING.replace("\n", " ")
+    pages: dict[str, bytes] = {careers_url: careers_page}
+    pages.update({url: _page(f"{body} variant {i}") for i, url in enumerate(job_urls)})
+    with Storage(workspace.db_path) as storage, pytest.MonkeyPatch.context() as patch:
+        patch.setattr(job_scoring_module, "SWEEP_LINK_CAP", cap)
+        add_company_source("Acme", careers_url, storage)
+        outcome = score_full_board(
+            "Acme",
+            workspace,
+            storage,
+            RecordedProvider(_judgment(quotes=[])),
+            fetcher=lambda url: pages[url],
+        )
+    assert len(outcome.scored) == cap
+    assert any("sweep cap" in note for note in outcome.notes)
 
 
 def test_scored_opening_actions_write_keys_and_evidence(workspace: Config) -> None:

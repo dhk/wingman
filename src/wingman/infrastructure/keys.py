@@ -51,9 +51,41 @@ class KeyStoreError(Exception):
 KNOWN_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "voyage": "VOYAGE_API_KEY",
-    "github": "GITHUB_API_ISSUES_KEY",
+    "github": "GITHUB_SHARED_ISSUES_KEY",
     "openrouter": "OPENROUTER_API_KEY",
 }
+
+# RFC-047's shared issues credential was GITHUB_API_ISSUES_KEY until #506.
+# The old name says what the key is FOR but not that it is box-wide, which
+# is the exact property the tenant-isolation change overlooked when it gave
+# this credential the per-tenant treatment the three metered keys get. Every
+# tier a running box already has still holds the old spelling, so read it as
+# an alias rather than making a rename an outage: the canonical name wins
+# wherever both are present, and nothing has to be rewritten in lockstep.
+LEGACY_KEY_ALIASES = {"GITHUB_API_ISSUES_KEY": "GITHUB_SHARED_ISSUES_KEY"}
+
+
+def canonical_env_var(name: str) -> str:
+    """The current spelling of a key's env var, translating a legacy one."""
+    return LEGACY_KEY_ALIASES.get(name, name)
+
+
+def env_key(env_var: str) -> str | None:
+    """A key's value from the process environment, accepting the legacy
+    spelling when the canonical one is unset. Callers that must NOT read
+    ambient process env at all (a shared multi-tenant process — see
+    application.feature_request._resolve_github_key) should not call this."""
+    value = os.environ.get(env_var, "").strip()
+    if value:
+        return value
+    for legacy, canonical in LEGACY_KEY_ALIASES.items():
+        if canonical == env_var:
+            legacy_value = os.environ.get(legacy, "").strip()
+            if legacy_value:
+                return legacy_value
+    return None
+
+
 _ACCOUNT = "wingman"
 
 # (argv) -> (returncode, stdout). Injectable so tests never touch a keychain.
@@ -166,8 +198,13 @@ def _read_known_keys_file(path: Path) -> tuple[dict[str, str], bool]:
     values: dict[str, str] = {}
     for line in text.splitlines():
         name, _, value = line.partition("=")
-        if name.strip() in known and value.strip():
-            values[name.strip()] = value.strip()
+        name, value = name.strip(), value.strip()
+        # A file written before #506 spells the shared issues key the old
+        # way; fold it onto the canonical name so every tier keeps working
+        # through a rename. An explicit canonical line always wins.
+        canonical = canonical_env_var(name)
+        if canonical in known and value and not (canonical != name and canonical in values):
+            values[canonical] = value
     return values, False
 
 
@@ -209,7 +246,7 @@ def read_host_keys(home: Path | None = None) -> dict[str, str]:
 
 # One credential meant to be shared by every account on a box, not
 # per-account (RFC-046 follow-up, issue #205's "global keys" gap):
-# GITHUB_API_ISSUES_KEY is the same fine-grained PAT for every account that
+# GITHUB_SHARED_ISSUES_KEY is the same fine-grained PAT for every account that
 # should be able to file feature requests, so it needs a home outside any
 # one account's ~/.config — /etc/wingman/global-secrets.env, root-owned,
 # group-readable by whichever accounts need it. Sits below the per-account

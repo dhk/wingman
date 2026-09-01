@@ -13,7 +13,7 @@ from wingman.application.feature_request import (
     stamp_operator,
 )
 from wingman.application.ingest import IngestError
-from wingman.infrastructure.config import load_config
+from wingman.infrastructure.config import Config, load_config
 from wingman.infrastructure.storage import Storage
 
 
@@ -165,11 +165,11 @@ def test_resolve_github_key_prefers_a_tenant_config_value(
     from wingman.application.feature_request import _resolve_github_key
     from wingman.infrastructure.config import Config
 
-    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "shared-process-env-value")
+    monkeypatch.setenv("GITHUB_SHARED_ISSUES_KEY", "shared-process-env-value")
     config = Config(
         data_dir=Path("/nonexistent"),
         data_dir_source="test",
-        github_api_issues_key="tenants-own-key",
+        github_shared_issues_key="tenants-own-key",
         strict_provider_keys=True,
     )
     assert _resolve_github_key(config) == "tenants-own-key"
@@ -181,37 +181,128 @@ def test_resolve_github_key_falls_back_to_env_outside_strict_mode(
     from wingman.application.feature_request import _resolve_github_key
     from wingman.infrastructure.config import Config
 
-    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "shape-b-env-value")
+    monkeypatch.setenv("GITHUB_SHARED_ISSUES_KEY", "shape-b-env-value")
     config = Config(data_dir=Path("/nonexistent"), data_dir_source="test")
     assert _resolve_github_key(config) == "shape-b-env-value"
 
 
-def test_resolve_github_key_strict_mode_never_falls_back_to_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """RFC-048: a tenant with no key of their own must fail loud (or here,
-    file under no key at all), never silently inherit whatever happens to
-    be set in the shared process's own environment."""
-    from wingman.application.feature_request import _resolve_github_key
-    from wingman.infrastructure.config import Config
+def _strict_config() -> Config:
+    return Config(data_dir=Path("/nonexistent"), data_dir_source="test", strict_provider_keys=True)
 
-    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "shared-process-env-value")
-    config = Config(
-        data_dir=Path("/nonexistent"), data_dir_source="test", strict_provider_keys=True
+
+def test_resolve_github_key_strict_mode_never_falls_back_to_ambient_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-048's guarantee, preserved through #506: a tenant must never
+    inherit whatever the account running a shared process happened to
+    export. Here the env var IS set and the operator's declared tiers are
+    empty, so the answer is nothing at all."""
+    from wingman.application.feature_request import _resolve_github_key
+
+    monkeypatch.setenv("GITHUB_SHARED_ISSUES_KEY", "shared-process-env-value")
+    assert (
+        _resolve_github_key(
+            _strict_config(),
+            home=tmp_path / "empty-home",
+            global_path=tmp_path / "absent-global.env",
+        )
+        is None
     )
-    assert _resolve_github_key(config) is None
+
+
+def test_resolve_github_key_strict_mode_uses_the_operators_declared_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#506: RFC-047's shared credential must actually REACH a tenant who
+    has none of their own — that is the whole point of a box-wide PAT for
+    accounts with no GitHub identity (#167). The ambient env is set to a
+    different value so the assertion proves which source was read."""
+    from wingman.application.feature_request import _resolve_github_key
+
+    global_file = tmp_path / "etc" / "global-secrets.env"
+    global_file.parent.mkdir(parents=True)
+    global_file.write_text("GITHUB_SHARED_ISSUES_KEY=ghp-operator-provisioned\n", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_SHARED_ISSUES_KEY", "ambient-must-not-win")
+
+    assert (
+        _resolve_github_key(_strict_config(), home=tmp_path / "empty-home", global_path=global_file)
+        == "ghp-operator-provisioned"
+    )
+
+
+def test_declared_host_file_outranks_the_global_file(tmp_path: Path) -> None:
+    """RFC-047's ladder order: an account's own secrets.env overrides the
+    box-wide default, never the reverse."""
+    from wingman.application.feature_request import _resolve_github_key
+    from wingman.infrastructure.keys import host_keys_path
+
+    global_file = tmp_path / "etc" / "global-secrets.env"
+    global_file.parent.mkdir(parents=True)
+    global_file.write_text("GITHUB_SHARED_ISSUES_KEY=ghp-global\n", encoding="utf-8")
+    home = tmp_path / "home"
+    host_file = host_keys_path(home)
+    host_file.parent.mkdir(parents=True)
+    host_file.write_text("GITHUB_SHARED_ISSUES_KEY=ghp-per-account\n", encoding="utf-8")
+
+    assert (
+        _resolve_github_key(_strict_config(), home=home, global_path=global_file)
+        == "ghp-per-account"
+    )
+
+
+def test_a_file_written_before_the_rename_still_resolves(tmp_path: Path) -> None:
+    """#506 renamed the credential; a running box's /etc file still spells
+    it the old way. A rename must not be an outage."""
+    from wingman.application.feature_request import _resolve_github_key
+
+    global_file = tmp_path / "etc" / "global-secrets.env"
+    global_file.parent.mkdir(parents=True)
+    global_file.write_text("GITHUB_API_ISSUES_KEY=ghp-legacy-spelling\n", encoding="utf-8")
+
+    assert (
+        _resolve_github_key(_strict_config(), home=tmp_path / "empty-home", global_path=global_file)
+        == "ghp-legacy-spelling"
+    )
+
+
+def test_the_canonical_spelling_wins_when_a_file_carries_both(tmp_path: Path) -> None:
+    """A half-migrated file must not resolve to the stale value."""
+    from wingman.application.feature_request import _resolve_github_key
+
+    global_file = tmp_path / "etc" / "global-secrets.env"
+    global_file.parent.mkdir(parents=True)
+    global_file.write_text(
+        "GITHUB_API_ISSUES_KEY=ghp-old\nGITHUB_SHARED_ISSUES_KEY=ghp-new\n", encoding="utf-8"
+    )
+
+    assert (
+        _resolve_github_key(_strict_config(), home=tmp_path / "empty-home", global_path=global_file)
+        == "ghp-new"
+    )
+
+
+def test_stamp_operator_prefers_the_tenants_name_over_the_box_wide_setting(
+    tmp_path: Path,
+) -> None:
+    """#506: one shared PAT makes GitHub's 'opened by' say the operator for
+    everybody, and WINGMAN_OPERATOR_NAME is one file per box — so without a
+    per-tenant name every tenant's issue is indistinguishable."""
+    config = Config(data_dir=Path("/nonexistent"), data_dir_source="test", operator_name="jason")
+    assert stamp_operator("Because Y.", home=tmp_path, config=config).endswith(
+        "Submitted by: jason"
+    )
 
 
 def test_filing_end_to_end_uses_the_tenants_own_key_not_the_shared_env(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The actual wiring, not just the two pieces in isolation: a tenant
-    Config's own github_api_issues_key reaches GH_TOKEN through
+    Config's own github_shared_issues_key reaches GH_TOKEN through
     file_feature_request's default path, and the shared process's own
     env value never leaks in alongside or instead of it."""
     config = load_config()
     set_feature_repo(config, "dhk/wingman")
-    config.github_api_issues_key = "tenants-own-key"
+    config.github_shared_issues_key = "tenants-own-key"
     config.strict_provider_keys = True
 
     captured: dict[str, object] = {}
@@ -226,7 +317,7 @@ def test_filing_end_to_end_uses_the_tenants_own_key_not_the_shared_env(
         return FakeResult()
 
     monkeypatch.setattr("subprocess.run", fake_run)
-    monkeypatch.setenv("GITHUB_API_ISSUES_KEY", "shared-process-env-value")
+    monkeypatch.setenv("GITHUB_SHARED_ISSUES_KEY", "shared-process-env-value")
 
     file_feature_request(config, "Add X", "Because Y.")
 
