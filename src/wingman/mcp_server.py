@@ -4305,6 +4305,37 @@ def company_research(name: str) -> str:
 
 
 @server.tool()
+def company_score_board(name: str) -> str:
+    """Score EVERY current jobish link on a company's watched pages against
+    job-criteria.md (RFC-035), not just what's new since the last research
+    diff (#488).
+
+    Overnight scoring is structurally diff-only: a posting already on a
+    page before scoring existed, or before you started watching a company,
+    is invisible to it forever however well it matches. This is the
+    deliberate, explicitly-more-expensive sweep instead — one read-only GET
+    per approved source (reusing company_research's own fetch and its
+    saved snapshot of every current link), then one fetch and one judge
+    call per jobish link found. Bypasses overnight's per-run fetch/judge
+    budgets entirely; bounded only by its own sweep cap, which is reported
+    if it fires. Requires job-criteria.md (job_criteria tool, or 'wingman
+    criteria review' to seed it).
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    from wingman.application.job_scoring import render_opening_scores, score_full_board
+
+    try:
+        provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
+        with Storage(config.db_path) as storage:
+            outcome = score_full_board(name, config, storage, provider)
+    except (IngestError, ModelConfigError, ProviderError) as exc:
+        return f"score-board failed: {exc}"
+    return render_opening_scores(name, outcome)
+
+
+@server.tool()
 def people_news(name: str) -> str:
     """Fetch and store recent news mentioning a person or their company.
 

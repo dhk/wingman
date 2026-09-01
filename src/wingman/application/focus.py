@@ -28,6 +28,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from wingman.application.ingest import IngestError
+from wingman.application.job_scoring import JOBISH_KEYWORDS as _JOBISH
 from wingman.application.people import match_people
 from wingman.application.pipeline import MisoReport, make_it_so
 from wingman.application.research import add_company_source, research_company
@@ -192,7 +193,6 @@ class OvernightReport(BaseModel):
     actions: list[ActionItem] = Field(default_factory=list)
 
 
-_JOBISH = ("job", "career", "opening", "position", "role")
 _MAX_ACTIONS = 10
 _MAX_ACTION_EVIDENCE = 3
 _EVIDENCE_URL = re.compile(r"\]\((https?://\S+)\)$")
