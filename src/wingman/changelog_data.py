@@ -10,6 +10,18 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-09-01", 510, "fix: escalate a research source's failure message once it goes stale"),
+    ("2026-09-01", 516, "fix: an operator can fund one tenant's metered inference (#514)"),
+    ("2026-09-01", 476, "docs: design doc for a reproducible wingman/Woven LinkedIn sync"),
+    ("2026-09-01", 511, "feat: score the full current job board, not just the diff (#488)"),
+    (
+        "2026-08-30",
+        508,
+        "fix: add profile_manage(action='correct') for evidence transcription errors",
+    ),
+    ("2026-08-30", 512, "fix: the shared issues key reaches tenants again (#506)"),
+    ("2026-08-30", 513, "fix: restamp changelog_data at a commit that exists on main"),
+    ("2026-08-30", 509, "fix: make job-criteria.md reachable by requirement resolution"),
     ("2026-08-29", 494, "fix: a budget-skipped job link carries forward instead of vanishing"),
     (
         "2026-08-29",
@@ -769,7 +781,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "cf5dd47569f57d146c6e47ed5eceeca6dc5e534e"
+GENERATED_FROM_COMMIT = "2037e4deb0271da4a6ff2c43501036a1e70b2de6"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
