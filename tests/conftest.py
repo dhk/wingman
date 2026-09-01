@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from wingman.infrastructure import broadcast, keys, tenants
+
 
 @pytest.fixture(autouse=True)
 def _isolated_home(
@@ -30,6 +32,46 @@ def _isolated_home(
 ) -> None:
     fake_home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(fake_home))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_box_wide_state(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same protection as `_isolated_home`, for the tiers it cannot reach.
+
+    RFC-047's box-wide files live at ABSOLUTE paths under `/etc/wingman`, so
+    pinning HOME does nothing about them — that is the entire bug. Any test
+    that resolves a key, a broadcast or a tenant without passing an explicit
+    path reads the operator's real state, and every CLI-driving test does so
+    via `_bootstrap`'s unconditional `ensure_env`, exactly as #157 described
+    for the host tier.
+
+    It stayed invisible for as long as the box-wide files held nothing a test
+    asserted about. Two separate failures made it visible, and they are the
+    same failure: `global-secrets.env` held only `GITHUB_SHARED_ISSUES_KEY`
+    until an operator added ANTHROPIC_API_KEY and VOYAGE_API_KEY for #514's
+    funded tenants, at which point six tests asserting "no key is configured"
+    began failing; and a real `motd.json` broadcast outranks every computed
+    action by RFC-065's design, so four tests asserting what comes first in
+    `next_actions` failed for as long as that box had a message set.
+
+    Both only ever failed on a box that actually uses RFC-047 — which is the
+    box the code is developed on. CI has no `/etc/wingman` at all, so it
+    agreed with the tests and kept agreeing: a green pipeline that proved
+    nothing about the machine the code actually runs on. That is the property
+    worth naming, because it means the suite was least trustworthy exactly
+    where it was most needed.
+
+    Pointing each module global at a path that does not exist is enough:
+    every reader resolves them at call time, and the tests that mean to
+    exercise these tiers pass an explicit path and are untouched.
+    """
+    absent = tmp_path_factory.mktemp("box-wide")
+    monkeypatch.setattr(keys, "GLOBAL_KEYS_PATH", absent / "global-secrets.env")
+    monkeypatch.setattr(broadcast, "OPERATOR_MESSAGE_PATH", absent / "motd.json")
+    monkeypatch.setattr(broadcast, "OPERATOR_QUESTION_PATH", absent / "qotd.json")
+    monkeypatch.setattr(tenants, "DEFAULT_REGISTRY_PATH", absent / "tenants.toml")
 
 
 @pytest.fixture(scope="session")
