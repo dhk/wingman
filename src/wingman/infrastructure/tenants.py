@@ -98,6 +98,12 @@ class Tenant:
     #: is the fail-open this flag exists to prevent. Named per tenant, by
     #: the one person who can edit a root-owned file, or not at all.
     privileged: bool = False
+    #: Does the OPERATOR pay for this tenant's metered inference (#514)?
+    #: False unless the registry entry says otherwise, and — like
+    #: 'privileged' — deliberately NOT settable in '[defaults]': a
+    #: box-wide "everyone is funded" would put every tenant added later on
+    #: the operator's invoice without anyone deciding to.
+    funded: bool = False
 
     def token_path(self) -> Path:
         return self.data_dir / _TOKEN_FILENAME
@@ -183,6 +189,7 @@ class Tenant:
             github_shared_issues_key=workspace_keys.get(KNOWN_KEYS["github"]),
             strict_provider_keys=True,
             privileged=self.privileged,
+            funded=self.funded,
             # One shared PAT means GitHub's own 'opened by' says the
             # operator for every tenant, and the WINGMAN_OPERATOR_NAME
             # host setting that exists to recover the real submitter is
@@ -208,8 +215,8 @@ def _feature_repo(value: object, whose: str, path: Path) -> str | None:
     return value
 
 
-def _privileged(value: object, slug: str, path: Path) -> bool:
-    """This entry's 'privileged' flag: absent means False (RFC-068).
+def _bool_flag(value: object, field: str, slug: str, path: Path) -> bool:
+    """One of this entry's boolean flags: absent means False.
 
     Only a real TOML boolean counts. 'privileged = "true"' and
     'privileged = 1' are refused rather than coerced, because both
@@ -223,35 +230,53 @@ def _privileged(value: object, slug: str, path: Path) -> bool:
         return False
     if not isinstance(value, bool):
         raise TenantRegistryError(
-            f"tenant {slug!r} in {path} has a malformed 'privileged' — "
+            f"tenant {slug!r} in {path} has a malformed {field!r} — "
             "it must be the bare TOML boolean true or false, unquoted."
         )
     return value
 
 
-def _refuse_privileged_default(data: dict[str, object], path: Path) -> None:
-    """'privileged' is per tenant only — never '[defaults]', never bare.
+def _refuse_shared_flag(data: dict[str, object], path: Path, field: str, tail: str) -> None:
+    """'privileged' and 'funded' are per tenant only — never '[defaults]',
+    never bare.
 
-    A box-wide default of "everyone is privileged" is precisely the
-    fail-open this flag exists to prevent, so there is nothing to read
-    here. But IGNORING the key would be worse than not supporting it: an
-    operator who wrote '[defaults] privileged = true' would be told
-    nothing and would believe the grant had happened, and one who wrote
-    'privileged = false' there would believe they had revoked something
-    they had not. Refusing at load names the mistake while its author is
-    still standing in front of the file.
+    Both flags exist to make one person's entry say something the rest of
+    the file does not, so a box-wide default is precisely the fail-open
+    they guard against. But IGNORING the key would be worse than not
+    supporting it: an operator who wrote '[defaults] privileged = true'
+    would be told nothing and would believe the grant had happened, and
+    one who wrote 'funded = false' there would believe they had capped a
+    bill they had not. Refusing at load names the mistake while its author
+    is still standing in front of the file.
     """
     defaults = data.get("defaults")
     tables: list[tuple[str, dict[str, object]]] = [("the top level", data)]
     if isinstance(defaults, dict):
         tables.insert(0, ("[defaults]", defaults))
     for scope, table in tables:
-        if "privileged" in table:
-            raise TenantRegistryError(
-                f"tenant registry {path} sets 'privileged' at {scope} — privilege is granted "
-                "one tenant at a time, on that tenant's own [[tenant]] entry, never to "
-                "everybody at once."
-            )
+        if field in table:
+            raise TenantRegistryError(f"tenant registry {path} sets {field!r} at {scope} — {tail}")
+
+
+def _refuse_privileged_default(data: dict[str, object], path: Path) -> None:
+    _refuse_shared_flag(
+        data,
+        path,
+        "privileged",
+        "privilege is granted one tenant at a time, on that tenant's own "
+        "[[tenant]] entry, never to everybody at once.",
+    )
+
+
+def _refuse_funded_default(data: dict[str, object], path: Path) -> None:
+    _refuse_shared_flag(
+        data,
+        path,
+        "funded",
+        "the operator pays for one named tenant at a time, on that tenant's own "
+        "[[tenant]] entry — a box-wide default would put every tenant added later "
+        "on the invoice without anyone deciding to.",
+    )
 
 
 def _registry_default_feature_repo(data: dict[str, object], path: Path) -> str | None:
@@ -329,6 +354,7 @@ def load_registry(path: Path) -> list[Tenant]:
         raise TenantRegistryError(f"tenant registry {path} needs a [[tenant]] array of tables.")
     default_feature_repo = _registry_default_feature_repo(data, path)
     _refuse_privileged_default(data, path)
+    _refuse_funded_default(data, path)
     tenants: list[Tenant] = []
     seen_slugs: set[str] = set()
     for entry in entries:
@@ -350,7 +376,8 @@ def load_registry(path: Path) -> list[Tenant]:
                 data_dir=Path(data_dir).expanduser(),
                 feature_repo=feature_repo,
                 default_feature_repo=default_feature_repo,
-                privileged=_privileged(entry.get("privileged"), slug, path),
+                privileged=_bool_flag(entry.get("privileged"), "privileged", slug, path),
+                funded=_bool_flag(entry.get("funded"), "funded", slug, path),
             )
         )
     return tenants

@@ -47,6 +47,20 @@ class AnthropicProvider:
         # here so a missing key fails loud and clear instead of surfacing as
         # a cryptic error the first time a request is made (overnight P1).
         if not self._client.api_key and not self._client.auth_token:
+            # Two different audiences, two different remedies (#514). A
+            # hosted tenant reached over MCP has no shell and no
+            # environment to export into, so "set ANTHROPIC_API_KEY" named
+            # the one thing they cannot do — and they were told it on
+            # every model-backed call. Manage → Keys writes the workspace
+            # key, which is the route the other two providers already
+            # pointed at; the operator-funded path is the other, and only
+            # the operator can take it.
+            if strict:
+                raise ProviderError(
+                    "no Anthropic key configured for this workspace. Add your own via "
+                    "Manage → Keys, or ask the operator to enable shared inference for "
+                    "this tenant."
+                )
             raise ProviderError("No Anthropic credentials found. Set ANTHROPIC_API_KEY and retry.")
 
     def complete(self, request: ModelRequest) -> ModelResponse:

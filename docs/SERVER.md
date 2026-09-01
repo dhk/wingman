@@ -1003,6 +1003,59 @@ would leave you believing you had granted — or revoked — something you
 had not. Write the bare boolean `true`/`false`, unquoted; `"true"` is
 refused rather than guessed at.
 
+**Operator-funded inference** (#514, RFC-080). A tenant on the shared
+process has `strict_provider_keys` set, which means the three metered
+keys — `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `VOYAGE_API_KEY` —
+never fall back to anything the tenant did not supply themselves. That
+is the billing isolation RFC-048 asked for and it is not weakened here.
+It also means a tenant who has set no key of their own can make no model
+call at all, which is most of Wingman. Two ways out:
+
+- **They bring their own key.** Manage → Keys in the web UI writes it
+  into their own workspace (RFC-019's `keys.env`); it is theirs, it
+  spends their money, and it outranks everything below. Nothing on the
+  box has to change.
+- **You pay for them.** Put the key in a tier you declare as operator —
+  `/etc/wingman/global-secrets.env` for the whole box, or
+  `~/.config/wingman/secrets.env` for the service account — and mark
+  that one tenant funded:
+
+```toml
+[[tenant]]
+slug = "jason"
+data_dir = "/home/wingman-shared/tenants/jason"
+funded = true              # metered calls fall back to the operator's declared key
+```
+
+```
+# /etc/wingman/global-secrets.env  (RFC-047, 640 root:wingman)
+ANTHROPIC_API_KEY=sk-ant-...
+VOYAGE_API_KEY=pa-...
+```
+
+`funded` is **per tenant only**, refused in `[defaults]` and bare at the
+top level for the same reason as `privileged` and more sharply: a
+box-wide default would put every tenant added later on your invoice
+without anyone deciding to. Absent means false, so every registry
+written before this keeps meaning what it meant. Bare boolean,
+unquoted; `"true"` is refused rather than guessed at. Restart the shared
+process (`wg redeploy-shared`) after either change — the registry and
+the key files are read at startup.
+
+A funded tenant reaches the **declared** tiers only: the host file and
+the global file, in that order, never the ambient process environment.
+Whatever the account that launched the shared process happened to export
+stays invisible to every tenant, funded or not — one shared process
+means an ambient key is nobody's in particular, and the operator has to
+have written a tier down for it to count.
+
+An unfunded tenant with no key of their own does not get a traceback:
+model-backed tools refuse with *"no Anthropic key configured for this
+workspace. Add your own via Manage → Keys, or ask the operator to enable
+shared inference for this tenant."* — and `completeness` stops
+recommending the steps that need a model call, recommending the key
+instead.
+
 Filing itself already runs through the shared credential
 (`GITHUB_SHARED_ISSUES_KEY`, RFC-047) with attribution-by-body-stamp, so
 no tenant needs their own `gh auth login`. That stamp is the tenant's own

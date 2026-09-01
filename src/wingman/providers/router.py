@@ -6,7 +6,7 @@ import tomllib
 from pathlib import Path
 
 from wingman.infrastructure.config import Config
-from wingman.infrastructure.keys import KNOWN_KEYS, resolve_provider_key
+from wingman.infrastructure.keys import KNOWN_KEYS, declared_shared_key, resolve_provider_key
 from wingman.providers.anthropic_provider import AnthropicProvider
 from wingman.providers.base import CapabilityClass, ModelProvider
 from wingman.providers.embeddings import (
@@ -64,6 +64,50 @@ class ModelConfigError(Exception):
     """The workspace model configuration is missing or invalid."""
 
 
+def metered_key(
+    config: Config,
+    provider: str,
+    home: Path | None = None,
+    global_path: Path | None = None,
+) -> str | None:
+    """The api_key for one METERED provider, under this workspace's policy.
+
+    BYOK always wins: a workspace that supplied its own key spends its own
+    money, and nothing below is consulted. After that the two policies
+    differ in what a missing key falls back to.
+
+    Not strict (a solo install, CLI, stdio): the historical ladder, ambient
+    environment included. That environment IS the operator's own, so there
+    is nothing to protect them from.
+
+    Strict (a registry tenant on the shared process, RFC-048) and NOT
+    funded: nothing. This is the refusal the flag exists for — an unfunded
+    tenant silently billing the operator is exactly the failure mode.
+
+    Strict and FUNDED (#514): the operator's DECLARED file tiers, and still
+    never the ambient environment. The operator said, per tenant and in a
+    root-owned file, that they pay for this person; reading the files they
+    actually wrote honours that without reopening the hole RFC-048 closed,
+    where whatever the account launching a shared process happened to
+    export leaked into every tenant. Same distinction, and the same
+    'declared_shared_key', as the shared issues key (#506).
+
+    'home'/'global_path' are injectable exactly as keys.read_host_keys
+    and keys.read_global_keys are, so a test can point at a fixture
+    instead of silently resolving — and live-testing — the real
+    operator's credential.
+    """
+    declared: str | None = getattr(config, f"{provider}_api_key")
+    if declared is not None:
+        return declared
+    env_var = KNOWN_KEYS[provider]
+    if not config.strict_provider_keys:
+        return resolve_provider_key(env_var, config.data_dir)
+    if config.funded:
+        return declared_shared_key(env_var, home, global_path)
+    return None
+
+
 def get_provider(capability: CapabilityClass, config: Config) -> ModelProvider:
     path = config.models_config_path
     if not path.exists():
@@ -84,17 +128,13 @@ def get_provider(capability: CapabilityClass, config: Config) -> ModelProvider:
         model = entry.get("model")
         if not isinstance(model, str) or not model:
             raise ModelConfigError(f"[models.{capability.value}] needs a 'model' name in {path}.")
-        api_key = config.anthropic_api_key
-        if api_key is None and not config.strict_provider_keys:
-            api_key = resolve_provider_key(KNOWN_KEYS["anthropic"], config.data_dir)
+        api_key = metered_key(config, "anthropic")
         return AnthropicProvider(model=model, api_key=api_key, strict=config.strict_provider_keys)
     if provider == "openrouter":
         model = entry.get("model")
         if not isinstance(model, str) or not model:
             raise ModelConfigError(f"[models.{capability.value}] needs a 'model' name in {path}.")
-        api_key = config.openrouter_api_key
-        if api_key is None and not config.strict_provider_keys:
-            api_key = resolve_provider_key(KNOWN_KEYS["openrouter"], config.data_dir)
+        api_key = metered_key(config, "openrouter")
         return OpenRouterProvider(model=model, api_key=api_key, strict=config.strict_provider_keys)
     if provider == "recorded":
         raw_path = entry.get("path")
@@ -119,9 +159,7 @@ def get_embedding_provider(config: Config) -> EmbeddingProvider:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ModelConfigError(f"Model configuration {path} could not be parsed: {exc}") from exc
     entry = data.get("models", {}).get("embed_semantic")
-    voyage_api_key = config.voyage_api_key
-    if voyage_api_key is None and not config.strict_provider_keys:
-        voyage_api_key = resolve_provider_key(KNOWN_KEYS["voyage"], config.data_dir)
+    voyage_api_key = metered_key(config, "voyage")
     if entry is None:
         return VoyageEmbeddingProvider(
             model=DEFAULT_EMBEDDING[1], api_key=voyage_api_key, strict=config.strict_provider_keys
