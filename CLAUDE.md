@@ -126,9 +126,17 @@ The managed Beads block above is scoped by these rules, which win where they con
   `MEMORY.md` index remain in use; ignore "do NOT use MEMORY.md files".
 - **TodoWrite** stays available for within-session scratch planning. Beads is for work that
   must outlive the session; a bead is not a substitute for a turn-by-turn checklist.
-- **Nothing is in flight without a bead.** Branches embed the bead id (`wingman-a3f2-slug`);
-  PR bodies carry a `bd: wingman-a3f2` trailer.
+- **A bead is not a precondition for starting or landing work.** Branch names need no bead
+  id and PR bodies need no `bd:` trailer. The rule this replaces read "nothing is in flight
+  without a bead", and what it actually bought was a gate that fires in the wrong place:
+  `bd` is not installed in every environment an agent runs in (a Claude Code on the web
+  container has no Dolt), so the requirement was unmeetable exactly where it was being
+  checked, and the honest options left were to block finished work or to note the omission
+  and carry on. Use a bead when work must outlive the session; do not manufacture one to
+  satisfy a checklist. GitHub issues remain the durable record for anything a person files
+  or reviews.
 - **Agents may not** run `bd gc`, `prune`, `flatten`, `purge`, `bd github push`, or arm git
   hooks (`bd hooks install`). Those are human-run only.
-- **Done means landed:** pushed, PR open or merged, bead closed with a reason.
+- **Done means landed:** pushed, PR open or merged, and any bead it does have closed with a
+  reason.
 <!-- END LOCAL BEADS CONSTITUTION -->
