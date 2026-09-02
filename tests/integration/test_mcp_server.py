@@ -590,3 +590,48 @@ def test_profile_html_measures_its_cap_in_bytes_not_characters(
     assert result != page
     assert "too large" in result
     assert "browser" in result
+
+
+def test_status_says_when_this_workspace_cannot_call_a_model(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The state this was reported in (#514): every count healthy, every
+    model-backed tool failing. 'status' is the first thing anybody calls
+    when something is wrong, and it was the one surface saying nothing
+    about the only thing that was."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    reported = status()
+    assert "Model calls: UNAVAILABLE" in reported
+    assert "Manage → Keys" in reported
+    # A credential problem, not a workspace problem: the counts are still
+    # true and still shown, or somebody goes looking for missing data that
+    # is sitting right there.
+    assert "Source records: 0" in reported
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    assert "Model calls" not in status()
+
+
+def test_status_tells_an_unfunded_tenant_the_truth_about_an_ambient_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key in the shared process's environment is not this tenant's to
+    spend (RFC-048), so reporting it as available would be a lie that sends
+    somebody hunting for a workspace problem that isn't there."""
+    from wingman.infrastructure.config import Config, tenant_config_scope
+    from wingman.infrastructure.storage import Storage
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-the-operators-own")
+    data_dir = tmp_path / "tenants" / "jason"
+    for directory in (data_dir, data_dir / "inbox", data_dir / "reports"):
+        directory.mkdir(parents=True)
+    Storage(data_dir / "wingman.db").close()
+    tenant = Config(
+        data_dir=data_dir,
+        data_dir_source="tenant registry (jason)",
+        strict_provider_keys=True,
+    )
+
+    with tenant_config_scope(tenant):
+        assert "Model calls: UNAVAILABLE" in status()

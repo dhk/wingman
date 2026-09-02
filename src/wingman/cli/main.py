@@ -195,6 +195,7 @@ from wingman.providers.router import (
     ModelConfigError,
     get_embedding_provider,
     get_provider,
+    metered_key,
 )
 from wingman.reporting.export import (
     export_career,
@@ -1375,6 +1376,17 @@ def status() -> None:
     typer.echo(
         f"Commentary entries: {commentary_entries} (the assistant's readings — never evidence)"
     )
+    # Said only when it is missing — the state where every count above looks
+    # healthy while every model-backed command fails (#514). The MCP 'status'
+    # tool says the same thing in the same case, through the same predicate;
+    # the remedy differs because whoever reads this has a shell.
+    if metered_key(config, "anthropic") is None:
+        typer.echo(
+            "Model calls: UNAVAILABLE — no model key for this workspace, so values, "
+            "assessments, briefs and every other model-backed step will fail. Everything "
+            "above is read from local data and is unaffected. 'wingman keys where' names "
+            "every tier and which copy wins."
+        )
 
 
 def _human_size(size_bytes: int) -> str:

@@ -166,6 +166,16 @@ Worth being clear about, since it's different from running it yourself:
   how you confirm that for yourself rather than taking it on faith.
 - **The overnight run happens for you automatically.** You don't schedule
   anything.
+- **Somebody has to pay for the thinking.** Wingman calls Claude, and those
+  calls are paid for by a key — either one your host put on the machine for
+  you, or one of your own. Ask them which; they may have set you up already.
+  If nobody has, everything that only *reads* what's already there keeps
+  working, and everything that needs to *think* refuses with a message
+  saying so: no values profile, no chart, no fit assessment. You can settle
+  it yourself on your page under **Manage → Keys**. If the next thing you
+  ask still refuses, disconnect and reconnect the connector in Claude and
+  try again — the server picks the key up immediately, but a chat session
+  that was already open can hold on to what it knew before.
 - **Lost your links?** Ask your host. They can print them again or issue
   new ones — there's deliberately no self-service password reset, because
   there's no password.
