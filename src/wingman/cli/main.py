@@ -5231,14 +5231,57 @@ def _echo_tenant_key_locations(
     return drifted
 
 
+def _echo_tenant_keys_by_fingerprint(entries: list[Tenant]) -> None:
+    """The inverse question: which people share one credential.
+
+    'wingman tenant keys' answers per tenant, which is the right shape for
+    "is this person set up". It is the wrong shape for the question a leak
+    asks — WHO is spending this key — because answering that from per-tenant
+    rows means comparing digests by eye across N blocks (#536).
+    """
+    from wingman.infrastructure.keys import KNOWN_KEYS, describe_tenant_key_locations
+
+    typer.echo("\nGrouped by key — who shares which credential:")
+    for short_name, env_var in KNOWN_KEYS.items():
+        # fingerprint -> (tier, [slug, ...]); None keys the tenants with none.
+        groups: dict[str | None, tuple[str, list[str]]] = {}
+        for entry in entries:
+            rows = describe_tenant_key_locations(entry.data_dir, entry.funded)[short_name]
+            winner = next((r for r in rows if r.winner), None)
+            key = winner.fingerprint if winner else None
+            tier = winner.tier if winner else "no key"
+            groups.setdefault(key, (tier, []))[1].append(entry.slug)
+
+        typer.echo(f"\n  {short_name:11s} {env_var}")
+        # Most-shared first: the widest blast radius is the thing to see.
+        for fingerprint_value, (tier, slugs) in sorted(
+            groups.items(), key=lambda item: (-len(item[1][1]), item[0] or "")
+        ):
+            count = f"{len(slugs)} tenant" + ("s" if len(slugs) != 1 else "")
+            typer.echo(f"    {fingerprint_value or '(not configured)'}")
+            typer.echo(f"      {count:12s} {', '.join(sorted(slugs))}")
+            if fingerprint_value is not None:
+                typer.echo(f"      from {tier}")
+
+
 @tenant_app.command("keys")
 def tenant_keys_cmd(
     tenant: str = typer.Option("", "--tenant", help="One tenant by slug. Default: every tenant."),
     all_tenants: bool = typer.Option(
         False, "--all", help="Every tenant in the registry (the default when --tenant is omitted)."
     ),
+    by_key: bool = typer.Option(
+        False,
+        "--by-key",
+        help="Group by credential instead of by person: who shares which key.",
+    ),
 ) -> None:
     """Which key each person is actually using — by fingerprint, never by value.
+
+    '--by-key' inverts it: one block per credential, listing every tenant
+    spending it, widest blast radius first. That is the question a leaked
+    shared key asks, and answering it from per-tenant rows means comparing
+    digests by eye across every block (#536).
 
     Reports the ladder a TENANT's own process really walks
     (strict_provider_keys, RFC-048): their workspace 'keys.env', then the
@@ -5267,6 +5310,10 @@ def tenant_keys_cmd(
         if not tenants:
             typer.echo(f"No tenant named {tenant!r} in {registry}.", err=True)
             raise typer.Exit(code=1)
+
+    if by_key:
+        _echo_tenant_keys_by_fingerprint(tenants)
+        return
 
     typer.echo("Strict tenant ladder (RFC-048) - first one present wins:")
     typer.echo("  1. workspace file   <workspace>/keys.env   (this person's own key)")

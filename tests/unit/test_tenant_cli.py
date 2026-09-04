@@ -299,3 +299,47 @@ def test_tenant_urls_unreadable_registry_diagnoses_rather_than_says_malformed(
     assert "permission denied" in result.output
     assert "predates" in result.output
     assert "malformed" not in result.output
+
+
+def test_tenant_keys_by_key_groups_tenants_sharing_one_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#536: the question a leak asks is 'who is spending this key', and
+    per-tenant rows answer it only by eye across every block."""
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+    from wingman.infrastructure import keys as keys_module
+    from wingman.infrastructure import tenants as tenants_module
+
+    shared = tmp_path / "global.env"
+    shared.write_text("ANTHROPIC_API_KEY=sk-ant-shared-operator\n", encoding="utf-8")
+    for slug in ("jason", "bob", "dave", "newbie"):
+        (tmp_path / slug).mkdir()
+    (tmp_path / "dave" / "keys.env").write_text(
+        "ANTHROPIC_API_KEY=sk-ant-daves-own\n", encoding="utf-8"
+    )
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(
+        "".join(
+            f'[[tenant]]\nslug = "{slug}"\ndata_dir = "{tmp_path / slug}"\n'
+            + ("funded = true\n" if slug in ("jason", "bob") else "")
+            for slug in ("jason", "bob", "dave", "newbie")
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(keys_module, "GLOBAL_KEYS_PATH", shared)
+    monkeypatch.setattr(tenants_module, "DEFAULT_REGISTRY_PATH", registry)
+
+    out = CliRunner().invoke(app, ["tenant", "keys", "--by-key"]).output
+
+    # The two funded tenants appear as ONE group; dave's own key is its own.
+    assert "2 tenants" in out
+    jason_line = next(line for line in out.splitlines() if "jason" in line)
+    assert "bob" in jason_line and "dave" not in jason_line
+    # A tenant with nothing is visible rather than absent.
+    assert "(not configured)" in out
+    assert "newbie" in out
+    # Never the value.
+    assert "sk-ant-shared-operator" not in out
+    assert "sk-ant-daves-own" not in out
