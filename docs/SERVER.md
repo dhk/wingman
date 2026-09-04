@@ -845,8 +845,27 @@ a per-hostname toggle, not a per-path one. Hit live; see
 
 **Which paths this box actually fronts.** `WINGMAN_SHARED_TAILSCALE_PATHS`
 takes a space- or comma-separated list, so a shared instance fronting more
-than one path is reproducible from the script. Lobster serves **both `/` and
-`/shared`** from 8789, so rebuilding it means:
+than one path is reproducible from the script.
+
+Lobster today serves the shared process at **`/shared` only** — verify
+before believing any of this, because it has already drifted once:
+
+```console
+$ tailscale serve status
+https://lobster.tail08dfce.ts.net (Funnel on)
+|-- /shared     proxy http://127.0.0.1:8789
+|-- /alexandria proxy http://127.0.0.1:8797
+```
+
+There is no `/` mount on the funnel (the `/` that exists is on `:8443`,
+tailnet-only, pointing at a different port entirely). So every tenant URL
+for this box needs `--tunnel-prefix /shared`; generated without it, the
+bare-hostname form 404s **at the tunnel, not at wingman** — which reads
+like the tenant is unregistered rather than like a URL built with the
+wrong prefix. `wg tenant url <slug>` is the safe way to ask, since it
+runs as the account that can actually read the tenant's token file.
+
+To mount the root as well, rebuild with both paths:
 
 ```bash
 sudo WINGMAN_SHARED_TAILSCALE_PATHS="/ /shared" ./wingman-provision-shared.sh

@@ -425,39 +425,32 @@ require_no_args() {
   exit 2
 }
 
-cmd_keys() {
-  # #444: the 'keys' commands live on the wingman CLI, but the account
-  # whose keys need looking at is usually not the one you are logged in
-  # as. sudo resets PATH, so every invocation had become
-  #   sudo -iu wingman-shared bash -c 'export PATH=...; wingman keys ...'
-  # which docs/SERVER.md had absorbed rather than solved, and which fails
-  # two unhelpful ways: 'command not found', or -- worse -- running as the
-  # wrong account and reading every tenant's keys.env as absent (#442).
-  local as_shared=0 arg
-  for arg in "$@"; do
-    case "$arg" in
-      --all-tenants|--tenant|--tenant=*) as_shared=1 ;;
-    esac
-  done
-
-  if [ "$as_shared" -eq 0 ]; then
-    command -v wingman >/dev/null 2>&1 || {
-      say "no 'wingman' on PATH for $(id -un) — is the CLI installed for this account?"
-      return 127
-    }
-    say "→ as $(id -un) (this account)"
-    wingman keys "$@"
-    return $?
-  fi
-
-  # Tenant-scoped: the registry and every tenant's keys.env belong to the
-  # shared service account. Read as anyone else they come back "absent",
-  # which is a permissions failure wearing a finding's costume.
+_run_as_shared() {
+  # Re-exec 'wingman <args>' as the account that owns the tenant registry
+  # and every tenant's keys.env / token file. Extracted from cmd_keys
+  # (#444) so 'tenant' gets the identical treatment: every 'wingman tenant'
+  # subcommand reads those same shared-account files, and read as anyone
+  # else they come back "absent" — a permissions failure wearing a
+  # finding's costume (#442).
   id "$SHARED_USER" >/dev/null 2>&1 || {
     say "no '$SHARED_USER' account on this box — is the RFC-048 shared process provisioned?"
     say "(override the name with WINGMAN_SHARED_USER=...)"
     return 1
   }
+
+  # Already the owning account: run in-process. Without this, being
+  # wingman-shared would still shell out through sudo to reach itself,
+  # needing sudo rights the service account has no reason to hold.
+  if [ "$(id -un)" = "$SHARED_USER" ]; then
+    command -v wingman >/dev/null 2>&1 || {
+      say "no 'wingman' on PATH for $SHARED_USER — run '$0 upgrade-all' first"
+      return 127
+    }
+    say "→ as $SHARED_USER (this account already owns the tenant files)"
+    wingman "$@"
+    return $?
+  fi
+
   # Exec the binary directly rather than going through a shell. 'sudo -i'
   # runs the target's LOGIN shell, which joins everything after it into one
   # string and re-parses it — a quoted multi-line script does not survive
@@ -480,30 +473,76 @@ cmd_keys() {
     return 127
   }
   say "→ as $SHARED_USER (owns the tenant registry and every tenant's keys.env)"
-  sudo -H -u "$SHARED_USER" "$bin" keys "$@"
+  sudo -H -u "$SHARED_USER" "$bin" "$@"
+}
+
+cmd_keys() {
+  # #444: the 'keys' commands live on the wingman CLI, but the account
+  # whose keys need looking at is usually not the one you are logged in
+  # as. sudo resets PATH, so every invocation had become
+  #   sudo -iu wingman-shared bash -c 'export PATH=...; wingman keys ...'
+  # which docs/SERVER.md had absorbed rather than solved, and which fails
+  # two unhelpful ways: 'command not found', or -- worse -- running as the
+  # wrong account and reading every tenant's keys.env as absent (#442).
+  #
+  # Unlike 'tenant', this routes CONDITIONALLY: 'wg keys where' with no
+  # flags is a question about the caller's OWN account, and answering it as
+  # somebody else would be the same wrong-account bug in reverse.
+  local as_shared=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --all-tenants|--tenant|--tenant=*) as_shared=1 ;;
+    esac
+  done
+
+  if [ "$as_shared" -eq 0 ]; then
+    command -v wingman >/dev/null 2>&1 || {
+      say "no 'wingman' on PATH for $(id -un) — is the CLI installed for this account?"
+      return 127
+    }
+    say "→ as $(id -un) (this account)"
+    wingman keys "$@"
+    return $?
+  fi
+
+  _run_as_shared keys "$@"
 }
 
 cmd_tenant() {
-  # Thin wrapper over the real implementation ('wingman tenant ...',
-  # RFC-048 #209/#210) — same shape as every other wingman-ctl command
-  # that just delegates to the Python CLI (e.g. cmd_stop). Forwards every
-  # trailing flag (--port, --tunnel-prefix, --allowed-host, ...) through
-  # unchanged -- these previously got silently dropped by both this
-  # function AND the outer dispatch only ever passing $2/$3 along, so
-  # docs/SERVER.md's own documented 'wg tenant url <slug> --port 8789'
-  # never actually reached the real command.
+  # Every 'wingman tenant' subcommand reads files that belong to the shared
+  # service account -- the registry, each tenant's keys.env, each tenant's
+  # token file -- so this routes through _run_as_shared unconditionally.
+  # That is the difference from cmd_keys, which routes only when a
+  # tenant-scoped flag is present: there is no such thing as an
+  # own-account 'tenant' question.
+  #
+  # Before this, 'wg tenant url <slug>' ran as the CALLER and could not read
+  # the tenant's token file, so it reported a URL it had failed to build --
+  # which is why wingman-provision-shared.sh's own status hint had to spell
+  # out a 'sudo -iu wingman-shared bash -c export PATH=...' incantation
+  # instead of just saying 'wg tenant url <slug>'.
   local sub="${1:-}" slug="${2:-}"
   case "$sub" in
+    keys)
+      shift
+      _run_as_shared tenant keys "$@" ;;
     url)
       [ -n "$slug" ] || { say "usage: $0 tenant url <slug> [--port N] [--tunnel-prefix /path] ..."; return 2; }
       shift 2
-      wingman tenant url "$slug" "$@" ;;
+      _run_as_shared tenant url "$slug" "$@" ;;
+    urls)
+      shift
+      _run_as_shared tenant urls "$@" ;;
+    validate)
+      shift
+      _run_as_shared tenant validate "$@" ;;
     rotate-token)
       [ -n "$slug" ] || { say "usage: $0 tenant rotate-token <slug>"; return 2; }
       shift 2
-      wingman tenant rotate-token "$slug" "$@" ;;
+      _run_as_shared tenant rotate-token "$slug" "$@" ;;
     *)
-      say "usage: $0 tenant url <slug> | tenant rotate-token <slug>"
+      say "usage: $0 tenant keys [--tenant <slug>] | tenant validate [--tenant <slug>]"
+      say "       $0 tenant url <slug> | tenant urls | tenant rotate-token <slug>"
       return 2 ;;
   esac
 }
@@ -539,8 +578,16 @@ case "${1:-}" in
     say "  keys ...     forward to 'wingman keys' with a working PATH; tenant-scoped"
     say "               flags (--tenant/--all-tenants) run as the account that owns"
     say "               the registry, so tenant files are readable (#442, #444)"
+    say "  tenant keys [--tenant <slug>]  which key each person actually uses, by"
+    say "                              fingerprint only -- the strict RFC-048 ladder"
+    say "                              (their workspace keys.env, then the global file"
+    say "                              only if funded), never the operator's host file"
+    say "  tenant validate [--tenant <slug>]  call the provider with the key that"
+    say "                              person actually spends, on the strict ladder"
     say "  tenant url <slug>           print a tenant's connector URLs (RFC-048, #209)"
+    say "  tenant urls                 the same, for every registered tenant"
     say "  tenant rotate-token <slug>  invalidate + reissue a tenant's token in one step,"
     say "                              no restart, no drain (RFC-048, #210)"
+    say "  every 'tenant' subcommand runs as the account owning the tenant files (#442)"
     exit 2 ;;
 esac

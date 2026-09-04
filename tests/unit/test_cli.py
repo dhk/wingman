@@ -100,11 +100,14 @@ def test_keys_where_never_prints_a_key_value(monkeypatch) -> None:
     assert "DO-NOT-PRINT-THIS-TAIL" not in result.output
 
 
-def test_keys_where_has_help() -> None:
+def test_keys_where_no_longer_offers_the_tenant_flags() -> None:
+    """They answered on the single-account ladder, which names this
+    account's host file — a file no tenant ever reads. Moved to
+    'wingman tenant keys' rather than left quietly wrong."""
     result = runner.invoke(app, ["keys", "where", "--help"])
     assert result.exit_code == 0
-    assert "--tenant" in plain(result.output)
-    assert "--all-tenants" in plain(result.output)
+    assert "--tenant" not in plain(result.output)
+    assert "--all-tenants" not in plain(result.output)
 
 
 def test_keys_set_rejects_an_unknown_scope() -> None:
@@ -139,11 +142,14 @@ def test_keys_list_states_the_current_precedence() -> None:
     assert "keys where" in result.output
 
 
-def test_keys_validate_has_help_and_scopes() -> None:
+def test_keys_validate_no_longer_offers_the_tenant_flags() -> None:
+    """Same reason as 'keys where', with a sharper failure: falling through
+    to this account's host file would live-test a working key and report a
+    pass for a tenant who has none. Moved to 'wingman tenant validate'."""
     result = runner.invoke(app, ["keys", "validate", "--help"])
     assert result.exit_code == 0
-    assert "--tenant" in plain(result.output)
-    assert "--all-tenants" in plain(result.output)
+    assert "--tenant" not in plain(result.output)
+    assert "--all-tenants" not in plain(result.output)
 
 
 def test_keys_validate_names_the_tier_and_fails_loudly(monkeypatch) -> None:
