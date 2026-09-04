@@ -11,6 +11,7 @@ return unit-length vectors, so this is cosine similarity).
 from __future__ import annotations
 
 import math
+import re
 
 from pydantic import BaseModel, Field
 
@@ -193,12 +194,43 @@ def company_key(name: str) -> str:
     return " ".join(name.lower().split())
 
 
+def _appears_as_a_whole_word(key: str, haystack: str) -> bool:
+    """Does `key` occur in `haystack` bounded by non-alphanumerics?
+
+    A bare `key in haystack` is what this replaces, and the substring it
+    matched was not hypothetical: LinkedIn writes "NA" into the company
+    column of a connection with no employer, so an imported person arrives
+    carrying "NA" as a real company. `company_key("NA")` is "na", and "na"
+    is a substring of "data-a[na]lyst" — so every opportunity whose title
+    contained those two letters was attributed to a company that does not
+    exist, and the pack then listed everyone else carrying the same
+    placeholder under "People you know there". "manager", "analytics",
+    "national" and "international" all carry those letters too.
+
+    Boundaries are checked with lookarounds rather than `\\b` so a key that
+    begins or ends in punctuation ("iO Associates - US") still anchors on
+    the character that actually borders it.
+
+    Deliberately NOT paired with a minimum key length. Two-character
+    company names are real — 3M, HP, GE, BP — and a length floor would
+    silently stop matching them to buy protection the boundary check
+    already gives. The exposure left is a placeholder that is also a
+    plausible whole word in a title ("NA" for North America in "Regional
+    Director, NA"), and the fix for that is to stop storing a placeholder
+    as a company, not to blind the matcher.
+    """
+    return re.search(rf"(?<![0-9a-z]){re.escape(key)}(?![0-9a-z])", haystack) is not None
+
+
 def infer_company_from_title(title: str, storage: Storage) -> str | None:
     """The known company whose name appears in a role title, if any.
 
     Shared by application.pack (composing a pack) and application.opportunities
     (#312, listing assessed opportunities) so both infer company the same
     way instead of carrying two implementations.
+
+    Matching is whole-word (see `_appears_as_a_whole_word`); the longest
+    matching key still wins, so a specific name beats a generic one.
     """
     lowered = " ".join(title.lower().split())
     candidates: dict[str, str] = {}
@@ -210,7 +242,17 @@ def infer_company_from_title(title: str, storage: Storage) -> str | None:
             candidates.setdefault(card.person_id.removeprefix("__company__"), card.person_name)
     best = None
     for key, display in candidates.items():
-        if key and key in lowered and (best is None or len(key) > len(company_key(best))):
+        # A "company" with no alphanumeric character in it is a placeholder,
+        # not a name — the import also yields "-", "." and ".." — and a bare
+        # "-" whole-word-matches "Regional Director - AI Deployment". Skipping
+        # them costs nothing real: no company is punctuation alone.
+        if not any(character.isalnum() for character in key):
+            continue
+        if (
+            key
+            and _appears_as_a_whole_word(key, lowered)
+            and (best is None or len(key) > len(company_key(best)))
+        ):
             best = display
     return best.removesuffix(" (company)") if best else None
 

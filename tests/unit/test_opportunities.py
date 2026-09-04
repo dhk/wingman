@@ -218,3 +218,59 @@ def test_infer_company_from_title_used_directly_matches_pack(workspace: Config) 
         add_person("Jane Author", storage, company="Acme", position="Head of Data")
         assert infer_company_from_title("Staff MLE at Acme", storage) == "Acme"
         assert infer_company_from_title("Staff MLE at Nowhere Co", storage) is None
+
+
+def test_a_placeholder_company_no_longer_matches_inside_a_word(workspace: Config) -> None:
+    """LinkedIn writes "NA" into the company column of a connection with no
+    employer, so an imported person arrives carrying it as a real company.
+    company_key("NA") is "na", which is a substring of "data-a[na]lyst" —
+    the bare `in` test attributed the role to a company that does not exist
+    and then listed everyone else carrying the placeholder as colleagues.
+    """
+    with Storage(workspace.db_path) as storage:
+        add_person("Rob Placeholder", storage, company="NA", position="Retired")
+        title = "Source: https://cursor.com/careers/data-analyst-user-operations"
+        assert infer_company_from_title(title, storage) is None
+        for word in ("Manager, Analytics", "International Sales", "National Accounts Lead"):
+            assert infer_company_from_title(word, storage) is None
+
+
+def test_short_company_names_still_match_as_whole_words(workspace: Config) -> None:
+    """The fix is a boundary check, not a length floor: two-character
+    company names are real and must keep working."""
+    with Storage(workspace.db_path) as storage:
+        add_person("Pat Printer", storage, company="HP", position="Engineer")
+        assert infer_company_from_title("Data Analyst at HP", storage) == "HP"
+        assert infer_company_from_title("HP, Staff Engineer", storage) == "HP"
+        # ...but not buried inside another word.
+        assert infer_company_from_title("Head of HPC Strategy", storage) is None
+
+
+def test_the_longest_matching_company_still_wins(workspace: Config) -> None:
+    """Boundary matching must not disturb the existing specific-beats-generic
+    rule that makes Anthropic roles resolve correctly today."""
+    with Storage(workspace.db_path) as storage:
+        add_person("Ann Broad", storage, company="AI", position="Founder")
+        add_person("Ann Narrow", storage, company="AI Deployment", position="Lead")
+        assert infer_company_from_title("Manager at AI Deployment", storage) == "AI Deployment"
+
+
+def test_a_company_name_with_punctuation_still_anchors(workspace: Config) -> None:
+    """Lookarounds rather than \\b, so a key bordered by punctuation matches."""
+    with Storage(workspace.db_path) as storage:
+        add_person("Sam Assoc", storage, company="iO Associates - US", position="Recruiter")
+        assert (
+            infer_company_from_title("Analyst, iO Associates - US", storage) == "iO Associates - US"
+        )
+
+
+def test_a_punctuation_only_company_is_never_matched(workspace: Config) -> None:
+    """The same import that yields "NA" also yields "-", "." and "..". A bare
+    "-" passes a whole-word check inside "Regional Director - AI Deployment",
+    so the boundary rule alone is not enough: a key with no alphanumeric
+    character in it is a placeholder and never a name."""
+    with Storage(workspace.db_path) as storage:
+        add_person("Dash Person", storage, company="-", position="Unknown")
+        add_person("Dot Person", storage, company="..", position="Unknown")
+        assert infer_company_from_title("Regional Director - AI Deployment", storage) is None
+        assert infer_company_from_title("Head of Data .. Strategy", storage) is None
