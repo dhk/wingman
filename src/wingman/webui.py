@@ -687,6 +687,9 @@ def _connect_panel(request: Request, token: str, step: str = "") -> str:
 def _key_field(short: str, env_var: str, source: str) -> str:
     label = f"{short.capitalize()} key"
     if source == "environment":
+        # Single-account only. A tenant never reaches this branch (see
+        # 'key_status_rows'), which is the point: this renders readonly,
+        # and a tenant who cannot type here cannot set their own key.
         return (
             f'<div class="field"><label>{_e(label)}</label>'
             '<input type="password" value="********" readonly>'
@@ -697,6 +700,12 @@ def _key_field(short: str, env_var: str, source: str) -> str:
     if source == "workspace file":
         status = (
             '<span class="status ok"><span class="sdot"></span>verified · workspace file</span>'
+        )
+    elif source == "global file (funded)":
+        status = (
+            '<span class="status warn"><span class="sdot"></span>'
+            "using the shared key this workspace is funded with — "
+            "set your own here to use it instead</span>"
         )
     else:
         status = '<span class="status"><span class="sdot"></span>not set</span>'
@@ -756,14 +765,21 @@ def _keys_panel(config: Config, step: str = "") -> str:
     )
     fields = "".join(
         _key_field(short, env_var, source)
-        for short, env_var, source in key_status_rows(config.data_dir)
+        for short, env_var, source in key_status_rows(config.data_dir, config)
     )
     return (
         f'<div class="panel">{lead}'
         "<p>Each key is <b>verified against its provider</b> before it is stored "
         "(workspace file, owner-only). Your own key is the one that gets used \u2014 "
-        "anything set in the service environment is only a fallback.</p>"
-        f'<form method="post" action="keys" class="field">{fields}'
+        + (
+            "if you do not set one, this workspace falls back to the shared key it is "
+            "funded with.</p>"
+            if config.strict_provider_keys and config.funded
+            else "and with no key of your own here, nothing model-backed can run.</p>"
+            if config.strict_provider_keys
+            else "anything set in the service environment is only a fallback.</p>"
+        )
+        + f'<form method="post" action="keys" class="field">{fields}'
         '<button class="btn">Verify &amp; store</button></form></div>'
     )
 
@@ -985,19 +1001,39 @@ async def ui_upload(request: Request) -> Response:
     return _page("Upload", f'{back}<div class="report-box">{_e(summary)}</div>')
 
 
-def key_status_rows(data_dir: Path) -> list[tuple[str, str, str]]:
-    """(short, env var, source) per key: environment / workspace file / not set."""
+def key_status_rows(data_dir: Path, config: Config | None = None) -> list[tuple[str, str, str]]:
+    """(short, env var, source) per key: environment / workspace file /
+    global file (funded) / not set.
+
+    'config' decides WHICH ladder is reported, and passing None keeps the
+    single-account one. Under a shared multi-tenant process the process
+    environment is the SERVICE ACCOUNT's, not the tenant's, and
+    'providers.router.metered_key' never consults it for a tenant
+    (strict_provider_keys, RFC-048). Reporting "environment" there was
+    wrong twice over: it claimed a key was in play that the tenant's own
+    calls ignore, and — because '_key_field' renders that state readonly —
+    it locked every tenant out of setting their own key. 'ensure_env' at
+    server startup hydrates the box-wide global file into this process's
+    environment, so one funded box made the form uneditable for everybody
+    on it.
+    """
     import os
 
-    from wingman.infrastructure.keys import KNOWN_KEYS, read_workspace_keys
+    from wingman.infrastructure.keys import KNOWN_KEYS, read_global_keys, read_workspace_keys
 
     stored = read_workspace_keys(data_dir)
+    strict = config is not None and config.strict_provider_keys
+    shared = read_global_keys() if strict and config is not None and config.funded else {}
     rows: list[tuple[str, str, str]] = []
     for short, env_var in KNOWN_KEYS.items():
-        if os.environ.get(env_var, "").strip():
-            source = "environment"
-        elif env_var in stored:
+        if env_var in stored:
             source = "workspace file"
+        elif strict:
+            # No environment tier at all for a tenant: their own file, then
+            # the global file if the operator funds them, then nothing.
+            source = "global file (funded)" if env_var in shared else "not set"
+        elif os.environ.get(env_var, "").strip():
+            source = "environment"
         else:
             source = "not set"
         rows.append((short, env_var, source))

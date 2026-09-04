@@ -686,6 +686,71 @@ def describe_key_locations(
     return out
 
 
+def describe_tenant_key_locations(
+    data_dir: Path,
+    funded: bool,
+    global_path: Path | None = None,
+) -> dict[str, list[KeyLocation]]:
+    """Every tier a TENANT's key can come from, in the order the tenant's
+    own process consults them — which is not the order 'describe_key_locations'
+    reports.
+
+    A tenant in the shared multi-tenant process runs with
+    'strict_provider_keys' (RFC-048), so 'providers.router.metered_key'
+    resolves exactly two tiers: the tenant's own workspace 'keys.env',
+    then — only when that tenant is 'funded' — the box-wide global file.
+    The operator's host file and the ambient process environment are
+    deliberately never consulted, which is the whole point of the
+    isolation: one tenant must not silently spend another account's
+    credential.
+
+    Reporting the single-account ladder for a tenant is therefore not a
+    near-miss, it names a file the tenant will never read. That is why this
+    is a separate function rather than a flag on 'describe_key_locations':
+    the two ladders share a row type and nothing else.
+
+    An unfunded tenant with no workspace key has NO key — the returned rows
+    say so by being uniformly absent, rather than falling through to a tier
+    that would have answered for a different account.
+    """
+    values, denied = _read_known_keys_file(workspace_keys_path(data_dir))
+    resolved_global = global_path if global_path is not None else GLOBAL_KEYS_PATH
+    global_values, global_denied = _read_known_keys_file(resolved_global)
+
+    out: dict[str, list[KeyLocation]] = {}
+    for short_name, env_var in KNOWN_KEYS.items():
+        rows: list[KeyLocation] = []
+        workspace_value = values.get(env_var, "")
+        workspace_present = bool(workspace_value.strip())
+        rows.append(
+            KeyLocation(
+                tier="workspace file",
+                path=str(workspace_keys_path(data_dir)),
+                present=workspace_present,
+                fingerprint=fingerprint(workspace_value) if workspace_present else None,
+                # A denied workspace read must never read as a win: the file
+                # could hold a key that outranks everything below it.
+                winner=workspace_present and not denied,
+                readable=not denied,
+            )
+        )
+        if funded:
+            global_value = global_values.get(env_var, "")
+            global_present = bool(global_value.strip())
+            rows.append(
+                KeyLocation(
+                    tier="global file (funded fallback)",
+                    path=str(resolved_global),
+                    present=global_present,
+                    fingerprint=fingerprint(global_value) if global_present else None,
+                    winner=global_present and not workspace_present and not denied,
+                    readable=not global_denied,
+                )
+            )
+        out[short_name] = rows
+    return out
+
+
 def key_status(runner: Runner | None = None) -> list[tuple[str, str, str]]:
     """(short name, env var, state) per known key — states name the source,
     never the value: 'environment', 'keychain', or 'not set'."""

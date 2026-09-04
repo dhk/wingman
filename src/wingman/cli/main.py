@@ -153,6 +153,7 @@ from wingman.infrastructure.keys import (
     KeyStoreError,
     KeyValidation,
     describe_key_locations,
+    describe_tenant_key_locations,
     ensure_env,
     host_keys_path,
     key_status,
@@ -5156,6 +5157,102 @@ def tenant_overnight_cmd(
         typer.echo(f"{degraded} of them had failed targets, recorded in that tenant's own digest.")
     if unrunnable or (degraded and strict):
         raise typer.Exit(code=1)
+
+
+def _echo_tenant_key_locations(
+    slug: str, data_dir: Path, funded: bool, rows_by_key: dict[str, list[KeyLocation]]
+) -> bool:
+    """Print one tenant's strict-ladder table. Returns True if drift was found."""
+    typer.echo(f"\ntenant {slug!r}   {'funded' if funded else 'not funded'}")
+    typer.echo(f"  workspace: {data_dir}")
+    drifted = False
+    for short_name, rows in rows_by_key.items():
+        winner = next((r for r in rows if r.winner), None)
+        blind = [r for r in rows if not r.readable]
+        if blind:
+            # An unreadable tier outranks or ties everything reported below
+            # it, so no winner may be asserted — the failure 'keys where'
+            # still has, where a readable lower tier gets announced as USED
+            # while the tier above it was never read.
+            headline = "CANNOT TELL - a tier could not be read"
+        elif winner:
+            headline = winner.tier
+        elif funded:
+            headline = "NO KEY - workspace unset and global unset"
+        else:
+            headline = "NO KEY - workspace unset, and not funded"
+        typer.echo(f"  {short_name:11s} {KNOWN_KEYS[short_name]:22s} -> {headline}")
+        others = [r.fingerprint for r in rows if r.present and not r.winner]
+        if winner and any(f != winner.fingerprint for f in others):
+            drifted = True
+        for row in rows:
+            if not row.readable:
+                typer.echo(
+                    f"    ????  {row.tier:28s} UNREADABLE (permission denied)"
+                    "  <-- run as the account owning the workspace"
+                )
+                continue
+            if not row.present:
+                continue
+            mark = "USED " if row.winner else "     "
+            note = "" if row.winner else "   <-- unused"
+            typer.echo(f"    {mark}{row.tier:28s} {row.fingerprint}{note}")
+    return drifted
+
+
+@tenant_app.command("keys")
+def tenant_keys_cmd(
+    tenant: str = typer.Option("", "--tenant", help="One tenant by slug. Default: every tenant."),
+    all_tenants: bool = typer.Option(
+        False, "--all", help="Every tenant in the registry (the default when --tenant is omitted)."
+    ),
+) -> None:
+    """Which key each person is actually using — by fingerprint, never by value.
+
+    Reports the ladder a TENANT's own process really walks
+    (strict_provider_keys, RFC-048): their workspace 'keys.env', then the
+    box-wide global file only if they are funded. 'wingman keys where'
+    reports the single-account ladder instead, which names the operator's
+    host file — a file no tenant ever reads.
+
+    Tenant workspaces are readable only by the account that owns them, so
+    run this AS that account or the rows come back UNREADABLE:
+
+      sudo -iu wingman-shared bash -c 'export PATH="$HOME/.local/bin:$PATH"; wingman tenant keys'
+    """
+    configure_logging()
+    from wingman.infrastructure.tenants import load_registry, tenant_registry_path
+
+    registry = tenant_registry_path()
+    tenants = load_registry(registry)
+    if not tenants:
+        typer.echo(f"No tenants in {registry}.", err=True)
+        raise typer.Exit(code=1)
+    if tenant and all_tenants:
+        typer.echo("--tenant and --all contradict each other; pass one.", err=True)
+        raise typer.Exit(code=2)
+    if tenant:
+        tenants = [t for t in tenants if t.slug == tenant]
+        if not tenants:
+            typer.echo(f"No tenant named {tenant!r} in {registry}.", err=True)
+            raise typer.Exit(code=1)
+
+    typer.echo("Strict tenant ladder (RFC-048) - first one present wins:")
+    typer.echo("  1. workspace file   <workspace>/keys.env   (this person's own key)")
+    typer.echo("  2. global file      /etc/wingman/global-secrets.env   (only if funded)")
+    typer.echo("\nThe operator host file and process environment are never consulted for a")
+    typer.echo("tenant. A fingerprint is prefix...#digest (len N) - same digest, same key.")
+
+    drifted = False
+    for entry in tenants:
+        rows = describe_tenant_key_locations(entry.data_dir, entry.funded)
+        drifted |= _echo_tenant_key_locations(entry.slug, entry.data_dir, entry.funded, rows)
+
+    if drifted:
+        typer.echo(
+            "\nA tier holds a DIFFERENT key from the one being used. That is how an expired "
+            "key hides: fix or remove the stale copy, or it will win somewhere else."
+        )
 
 
 @admin_app.command("url")
