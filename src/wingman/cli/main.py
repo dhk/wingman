@@ -164,6 +164,7 @@ from wingman.infrastructure.keys import (
     test_keys,
     unset_key,
     validate_keys,
+    validate_tenant_keys,
 )
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.mcp_process import server_status, stop_server
@@ -3302,9 +3303,19 @@ def keys_set(
     """
     configure_logging()
     env_var = KNOWN_KEYS.get(name.strip().lower(), "")
-    secret = value or os.environ.get(env_var, "").strip()
-    if not secret:
-        secret = typer.prompt(f"{name} key", hide_input=True)
+    if tenant:
+        # NEVER the ambient environment when writing into somebody else's
+        # workspace. 'ensure_env' hydrates the host and global files into
+        # this process on every invocation, so the fallback below would
+        # silently copy the OPERATOR's key into a tenant's BYOK file and
+        # report success — the write looks like it worked, the tenant is
+        # pinned to a credential that is not theirs, and rotating the file
+        # it came from no longer reaches them. Hit live on lobster.
+        secret = value or typer.prompt(f"{name} key for tenant {tenant!r}", hide_input=True)
+    else:
+        secret = value or os.environ.get(env_var, "").strip()
+        if not secret:
+            secret = typer.prompt(f"{name} key", hide_input=True)
 
     choice = scope.strip().lower()
     if choice not in ("keychain", "host", "workspace"):
@@ -3341,7 +3352,14 @@ def keys_set(
         typer.echo(f"keys set failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    typer.echo("Confirm which copy now wins with: wingman keys where")
+    # 'keys where' walks the single-account ladder, so pointing a tenant
+    # write at it names the operator's host file as the winner — a file the
+    # tenant never reads.
+    typer.echo(
+        f"Confirm which copy now wins with: wingman tenant keys --tenant {tenant}"
+        if tenant
+        else "Confirm which copy now wins with: wingman keys where"
+    )
 
 
 @keys_app.command("list")
@@ -3392,14 +3410,21 @@ def _echo_key_locations(title: str, rows_by_key: dict[str, list[KeyLocation]]) -
     return drifted
 
 
+_TENANT_FLAGS_MOVED = (
+    "{cmd} answers for ONE ACCOUNT, on the single-account ladder: workspace, "
+    "environment, Keychain, host file, global file.\n"
+    "A tenant resolves on the strict RFC-048 ladder instead — their own workspace "
+    "file, then the global file only if funded — and never reads this account's host "
+    "file or this process's environment. Reporting one ladder for the other named a "
+    "file no tenant ever consults, so the tenant flags moved rather than staying "
+    "quietly wrong:\n\n  {replacement}\n"
+)
+
+
 @keys_app.command("where")
 def keys_where(
-    tenant: str = typer.Option(
-        "", "--tenant", help="Show one tenant's workspace instead of this account's."
-    ),
-    all_tenants: bool = typer.Option(
-        False, "--all-tenants", help="Show every tenant in the registry (operators)."
-    ),
+    tenant: str = typer.Option("", "--tenant", hidden=True),
+    all_tenants: bool = typer.Option(False, "--all-tenants", hidden=True),
 ) -> None:
     """Every place a key could live, which copy is actually used, and whether
     the copies disagree — by fingerprint, never by value.
@@ -3409,6 +3434,14 @@ def keys_where(
     tiers themselves, so an expired key can be found in the one file that
     still holds it.
     """
+    if tenant or all_tenants:
+        replacement = (
+            f"wingman tenant keys --tenant {tenant}" if tenant else "wingman tenant keys --all"
+        )
+        typer.echo(
+            _TENANT_FLAGS_MOVED.format(cmd="'keys where'", replacement=replacement), err=True
+        )
+        raise typer.Exit(code=2)
     configure_logging()
     config = load_config()
 
@@ -3422,25 +3455,8 @@ def keys_where(
     typer.echo("prefix...#digest (len N) - same digest means the same key.")
 
     drifted = False
-    if all_tenants or tenant:
-        from wingman.infrastructure.tenants import load_registry, tenant_registry_path
-
-        registry = tenant_registry_path()
-        tenants = load_registry(registry)
-        if not tenants:
-            typer.echo(f"\nNo tenants in {registry}.", err=True)
-            raise typer.Exit(code=1)
-        if tenant:
-            tenants = [t for t in tenants if t.slug == tenant]
-            if not tenants:
-                typer.echo(f"\nNo tenant named {tenant!r} in {registry}.", err=True)
-                raise typer.Exit(code=1)
-        for entry in tenants:
-            rows = describe_key_locations(_pre_hydration_env, data_dir=entry.data_dir)
-            drifted |= _echo_key_locations(f"tenant '{entry.slug}'  ({entry.data_dir})", rows)
-    else:
-        rows = describe_key_locations(_pre_hydration_env, data_dir=config.data_dir)
-        drifted |= _echo_key_locations(f"this workspace  ({config.data_dir})", rows)
+    rows = describe_key_locations(_pre_hydration_env, data_dir=config.data_dir)
+    drifted |= _echo_key_locations(f"this workspace  ({config.data_dir})", rows)
 
     if drifted:
         typer.echo(
@@ -3490,12 +3506,8 @@ def _echo_validation(title: str, rows: list[KeyValidation]) -> bool:
 
 @keys_app.command("validate")
 def keys_validate(
-    tenant: str = typer.Option(
-        "", "--tenant", help="Validate one tenant's keys instead of this account's."
-    ),
-    all_tenants: bool = typer.Option(
-        False, "--all-tenants", help="Validate every tenant in the registry (operators)."
-    ),
+    tenant: str = typer.Option("", "--tenant", hidden=True),
+    all_tenants: bool = typer.Option(False, "--all-tenants", hidden=True),
 ) -> None:
     """Take the key that is actually in use and call the provider with it.
 
@@ -3510,29 +3522,22 @@ def keys_validate(
     (Anthropic: list models; Voyage: a one-word embed; GitHub/OpenRouter:
     an auth-status GET). Exits non-zero if any key fails.
     """
+    if tenant or all_tenants:
+        replacement = (
+            f"wingman tenant validate --tenant {tenant}"
+            if tenant
+            else "wingman tenant validate --all"
+        )
+        typer.echo(
+            _TENANT_FLAGS_MOVED.format(cmd="'keys validate'", replacement=replacement), err=True
+        )
+        raise typer.Exit(code=2)
     configure_logging()
     config = load_config()
     failed = False
 
-    if all_tenants or tenant:
-        from wingman.infrastructure.tenants import load_registry, tenant_registry_path
-
-        registry = tenant_registry_path()
-        tenants = load_registry(registry)
-        if not tenants:
-            typer.echo(f"No tenants in {registry}.", err=True)
-            raise typer.Exit(code=1)
-        if tenant:
-            tenants = [entry for entry in tenants if entry.slug == tenant]
-            if not tenants:
-                typer.echo(f"No tenant named {tenant!r} in {registry}.", err=True)
-                raise typer.Exit(code=1)
-        for entry in tenants:
-            rows = validate_keys(_pre_hydration_env, data_dir=entry.data_dir)
-            failed |= _echo_validation(f"tenant '{entry.slug}'  ({entry.data_dir})", rows)
-    else:
-        rows = validate_keys(_pre_hydration_env, data_dir=config.data_dir)
-        failed |= _echo_validation(f"this workspace  ({config.data_dir})", rows)
+    rows = validate_keys(_pre_hydration_env, data_dir=config.data_dir)
+    failed |= _echo_validation(f"this workspace  ({config.data_dir})", rows)
 
     if failed:
         typer.echo(
@@ -5253,6 +5258,54 @@ def tenant_keys_cmd(
             "\nA tier holds a DIFFERENT key from the one being used. That is how an expired "
             "key hides: fix or remove the stale copy, or it will win somewhere else."
         )
+
+
+@tenant_app.command("validate")
+def tenant_validate_cmd(
+    tenant: str = typer.Option("", "--tenant", help="One tenant by slug. Default: every tenant."),
+    all_tenants: bool = typer.Option(False, "--all", help="Every tenant in the registry."),
+) -> None:
+    """Call the provider with the key each person's calls actually spend.
+
+    Differs from 'wingman keys validate' in the ladder it resolves through:
+    the strict RFC-048 one. 'keys validate' falls through to this account's
+    host file when a tenant has no workspace key, and reports a healthy key
+    that tenant never touches — a green check on somebody else's
+    credential, which is worse than a red one.
+
+    Costs one cheap, no-completion-tokens call per configured key. Exits
+    non-zero if any key fails.
+    """
+    configure_logging()
+    from wingman.infrastructure.tenants import load_registry, tenant_registry_path
+
+    if tenant and all_tenants:
+        typer.echo("--tenant and --all contradict each other; pass one.", err=True)
+        raise typer.Exit(code=2)
+    registry = tenant_registry_path()
+    tenants = load_registry(registry)
+    if not tenants:
+        typer.echo(f"No tenants in {registry}.", err=True)
+        raise typer.Exit(code=1)
+    if tenant:
+        tenants = [t for t in tenants if t.slug == tenant]
+        if not tenants:
+            typer.echo(f"No tenant named {tenant!r} in {registry}.", err=True)
+            raise typer.Exit(code=1)
+
+    failed = False
+    for entry in tenants:
+        rows = validate_tenant_keys(entry.data_dir, entry.funded)
+        label = f"tenant '{entry.slug}'  ({'funded' if entry.funded else 'not funded'})"
+        failed |= _echo_validation(label, rows)
+
+    if failed:
+        typer.echo(
+            "\nA key that fails here is the one that tenant is spending. Replace it with: "
+            "wingman keys set <name> --scope workspace --tenant <slug> --value <key>",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @admin_app.command("url")

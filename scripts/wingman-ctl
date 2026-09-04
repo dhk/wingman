@@ -533,12 +533,16 @@ cmd_tenant() {
     urls)
       shift
       _run_as_shared tenant urls "$@" ;;
+    validate)
+      shift
+      _run_as_shared tenant validate "$@" ;;
     rotate-token)
       [ -n "$slug" ] || { say "usage: $0 tenant rotate-token <slug>"; return 2; }
       shift 2
       _run_as_shared tenant rotate-token "$slug" "$@" ;;
     *)
-      say "usage: $0 tenant keys [--tenant <slug>] | tenant url <slug> | tenant urls | tenant rotate-token <slug>"
+      say "usage: $0 tenant keys [--tenant <slug>] | tenant validate [--tenant <slug>]"
+      say "       $0 tenant url <slug> | tenant urls | tenant rotate-token <slug>"
       return 2 ;;
   esac
 }
@@ -578,6 +582,8 @@ case "${1:-}" in
     say "                              fingerprint only -- the strict RFC-048 ladder"
     say "                              (their workspace keys.env, then the global file"
     say "                              only if funded), never the operator's host file"
+    say "  tenant validate [--tenant <slug>]  call the provider with the key that"
+    say "                              person actually spends, on the strict ladder"
     say "  tenant url <slug>           print a tenant's connector URLs (RFC-048, #209)"
     say "  tenant urls                 the same, for every registered tenant"
     say "  tenant rotate-token <slug>  invalidate + reissue a tenant's token in one step,"

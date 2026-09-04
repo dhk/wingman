@@ -929,6 +929,52 @@ def validate_keys(
     return results
 
 
+def validate_tenant_keys(
+    data_dir: Path,
+    funded: bool,
+    global_path: Path | None = None,
+) -> list[KeyValidation]:
+    """Live-test the key a TENANT's calls actually spend.
+
+    'validate_keys' walks the single-account ladder, so for a tenant with
+    no workspace key of their own it falls through to the operator's host
+    file and reports a healthy key that tenant never touches — a green
+    check on a credential that is not theirs, which is worse than a red
+    one. This walks the strict RFC-048 ladder instead
+    ('describe_tenant_key_locations'), so a tenant with no key is reported
+    as having no key.
+
+    Costs at most one cheap, no-completion-tokens call per configured key.
+    """
+    rows_by_key = describe_tenant_key_locations(data_dir, funded, global_path)
+    values, _ = _read_known_keys_file(workspace_keys_path(data_dir))
+    resolved_global = global_path if global_path is not None else GLOBAL_KEYS_PATH
+    global_values, _ = _read_known_keys_file(resolved_global)
+
+    results: list[KeyValidation] = []
+    for short_name, env_var in KNOWN_KEYS.items():
+        rows = rows_by_key[short_name]
+        blind = [row.tier for row in rows if not row.readable]
+        winner = next((row for row in rows if row.winner), None)
+        if winner is None:
+            message = "not set"
+            if blind:
+                message = f"cannot tell — unreadable: {', '.join(blind)}"
+            elif not funded:
+                message = "not set (workspace unset, and this tenant is not funded)"
+            results.append(
+                KeyValidation(short_name, env_var, "not set", None, False, message, blind)
+            )
+            continue
+        source = values if winner.tier == "workspace file" else global_values
+        value = source.get(env_var, "")
+        ok, message = test_key_value(short_name, value)
+        results.append(
+            KeyValidation(short_name, env_var, winner.tier, fingerprint(value), ok, message, blind)
+        )
+    return results
+
+
 def test_key(short_name: str, runner: Runner | None = None) -> tuple[bool, str]:
     """Actually call the provider to confirm a key works, not just that it's
 
