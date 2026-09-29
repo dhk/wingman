@@ -55,7 +55,8 @@ Recommendation: A for the first hosted release. Revisit B when there is user dem
 
 - The owner is the maintainer and wants OAuth: more users are arriving **within weeks**.
 - **Managed identity provider**, user identities held by a vendor. Self-hosting an authorization server is out.
-- **Social login** for sign-in. Which social providers are needed is not yet specified.
+- **Social login: Google and Apple.** WorkOS AuthKit lists both as supported social connections (https://workos.com/docs/authkit/social-login); each must be configured in the dashboard first. That page states nothing on plan limits or pricing.
+- **Apple prerequisite (verified from Apple's docs):** Sign in with Apple for a website requires a Services ID associated with an *existing* iOS, macOS, tvOS or watchOS App ID enabled for Sign in with Apple (https://developer.apple.com/help/account/capabilities/configure-sign-in-with-apple-for-the-web/). A web-only product therefore still needs an Apple Developer account and an App ID. Apple's page does not say which membership tier is required. Not verified: how hidden-email (private relay) users appear in the token. Design consequence either way: tenant identity is keyed on `(iss, sub)`, never on email.
 
 ## Identity provider: what is and is not verified
 
@@ -77,7 +78,7 @@ Provisional choice: **WorkOS AuthKit**, pending the spike below. This is a provi
 
 ## Open questions (owner input needed)
 
-1. Which social providers are required at signup? (Not confirmed for any vendor yet.)
+1. Account linking: the same person signing in with Google one day and Apple the next. Keyed on `(iss, sub)` they are two different tenants unless linking is added. Does the provider offer linking, and do you want it in the first release? (Not checked.)
 2. Offer bring-your-own-key to strangers, or fund all hosted inference? This gates opening signup.
 3. Is the UI in or out for the first hosted release? Recommendation: out.
 4. Is the hosted product a new deployment, or do operator tenants and hosted tenants share one process?
