@@ -5285,6 +5285,30 @@ def main(argv: list[str] | None = None) -> None:
         "--rotate-token does not — each tenant's own token lives in their own data_dir; rotate "
         "one via 'wingman tenant rotate-token <slug>'.",
     )
+    parser.add_argument(
+        "--oauth-issuer",
+        metavar="URL",
+        help="SPIKE (RFC-081 draft): also accept OAuth 2.1 bearer tokens from this "
+        "authorization server on <prefix>/mcp. Needs --tenant-registry and all four "
+        "--oauth-* flags. Off by default; the capability-token route is unchanged.",
+    )
+    parser.add_argument(
+        "--oauth-audience",
+        metavar="URL",
+        help="This server's canonical public MCP URL (RFC 8707). Tokens minted for "
+        "any other resource are refused.",
+    )
+    parser.add_argument(
+        "--oauth-jwks-uri",
+        metavar="URL",
+        help="The authorization server's JWKS endpoint, used to verify signatures.",
+    )
+    parser.add_argument(
+        "--oauth-identities",
+        metavar="PATH",
+        help="TOML file of [[identity]] entries (iss, sub, slug) mapping a verified "
+        "identity to a tenant slug in the registry.",
+    )
     args = parser.parse_args(argv)
     configure_logging()
     get_logger("mcp").info("wingman-mcp %s starting", wingman_version())
@@ -5295,6 +5319,20 @@ def main(argv: list[str] | None = None) -> None:
             "--rotate-token doesn't apply with --tenant-registry — each tenant's own token "
             "lives in their own data_dir; rotate one via 'wingman tenant rotate-token <slug>'"
         )
+    oauth_flags = (
+        args.oauth_issuer,
+        args.oauth_audience,
+        args.oauth_jwks_uri,
+        args.oauth_identities,
+    )
+    if any(oauth_flags):
+        if not all(oauth_flags):
+            parser.error(
+                "the --oauth-* flags work only together: --oauth-issuer, --oauth-audience, "
+                "--oauth-jwks-uri and --oauth-identities"
+            )
+        if not args.tenant_registry:
+            parser.error("--oauth-* only makes sense with --tenant-registry")
     # One-time move off the legacy flat '~/.config/keys.env' (RFC-046) —
     # idempotent, so this logs nothing on every subsequent start; called
     # here (not just inside 'ensure_env') so a migration on someone's
@@ -5426,6 +5464,48 @@ def _probe_bind(host: str, port: int) -> None:
             sys.exit(1)
 
 
+def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> None:
+    """Add the bearer-authenticated route beside the capability-token one
+    (RFC-081 draft spike). Any misconfiguration refuses to start: a server
+    that looks OAuth-enabled and is not is worse than one that says so."""
+    from wingman.infrastructure.oauth_bearer import (
+        IdentityMap,
+        IdentityMapError,
+        OAuthConfigError,
+        bind_oauth_routing,
+        build_oauth_settings,
+        jwks_key_resolver,
+    )
+
+    try:
+        settings = build_oauth_settings(args.oauth_issuer, args.oauth_audience, args.oauth_jwks_uri)
+        identities = IdentityMap.from_toml(Path(args.oauth_identities).expanduser())
+    except (OAuthConfigError, IdentityMapError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+    unknown = sorted({slug for slug in identities.slugs() if index.by_slug(slug) is None})
+    if unknown:
+        print(
+            "ERROR: the identity map names tenant(s) missing from the registry: "
+            + ", ".join(unknown),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    bind_oauth_routing(
+        app,
+        f"{prefix}/mcp/{{token}}",
+        f"{prefix}/mcp",
+        index,
+        identities,
+        settings,
+        jwks_key_resolver(settings.jwks_uri),
+    )
+    print(
+        f"OAuth bearer (RFC-081 draft spike): {settings.audience}, "
+        f"{len(identities)} identity mapping(s), issuer {settings.issuer}"
+    )
+
+
 def _run_tenant_server(args: argparse.Namespace, prefix: str) -> None:
     """The shared multi-tenant process (RFC-048): one OS process, share-
     nothing per-tenant data, capability tokens per tenant. Bypasses
@@ -5509,6 +5589,8 @@ def _run_tenant_server(args: argparse.Namespace, prefix: str) -> None:
 
     app = server.streamable_http_app()
     bind_tenant_routing(app, f"{prefix}/mcp/{{token}}", index)
+    if args.oauth_issuer:
+        _bind_oauth(app, args, prefix, index)
     register_reload_handler(index, registry_path)
 
     print(f"Shared multi-tenant server (RFC-048) — {len(index)} tenant(s) from {registry_path}")
