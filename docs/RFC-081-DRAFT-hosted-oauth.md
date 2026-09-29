@@ -49,6 +49,26 @@ Recommendation: A for the first hosted release. Revisit B when there is user dem
 - **Row-level tenancy in one shared database.** Rejected again, for RFC-048's reason: share-nothing data removes a class of scoping bugs.
 - **Process or container per tenant.** Strongest isolation, restores something like the kernel boundary the OAuth-consideration doc valued. Deferred, not rejected. It is the fallback if shared-process isolation cannot be made convincing for strangers.
 
+## Free-tier cap design
+
+*Measured facts.* Every model response already carries `input_tokens` and `output_tokens` (`providers/base.py`, `ModelResponse`), so per-call cost can be computed at the provider layer. Default models (`providers/router.py`): Haiku 4.5 for `extract_fast`, Sonnet 5 for `synthesize_balanced` and `critic_independent`, Opus 4.8 for `reason_frontier`, Voyage `voyage-4` for embeddings, and OpenRouter (Sonnet 5 with web search) for `research_websearch`. Published rates per million tokens (https://platform.claude.com/docs/en/about-claude/pricing, page undated): Haiku 4.5 $1 in / $5 out; Sonnet 5 $2 / $10; Opus 4.8 $5 / $25; cache reads 0.1x input, 5-minute cache writes 1.25x.
+
+*Recommendation: cap in dollars per tenant per calendar month, not tokens.* Output rates differ 5x across the model tiers above, so a token cap means different money depending on which capability class a tenant happens to hit.
+
+*Enforcement: reserve before the call, settle after.* The default `max_tokens` is 8192 (`ModelRequest`), which bounds worst-case output cost per call: 8192 x $25/MTok = $0.205 on Opus 4.8, $0.082 on Sonnet 5, $0.041 on Haiku 4.5. Input cost is not bounded by that and must be estimated from the request. Refuse a call when the remaining budget is below the reservation; record actual cost from the response afterwards. Without a pre-call check a cap only reports overspend after the fact.
+
+*At the cap:* refuse model-calling tools with a message that points to adding the tenant's own key (the upsell path). Tools that make no model call should keep working. This RFC has not audited which tools those are.
+
+*Gaps in the current metering surface (not addressed by anything in the repo):*
+- No usage ledger exists. A per-tenant table (call, model, tokens, computed cost, timestamp) is new work.
+- `ModelResponse` records only input and output tokens, so cache reads and writes are not priced.
+- Voyage embedding calls do not return a `ModelResponse`, so their usage is not in the same path.
+- OpenRouter's web-search plugin may carry costs beyond token rates. Not verified.
+
+*Worked example (arithmetic, not a forecast).* Worst-case exposure is cap x signups: $5 x 200 tenants = $1,000/month; $10 x 200 = $2,000/month.
+
+*Choosing the number.* Real per-tenant usage is not known from anything in this repo. Recommendation: build the ledger first and run it in shadow mode (record, do not enforce) on the existing tenants for a week, then set the cap from measured usage.
+
 ## Not addressed here (each needs its own entry)
 
 - **Synchronous tool dispatch** on one event loop (RFC-048's accepted trade-off). Public hosting exceeds "before a fifth tenant" by a wide margin. Needs an async-offload or worker design before launch.
@@ -60,8 +80,8 @@ Recommendation: A for the first hosted release. Revisit B when there is user dem
 
 - The owner is the maintainer and wants OAuth: more users are arriving **within weeks**.
 - **Managed identity provider**, user identities held by a vendor. Self-hosting an authorization server is out.
-- **Social login: Google and Apple.** WorkOS AuthKit lists both as supported social connections (https://workos.com/docs/authkit/social-login); each must be configured in the dashboard first. That page states nothing on plan limits or pricing.
-- **Apple prerequisite (verified from Apple's docs):** Sign in with Apple for a website requires a Services ID associated with an *existing* iOS, macOS, tvOS or watchOS App ID enabled for Sign in with Apple (https://developer.apple.com/help/account/capabilities/configure-sign-in-with-apple-for-the-web/). A web-only product therefore still needs an Apple Developer account and an App ID. Apple's page does not say which membership tier is required. Not verified: how hidden-email (private relay) users appear in the token. Design consequence either way: tenant identity is keyed on `(iss, sub)`, never on email.
+- **Social login: Google only at launch (owner, 2026-09-28).** The owner has no Apple Developer account. WorkOS AuthKit lists Google as a supported social connection (https://workos.com/docs/authkit/social-login); it must be enabled in the dashboard first. That page states nothing on plan limits or pricing.
+- **Apple deferred.** Sign in with Apple for a website needs a Services ID tied to an existing iOS, macOS, tvOS or watchOS App ID (https://developer.apple.com/help/account/capabilities/configure-sign-in-with-apple-for-the-web/), so a web-only product still needs an Apple Developer account and App ID. Apple's page does not say which membership tier. Revisit if users ask. Design consequence that holds regardless: tenant identity is keyed on `(iss, sub)`, never email.
 
 ## Identity provider: what is and is not verified
 
@@ -83,8 +103,8 @@ Provisional choice: **WorkOS AuthKit**, pending the spike below. This is a provi
 
 ## Open questions (owner input needed)
 
-1. Account linking: the same person signing in with Google one day and Apple the next. Keyed on `(iss, sub)` they are two different tenants unless linking is added. Does the provider offer linking, and do you want it in the first release? (Not checked.)
-2. Free-tier cap: what per-tenant limit, and what happens at the cap (hard stop, prompt to add a key)? This gates opening signup.
+1. Account linking becomes relevant only when a second sign-in method is added (Apple, email). Keyed on `(iss, sub)`, one person with two methods is two tenants unless linking exists. Not needed at launch with Google only; decide before the second method ships.
+2. Free-tier cap: the dollar figure (see "Free-tier cap design"; recommendation is to measure in shadow mode first) and confirmation of the at-cap behavior. This gates opening signup.
 3. Is the UI in or out for the first hosted release? Recommendation: out.
 4. Is the hosted product a new deployment, or do operator tenants and hosted tenants share one process?
 
