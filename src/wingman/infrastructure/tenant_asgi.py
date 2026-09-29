@@ -204,6 +204,18 @@ def current_request_origin() -> RequestOrigin | None:
     return _request_origin.get()
 
 
+def current_tenant_config(index: TenantIndex, resolved: Tenant) -> Config:
+    """A tenant's Config as the registry stands right now (#404).
+
+    Shared by every route that resolves a tenant, whatever the credential
+    (capability token, or the OAuth bearer path in oauth_bearer.py), so the
+    "look the slug up per call, fall back to the resolved tenant" rule lives
+    in one place.
+    """
+    current = index.by_slug(resolved.slug)
+    return (current or resolved).config()
+
+
 class TenantRoutingASGIApp:
     """Wraps one Route's ASGI app: resolves the request's 'token' path
     parameter against a TenantIndex, binds the matching tenant's Config
@@ -220,6 +232,12 @@ class TenantRoutingASGIApp:
     def __init__(self, inner: Any, index: TenantIndex) -> None:
         self._inner = inner
         self._index = index
+
+    @property
+    def inner(self) -> Any:
+        """The app this wraps — for a second route (see oauth_bearer) that
+        fronts the same MCP endpoint with a different credential."""
+        return self._inner
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -254,8 +272,7 @@ class TenantRoutingASGIApp:
         tenant that no longer exists. Falling back rather than raising
         keeps a mid-flight request from failing on a registry edit.
         """
-        current = self._index.by_slug(resolved.slug)
-        return (current or resolved).config()
+        return current_tenant_config(self._index, resolved)
 
 
 def bind_tenant_routing(app: Starlette, path: str, index: TenantIndex) -> None:

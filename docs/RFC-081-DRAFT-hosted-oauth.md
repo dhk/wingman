@@ -77,6 +77,26 @@ Recommendation: A for the first hosted release. Revisit B when there is user dem
 - **Bound the number of free tenants, not just each one's cap.** Worst-case exposure is cap x tenants. First release is invite or waitlist, with a free-tenant ceiling set from the budget the operator is willing to lose.
 - **At the cap: hard stop with a path to add a key. Never a silent downgrade.**
 
+## Spike results (2026-09-28, branch `spike/oauth-bearer-validation`)
+
+**What was built.** `infrastructure/oauth_bearer.py` (bearer validation, identity map, metadata routes), opt-in flags `--oauth-issuer/--oauth-audience/--oauth-jwks-uri/--oauth-identities` on the shared process, a small helper extracted from `tenant_asgi.py`, and PyJWT declared as a direct dependency. With the flags absent, nothing changes: the capability-token route is untouched and no OAuth code runs.
+
+**Verified.** 53 new tests pass, including concurrent-request isolation (50 interleaved requests across two identities, no cross-contamination), refusal before the inner app runs for wrong audience, wrong issuer, expired, foreign signature, missing `exp`/`sub`/`aud`/`iss`, `alg: none`, HMAC confusion, query-string tokens, malformed and duplicated headers; 403 for a verified-but-unprovisioned identity, indistinguishable from one mapped to a departed tenant. The full suite shows no regressions (see caveats below). Six security controls were mutation-checked (remove the control, confirm a test fails). The first pass caught a real gap in my own tests: the HMAC case passed with the algorithm allowlist removed, because PyJWT independently refuses an RSA key object as an HMAC secret. Two tests now make the allowlist the only guard.
+
+**Exit criteria from the phasing section.**
+- *A second identity cannot see the first tenant's data:* met, in tests.
+- *A client with no prior relationship completes the flow against a real provider and calls a read tool as the right tenant:* **NOT met.** No provider account or test environment exists yet. Every test injects the signing key. `jwks_key_resolver` (the real JWKS fetch through `PyJWKClient`) has **no test coverage at all**, and neither does the Protected Resource Metadata behavior behind a prefix-stripping front such as a Tailscale funnel.
+
+**Findings.**
+1. `my_urls` (`mcp_server.py:223`) tells a caller with no request origin: "This session did not arrive over HTTP". That is false for a bearer caller, and the concept of a token-bearing URL does not apply to them at all. Bearer requests bind no origin on purpose (there is no token in the URL to echo). The tool needs a bearer-aware answer; not changed in the spike because what to tell an OAuth user is a product decision.
+2. The capability-token wrapper passes non-HTTP ASGI scopes straight to the inner app with no authentication (`tenant_asgi.py`, `TenantRoutingASGIApp.__call__`). The new wrapper closes them instead. Whether the legacy behavior is reachable is **unverified**: FastMCP's streamable-HTTP endpoint is HTTP-only, so it is probably inert, but nobody has checked.
+3. `PyJWKClient` blocks on its first fetch and on any unknown `kid`. The wrapper runs validation in a worker thread so one slow issuer stalls one request. This does not remove the synchronous-dispatch concern below; it avoids adding to it.
+4. Identity mapping supports several identities per slug, so account linking is expressible today as an explicit line rather than inferred.
+
+**Not built.** Scope enforcement (scopes are parsed and discarded); identity-map reload (SIGHUP reloads the tenant registry only); revocation or introspection; the web UI; the provisioning service that would write the identity map.
+
+**Caveats on the test run.** Nine tests fail identically on untouched `main` because they assert unreadable-file behavior and the sandbox runs as root, which can read anything. A tenth, `test_changelog_data_is_not_far_behind_head`, fails only on this branch: `main` is 11 commits past the changelog stamp against a ceiling of 15, and the seven RFC-doc commits underneath this branch make it 18. The repo squash-merges, so a PR would add one commit, not seven. The changelog was deliberately not regenerated to hide it.
+
 ## Not addressed here (each needs its own entry)
 
 - **Synchronous tool dispatch** on one event loop (RFC-048's accepted trade-off). Public hosting exceeds "before a fifth tenant" by a wide margin. Needs an async-offload or worker design before launch.
