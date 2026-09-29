@@ -25,7 +25,12 @@
 5. **Scopes** are per tool group, least privilege first (for example read-only profile/people versus writes). Names to be settled in review.
 6. **Legacy capability tokens are kept only for operator-provisioned tenants** (`dhk`, `trent`, `jason`, `bob`) during a fixed dual-accept window, then retired. Every legacy-path use is logged so the window can end on evidence.
 7. **Registry moves from a root-owned TOML to a provisioning store** mapping `(iss, sub) → slug → data_dir`, written by a provisioning service. `privileged` and `funded` stay operator-only and are never settable through signup, consistent with RFC-048 and RFC-068.
-8. **Provider keys.** Hosted tenants' bring-your-own keys are encrypted at rest with envelope encryption. Decision on whether to offer bring-your-own-key at all is left to review (see Open Questions).
+8. **Provider keys: tiered (owner decision, 2026-09-28).** A free tier funded by the operator, and bring-your-own-key above it.
+   - *What already exists:* a tenant's own key wins over any shared one (`providers/router.py`, "BYOK always wins"), and an unfunded tenant with no key gets no key at all rather than borrowing the operator's (`router.metered_key`, RFC-048/#514). The BYOK-over-funded ordering the tier needs is already the behavior.
+   - *What does not exist:* any spend cap. `funded` is a boolean. Reading `router.py` and `config.py`, the only mentions of spend or budget are comments. A funded hosted tenant today has unlimited operator-paid inference.
+   - *Required before signup opens:* a hard per-tenant cap on the funded tier (tokens or dollars per period, refused rather than warned), plus an operator-visible spend report. Without it, the free tier is an open-ended bill.
+   - *Tension with decision 7 and RFC-048:* `funded` was deliberately made operator-set per tenant, never a default and never automatic, so that no tenant lands on the operator's invoice without a decision. A free tier that signup assigns automatically breaks that rule. Resolution proposed: the provisioning service may assign only a distinct, capped `free` mode. `funded` (uncapped) stays operator-only.
+   - *BYOK custody:* encrypted at rest with envelope encryption. Plaintext `keys.env` (mode 0600, RFC-034) is not acceptable for strangers' keys.
 9. **Operator-only tools stay off the hosted surface.** `carve_off_persona(persona, target_dir)` takes a filesystem path and writes to it. It is gated by `operator_only_refusal` today. For hosted tenants it must be unreachable, not just refused.
 
 ## The web UI
@@ -79,7 +84,7 @@ Provisional choice: **WorkOS AuthKit**, pending the spike below. This is a provi
 ## Open questions (owner input needed)
 
 1. Account linking: the same person signing in with Google one day and Apple the next. Keyed on `(iss, sub)` they are two different tenants unless linking is added. Does the provider offer linking, and do you want it in the first release? (Not checked.)
-2. Offer bring-your-own-key to strangers, or fund all hosted inference? This gates opening signup.
+2. Free-tier cap: what per-tenant limit, and what happens at the cap (hard stop, prompt to add a key)? This gates opening signup.
 3. Is the UI in or out for the first hosted release? Recommendation: out.
 4. Is the hosted product a new deployment, or do operator tenants and hosted tenants share one process?
 
