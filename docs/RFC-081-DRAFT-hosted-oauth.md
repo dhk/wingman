@@ -31,13 +31,7 @@
    - *Required before signup opens:* a hard per-tenant cap on the funded tier (tokens or dollars per period, refused rather than warned), plus an operator-visible spend report. Without it, the free tier is an open-ended bill.
    - *Tension with decision 7 and RFC-048:* `funded` was deliberately made operator-set per tenant, never a default and never automatic, so that no tenant lands on the operator's invoice without a decision. A free tier that signup assigns automatically breaks that rule. Resolution proposed: the provisioning service may assign only a distinct, capped `free` mode. `funded` (uncapped) stays operator-only.
    - *BYOK custody:* encrypted at rest with envelope encryption. Plaintext `keys.env` (mode 0600, RFC-034) is not acceptable for strangers' keys.
-   - **Free-tier cap: proposal, not yet decided.**
-     - *Denominate in dollars, enforce at the provider layer.* `AnthropicProvider` already receives `usage.input_tokens` and `usage.output_tokens` on every response (`providers/anthropic_provider.py:96-97`), so a per-tenant counter belongs there. Today usage is only logged and stored on the ingest path (`application/ingest.py`), which is not a choke point. Metering there would miss every other call.
-     - *Three meters, not one.* The default model map (`providers/router.py:21-57`) also calls Voyage for embeddings and OpenRouter for open-web research. Neither is priced by the Anthropic table and neither is covered by a counter today. Proposal: the free tier excludes `research_websearch` entirely until it is metered.
-     - *Model gating is the strongest cost lever.* Anthropic's published rates per million tokens (https://platform.claude.com/docs/en/about-claude/pricing): Haiku 4.5 $1 in / $5 out, Sonnet 5.5 $2 / $10, Opus 5.5 $4 / $20. Opus costs 4x Haiku. Proposal: the free tier runs `extract_fast` (Haiku) and `synthesize_balanced` (Sonnet) only, and `reason_frontier` requires the tenant's own key. Caveat: the shipped model map names `claude-opus-4-8` and `claude-sonnet-5`, which do not appear in the pricing table read; confirm those names resolve and what they cost before pricing anything.
-     - *Your maximum monthly bill is cap x number of free tenants.* The cap alone bounds nothing if signup is open. Proposal: first release is invite or waitlist, with a total free-tenant limit set from the budget you are willing to lose.
-     - *Behavior at the cap:* hard stop with a clear message and a path to add a key. Never a silent downgrade.
-     - *The number itself needs measurement, not a guess.* Run a realistic onboarding on a test tenant, read the logged token counts, and set the cap from that.
+   - Free-tier cap: see "Free-tier cap design" below.
 9. **Operator-only tools stay off the hosted surface.** `carve_off_persona(persona, target_dir)` takes a filesystem path and writes to it. It is gated by `operator_only_refusal` today. For hosted tenants it must be unreachable, not just refused.
 
 ## The web UI
@@ -75,6 +69,13 @@ Recommendation: A for the first hosted release. Revisit B when there is user dem
 *Worked example (arithmetic, not a forecast).* Worst-case exposure is cap x signups: $5 x 200 tenants = $1,000/month; $10 x 200 = $2,000/month.
 
 *Choosing the number.* Real per-tenant usage is not known from anything in this repo. Recommendation: build the ledger first and run it in shadow mode (record, do not enforce) on the existing tenants for a week, then set the cap from measured usage.
+
+*Cost levers and gaps found in a second pass (added 2026-09-28).*
+- **Model gating is the strongest lever.** Anthropic's published rates per million tokens (https://platform.claude.com/docs/en/about-claude/pricing): Haiku 4.5 $1 in / $5 out, Sonnet 5.5 $2 / $10, Opus 5.5 $4 / $20. Proposal: the free tier runs `extract_fast` and `synthesize_balanced` only; `reason_frontier` requires the tenant's own key. The shipped model map names `claude-sonnet-5` and `claude-opus-4-8`, which do not appear in the pricing table read, so their real rates are unconfirmed. Confirm before any figure above is treated as a price.
+- **Token counts can be missing.** `ModelResponse.input_tokens` and `output_tokens` are typed `int | None` (`providers/base.py:34-35`). The ledger needs a rule for unknown usage: charge the reservation, do not record zero.
+- **Exclude `research_websearch` (OpenRouter) from the free tier** until it is metered, for the reason in the gaps list above.
+- **Bound the number of free tenants, not just each one's cap.** Worst-case exposure is cap x tenants. First release is invite or waitlist, with a free-tenant ceiling set from the budget the operator is willing to lose.
+- **At the cap: hard stop with a path to add a key. Never a silent downgrade.**
 
 ## Not addressed here (each needs its own entry)
 
