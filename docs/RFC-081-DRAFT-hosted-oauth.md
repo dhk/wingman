@@ -51,11 +51,35 @@ Recommendation: A for the first hosted release. Revisit B when there is user dem
 - **`GITHUB_SHARED_ISSUES_KEY`** is box-wide by design (#506). Confirm that is acceptable when tenants are strangers.
 - **Abuse and metering** for `funded` inference spend.
 
+## Decisions taken (owner, 2026-09-28)
+
+- The owner is the maintainer and wants OAuth: more users are arriving **within weeks**.
+- **Managed identity provider**, user identities held by a vendor. Self-hosting an authorization server is out.
+- **Social login** for sign-in. Which social providers are needed is not yet specified.
+
+## Identity provider: what is and is not verified
+
+Requirement: advertise CIMD (`client_id_metadata_document_supported`), honour RFC 8707 `resource`, and put an audience Wingman can check in the token.
+
+- **WorkOS AuthKit — verified from its own docs (https://workos.com/docs/authkit/mcp):** CIMD is supported but *off by default* and must be enabled in the dashboard; Dynamic Client Registration is supported for backwards compatibility; resource indicators are supported. Not shown on that page: which social providers, pricing, and limits.
+- **Auth0 Auth for MCP — not verified.** Its overview page (https://auth0.com/ai/docs/mcp/auth-for-mcp) does not mention CIMD, DCR or resource indicators. A third-party page (Zuplo, dated 2026-07-28) says Auth0 prioritizes `audience` over `resource` and needs DCR enabled per tenant. That is a secondary source about one vendor's older behavior.
+- **Self-hosted options** (Keycloak, Zitadel, authentik, Cognito, Entra ID) are out per the decision above.
+- **Clerk** advertises CIMD in a 2026-08-05 changelog. Not read beyond the title.
+
+Provisional choice: **WorkOS AuthKit**, pending the spike below. This is a provisional pick because it is the only candidate verified against its own docs, not because it was compared on price or social-provider coverage (neither was checked). Selection is reversible: Wingman only validates tokens (`iss`, `aud`, `exp`, signature), so swapping providers changes configuration, not the ASGI wrapper.
+
+## Phasing for a weeks-not-months timeline
+
+1. **Spike (days).** In a branch, add bearer validation to `TenantRoutingASGIApp` behind a flag, serving PRM and a correct `401`, next to the existing URL path. Prove one end-to-end connect from a real MCP client against the chosen provider. Exit criterion: a client with no prior relationship completes the flow and can call one read tool as the right tenant, and a second identity cannot see the first tenant's data.
+2. **Hosted-tenant provisioning.** `(iss, sub) → slug → data_dir` store and signup path. Operator-only flags stay out of reach.
+3. **Blockers before strangers arrive:** provider-key storage (open question 2) and synchronous dispatch (see "Not addressed here"). Neither is auth; both gate opening signup.
+4. **Then** the dual-accept window and legacy-token retirement for operator tenants.
+
 ## Open questions (owner input needed)
 
-1. Which identity provider? Must support the MCP client flow (Client ID Metadata Documents preferred, Dynamic Client Registration deprecated but retained in the spec's draft revision). Not yet researched; no claim is made here about any vendor.
-2. Offer bring-your-own-key to strangers, or fund all hosted inference?
-3. Is the UI in or out for the first hosted release?
+1. Which social providers are required at signup? (Not confirmed for any vendor yet.)
+2. Offer bring-your-own-key to strangers, or fund all hosted inference? This gates opening signup.
+3. Is the UI in or out for the first hosted release? Recommendation: out.
 4. Is the hosted product a new deployment, or do operator tenants and hosted tenants share one process?
 
 ## Migration
