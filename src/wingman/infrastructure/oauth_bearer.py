@@ -115,8 +115,12 @@ class OAuthSettings:
         parsed = urlparse(self.audience)
         path = parsed.path.rstrip("/")
         local_path = local_mcp_path.rstrip("/")
-        public_mount = path[: -len(local_path)] if local_path and path.endswith(local_path) else ""
-        return f"{parsed.scheme}://{parsed.netloc}{public_mount}{_WELL_KNOWN}{local_path}"
+if local_path and path.endswith(local_path):
+    public_mount = path[: -len(local_path)]
+    metadata_path = f"{public_mount}{_WELL_KNOWN}{local_path}"
+else:
+    metadata_path = f"{_WELL_KNOWN}{path}"
+return f"{parsed.scheme}://{parsed.netloc}{metadata_path}"
 
 
 def _https_or_loopback(url: str, label: str) -> None:
