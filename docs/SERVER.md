@@ -794,6 +794,33 @@ sudo scripts/wingman-add-tenant.sh jason --telemetry
 sudo scripts/wingman-add-tenant.sh bob --no-telemetry
 ```
 
+For a deliberately trusted OAuth user, bind the exact verified WorkOS
+`(iss, sub)` instead of issuing a capability URL. A newly trusted user gets
+an isolated workspace and the binding in one operator action:
+
+```bash
+sudo scripts/wingman-add-tenant.sh taylor --no-telemetry \
+  --oauth-issuer https://your-project.authkit.app \
+  --oauth-subject user_01EXAMPLE \
+  --oauth-identities /home/wingman-shared/.config/wingman/oauth-identities.toml
+```
+
+For an existing tenant, preserve their workspace and add only the binding:
+
+```bash
+sudo -iu wingman-shared wingman tenant oauth-bind jason \
+  --issuer https://your-project.authkit.app \
+  --subject user_01EXAMPLE \
+  --identities ~/.config/wingman/oauth-identities.toml \
+  --registry /etc/wingman/tenants.toml
+```
+
+The identity map is replaced atomically with mode `0600`, and the running
+shared server reloads it without a restart. Repeating the same binding is
+idempotent; trying to bind the same identity to another tenant is refused.
+Unknown authenticated identities remain unprovisioned. Do not use email as
+the key and do not copy a `sub` from an unverified source.
+
 `--telemetry` / `--no-telemetry` decide RFC-023's local usage journal for
 that tenant. **With neither flag it asks**, and with neither flag and no
 terminal it fails rather than guessing (#299). Default-off is right for

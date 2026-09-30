@@ -4578,6 +4578,54 @@ def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path
     return tenant, registry_path
 
 
+@tenant_app.command("oauth-bind")
+def tenant_oauth_bind_cmd(
+    slug: str = typer.Argument(..., help="Existing tenant slug to receive this identity."),
+    issuer: str = typer.Option(..., "--issuer", help="Exact verified token issuer (`iss`)."),
+    subject: str = typer.Option(..., "--subject", help="Exact verified WorkOS subject (`sub`)."),
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+    registry: Path | None = typer.Option(
+        None, "--registry", help="Tenant registry path (default: host setting)."
+    ),
+) -> None:
+    """Bind one operator-trusted OAuth identity to an existing tenant.
+
+    For a newly trusted person, first create their isolated tenant with
+    wingman-add-tenant.sh, then run this command. Login alone never creates
+    a workspace, and no email, privilege, or funded access is inferred.
+    """
+    configure_logging()
+    from wingman.infrastructure.oauth_bearer import IdentityMapError, bind_trusted_identity
+    from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
+
+    _tenant, registry_path = _load_tenant_or_exit(slug, registry)
+    identity_path = identities.expanduser()
+    try:
+        changed = bind_trusted_identity(identity_path, issuer, subject, slug)
+    except IdentityMapError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if not changed:
+        typer.echo(f"That trusted OAuth identity is already bound to {slug!r}; nothing changed.")
+        return
+    try:
+        signaled_pid = signal_reload(registry_path)
+    except TenantProcessSignalError as exc:
+        typer.echo(str(exc), err=True)
+        signaled_pid = None
+    typer.echo(f"Bound trusted OAuth identity to tenant {slug!r} in {identity_path}.")
+    if signaled_pid is not None:
+        typer.echo(f"Signaled the running shared process (pid {signaled_pid}) to reload.")
+    else:
+        typer.echo(
+            "No running shared process found; the binding will take effect when it starts "
+            "or is reloaded.",
+            err=True,
+        )
+
+
 @tenant_app.command("url")
 def tenant_url_cmd(
     slug: str = typer.Argument(..., help="The tenant's slug in the registry."),

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from wingman.infrastructure.oauth_bearer import IdentityMap
 from wingman.infrastructure.tenant_process import (
     clear_tenant_pidfile,
     read_tenant_process_pid,
@@ -138,6 +139,31 @@ def test_tenant_index_still_isolated_after_reload(tmp_path: Path) -> None:
     )
     index.reload(registry)
     assert index.resolve("tok-jason").slug == "jason"  # type: ignore[union-attr]
+
+
+def test_sighup_reloads_the_oauth_identity_map_too(tmp_path: Path) -> None:
+    import signal
+
+    data_dir = tmp_path / "jason"
+    data_dir.mkdir()
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{data_dir}"\n', encoding="utf-8")
+    identity_path = tmp_path / "oauth-identities.toml"
+    identity_path.write_text("", encoding="utf-8")
+    index = TenantIndex.from_registry_path(registry)
+    identities = IdentityMap.from_toml(identity_path)
+
+    old_handler = signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    try:
+        register_reload_handler(index, registry, identities, identity_path)
+        identity_path.write_text(
+            '[[identity]]\niss = "https://issuer.example"\nsub = "user_123"\nslug = "jason"\n',
+            encoding="utf-8",
+        )
+        os.kill(os.getpid(), signal.SIGHUP)
+        assert identities.slug_for("https://issuer.example", "user_123") == "jason"
+    finally:
+        signal.signal(signal.SIGHUP, old_handler)
 
 
 def test_a_malformed_registry_does_not_take_the_shared_process_down(

@@ -93,7 +93,9 @@ Recommendation: A for the first hosted release. Revisit B when there is user dem
 3. `PyJWKClient` blocks on its first fetch and on any unknown `kid`. The wrapper runs validation in a worker thread so one slow issuer stalls one request. This does not remove the synchronous-dispatch concern below; it avoids adding to it.
 4. Identity mapping supports several identities per slug, so account linking is expressible today as an explicit line rather than inferred.
 
-**Not built.** Scope enforcement (scopes are parsed and discarded); identity-map reload (SIGHUP reloads the tenant registry only); revocation or introspection; the web UI; the provisioning service that would write the identity map.
+**Trusted provisioning added after the spike.** `wingman tenant oauth-bind` atomically binds an exact `(iss, sub)` to an existing tenant and SIGHUP reloads both the tenant registry and identity map without dropping sessions. `wingman-add-tenant.sh` accepts the same three OAuth values for a newly trusted tenant and deliberately mints no legacy URL token in that mode. This is operator-controlled provisioning for a small trusted roster, not public signup: authentication alone never creates or claims a workspace, email is never an identity key, and neither privilege nor funded inference is granted.
+
+**Not built.** Scope enforcement (scopes are parsed and discarded); revocation or introspection; public self-service provisioning; the web UI.
 
 **Caveats on the test run.** Nine tests fail identically on untouched `main` because they assert unreadable-file behavior and the sandbox runs as root, which can read anything. A tenth, `test_changelog_data_is_not_far_behind_head`, fails only on this branch: `main` is 11 commits past the changelog stamp against a ceiling of 15, and the seven RFC-doc commits underneath this branch make it 18. The repo squash-merges, so a PR would add one commit, not seven. The changelog was deliberately not regenerated to hide it.
 
