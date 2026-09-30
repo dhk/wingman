@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from wingman.cli.main import app
-from wingman.infrastructure.oauth_bearer import IdentityMap
+from wingman.infrastructure.oauth_bearer import IdentityMap, bind_trusted_identity
 
 cli = CliRunner()
 ISSUER = "https://example.authkit.app"
@@ -132,3 +134,62 @@ def test_malformed_identity_map_is_preserved(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "not valid TOML" in result.output
     assert identities.read_text(encoding="utf-8") == malformed
+
+
+def test_concurrent_bindings_serialize_the_read_modify_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identities = tmp_path / "oauth-identities.toml"
+    identities.write_text("", encoding="utf-8")
+    first_read = threading.Event()
+    release_first = threading.Event()
+    second_read = threading.Event()
+    read_count = 0
+    count_lock = threading.Lock()
+    original_read_text = Path.read_text
+
+    def coordinated_read(path: Path, *args: object, **kwargs: object) -> str:
+        nonlocal read_count
+        content = original_read_text(path, *args, **kwargs)
+        if path == identities:
+            with count_lock:
+                read_count += 1
+                current = read_count
+            if current == 1:
+                first_read.set()
+                release_first.wait(timeout=2)
+            elif current == 2:
+                second_read.set()
+        return content
+
+    monkeypatch.setattr(Path, "read_text", coordinated_read)
+    failures: list[BaseException] = []
+
+    def bind(subject: str) -> None:
+        try:
+            bind_trusted_identity(identities, ISSUER, subject, subject)
+        except BaseException as exc:
+            failures.append(exc)
+
+    first = threading.Thread(target=bind, args=("first",))
+    second = threading.Thread(target=bind, args=("second",))
+    first.start()
+    try:
+        assert first_read.wait(timeout=2)
+        second.start()
+        assert not second_read.wait(timeout=0.1), (
+            "the second operator read the identity map before the first update completed"
+        )
+    finally:
+        release_first.set()
+        first.join(timeout=2)
+        if second.ident is not None:
+            second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert failures == []
+    monkeypatch.setattr(Path, "read_text", original_read_text)
+    mapping = IdentityMap.from_toml(identities)
+    assert mapping.slug_for(ISSUER, "first") == "first"
+    assert mapping.slug_for(ISSUER, "second") == "second"
