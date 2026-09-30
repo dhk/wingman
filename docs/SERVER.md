@@ -805,6 +805,10 @@ sudo scripts/wingman-add-tenant.sh taylor --no-telemetry \
   --oauth-identities /home/wingman-shared/.config/wingman/oauth-identities.toml
 ```
 
+The identity-map file must be readable and writable by `wingman-shared`, and
+its parent directory must be writable so bindings can be replaced atomically.
+The provisioning script checks this before creating the workspace.
+
 For an existing tenant, preserve their workspace and add only the binding:
 
 ```bash

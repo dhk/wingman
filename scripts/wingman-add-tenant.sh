@@ -54,6 +54,38 @@ fi
 
 say() { printf '==> %s\n' "$*"; }
 
+validate_oauth_identities_path() {
+  [ "$oauth_fields" -eq 3 ] || return 0
+  if ! sudo -iu "$SERVICE_USER" python3 - "$OAUTH_IDENTITIES" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1]).expanduser()
+if path.exists():
+    if not path.is_file():
+        print(f"OAuth identity-map path is not a regular file: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    if not os.access(path, os.R_OK | os.W_OK):
+        print(f"OAuth identity-map file is not readable and writable: {path}", file=sys.stderr)
+        raise SystemExit(1)
+
+parent = path.parent
+while not parent.exists() and parent != parent.parent:
+    parent = parent.parent
+if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
+    print(
+        f"OAuth identity-map parent is not a writable directory: {parent}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+  then
+    echo "OAuth identity-map path '$OAUTH_IDENTITIES' is unusable by service account '$SERVICE_USER'. Use a readable file (if it exists) in a parent directory that account can write." >&2
+    exit 1
+  fi
+}
+
 # Asked before the workspace exists, so a "no" costs nothing to honour.
 resolve_telemetry() {
   [ -n "$TELEMETRY" ] && return 0
@@ -86,6 +118,8 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "run as root: sudo $0 $SLUG" >&2
   exit 1
 fi
+
+validate_oauth_identities_path
 
 if [ ! -f "$REGISTRY_PATH" ]; then
   echo "no registry at $REGISTRY_PATH — run wingman-provision-shared.sh first" >&2
