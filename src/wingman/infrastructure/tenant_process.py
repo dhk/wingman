@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 from wingman.infrastructure.logs import get_logger
 
 if TYPE_CHECKING:
+    from wingman.infrastructure.oauth_bearer import IdentityMap
     from wingman.infrastructure.tenants import TenantIndex
 
 _logger = get_logger("infrastructure.tenant_process")
@@ -155,7 +156,12 @@ def signal_reload(registry_path: Path, command_of: CommandOf = _ps_command_of) -
     return pid
 
 
-def register_reload_handler(index: TenantIndex, registry_path: Path) -> None:
+def register_reload_handler(
+    index: TenantIndex,
+    registry_path: Path,
+    identities: IdentityMap | None = None,
+    identity_path: Path | None = None,
+) -> None:
     """Install a SIGHUP handler on the CURRENT process that reloads
     'index' from 'registry_path'. Call once, from the shared-process
     startup path, before serving. Safe to run directly inside a signal
@@ -168,6 +174,8 @@ def register_reload_handler(index: TenantIndex, registry_path: Path) -> None:
         _logger.info("SIGHUP received — reloading tenant registry from %s", registry_path)
         try:
             index.reload(registry_path)
+            if identities is not None and identity_path is not None:
+                identities.reload(identity_path)
         except Exception:  # noqa: BLE001 — see below: this must never propagate
             # An exception raised in a signal handler propagates into whatever
             # the main thread was executing, and this process serves every
