@@ -10,6 +10,20 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-09-28", 550, "Enroll in Doc Watson: add .doc-watson.yml"),
+    ("2026-09-04", 530, "Show which key each tenant actually uses, and let them set it"),
+    ("2026-09-04", 529, "Infer company from a title on word boundaries, not substrings"),
+    ("2026-09-01", 527, "docs: a bead is no longer a precondition for starting or landing work"),
+    (
+        "2026-09-01",
+        525,
+        "fix: say when a workspace cannot call a model, before it is asked to (#524)",
+    ),
+    ("2026-09-01", 526, "chore: keep web sessions on a full clone, and say so where it is cloned"),
+    ("2026-09-01", 523, "fix: the changelog stamps a commit that survives a squash merge (#522)"),
+    ("2026-09-01", 475, "feat: a yellow tier for overnight targets, so red means something (#473)"),
+    ("2026-09-01", 521, "fix: tests never read the operator's real /etc/wingman state (#520)"),
+    ("2026-09-01", 519, "fix: restamp changelog_data at a commit that exists on main"),
     ("2026-09-01", 510, "fix: escalate a research source's failure message once it goes stale"),
     ("2026-09-01", 516, "fix: an operator can fund one tenant's metered inference (#514)"),
     ("2026-09-01", 476, "docs: design doc for a reproducible wingman/Woven LinkedIn sync"),
@@ -781,7 +795,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "2037e4deb0271da4a6ff2c43501036a1e70b2de6"
+GENERATED_FROM_COMMIT = "1556b5ae11856cfb341ff94af776f5d0a93d5cd8"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -791,4 +805,4 @@ GENERATED_FROM_COMMIT = "2037e4deb0271da4a6ff2c43501036a1e70b2de6"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 64
+GENERATED_FROM_DISTANCE = 75
