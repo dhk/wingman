@@ -7,8 +7,9 @@ data: each tenant keeps their own SQLite DB, their own capability token
 new thing: mapping a presented capability token to the tenant it belongs
 to.
 
-The registry file itself lists only `{slug, data_dir}` per tenant — no
-secrets. Centralizing tokens or API keys here would turn one file's
+The registry file itself lists only identity and policy per tenant
+(`slug`, `data_dir`, plus optional `email`, `feature_repo`, `privileged`,
+`funded`) — no secrets. Centralizing tokens or API keys here would turn one file's
 compromise into every tenant's credentials leaking at once, exactly
 backwards from "share-nothing." Tokens and keys are read fresh from each
 tenant's own files instead.
@@ -24,6 +25,7 @@ from pathlib import Path
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.keys import KNOWN_KEYS, read_workspace_keys
 from wingman.infrastructure.logs import get_logger
+from wingman.infrastructure.workspace_identity import stamp_identity
 
 _logger = get_logger("tenants")
 
@@ -104,6 +106,12 @@ class Tenant:
     #: box-wide "everyone is funded" would put every tenant added later on
     #: the operator's invoice without anyone deciding to.
     funded: bool = False
+    #: A contact address for this tenant, lower-cased. Optional, and — like
+    #: 'funded' — per tenant only: a box-wide default would stamp one
+    #: person's address into everybody's workspace. Stamped into the
+    #: tenant's own database (infrastructure.workspace_identity) so a copy
+    #: of it says whose it is; never used to authenticate anybody.
+    email: str | None = None
 
     def token_path(self) -> Path:
         return self.data_dir / _TOKEN_FILENAME
@@ -197,6 +205,7 @@ class Tenant:
             # no answer at all (#506). The registry already names each
             # tenant exactly once; that slug is the attribution.
             operator_name=self.slug,
+            owner_email=self.email,
         )
 
 
@@ -279,6 +288,38 @@ def _refuse_funded_default(data: dict[str, object], path: Path) -> None:
     )
 
 
+def _refuse_email_default(data: dict[str, object], path: Path) -> None:
+    _refuse_shared_flag(
+        data,
+        path,
+        "email",
+        "an address names one person, so it belongs on that tenant's own "
+        "[[tenant]] entry — a box-wide default would stamp the same address "
+        "into every workspace.",
+    )
+
+
+def _email(value: object, whose: str, path: Path) -> str | None:
+    """A tenant's contact address from the registry, lower-cased, or None.
+
+    Deliberately shallow: one '@' with something on each side and no
+    whitespace. The registry is hand-edited by an operator, so this catches
+    a typo that would stamp garbage into a database; it does not try to
+    validate deliverability, which nothing here depends on.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TenantRegistryError(f"{whose} in {path} has a malformed 'email' — it must be text.")
+    address = value.strip().lower()
+    local, at, domain = address.partition("@")
+    if not at or not local or not domain or "@" in domain or any(c.isspace() for c in address):
+        raise TenantRegistryError(
+            f"{whose} in {path} has a malformed 'email' — it must look like name@example.com."
+        )
+    return address
+
+
 def _registry_default_feature_repo(data: dict[str, object], path: Path) -> str | None:
     """The all-tenant destination: '[defaults] feature_repo'.
 
@@ -355,6 +396,7 @@ def load_registry(path: Path) -> list[Tenant]:
     default_feature_repo = _registry_default_feature_repo(data, path)
     _refuse_privileged_default(data, path)
     _refuse_funded_default(data, path)
+    _refuse_email_default(data, path)
     tenants: list[Tenant] = []
     seen_slugs: set[str] = set()
     for entry in entries:
@@ -378,6 +420,7 @@ def load_registry(path: Path) -> list[Tenant]:
                 default_feature_repo=default_feature_repo,
                 privileged=_bool_flag(entry.get("privileged"), "privileged", slug, path),
                 funded=_bool_flag(entry.get("funded"), "funded", slug, path),
+                email=_email(entry.get("email"), f"tenant {slug!r}", path),
             )
         )
     return tenants
@@ -416,6 +459,10 @@ class TenantIndex:
         ambiguous: set[str] = set()
         for tenant in tenants:
             by_slug[tenant.slug] = tenant
+            # Project the registry entry into the tenant's own database so a
+            # copy of it says whose it is. Best-effort and a no-op for a
+            # workspace with no database yet; see infrastructure.workspace_identity.
+            stamp_identity(tenant.data_dir / "wingman.db", tenant.slug, tenant.email)
             token = tenant.read_token()
             if token is None:
                 continue

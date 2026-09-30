@@ -91,6 +91,10 @@ class Config(BaseModel):
     # tenants._refuse_funded_default — so adding a tenant never silently
     # adds them to the operator's invoice.
     funded: bool = False
+    #: The tenant's contact address from the registry, when it names one.
+    #: Informational only (stamped into the workspace database by
+    #: infrastructure.workspace_identity); no code authenticates on it.
+    owner_email: str | None = None
 
     @property
     def db_path(self) -> Path:

@@ -1061,6 +1061,32 @@ unquoted; `"true"` is refused rather than guessed at. Restart the shared
 process (`wg redeploy-shared`) after either change — the registry and
 the key files are read at startup.
 
+**Workspace identity.** A tenant entry may also carry an `email`, and the
+shared process stamps it, with the tenant's slug, into a one-row
+`workspace_identity` table in that tenant's own `wingman.db` whenever the
+registry is loaded (startup, and on every SIGHUP reload, so editing the
+address and signalling the process converges the database):
+
+```toml
+[[tenant]]
+slug = "jason"
+data_dir = "/home/wingman-shared/tenants/jason"
+email = "jason@example.com"
+```
+
+The point is that a copy of a tenant database says whose it is — a
+cross-workspace rollup of spend or usage has to attribute rows to somebody,
+and until now the slug existed only in the registry and in the data path.
+It is a label on the workspace, not a column on every record, and nothing
+authenticates on it. The registry stays the source of truth; the row is a
+projection of it. `email` is per tenant only (a `[defaults]` or top-level
+value is refused, like `funded`), is lower-cased, and is checked only for
+the shape `name@example.com`. A tenant with no database yet is skipped
+rather than given a bare file, and a stamping failure is logged, never
+raised. Because the address lives in the database it is included in
+`wingman backup` archives; leave `email` out of an entry if that is not
+wanted — the slug is stamped either way.
+
 A funded tenant reaches the **declared** tiers only: the host file and
 the global file, in that order, never the ambient process environment.
 Whatever the account that launched the shared process happened to export
