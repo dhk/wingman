@@ -16,7 +16,6 @@ from wingman.infrastructure.tenant_process import (
     tenant_pidfile_path,
     write_tenant_pidfile,
 )
-from wingman.infrastructure.oauth_bearer import IdentityMap
 from wingman.infrastructure.tenants import Tenant, TenantIndex
 
 

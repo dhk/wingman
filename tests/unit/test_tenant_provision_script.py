@@ -4,7 +4,6 @@ import os
 import subprocess
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts" / "wingman-add-tenant.sh"
 
@@ -16,7 +15,7 @@ def test_add_tenant_rejects_an_unusable_oauth_identities_path_early(tmp_path: Pa
     id_command.write_text("#!/bin/sh\necho 0\n", encoding="utf-8")
     id_command.chmod(0o755)
     sudo_command = commands / "sudo"
-    sudo_command.write_text("#!/bin/sh\nshift 2\nexec \"$@\"\n", encoding="utf-8")
+    sudo_command.write_text('#!/bin/sh\nshift 2\nexec "$@"\n', encoding="utf-8")
     sudo_command.chmod(0o755)
     identities_directory = tmp_path / "identities"
     identities_directory.mkdir()
