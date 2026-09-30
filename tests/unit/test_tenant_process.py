@@ -16,6 +16,7 @@ from wingman.infrastructure.tenant_process import (
     tenant_pidfile_path,
     write_tenant_pidfile,
 )
+from wingman.infrastructure.oauth_bearer import IdentityMap
 from wingman.infrastructure.tenants import Tenant, TenantIndex
 
 
@@ -122,6 +123,93 @@ def test_register_reload_handler_reloads_the_index_on_sighup(tmp_path: Path) -> 
         os.kill(os.getpid(), signal.SIGHUP)
         assert index.resolve("tok-old") is None
         assert index.resolve("tok-new") is not None
+    finally:
+        signal.signal(signal.SIGHUP, old_handler)
+
+
+def test_sighup_reloads_registry_and_oauth_map_together(tmp_path: Path) -> None:
+    import signal
+
+    jason_dir = tmp_path / "jason"
+    jason_dir.mkdir()
+    (jason_dir / "mcp-http-token").write_text("tok-old", encoding="utf-8")
+    taylor_dir = tmp_path / "taylor"
+    taylor_dir.mkdir()
+    (taylor_dir / "mcp-http-token").write_text("tok-taylor", encoding="utf-8")
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n', encoding="utf-8")
+    identity_path = tmp_path / "identities.toml"
+    identity_path.write_text(
+        '[[identity]]\niss = "https://issuer.example"\nsub = "old"\nslug = "jason"\n',
+        encoding="utf-8",
+    )
+    index = TenantIndex.from_registry_path(registry)
+    identities = IdentityMap.from_toml(identity_path)
+    old_handler = signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    try:
+        register_reload_handler(index, registry, identities, identity_path)
+        registry.write_text(
+            f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n\n'
+            f'[[tenant]]\nslug = "taylor"\ndata_dir = "{taylor_dir}"\n',
+            encoding="utf-8",
+        )
+        (jason_dir / "mcp-http-token").write_text("tok-new", encoding="utf-8")
+        identity_path.write_text(
+            '[[identity]]\niss = "https://issuer.example"\nsub = "new"\nslug = "jason"\n\n'
+            '[[identity]]\niss = "https://issuer.example"\nsub = "taylor"\nslug = "taylor"\n',
+            encoding="utf-8",
+        )
+        os.kill(os.getpid(), signal.SIGHUP)
+        assert index.resolve("tok-old") is None
+        assert index.resolve("tok-new").slug == "jason"  # type: ignore[union-attr]
+        assert index.resolve("tok-taylor").slug == "taylor"  # type: ignore[union-attr]
+        assert identities.slug_for("https://issuer.example", "old") is None
+        assert identities.slug_for("https://issuer.example", "new") == "jason"
+        assert identities.slug_for("https://issuer.example", "taylor") == "taylor"
+    finally:
+        signal.signal(signal.SIGHUP, old_handler)
+
+
+def test_failed_oauth_reload_keeps_both_previous_snapshots(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import signal
+
+    jason_dir = tmp_path / "jason"
+    jason_dir.mkdir()
+    (jason_dir / "mcp-http-token").write_text("tok-old", encoding="utf-8")
+    taylor_dir = tmp_path / "taylor"
+    taylor_dir.mkdir()
+    (taylor_dir / "mcp-http-token").write_text("tok-taylor", encoding="utf-8")
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n', encoding="utf-8")
+    identity_path = tmp_path / "identities.toml"
+    identity_path.write_text(
+        '[[identity]]\niss = "https://issuer.example"\nsub = "old"\nslug = "jason"\n',
+        encoding="utf-8",
+    )
+    index = TenantIndex.from_registry_path(registry)
+    identities = IdentityMap.from_toml(identity_path)
+    old_handler = signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    try:
+        register_reload_handler(index, registry, identities, identity_path)
+        registry.write_text(
+            f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n\n'
+            f'[[tenant]]\nslug = "taylor"\ndata_dir = "{taylor_dir}"\n',
+            encoding="utf-8",
+        )
+        (jason_dir / "mcp-http-token").write_text("tok-new", encoding="utf-8")
+        identity_path.write_text("[[identity]\n", encoding="utf-8")
+        os.kill(os.getpid(), signal.SIGHUP)
+        assert index.resolve("tok-old").slug == "jason"  # type: ignore[union-attr]
+        assert index.resolve("tok-new") is None
+        assert index.by_slug("taylor") is None
+        assert identities.slug_for("https://issuer.example", "old") == "jason"
+        assert len(identities) == 1
+        assert "retaining the previous tenant registry" in caplog.text
+        assert "and OAuth identity map" in caplog.text
+        assert str(registry) in caplog.text
+        assert str(identity_path) in caplog.text
     finally:
         signal.signal(signal.SIGHUP, old_handler)
 

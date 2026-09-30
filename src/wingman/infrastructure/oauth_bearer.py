@@ -32,14 +32,16 @@ cannot send a bearer header from a browser link).
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import tempfile
 import tomllib
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import urlparse
 
 import anyio
@@ -225,7 +227,10 @@ class IdentityMap:
 
     def reload(self, path: Path) -> None:
         """Replace the live mapping only after a complete new file validates."""
-        fresh = type(self).from_toml(path)
+        self.replace_with(type(self).from_toml(path))
+
+    def replace_with(self, fresh: IdentityMap) -> None:
+        """Install a fully parsed candidate mapping without rereading its file."""
         self._entries = fresh._entries
 
     @classmethod
@@ -267,49 +272,66 @@ class IdentityMap:
         return cls(entries)
 
 
+@contextmanager
+def _identity_map_lock(path: Path) -> Iterator[None]:
+    """Serialize all read-modify-write updates across operator processes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f".{path.name}.lock")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def bind_trusted_identity(path: Path, issuer: str, subject: str, slug: str) -> bool:
     """Atomically bind one operator-approved identity; False means already exact."""
     if not issuer or not subject or not slug:
         raise IdentityMapError("issuer, subject and slug must be non-empty")
-    try:
-        identities = IdentityMap.from_toml(path)
-    except IdentityMapError as exc:
-        if not isinstance(exc.__cause__, FileNotFoundError):
-            raise
-        identities = IdentityMap({})
-    entries = identities.entries()
-    key = (issuer, subject)
-    existing = entries.get(key)
-    if existing == slug:
-        return False
-    if existing is not None:
-        raise IdentityMapError(
-            f"identity ({issuer!r}, {subject!r}) is already bound to {existing!r}"
-        )
-    entries[key] = slug
-    lines: list[str] = []
-    for (row_issuer, row_subject), row_slug in sorted(entries.items()):
-        lines.extend(
-            (
-                "[[identity]]",
-                f"iss = {json.dumps(row_issuer)}",
-                f"sub = {json.dumps(row_subject)}",
-                f"slug = {json.dumps(row_slug)}",
-                "",
+    with _identity_map_lock(path):
+        try:
+            identities = IdentityMap.from_toml(path)
+        except IdentityMapError as exc:
+            if not isinstance(exc.__cause__, FileNotFoundError):
+                raise
+            identities = IdentityMap({})
+        entries = identities.entries()
+        key = (issuer, subject)
+        existing = entries.get(key)
+        if existing == slug:
+            return False
+        if existing is not None:
+            raise IdentityMapError(
+                f"identity ({issuer!r}, {subject!r}) is already bound to {existing!r}"
             )
-        )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write("\n".join(lines))
-            handle.flush()
-            os.fsync(handle.fileno())
-        Path(temporary).chmod(0o600)
-        os.replace(temporary, path)
-    except Exception:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+        entries[key] = slug
+        lines: list[str] = []
+        for (row_issuer, row_subject), row_slug in sorted(entries.items()):
+            lines.extend(
+                (
+                    "[[identity]]",
+                    f"iss = {json.dumps(row_issuer)}",
+                    f"sub = {json.dumps(row_subject)}",
+                    f"slug = {json.dumps(row_slug)}",
+                    "",
+                )
+            )
+        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write("\n".join(lines))
+                handle.flush()
+                os.fsync(handle.fileno())
+            Path(temporary).chmod(0o600)
+            os.replace(temporary, path)
+        except Exception:
+            Path(temporary).unlink(missing_ok=True)
+            raise
     return True
 
 

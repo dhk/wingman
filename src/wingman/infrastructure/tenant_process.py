@@ -162,20 +162,42 @@ def register_reload_handler(
     identities: IdentityMap | None = None,
     identity_path: Path | None = None,
 ) -> None:
-    """Install a SIGHUP handler on the CURRENT process that reloads
-    'index' from 'registry_path'. Call once, from the shared-process
-    startup path, before serving. Safe to run directly inside a signal
-    handler: 'TenantIndex.reload' is synchronous, file-read-and-dict-swap
-    work — no async marshaling needed, and the swap itself is a single
-    attribute reassignment, atomic from any concurrent request's view.
-    """
+    """Reload the tenant registry and optional OAuth map as one validated update."""
+    if (identities is None) != (identity_path is None):
+        raise ValueError("identities and identity_path must be provided together")
 
     def _handler(signum: int, frame: object) -> None:  # noqa: ARG001
-        _logger.info("SIGHUP received — reloading tenant registry from %s", registry_path)
+        if identity_path is None:
+            _logger.info("SIGHUP received — reloading tenant registry from %s", registry_path)
+        else:
+            _logger.info(
+                "SIGHUP received — reloading tenant registry from %s and OAuth identity map "
+                "from %s",
+                registry_path,
+                identity_path,
+            )
         try:
-            index.reload(registry_path)
+            fresh_index = type(index).from_registry_path(registry_path)
+            fresh_identities = None
             if identities is not None and identity_path is not None:
-                identities.reload(identity_path)
+                from wingman.infrastructure.oauth_bearer import IdentityMap
+
+                fresh_identities = IdentityMap.from_toml(identity_path)
+                unknown = sorted(
+                    slug for slug in fresh_identities.slugs() if fresh_index.by_slug(slug) is None
+                )
+                if unknown:
+                    raise ValueError(
+                        "OAuth identity map names tenant(s) missing from the registry: "
+                        + ", ".join(unknown)
+                    )
+
+            # Parse and cross-validate both files before changing either live
+            # object. The signal handler is synchronous, so request handling
+            # cannot observe the assignments halfway through.
+            index.replace_with(fresh_index)
+            if identities is not None and fresh_identities is not None:
+                identities.replace_with(fresh_identities)
         except Exception:  # noqa: BLE001 — see below: this must never propagate
             # An exception raised in a signal handler propagates into whatever
             # the main thread was executing, and this process serves every
@@ -184,14 +206,22 @@ def register_reload_handler(
             # ordinary 'tenant rotate-token', which is what sends the SIGHUP
             # (#328).
             #
-            # A registry that cannot be read is a reason to keep serving from
-            # the last good one, not to stop answering. The reload is what
-            # failed, not the process.
-            _logger.exception(
-                "SIGHUP reload failed; continuing with the tenant registry already loaded "
-                "(%d tenant(s)). Fix %s and signal again.",
-                len(index),
-                registry_path,
-            )
+            if identity_path is None:
+                _logger.exception(
+                    "SIGHUP reload failed; retaining the previous tenant registry "
+                    "(%d tenant(s)). Fix %s and signal again.",
+                    len(index),
+                    registry_path,
+                )
+            else:
+                _logger.exception(
+                    "SIGHUP reload failed; retaining the previous tenant registry "
+                    "(%d tenant(s)) and OAuth identity map (%d mapping(s)). Fix %s and %s "
+                    "and signal again.",
+                    len(index),
+                    len(identities) if identities is not None else 0,
+                    registry_path,
+                    identity_path,
+                )
 
     signal.signal(signal.SIGHUP, _handler)
