@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -163,32 +164,21 @@ def test_concurrent_bindings_serialize_the_read_modify_write(
         return content
 
     monkeypatch.setattr(Path, "read_text", coordinated_read)
-    failures: list[BaseException] = []
-
-    def bind(subject: str) -> None:
-        try:
-            bind_trusted_identity(identities, ISSUER, subject, subject)
-        except BaseException as exc:
-            failures.append(exc)
-
-    first = threading.Thread(target=bind, args=("first",))
-    second = threading.Thread(target=bind, args=("second",))
-    first.start()
+    executor = ThreadPoolExecutor(max_workers=2)
+    first = executor.submit(bind_trusted_identity, identities, ISSUER, "first", "first")
+    second = None
     try:
         assert first_read.wait(timeout=2)
-        second.start()
+        second = executor.submit(bind_trusted_identity, identities, ISSUER, "second", "second")
         assert not second_read.wait(timeout=0.1), (
             "the second operator read the identity map before the first update completed"
         )
     finally:
         release_first.set()
-        first.join(timeout=2)
-        if second.ident is not None:
-            second.join(timeout=2)
-
-    assert not first.is_alive()
-    assert not second.is_alive()
-    assert failures == []
+        executor.shutdown(wait=True)
+    assert first.result(timeout=2)
+    assert second is not None
+    assert second.result(timeout=2)
     monkeypatch.setattr(Path, "read_text", original_read_text)
     mapping = IdentityMap.from_toml(identities)
     assert mapping.slug_for(ISSUER, "first") == "first"
