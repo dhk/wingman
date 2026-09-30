@@ -85,7 +85,7 @@ Recommendation: A for the first hosted release. Revisit B when there is user dem
 
 **Exit criteria from the phasing section.**
 - *A second identity cannot see the first tenant's data:* met, in tests.
-- *A client with no prior relationship completes the flow against a real provider and calls a read tool as the right tenant:* **NOT met.** No provider account or test environment exists yet. Every test injects the signing key. `jwks_key_resolver` (the real JWKS fetch through `PyJWKClient`) has **no test coverage at all**, and neither does the Protected Resource Metadata behavior behind a prefix-stripping front such as a Tailscale funnel.
+- *A client with no prior relationship completes the flow against a real provider and calls a read tool as the right tenant:* met on 2026-09-30 with a live WorkOS-authenticated connector routed to its isolated tenant. Stacked PR #552 also adds regression coverage for Protected Resource Metadata behind a Tailscale Funnel-style prefix-stripping front. The test suite still injects signing keys for deterministic bearer cases; the live connector run is the provider-backed verification.
 
 **Findings.**
 1. `my_urls` (`mcp_server.py:223`) tells a caller with no request origin: "This session did not arrive over HTTP". That is false for a bearer caller, and the concept of a token-bearing URL does not apply to them at all. Bearer requests bind no origin on purpose (there is no token in the URL to echo). The tool needs a bearer-aware answer; not changed in the spike because what to tell an OAuth user is a product decision.
@@ -93,7 +93,9 @@ Recommendation: A for the first hosted release. Revisit B when there is user dem
 3. `PyJWKClient` blocks on its first fetch and on any unknown `kid`. The wrapper runs validation in a worker thread so one slow issuer stalls one request. This does not remove the synchronous-dispatch concern below; it avoids adding to it.
 4. Identity mapping supports several identities per slug, so account linking is expressible today as an explicit line rather than inferred.
 
-**Not built.** Scope enforcement (scopes are parsed and discarded); identity-map reload (SIGHUP reloads the tenant registry only); revocation or introspection; the web UI; the provisioning service that would write the identity map.
+**Trusted provisioning added after the spike.** `wingman tenant oauth-bind` atomically binds an exact `(iss, sub)` to an existing tenant, serializes concurrent operator updates with an inter-process lock, enforces a private identity-map mode, and SIGHUP reloads both the tenant registry and identity map without dropping sessions. `wingman-add-tenant.sh` preflights that binding before creating tenant state, can resume a partially completed OAuth run, accepts the same three OAuth values for a newly trusted tenant, and deliberately mints no legacy URL token in that mode. This is operator-controlled provisioning for a small trusted roster, not public signup: authentication alone never creates or claims a workspace, email is never an identity key, and neither privilege nor funded inference is granted.
+
+**Not built.** Scope enforcement (scopes are parsed and discarded); revocation or introspection; public self-service provisioning; the web UI.
 
 **Caveats on the test run.** Nine tests fail identically on untouched `main` because they assert unreadable-file behavior and the sandbox runs as root, which can read anything. A tenth, `test_changelog_data_is_not_far_behind_head`, fails only on this branch: `main` is 11 commits past the changelog stamp against a ceiling of 15, and the seven RFC-doc commits underneath this branch make it 18. The repo squash-merges, so a PR would add one commit, not seven. The changelog was deliberately not regenerated to hide it.
 
