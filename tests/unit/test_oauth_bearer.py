@@ -304,6 +304,37 @@ def test_no_credentials_is_a_401_challenge_that_points_at_the_metadata(world: _W
     assert world.inner.calls == 0
 
 
+def test_a_stripping_front_keeps_the_metadata_url_inside_its_public_mount(
+    tmp_path: Path,
+) -> None:
+    settings = OAuthSettings(
+        issuer=ISSUER,
+        audience="https://wingman.example.com/oauth-spike/mcp",
+        jwks_uri=f"{ISSUER}/jwks",
+    )
+    world = _World(tmp_path)
+    world.app.router.routes.clear()
+    world.app.router.routes.append(Route("/mcp/{token}", endpoint=world.inner))
+    bind_oauth_routing(
+        world.app,
+        "/mcp/{token}",
+        "/mcp",
+        world.index,
+        world.identities,
+        settings,
+        lambda _token: _KEY.public_key(),
+    )
+
+    response = TestClient(world.app).get("/mcp")
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == (
+        'Bearer resource_metadata="https://wingman.example.com/oauth-spike/'
+        '.well-known/oauth-protected-resource/mcp"'
+    )
+    assert TestClient(world.app).get("/.well-known/oauth-protected-resource/mcp").status_code == 200
+
+
 def test_a_token_in_the_query_string_is_never_read(world: _World) -> None:
     token = _token("sub-jason")
     assert world.get(params={"access_token": token}).status_code == 401

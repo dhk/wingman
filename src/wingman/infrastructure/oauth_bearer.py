@@ -104,11 +104,19 @@ class OAuthSettings:
     jwks_uri: str
     scopes: tuple[str, ...] = ()
 
-    @property
-    def resource_metadata_url(self) -> str:
+    def resource_metadata_url(self, local_mcp_path: str = "/mcp") -> str:
+        """The public metadata URL a client can actually reach.
+
+        A prefix-stripping front such as ``tailscale funnel --set-path``
+        removes the public mount before the request reaches this app.  Keep
+        the explicit metadata link inside that public mount, while naming the
+        local route served by ``_metadata_paths`` after the strip.
+        """
         parsed = urlparse(self.audience)
         path = parsed.path.rstrip("/")
-        return f"{parsed.scheme}://{parsed.netloc}{_WELL_KNOWN}{path}"
+        local_path = local_mcp_path.rstrip("/")
+        public_mount = path[: -len(local_path)] if local_path and path.endswith(local_path) else ""
+        return f"{parsed.scheme}://{parsed.netloc}{public_mount}{_WELL_KNOWN}{local_path}"
 
 
 def _https_or_loopback(url: str, label: str) -> None:
@@ -247,8 +255,10 @@ class IdentityMap:
         return cls(entries)
 
 
-def _challenge(settings: OAuthSettings, error: str | None = None) -> PlainTextResponse:
-    params = [f'resource_metadata="{settings.resource_metadata_url}"']
+def _challenge(
+    settings: OAuthSettings, local_mcp_path: str, error: str | None = None
+) -> PlainTextResponse:
+    params = [f'resource_metadata="{settings.resource_metadata_url(local_mcp_path)}"']
     if error:
         params.insert(0, f'error="{error}"')
     return PlainTextResponse(
@@ -290,12 +300,14 @@ class BearerRoutingASGIApp:
         identities: IdentityMap,
         settings: OAuthSettings,
         resolve_key: KeyResolver,
+        local_mcp_path: str = "/mcp",
     ) -> None:
         self._inner = inner
         self._index = index
         self._identities = identities
         self._settings = settings
         self._resolve_key = resolve_key
+        self._local_mcp_path = local_mcp_path
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -306,11 +318,13 @@ class BearerRoutingASGIApp:
             return
         presented = _bearer_token(scope)
         if presented is None:
-            await _challenge(self._settings)(scope, receive, send)
+            await _challenge(self._settings, self._local_mcp_path)(scope, receive, send)
             return
         if isinstance(presented, BearerError):
             _logger.info("bearer refused: %s", presented.reason)
-            await _challenge(self._settings, "invalid_request")(scope, receive, send)
+            await _challenge(self._settings, self._local_mcp_path, "invalid_request")(
+                scope, receive, send
+            )
             return
         try:
             identity = await anyio.to_thread.run_sync(
@@ -318,7 +332,9 @@ class BearerRoutingASGIApp:
             )
         except BearerError as exc:
             _logger.info("bearer refused: %s", exc.reason)
-            await _challenge(self._settings, "invalid_token")(scope, receive, send)
+            await _challenge(self._settings, self._local_mcp_path, "invalid_token")(
+                scope, receive, send
+            )
             return
         slug = self._identities.slug_for(identity.issuer, identity.subject)
         tenant = self._index.by_slug(slug) if slug else None
@@ -394,7 +410,9 @@ def bind_oauth_routing(
     async def metadata(_request: Request) -> JSONResponse:
         return JSONResponse(document)
 
-    wrapped = BearerRoutingASGIApp(inner, index, identities, settings, resolve_key)
+    wrapped = BearerRoutingASGIApp(
+        inner, index, identities, settings, resolve_key, local_mcp_path=oauth_path
+    )
     added: list[Route] = [Route(oauth_path, endpoint=wrapped)]
     added.extend(
         Route(path, endpoint=metadata, methods=["GET"])
