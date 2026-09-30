@@ -25,15 +25,20 @@ Failures answer 'WWW-Authenticate: Bearer resource_metadata=...' (RFC 9728) so
 a spec-following client can discover the authorization server. The response
 never says *why* a token was refused beyond RFC 6750's 'invalid_token'.
 
-Not in this spike (each is named in the RFC, none silently assumed):
-scope enforcement, identity-map reload, revocation/introspection, and the
-web UI (which cannot send a bearer header from a browser link).
+Not in this slice (each is named in the RFC, none silently assumed): scope
+enforcement, revocation/introspection, public signup, and the web UI (which
+cannot send a bearer header from a browser link).
 """
 
 from __future__ import annotations
 
+import fcntl
+import json
+import os
+import tempfile
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -115,12 +120,12 @@ class OAuthSettings:
         parsed = urlparse(self.audience)
         path = parsed.path.rstrip("/")
         local_path = local_mcp_path.rstrip("/")
-if local_path and path.endswith(local_path):
-    public_mount = path[: -len(local_path)]
-    metadata_path = f"{public_mount}{_WELL_KNOWN}{local_path}"
-else:
-    metadata_path = f"{_WELL_KNOWN}{path}"
-return f"{parsed.scheme}://{parsed.netloc}{metadata_path}"
+        if local_path and path.endswith(local_path):
+            public_mount = path[: -len(local_path)]
+            metadata_path = f"{public_mount}{_WELL_KNOWN}{local_path}"
+        else:
+            metadata_path = f"{_WELL_KNOWN}{path}"
+        return f"{parsed.scheme}://{parsed.netloc}{metadata_path}"
 
 
 def _https_or_loopback(url: str, label: str) -> None:
@@ -220,6 +225,15 @@ class IdentityMap:
     def slugs(self) -> set[str]:
         return set(self._entries.values())
 
+    def entries(self) -> dict[tuple[str, str], str]:
+        """A copy for operator provisioning; callers cannot mutate live routing."""
+        return dict(self._entries)
+
+    def reload(self, path: Path) -> None:
+        """Replace the live mapping only after a complete new file validates."""
+        fresh = type(self).from_toml(path)
+        self._entries = fresh._entries
+
     @classmethod
     def from_toml(cls, path: Path) -> IdentityMap:
         try:
@@ -257,6 +271,118 @@ class IdentityMap:
                 )
             entries[key] = slug
         return cls(entries)
+
+
+def _validate_binding(issuer: str, subject: str, slug: str) -> None:
+    if not issuer or not subject or not slug:
+        raise IdentityMapError("issuer, subject and slug must be non-empty")
+
+
+@contextmanager
+def _identity_map_lock(path: Path) -> Iterator[None]:
+    """Serialize the complete read-check-write operation across processes."""
+    lock_path = path.with_name(f".{path.name}.lock")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+    except OSError as exc:
+        raise IdentityMapError(f"identity map {path} could not be updated: {exc}") from exc
+    try:
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _load_identity_entries(path: Path) -> dict[tuple[str, str], str]:
+    try:
+        return IdentityMap.from_toml(path).entries()
+    except IdentityMapError as exc:
+        if isinstance(exc.__cause__, FileNotFoundError):
+            return {}
+        raise
+
+
+def _assert_available(
+    entries: dict[tuple[str, str], str], issuer: str, subject: str, slug: str
+) -> bool:
+    key = (issuer, subject)
+    existing = entries.get(key)
+    if existing == slug:
+        return True
+    if existing is not None:
+        raise IdentityMapError(
+            f"identity ({issuer!r}, {subject!r}) is already bound to {existing!r}"
+        )
+    return False
+
+
+def preflight_trusted_identity(path: Path, issuer: str, subject: str, slug: str) -> None:
+    """Check that a binding can proceed without changing the identity map."""
+    _validate_binding(issuer, subject, slug)
+    with _identity_map_lock(path):
+        exact = _assert_available(_load_identity_entries(path), issuer, subject, slug)
+        secure_exact = exact and path.stat().st_mode & 0o777 == 0o600
+        if not secure_exact:
+            _probe_identity_write_access(path)
+
+
+def _probe_identity_write_access(path: Path) -> None:
+    """Exercise the create-and-rename permissions an atomic update needs."""
+    temporary_paths: list[Path] = []
+    try:
+        for _ in range(2):
+            descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.preflight.", dir=path.parent)
+            os.close(descriptor)
+            temporary_paths.append(Path(name))
+        os.replace(temporary_paths[0], temporary_paths[1])
+    except OSError as exc:
+        raise IdentityMapError(f"identity map {path} could not be updated: {exc}") from exc
+    finally:
+        for temporary_path in temporary_paths:
+            temporary_path.unlink(missing_ok=True)
+
+
+def bind_trusted_identity(path: Path, issuer: str, subject: str, slug: str) -> bool:
+    """Atomically bind one operator-approved identity; False means already exact."""
+    _validate_binding(issuer, subject, slug)
+    with _identity_map_lock(path):
+        entries = _load_identity_entries(path)
+        exact = _assert_available(entries, issuer, subject, slug)
+        if exact and path.stat().st_mode & 0o777 == 0o600:
+            return False
+        if not exact:
+            entries[(issuer, subject)] = slug
+        _write_identity_entries(path, entries)
+    return True
+
+
+def _write_identity_entries(path: Path, entries: dict[tuple[str, str], str]) -> None:
+    lines: list[str] = []
+    for (row_issuer, row_subject), row_slug in sorted(entries.items()):
+        lines.extend(
+            (
+                "[[identity]]",
+                f"iss = {json.dumps(row_issuer, ensure_ascii=False)}",
+                f"sub = {json.dumps(row_subject, ensure_ascii=False)}",
+                f"slug = {json.dumps(row_slug, ensure_ascii=False)}",
+                "",
+            )
+        )
+    try:
+        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines))
+            handle.flush()
+            os.fsync(handle.fileno())
+        Path(temporary).chmod(0o600)
+        os.replace(temporary, path)
+    except OSError as exc:
+        if "temporary" in locals():
+            Path(temporary).unlink(missing_ok=True)
+        raise IdentityMapError(f"identity map {path} could not be updated: {exc}") from exc
 
 
 def _challenge(

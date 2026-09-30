@@ -5448,7 +5448,7 @@ def _probe_bind(host: str, port: int) -> None:
             sys.exit(1)
 
 
-def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> None:
+def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> tuple[Any, Path]:
     """Add the bearer-authenticated route beside the capability-token one
     (RFC-081 draft spike). Any misconfiguration refuses to start: a server
     that looks OAuth-enabled and is not is worse than one that says so."""
@@ -5463,7 +5463,8 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
 
     try:
         settings = build_oauth_settings(args.oauth_issuer, args.oauth_audience, args.oauth_jwks_uri)
-        identities = IdentityMap.from_toml(Path(args.oauth_identities).expanduser())
+        identity_path = Path(args.oauth_identities).expanduser()
+        identities = IdentityMap.from_toml(identity_path)
     except (OAuthConfigError, IdentityMapError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -5488,6 +5489,7 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         f"OAuth bearer (RFC-081 draft spike): {settings.audience}, "
         f"{len(identities)} identity mapping(s), issuer {settings.issuer}"
     )
+    return identities, identity_path
 
 
 def _run_tenant_server(args: argparse.Namespace, prefix: str) -> None:
@@ -5573,9 +5575,8 @@ def _run_tenant_server(args: argparse.Namespace, prefix: str) -> None:
 
     app = server.streamable_http_app()
     bind_tenant_routing(app, f"{prefix}/mcp/{{token}}", index)
-    if args.oauth_issuer:
-        _bind_oauth(app, args, prefix, index)
-    register_reload_handler(index, registry_path)
+    oauth_reload = _bind_oauth(app, args, prefix, index) if args.oauth_issuer else (None, None)
+    register_reload_handler(index, registry_path, *oauth_reload)
 
     print(f"Shared multi-tenant server (RFC-048) — {len(index)} tenant(s) from {registry_path}")
     for tenant in sorted(index.tenants, key=lambda t: t.slug):

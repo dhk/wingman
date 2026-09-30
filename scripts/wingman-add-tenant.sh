@@ -4,11 +4,11 @@
 # their first connector URL. Run after wingman-provision-shared.sh.
 #
 # Idempotent: skips workspace init if the tenant's data_dir already has
-# a wingman.db (a workspace created by hand, e.g. via 'wingman init',
-# before this script existed), and refuses if the slug is already in
-# the registry rather than duplicating the entry.
+# a wingman.db. OAuth provisioning can resume an already-registered tenant
+# after a partial run; legacy-token provisioning still refuses duplicates.
 #
 # Usage: sudo ./wingman-add-tenant.sh <slug> [--telemetry|--no-telemetry]
+#        [--oauth-issuer URL --oauth-subject SUBJECT --oauth-identities PATH]
 #
 # The telemetry decision (RFC-023's local usage journal) is taken here
 # rather than inherited. Default-off is right for someone installing on
@@ -26,13 +26,30 @@ set -euo pipefail
 SERVICE_USER="${WINGMAN_SHARED_USER:-wingman-shared}"
 PORT="${WINGMAN_SHARED_PORT:-8789}"
 TAILSCALE_PATH="${WINGMAN_SHARED_TAILSCALE_PATH:-/shared}"
-REGISTRY_PATH="/etc/wingman/tenants.toml"
+REGISTRY_PATH="${WINGMAN_TENANT_REGISTRY:-/etc/wingman/tenants.toml}"
 SLUG="${1:?usage: $0 <slug> [--telemetry|--no-telemetry]}"
-TELEMETRY="${2:-}"
-case "$TELEMETRY" in
-  --telemetry|--no-telemetry|"") ;;
-  *) echo "unknown option: $TELEMETRY (use --telemetry or --no-telemetry)" >&2; exit 2 ;;
-esac
+shift
+TELEMETRY=""
+OAUTH_ISSUER=""
+OAUTH_SUBJECT=""
+OAUTH_IDENTITIES=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --telemetry|--no-telemetry) TELEMETRY="$1"; shift ;;
+    --oauth-issuer) OAUTH_ISSUER="${2:?--oauth-issuer needs a URL}"; shift 2 ;;
+    --oauth-subject) OAUTH_SUBJECT="${2:?--oauth-subject needs a subject}"; shift 2 ;;
+    --oauth-identities) OAUTH_IDENTITIES="${2:?--oauth-identities needs a path}"; shift 2 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+oauth_fields=0
+[ -n "$OAUTH_ISSUER" ] && oauth_fields=$((oauth_fields + 1))
+[ -n "$OAUTH_SUBJECT" ] && oauth_fields=$((oauth_fields + 1))
+[ -n "$OAUTH_IDENTITIES" ] && oauth_fields=$((oauth_fields + 1))
+if [ "$oauth_fields" -ne 0 ] && [ "$oauth_fields" -ne 3 ]; then
+  echo "OAuth provisioning needs --oauth-issuer, --oauth-subject and --oauth-identities together." >&2
+  exit 2
+fi
 
 say() { printf '==> %s\n' "$*"; }
 
@@ -74,12 +91,28 @@ if [ ! -f "$REGISTRY_PATH" ]; then
   exit 1
 fi
 
+if [ "$oauth_fields" -eq 3 ]; then
+  say "checking the trusted OAuth binding before creating tenant state"
+  sudo -iu "$SERVICE_USER" env \
+    PATH="/home/$SERVICE_USER/.local/bin:$PATH" \
+    wingman tenant oauth-bind "$SLUG" \
+      --issuer "$OAUTH_ISSUER" \
+      --subject "$OAUTH_SUBJECT" \
+      --identities "$OAUTH_IDENTITIES" \
+      --preflight
+fi
+
+already_registered=0
 if grep -q "slug = \"$SLUG\"" "$REGISTRY_PATH"; then
+  already_registered=1
+fi
+if [ "$already_registered" -eq 1 ] && [ "$oauth_fields" -ne 3 ]; then
   echo "tenant '$SLUG' is already in the registry ($REGISTRY_PATH) — nothing to add." >&2
   exit 1
 fi
 
-DATA_DIR="/home/$SERVICE_USER/tenants/$SLUG"
+TENANT_ROOT="${WINGMAN_SHARED_TENANT_ROOT:-/home/$SERVICE_USER/tenants}"
+DATA_DIR="$TENANT_ROOT/$SLUG"
 
 resolve_telemetry
 
@@ -97,19 +130,34 @@ else
   say "leaving the usage journal OFF for '$SLUG' (wingman telemetry on, to change)"
 fi
 
-say "registering '$SLUG' in $REGISTRY_PATH"
-cat >> "$REGISTRY_PATH" <<EOF
+if [ "$already_registered" -eq 1 ]; then
+  say "tenant '$SLUG' is already registered — resuming OAuth provisioning"
+else
+  say "registering '$SLUG' in $REGISTRY_PATH"
+  cat >> "$REGISTRY_PATH" <<EOF
 
 [[tenant]]
 slug = "$SLUG"
 data_dir = "$DATA_DIR"
 EOF
+fi
 
-say "issuing first token and reloading the running server"
-# --tunnel-prefix matches this same script's tailscale mount (see
-# wingman-provision-shared.sh's '--set-path'): the printed tunnel URL
-# needs it even though the shared process's own local bind never does.
-sudo -iu "$SERVICE_USER" bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\"; wingman tenant rotate-token $SLUG --port $PORT --tunnel-prefix $TAILSCALE_PATH"
+if [ "$oauth_fields" -eq 3 ]; then
+  say "binding the trusted OAuth identity (no legacy URL token is minted)"
+  sudo -iu "$SERVICE_USER" env \
+    PATH="/home/$SERVICE_USER/.local/bin:$PATH" \
+    wingman tenant oauth-bind "$SLUG" \
+      --issuer "$OAUTH_ISSUER" \
+      --subject "$OAUTH_SUBJECT" \
+      --identities "$OAUTH_IDENTITIES" \
+      --registry "$REGISTRY_PATH"
+else
+  say "issuing first token and reloading the running server"
+  # --tunnel-prefix matches this same script's tailscale mount (see
+  # wingman-provision-shared.sh's '--set-path'): the printed tunnel URL
+  # needs it even though the shared process's own local bind never does.
+  sudo -iu "$SERVICE_USER" bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\"; wingman tenant rotate-token $SLUG --port $PORT --tunnel-prefix $TAILSCALE_PATH"
+fi
 
 # A tenant reaches no metered key until somebody decides which of the two
 # ways they get one (#514, RFC-080): their own, or yours. This script writes

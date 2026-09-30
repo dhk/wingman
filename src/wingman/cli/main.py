@@ -4578,6 +4578,69 @@ def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path
     return tenant, registry_path
 
 
+@tenant_app.command("oauth-bind")
+def tenant_oauth_bind_cmd(
+    slug: str = typer.Argument(..., help="Existing tenant slug to receive this identity."),
+    issuer: str = typer.Option(..., "--issuer", help="Exact verified token issuer (`iss`)."),
+    subject: str = typer.Option(..., "--subject", help="Exact verified WorkOS subject (`sub`)."),
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+    registry: Path | None = typer.Option(
+        None, "--registry", help="Tenant registry path (default: host setting)."
+    ),
+    preflight: bool = typer.Option(
+        False,
+        "--preflight",
+        help="Validate the binding and identity-map access without changing either file.",
+    ),
+) -> None:
+    """Bind one operator-trusted OAuth identity to an existing tenant.
+
+    For a newly trusted person, first create their isolated tenant with
+    wingman-add-tenant.sh, then run this command. Login alone never creates
+    a workspace, and no email, privilege, or funded access is inferred.
+    """
+    configure_logging()
+    from wingman.infrastructure.oauth_bearer import (
+        IdentityMapError,
+        bind_trusted_identity,
+        preflight_trusted_identity,
+    )
+    from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
+
+    identity_path = identities.expanduser()
+    try:
+        if preflight:
+            preflight_trusted_identity(identity_path, issuer, subject, slug)
+            typer.echo(f"Trusted OAuth binding preflight passed for tenant {slug!r}.")
+            return
+        _tenant, registry_path = _load_tenant_or_exit(slug, registry)
+        changed = bind_trusted_identity(identity_path, issuer, subject, slug)
+    except (IdentityMapError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    reload_denied = False
+    try:
+        signaled_pid = signal_reload(registry_path)
+    except TenantProcessSignalError as exc:
+        typer.echo(str(exc), err=True)
+        signaled_pid = None
+        reload_denied = True
+    if changed:
+        typer.echo(f"Bound trusted OAuth identity to tenant {slug!r} in {identity_path}.")
+    else:
+        typer.echo(f"That trusted OAuth identity is already bound to {slug!r}.")
+    if signaled_pid is not None:
+        typer.echo(f"Signaled the running shared process (pid {signaled_pid}) to reload.")
+    elif not reload_denied:
+        typer.echo(
+            "No running shared process found; the binding will take effect when it starts "
+            "or is reloaded.",
+            err=True,
+        )
+
+
 @tenant_app.command("url")
 def tenant_url_cmd(
     slug: str = typer.Argument(..., help="The tenant's slug in the registry."),
