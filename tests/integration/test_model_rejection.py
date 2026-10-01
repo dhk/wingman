@@ -20,9 +20,13 @@ from wingman.mcp_server import status
 from wingman.providers.base import CapabilityClass, ModelRequest, ProviderError
 from wingman.providers.router import DEFAULT_MODELS_TOML, get_provider, model_rejection
 
+# The wording Anthropic returned on 2026-09-04. The reset date is moved far
+# out: the real one (2026-10-01) has passed, and a record past its reset
+# correctly reports nothing, so the original date turned this whole file
+# into a test of the calendar. Expiry has its own test, with its own clock.
 USAGE_LIMIT = (
     "You have reached your specified API usage limits. "
-    "You will regain access on 2026-10-01 at 00:00 UTC."
+    "You will regain access on 2099-10-01 at 00:00 UTC."
 )
 
 
@@ -86,7 +90,7 @@ def test_an_over_budget_key_is_reported_with_the_providers_reason_and_reset(
     reported = status()
     assert "Model calls: UNAVAILABLE" in reported
     assert "usage limits" in reported
-    assert "access returns 2026-10-01 00:00 UTC" in reported
+    assert "access returns 2099-10-01 00:00 UTC" in reported
     # The counts are still true and still shown.
     assert "Source records: 0" in reported
 
@@ -164,8 +168,8 @@ def test_the_record_expires_at_the_providers_reset(
     path = health_path(workspace)
     key = "sk-ant-over-budget"
 
-    assert current_rejection(path, "anthropic", key, now=datetime(2026, 9, 30, tzinfo=UTC))
-    assert current_rejection(path, "anthropic", key, now=datetime(2026, 10, 1, tzinfo=UTC)) is None
+    assert current_rejection(path, "anthropic", key, now=datetime(2099, 9, 30, tzinfo=UTC))
+    assert current_rejection(path, "anthropic", key, now=datetime(2099, 10, 1, tzinfo=UTC)) is None
 
 
 def test_status_makes_no_model_call(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
