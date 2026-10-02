@@ -135,3 +135,21 @@ def test_validate_tenant_keys_prefers_the_tenants_own_key(tmp_path, monkeypatch)
     assert next(r for r in rows if r.short_name == "anthropic").tier == "workspace file"
     assert "sk-ant-tenant-own" in seen
     assert "sk-ant-box-wide" not in seen
+
+
+def test_validate_tenant_keys_tests_the_host_key_a_funded_tenant_actually_spends(
+    tmp_path, monkeypatch
+):
+    glob = _write(tmp_path / "global.env", "ANTHROPIC_API_KEY=sk-ant-box-wide\n")
+    home = tmp_path / "service-home"
+    _write(home / ".config" / "wingman" / "secrets.env", "ANTHROPIC_API_KEY=sk-ant-service\n")
+    seen: list[str] = []
+    monkeypatch.setattr(keys_mod, "test_key_value", lambda s, v: (seen.append(v), (True, "ok"))[1])
+
+    rows = validate_tenant_keys(tmp_path / "ws", funded=True, global_path=glob, home=home)
+
+    assert next(r for r in rows if r.short_name == "anthropic").tier == (
+        "host file (funded fallback)"
+    )
+    assert "sk-ant-service" in seen
+    assert "sk-ant-box-wide" not in seen
