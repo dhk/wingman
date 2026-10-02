@@ -161,6 +161,7 @@ from wingman.infrastructure.keys import (
     key_status,
     resolve_key_sources,
     set_key,
+    store_global_key,
     store_host_key,
     store_workspace_key,
     test_keys,
@@ -170,6 +171,7 @@ from wingman.infrastructure.keys import (
 )
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.mcp_process import server_status, stop_server
+from wingman.infrastructure.model_health import describe as describe_model_rejection
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.infrastructure.telemetry import (
     count_events as telemetry_count,
@@ -198,6 +200,7 @@ from wingman.providers.router import (
     get_embedding_provider,
     get_provider,
     metered_key,
+    model_rejection,
 )
 from wingman.reporting.export import (
     export_career,
@@ -1388,6 +1391,13 @@ def status() -> None:
             "assessments, briefs and every other model-backed step will fail. Everything "
             "above is read from local data and is unaffected. 'wingman keys where' names "
             "every tier and which copy wins."
+        )
+    elif (refused := model_rejection(config)) is not None:
+        typer.echo(
+            f"Model calls: UNAVAILABLE — {describe_model_rejection(refused)}. Values, assessments, briefs "
+            "and every other model-backed step will fail until that clears. Everything "
+            "above is read from local data and is unaffected. 'wingman keys where' names "
+            "the key being refused."
         )
 
 
@@ -3293,7 +3303,7 @@ def keys_set(
     scope: str = typer.Option(
         "keychain",
         "--scope",
-        help="Where to write it: keychain (default), host, or workspace.",
+        help="Where to write it: keychain (default), host, global, or workspace.",
     ),
     tenant: str = typer.Option(
         "", "--tenant", help="With --scope workspace: which tenant's workspace (operators)."
@@ -3307,7 +3317,9 @@ def keys_set(
     it, and nothing looks different.
 
       --scope keychain   macOS Keychain, this account (default)
-      --scope host       ~/.config/wingman/secrets.env — every consumer on the box
+      --scope host       ~/.config/wingman/secrets.env — every consumer on this account
+      --scope global     /etc/wingman/global-secrets.env — the whole box, and the
+                         fallback every funded tenant spends. Root-owned: needs sudo.
       --scope workspace  this workspace's keys.env — one person only, and it
                          outranks every other tier (BYOK)
 
@@ -3332,9 +3344,10 @@ def keys_set(
             secret = typer.prompt(f"{name} key", hide_input=True)
 
     choice = scope.strip().lower()
-    if choice not in ("keychain", "host", "workspace"):
+    if choice not in ("keychain", "host", "global", "workspace"):
         typer.echo(
-            f"keys set failed: unknown --scope {scope!r}; use keychain, host, or workspace.",
+            f"keys set failed: unknown --scope {scope!r}; "
+            "use keychain, host, global, or workspace.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -3349,6 +3362,18 @@ def keys_set(
         elif choice == "host":
             path = store_host_key(name, secret)
             typer.echo(f"Stored {env_var} in {path} (0600).")
+        elif choice == "global":
+            path, mode, group_readable = store_global_key(name, secret)
+            typer.echo(f"Stored {env_var} in {path} ({mode:04o}).")
+            if not group_readable:
+                # The silent-empty-tier failure, said out loud: this file is
+                # root-owned and every other account reaches it by group.
+                typer.echo(
+                    f"WARNING: {mode:04o} has no group-read bit, so no other account on "
+                    "this box can read this file — the tier will read as UNREADABLE for "
+                    "the service account and every tenant funded from it.",
+                    err=True,
+                )
         else:
             data_dir = load_config().data_dir
             if tenant:

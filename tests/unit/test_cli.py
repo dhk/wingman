@@ -207,3 +207,17 @@ def test_tenant_reload_has_help() -> None:
     result = runner.invoke(app, ["tenant", "reload", "--help"])
     assert result.exit_code == 0
     assert "registry" in plain(result.output)
+
+
+def test_keys_set_accepts_global_scope_in_help() -> None:
+    result = runner.invoke(app, ["keys", "set", "--help"])
+    assert result.exit_code == 0
+    for scope in ("keychain", "host", "global", "workspace"):
+        assert scope in plain(result.output)
+
+
+def test_keys_set_rejects_an_unknown_scope_and_lists_global() -> None:
+    result = runner.invoke(app, ["keys", "set", "anthropic", "--value", "x", "--scope", "nope"])
+    assert result.exit_code == 1
+    assert "unknown --scope" in result.output
+    assert "global" in result.output

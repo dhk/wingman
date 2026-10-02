@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from time import perf_counter
 
 import anthropic
 
+from wingman.infrastructure import model_health
 from wingman.providers.base import ModelRequest, ModelResponse, ProviderError
+
+
+def _provider_message(exc: anthropic.APIStatusError) -> str:
+    """The provider's own sentence, not the SDK's 'Error code: 400 - {...}'
+    wrapper around it, when the body carries one."""
+    body = exc.body
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            return str(error["message"])
+    return exc.message
 
 
 class AnthropicProvider:
@@ -26,10 +39,21 @@ class AnthropicProvider:
     itself only consults env when NO explicit credential argument was
     passed (checked via 'is not None', not truthiness) — so strict mode
     passes 'api_key=""' rather than omitting the argument.
+
+    'health_path', when given, is where this workspace keeps the last
+    terminal refusal (#528): written when the provider refuses the account
+    itself, removed by the next call that succeeds. None keeps no record.
     """
 
-    def __init__(self, model: str, api_key: str | None = None, strict: bool = False) -> None:
+    def __init__(
+        self,
+        model: str,
+        api_key: str | None = None,
+        strict: bool = False,
+        health_path: Path | None = None,
+    ) -> None:
         self._model = model
+        self._health_path = health_path
         try:
             if strict:
                 self._client = anthropic.Anthropic(api_key=api_key or "")
@@ -73,10 +97,12 @@ class AnthropicProvider:
                 messages=[{"role": "user", "content": request.prompt}],
             )
         except anthropic.AuthenticationError as exc:
+            self._record_rejection(exc)
             raise ProviderError(
                 "Anthropic rejected the credentials. Check ANTHROPIC_API_KEY and retry."
             ) from exc
         except anthropic.APIStatusError as exc:
+            self._record_rejection(exc)
             raise ProviderError(
                 f"Anthropic API error ({exc.status_code}) calling {self._model}: {exc.message}. "
                 "No local data was changed; retry when the provider is available."
@@ -88,6 +114,8 @@ class AnthropicProvider:
             ) from exc
         if response.stop_reason == "refusal":
             raise ProviderError(f"{self._model} declined the request. No local data was changed.")
+        if self._health_path is not None:
+            model_health.clear_rejection(self._health_path)
         text = "".join(block.text for block in response.content if block.type == "text")
         return ModelResponse(
             text=text,
@@ -96,4 +124,18 @@ class AnthropicProvider:
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             latency_ms=int((perf_counter() - start) * 1000),
+        )
+
+    def _record_rejection(self, exc: anthropic.APIStatusError) -> None:
+        if self._health_path is None:
+            return
+        message = _provider_message(exc)
+        if not model_health.is_terminal(exc.status_code, message):
+            return
+        model_health.record_rejection(
+            self._health_path,
+            provider="anthropic",
+            status_code=exc.status_code,
+            message=message,
+            api_key=self._client.api_key,
         )

@@ -344,6 +344,97 @@ def store_host_key(name: str, value: str, home: Path | None = None) -> Path:
     return path
 
 
+def global_key_permissions(path: Path | None = None) -> tuple[int, bool]:
+    """(mode, readable-by-a-group-member) for the box-wide secrets file.
+
+    The second value is the one that bites. This file is root-owned and
+    every OTHER account that needs it — the shared service account above
+    all — reads it through its group. Drop the group-read bit and the tier
+    goes silently empty for everyone: not an error, not a refusal, just a
+    key that appears not to exist (#442 is why that at least says
+    UNREADABLE now rather than 'not set').
+    """
+    mode = path_stat(path).st_mode & 0o777
+    return mode, bool(mode & 0o040)
+
+
+def path_stat(path: Path | None = None) -> os.stat_result:
+    return (path if path is not None else GLOBAL_KEYS_PATH).stat()
+
+
+def store_global_key(name: str, value: str, path: Path | None = None) -> tuple[Path, int, bool]:
+    """Store one key in the box-wide secrets file, preserving how it is shared.
+
+    Returns (path, mode, group_readable) so the caller can say what the
+    file now looks like rather than only that a write happened.
+
+    Three things this does that a text editor does not.
+
+    It REFUSES on an unreadable existing file instead of overwriting.
+    '_read_known_keys_file' answers ({}, denied) for a file it cannot read,
+    and treating that empty dict as the file's contents would rewrite it
+    with one key and drop every other — losing the box's Voyage and shared
+    GitHub credentials to fix its Anthropic one.
+
+    It writes ATOMICALLY, through a temp file in the same directory and a
+    rename, so an interrupted write cannot leave every account on the box
+    with half a secrets file.
+
+    And it PRESERVES owner, group and mode from the existing file, because
+    those are not incidental here — they are the whole mechanism by which
+    a root-owned file reaches the service account.
+    """
+    short = _require_name(name)
+    env_var = KNOWN_KEYS[short]
+    if not value.strip():
+        raise KeyStoreError("the key value is empty; nothing was stored.")
+    target = path if path is not None else GLOBAL_KEYS_PATH
+
+    existing: os.stat_result | None = None
+    if target.exists():
+        values, denied = _read_known_keys_file(target)
+        if denied:
+            raise KeyStoreError(
+                f"{target} exists but cannot be read by this account — refusing to write, "
+                "because rewriting it from what little is readable would drop every other "
+                "key in it. Run as root (or a member of its group)."
+            )
+        existing = target.stat()
+    else:
+        values = {}
+    values[env_var] = value.strip()
+
+    body = "".join(f"{key}={val}\n" for key, val in sorted(values.items()))
+    tmp = target.with_name(f".{target.name}.new")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(body, encoding="utf-8")
+        if existing is not None:
+            os.chmod(tmp, existing.st_mode & 0o777)
+            os.chown(tmp, existing.st_uid, existing.st_gid)
+        else:
+            # A file nobody has provisioned yet: 0640 is the shape RFC-047
+            # describes — root writes, one group reads. The caller reports
+            # the group so somebody can set it; creating it 0600 would look
+            # like success and leave the tier unreadable for every account
+            # that needs it.
+            os.chmod(tmp, 0o640)
+        os.replace(tmp, target)
+    except PermissionError as exc:
+        tmp.unlink(missing_ok=True)
+        raise KeyStoreError(
+            f"cannot write {target} ({exc.strerror}) — this file is root-owned by design; "
+            "run this command with sudo."
+        ) from exc
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise KeyStoreError(f"cannot write {target}: {exc}") from exc
+
+    _logger.info("global key stored var=%s", env_var)  # never the value
+    mode, group_readable = global_key_permissions(target)
+    return target, mode, group_readable
+
+
 def resolve_provider_key(env_var: str, data_dir: Path | None = None) -> str | None:
     """The value a provider should use for one known env var, read-only.
 

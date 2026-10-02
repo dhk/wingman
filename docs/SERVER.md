@@ -1075,6 +1075,17 @@ shared inference for this tenant."* — and `completeness` stops
 recommending the steps that need a model call, recommending the key
 instead.
 
+Having a key does not mean it works (#528). When the provider refuses a
+call for a reason that will not clear on retry (a spend limit, an empty
+balance, a bad or revoked key), the workspace keeps that refusal in
+`model-health.json` in its data directory. `status` (MCP and CLI) then
+reports `Model calls: UNAVAILABLE` in the provider's own words, including
+the reset time when the provider gave one, and `completeness` agrees. The
+record goes away as soon as a call succeeds, the provider's reset time
+passes, or the workspace starts spending a different key. A 429, a 5xx or
+a network error is never recorded. `status` only reads this file; it never
+makes a model call to find out.
+
 Filing itself already runs through the shared credential
 (`GITHUB_SHARED_ISSUES_KEY`, RFC-047) with attribution-by-body-stamp, so
 no tenant needs their own `gh auth login`. That stamp is the tenant's own
