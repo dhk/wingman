@@ -35,8 +35,9 @@ from wingman.infrastructure.broadcast import (
     pending_operator_message,
 )
 from wingman.infrastructure.config import Config
+from wingman.infrastructure.model_health import describe
 from wingman.infrastructure.storage import Storage
-from wingman.providers.router import metered_key
+from wingman.providers.router import metered_key, model_rejection
 
 
 class CareerProfileCompleteness(BaseModel):
@@ -205,6 +206,10 @@ class CompletenessReport(BaseModel):
     # the one call that could not succeed — as their top next step, on
     # evidence that comfortably cleared the floor.
     inference_available: bool = True
+    # Why not, when a key exists and the provider refused it (#528) — a
+    # spend limit or a revoked key. None when the reason is simply that
+    # there is no key, which the action below already words for.
+    inference_refused: str | None = None
 
 
 def _interview_completeness(storage: Storage) -> list[InterviewCompleteness]:
@@ -353,7 +358,20 @@ def next_actions(report: CompletenessReport) -> list[NextAction]:
         )
     values = report.values
     if not values.profile_built:
-        if values.ready and not report.inference_available:
+        if values.ready and not report.inference_available and report.inference_refused:
+            actions.append(
+                NextAction(
+                    title="Model calls are refused — your values profile has to wait",
+                    why=(
+                        f"You have {values.captures} captures across {values.subtypes} kinds — "
+                        "more than enough to infer what you actually value, but "
+                        f"{report.inference_refused}. Nothing here is lost; the profile "
+                        "is the one thing your evidence cannot buy until that clears."
+                    ),
+                    how="wait for the provider's reset, or replace the key under Manage → Keys",
+                )
+            )
+        elif values.ready and not report.inference_available:
             actions.append(
                 NextAction(
                     title="Add a model key to unlock your values profile",
@@ -515,6 +533,7 @@ def compute_completeness(storage: Storage, config: Config) -> CompletenessReport
     """
     from wingman.application.qotd import pending_question
 
+    refused = model_rejection(config)
     return CompletenessReport(
         generated_at=datetime.now(UTC),
         career=_career_completeness(storage),
@@ -526,5 +545,6 @@ def compute_completeness(storage: Storage, config: Config) -> CompletenessReport
         opportunities=_opportunity_completeness(storage),
         operator_action=pending_operator_message(config),
         operator_question=pending_question(config, storage),
-        inference_available=metered_key(config, "anthropic") is not None,
+        inference_available=metered_key(config, "anthropic") is not None and refused is None,
+        inference_refused=describe(refused) if refused is not None else None,
     )
