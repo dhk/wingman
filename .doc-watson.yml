@@ -1,0 +1,61 @@
+# Doc Watson enrollment: this repository's documentation contract.
+# Schema: https://github.com/dhk/doc-watson/blob/main/schemas/enrollment.schema.json
+# Level, audience, trigger decisions and exemptions are owner-declared facts.
+# Tools may question them; only the owner changes them.
+# Declared by the owner 2026-09-28 from the baseline audit's drafts.
+
+schema: 1
+standard: 0.3.0 # standard version last audited against
+level: 2 # declared by the owner, 2026-09-28
+audience: The owner as operator, people whose Wingman is hosted for them, self-hosters, and agents that build it.
+
+# One decision per trigger rule, each with its reason.
+triggers:
+  install-guide:
+    applies: true
+    reason: Several supported paths (git install, checkout, Ubuntu server, hosted) exceed a README section; docs/INSTALL.md and docs/SERVER.md hold them.
+  user-guides:
+    applies: true
+    reason: First success needs a guided session per surface; docs/WALKTHROUGH*.md provide four.
+  architecture:
+    applies: true
+    reason: Layered agents, MCP and CLI surfaces, and a shared multi-tenant process do not fit one read; docs/DESIGN.md is the architecture document.
+  adrs:
+    applies: true
+    reason: docs/RFC.md is a ledger of 80 decisions with alternatives and consequences.
+  agent-memory:
+    applies: true
+    reason: Agents return across sessions; AGENTS.md and CLAUDE.md hold rules and deployment facts.
+  machine-contracts:
+    applies: true
+    reason: MCP clients parse the tool interface served by src/wingman/mcp_server.py; host config files are parsed by scripts/wingman-ctl (docs/SERVER.md section 2).
+  codeowners:
+    applies: false
+    reason: One owner authors all changes; review routing is not shared.
+  contributing:
+    applies: false
+    reason: Outside contributions are not invited (owner, 2026-09-28).
+  governance:
+    applies: false
+    reason: One maintainer.
+  roadmap:
+    applies: false
+    reason: No public audience; ROADMAP.md is the owner's plan.
+  runbooks:
+    applies: false
+    reason: No alerting that pages anyone is documented; docs/SERVER.md covers care, feeding and rollback.
+  handover:
+    applies: true
+    reason: A second account holder operates Wingman on lobster and needs to run it without the owner (owner, 2026-09-28; CLAUDE.md names both accounts).
+
+# Concerns deliberately not met. Truthfulness, hygiene and duplication, and
+# maintenance and verification cannot be exempted.
+exemptions: []
+
+last_audit:
+  revision: "21072c5"
+  date: "2026-09-28"
+  record: https://github.com/dhk/doc-watson-audit/tree/main/audits/dhk/wingman/2026-09-28
+
+# What a sweep may do on divergence: issue-and-draft-pr, issue, or report.
+on_drift: issue-and-draft-pr

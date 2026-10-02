@@ -7,6 +7,7 @@ from pathlib import Path
 
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.keys import KNOWN_KEYS, declared_shared_key, resolve_provider_key
+from wingman.infrastructure.model_health import ModelRejection, current_rejection, health_path
 from wingman.providers.anthropic_provider import AnthropicProvider
 from wingman.providers.base import CapabilityClass, ModelProvider
 from wingman.providers.embeddings import (
@@ -108,6 +109,20 @@ def metered_key(
     return None
 
 
+def model_rejection(config: Config) -> ModelRejection | None:
+    """Has the provider refused this workspace's key, and does that still stand (#528)?
+
+    The other half of "can this workspace call a model": 'metered_key'
+    says whether there is a key to spend, this says whether the provider
+    last accepted it. 'status' and 'completeness' ask both through here and
+    'metered_key', so the two surfaces can never disagree. Reads a file;
+    never calls the provider.
+    """
+    return current_rejection(
+        health_path(config.data_dir), "anthropic", metered_key(config, "anthropic")
+    )
+
+
 def get_provider(capability: CapabilityClass, config: Config) -> ModelProvider:
     path = config.models_config_path
     if not path.exists():
@@ -129,7 +144,12 @@ def get_provider(capability: CapabilityClass, config: Config) -> ModelProvider:
         if not isinstance(model, str) or not model:
             raise ModelConfigError(f"[models.{capability.value}] needs a 'model' name in {path}.")
         api_key = metered_key(config, "anthropic")
-        return AnthropicProvider(model=model, api_key=api_key, strict=config.strict_provider_keys)
+        return AnthropicProvider(
+            model=model,
+            api_key=api_key,
+            strict=config.strict_provider_keys,
+            health_path=health_path(config.data_dir),
+        )
     if provider == "openrouter":
         model = entry.get("model")
         if not isinstance(model, str) or not model:
