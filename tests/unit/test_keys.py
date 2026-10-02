@@ -764,3 +764,86 @@ def test_a_genuinely_absent_tier_is_still_readable(
     )["anthropic"]
     assert all(row.readable for row in rows)
     assert not any(row.present for row in rows)
+
+
+def test_store_global_key_preserves_mode_and_other_keys(tmp_path: Path) -> None:
+    """#531: the tier that funds every funded tenant. Fixing one key must
+    not drop the box's other credentials, and must not change how the file
+    is shared — the mode IS the mechanism reaching the service account."""
+    from wingman.infrastructure.keys import read_global_keys, store_global_key
+
+    target = tmp_path / "global-secrets.env"
+    target.write_text(
+        "ANTHROPIC_API_KEY=sk-ant-old\nVOYAGE_API_KEY=pa-keep\nGITHUB_SHARED_ISSUES_KEY=gh-keep\n",
+        encoding="utf-8",
+    )
+    target.chmod(0o640)
+
+    path, mode, group_readable = store_global_key("anthropic", "sk-ant-new", path=target)
+
+    values = read_global_keys(target)
+    assert values["ANTHROPIC_API_KEY"] == "sk-ant-new"
+    assert values["VOYAGE_API_KEY"] == "pa-keep"
+    assert values["GITHUB_SHARED_ISSUES_KEY"] == "gh-keep"
+    assert (path, mode, group_readable) == (target, 0o640, True)
+
+
+def test_store_global_key_warns_shape_when_the_group_cannot_read(tmp_path: Path) -> None:
+    """0600 looks like success and leaves the tier unreadable for every
+    account that needed it — the silent-empty-tier failure."""
+    from wingman.infrastructure.keys import store_global_key
+
+    target = tmp_path / "global-secrets.env"
+    target.write_text("VOYAGE_API_KEY=pa-x\n", encoding="utf-8")
+    target.chmod(0o600)
+    _path, mode, group_readable = store_global_key("anthropic", "sk-ant-new", path=target)
+    assert mode == 0o600
+    assert group_readable is False
+
+
+def test_store_global_key_creates_a_shareable_file_when_absent(tmp_path: Path) -> None:
+    """A brand-new file created 0600 would be root-only and therefore
+    useless to the service account it exists for."""
+    from wingman.infrastructure.keys import store_global_key
+
+    target = tmp_path / "nested" / "global-secrets.env"
+    _path, mode, group_readable = store_global_key("anthropic", "sk-ant-new", path=target)
+    assert mode == 0o640
+    assert group_readable is True
+
+
+@_needs_non_root
+def test_store_global_key_refuses_an_unreadable_file_rather_than_truncating_it(
+    tmp_path: Path,
+) -> None:
+    """The whole reason this is not a sed one-liner: rewriting the file
+    from what little is readable would drop every other key in it."""
+    from wingman.infrastructure.keys import store_global_key
+
+    target = tmp_path / "global-secrets.env"
+    target.write_text("VOYAGE_API_KEY=pa-precious\n", encoding="utf-8")
+    target.chmod(0o000)
+    try:
+        with pytest.raises(KeyStoreError, match="cannot be read"):
+            store_global_key("anthropic", "sk-ant-new", path=target)
+        target.chmod(0o600)
+        # Untouched, which is the point.
+        assert "pa-precious" in target.read_text(encoding="utf-8")
+    finally:
+        target.chmod(0o600)
+
+
+def test_store_global_key_leaves_no_temp_file_behind_on_failure(tmp_path: Path) -> None:
+    from wingman.infrastructure.keys import store_global_key
+
+    target = tmp_path / "global-secrets.env"
+    with pytest.raises(KeyStoreError):
+        store_global_key("anthropic", "   ", path=target)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_store_global_key_refuses_an_empty_value(tmp_path: Path) -> None:
+    from wingman.infrastructure.keys import store_global_key
+
+    with pytest.raises(KeyStoreError):
+        store_global_key("anthropic", "  ", path=tmp_path / "g.env")
