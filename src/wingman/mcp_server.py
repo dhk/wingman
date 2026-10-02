@@ -175,6 +175,7 @@ from wingman.infrastructure.mcp_process import (
     read_server_pid,
     write_pidfile,
 )
+from wingman.infrastructure.model_health import describe as describe_model_rejection
 from wingman.infrastructure.privilege import operator_only_refusal
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.infrastructure.telemetry import (
@@ -195,6 +196,7 @@ from wingman.providers.router import (
     get_embedding_provider,
     get_provider,
     metered_key,
+    model_rejection,
 )
 from wingman.reporting.completeness import render_completeness_markdown, write_completeness
 from wingman.reporting.completeness_html import render_completeness_html
@@ -305,6 +307,13 @@ def status() -> str:
     The same question 'completeness' asks, through the same
     'providers.router.metered_key', so the two can never disagree about
     whether this workspace can spend.
+
+    A key that exists is not a key that works (#528): one that has hit its
+    spend limit or been revoked passed the key check, and a month-long
+    outage was again reported as seven healthy counts. So the line is also
+    printed when the provider's last answer was a terminal refusal, in the
+    provider's own words and with its reset time — read from what the last
+    real call recorded, never by making one.
     """
     config = _ready_config()
     if config is None:
@@ -329,6 +338,13 @@ def status() -> str:
             "above is read from local data and is unaffected. Add a key on your own "
             "Wingman page under Manage → Keys (my_urls gives you the address), or ask "
             "whoever runs this Wingman."
+        )
+    elif (refused := model_rejection(config)) is not None:
+        lines.append(
+            f"Model calls: UNAVAILABLE — {describe_model_rejection(refused)}. Values, assessments, briefs "
+            "and every other model-backed step will fail until that clears. Everything "
+            "above is read from local data and is unaffected. A new key under Manage → "
+            "Keys takes effect at once; otherwise ask whoever runs this Wingman."
         )
     return "\n".join(lines)
 

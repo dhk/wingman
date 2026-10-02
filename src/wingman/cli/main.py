@@ -170,6 +170,7 @@ from wingman.infrastructure.keys import (
 )
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.mcp_process import server_status, stop_server
+from wingman.infrastructure.model_health import describe as describe_model_rejection
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.infrastructure.telemetry import (
     count_events as telemetry_count,
@@ -198,6 +199,7 @@ from wingman.providers.router import (
     get_embedding_provider,
     get_provider,
     metered_key,
+    model_rejection,
 )
 from wingman.reporting.export import (
     export_career,
@@ -1391,6 +1393,13 @@ def status() -> None:
             "assessments, briefs and every other model-backed step will fail. Everything "
             "above is read from local data and is unaffected. 'wingman keys where' names "
             "every tier and which copy wins."
+        )
+    elif (refused := model_rejection(config)) is not None:
+        typer.echo(
+            f"Model calls: UNAVAILABLE — {describe_model_rejection(refused)}. Values, assessments, briefs "
+            "and every other model-backed step will fail until that clears. Everything "
+            "above is read from local data and is unaffected. 'wingman keys where' names "
+            "the key being refused."
         )
 
 
