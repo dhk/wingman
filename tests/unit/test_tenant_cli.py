@@ -343,3 +343,121 @@ def test_tenant_keys_by_key_groups_tenants_sharing_one_credential(
     # Never the value.
     assert "sk-ant-shared-operator" not in out
     assert "sk-ant-daves-own" not in out
+
+
+def _by_key_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tenants: dict) -> str:
+    """Registry of {slug: (workspace key or None, funded)} plus a global file."""
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+    from wingman.infrastructure import keys as keys_module
+    from wingman.infrastructure import tenants as tenants_module
+
+    shared = tmp_path / "global.env"
+    shared.write_text("ANTHROPIC_API_KEY=sk-ant-shared-operator\n", encoding="utf-8")
+    entries = []
+    for slug, (own_key, funded) in tenants.items():
+        (tmp_path / slug).mkdir()
+        if own_key:
+            (tmp_path / slug / "keys.env").write_text(
+                f"ANTHROPIC_API_KEY={own_key}\n", encoding="utf-8"
+            )
+        entries.append(
+            f'[[tenant]]\nslug = "{slug}"\ndata_dir = "{tmp_path / slug}"\n'
+            + ("funded = true\n" if funded else "")
+        )
+    registry = tmp_path / "tenants.toml"
+    registry.write_text("".join(entries), encoding="utf-8")
+    monkeypatch.setattr(keys_module, "GLOBAL_KEYS_PATH", shared)
+    monkeypatch.setattr(tenants_module, "DEFAULT_REGISTRY_PATH", registry)
+    return CliRunner().invoke(app, ["tenant", "keys", "--by-key"]).output
+
+
+def _anthropic_block(out: str) -> list[str]:
+    lines = out.splitlines()
+    start = next(i for i, line in enumerate(lines) if "ANTHROPIC_API_KEY" in line)
+    end = next(
+        (
+            i
+            for i in range(start + 1, len(lines))
+            if lines[i].startswith("  ") and "_KEY" in lines[i]
+        ),
+        len(lines),
+    )
+    return lines[start:end]
+
+
+def test_by_key_never_merges_two_keys_that_share_a_display_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The displayed digest is six hex characters. Two different keys that
+    collide on it are two blast radii, not one."""
+    from wingman.infrastructure import keys as keys_module
+
+    monkeypatch.setattr(keys_module, "fingerprint", lambda value: "sk-ant-...#000000 (len 9)")
+    out = _by_key_fixture(
+        tmp_path, monkeypatch, {"amy": ("sk-ant-one", False), "ben": ("sk-ant-two", False)}
+    )
+
+    block = _anthropic_block(out)
+    assert not any("2 tenants" in line for line in block)
+    assert sum("1 tenant " in line for line in block) == 2
+
+
+def test_by_key_lists_unconfigured_after_every_real_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three people with no key is not a blast radius; one shared key is."""
+    out = _by_key_fixture(
+        tmp_path,
+        monkeypatch,
+        {
+            "amy": ("sk-ant-shared-own", False),
+            "ben": ("sk-ant-shared-own", False),
+            "cy": (None, False),
+            "di": (None, False),
+            "ed": (None, False),
+        },
+    )
+    block = _anthropic_block(out)
+    shared_at = next(i for i, line in enumerate(block) if "amy" in line)
+    unconfigured_at = next(i for i, line in enumerate(block) if "(not configured)" in line)
+    assert shared_at < unconfigured_at
+
+
+def test_by_key_names_every_tier_a_shared_key_is_spent_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One person pasted the operator's key into their workspace; another is
+    funded from the global file. Same key, two sources — naming only the
+    first hides the copy that has to be rotated too."""
+    out = _by_key_fixture(
+        tmp_path,
+        monkeypatch,
+        {"amy": ("sk-ant-shared-operator", False), "ben": (None, True)},
+    )
+    from_line = next(line for line in _anthropic_block(out) if "from " in line)
+    assert "workspace file" in from_line
+    assert "global file" in from_line
+
+
+def test_by_key_does_not_call_an_unreadable_tenant_unconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key may be in the file nobody could read. Staged without chmod,
+    which root ignores."""
+    from wingman.infrastructure import keys as keys_module
+
+    real_read = keys_module._read_known_keys_file
+    blocked = tmp_path / "amy" / "keys.env"
+
+    def read(path: Path) -> tuple[dict[str, str], bool]:
+        return ({}, True) if path == blocked else real_read(path)
+
+    monkeypatch.setattr(keys_module, "_read_known_keys_file", read)
+    out = _by_key_fixture(tmp_path, monkeypatch, {"amy": ("sk-ant-hidden", False)})
+
+    block = "\n".join(_anthropic_block(out))
+    assert "(not configured)" not in block
+    assert "unreadable: workspace file" in block
+    assert "amy" in block

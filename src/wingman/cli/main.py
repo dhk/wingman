@@ -5266,30 +5266,61 @@ def _echo_tenant_keys_by_fingerprint(entries: list[Tenant]) -> None:
     "is this person set up". It is the wrong shape for the question a leak
     asks — WHO is spending this key — because answering that from per-tenant
     rows means comparing digests by eye across N blocks (#536).
+
+    Grouped by a full sha256 of the value, not by the displayed fingerprint:
+    that carries six hex digits, and two different keys sharing them would
+    merge into one apparent blast radius. A tenant whose ladder hit an
+    unreadable tier is its own group — the key may be sitting in the file
+    nobody could read, so "not configured" would be a guess.
     """
-    from wingman.infrastructure.keys import KNOWN_KEYS, describe_tenant_key_locations
+    import hashlib
+
+    from wingman.infrastructure.keys import (
+        KNOWN_KEYS,
+        describe_tenant_key_locations,
+        tenant_key_value,
+    )
 
     typer.echo("\nGrouped by key — who shares which credential:")
     for short_name, env_var in KNOWN_KEYS.items():
-        # fingerprint -> (tier, [slug, ...]); None keys the tenants with none.
-        groups: dict[str | None, tuple[str, list[str]]] = {}
+        # identity -> (display fingerprint, tiers seen, slugs)
+        spent: dict[str, tuple[str, set[str], list[str]]] = {}
+        unconfigured: list[str] = []
+        unreadable: dict[str, list[str]] = {}
         for entry in entries:
             rows = describe_tenant_key_locations(entry.data_dir, entry.funded)[short_name]
             winner = next((r for r in rows if r.winner), None)
-            key = winner.fingerprint if winner else None
-            tier = winner.tier if winner else "no key"
-            groups.setdefault(key, (tier, []))[1].append(entry.slug)
+            if winner is not None and winner.fingerprint is not None:
+                value = tenant_key_value(entry.data_dir, env_var, winner.tier).strip()
+                identity = hashlib.sha256(value.encode("utf-8")).hexdigest()
+                group = spent.setdefault(identity, (winner.fingerprint, set(), []))
+                group[1].add(winner.tier)
+                group[2].append(entry.slug)
+                continue
+            blind = [r.tier for r in rows if not r.readable]
+            if blind:
+                unreadable.setdefault(", ".join(blind), []).append(entry.slug)
+            else:
+                unconfigured.append(entry.slug)
 
         typer.echo(f"\n  {short_name:11s} {env_var}")
-        # Most-shared first: the widest blast radius is the thing to see.
-        for fingerprint_value, (tier, slugs) in sorted(
-            groups.items(), key=lambda item: (-len(item[1][1]), item[0] or "")
+        # Widest blast radius first; only real credentials compete for it.
+        for fingerprint_value, tiers, slugs in sorted(
+            spent.values(), key=lambda group: (-len(group[2]), group[0])
         ):
-            count = f"{len(slugs)} tenant" + ("s" if len(slugs) != 1 else "")
-            typer.echo(f"    {fingerprint_value or '(not configured)'}")
-            typer.echo(f"      {count:12s} {', '.join(sorted(slugs))}")
-            if fingerprint_value is not None:
-                typer.echo(f"      from {tier}")
+            typer.echo(f"    {fingerprint_value}")
+            typer.echo(f"      {_tenant_count(slugs):12s} {', '.join(sorted(slugs))}")
+            typer.echo(f"      from {', '.join(sorted(tiers))}")
+        if unconfigured:
+            typer.echo("    (not configured)")
+            typer.echo(f"      {_tenant_count(unconfigured):12s} {', '.join(sorted(unconfigured))}")
+        for blind_tiers, slugs in sorted(unreadable.items()):
+            typer.echo(f"    (cannot tell — unreadable: {blind_tiers})")
+            typer.echo(f"      {_tenant_count(slugs):12s} {', '.join(sorted(slugs))}")
+
+
+def _tenant_count(slugs: list[str]) -> str:
+    return f"{len(slugs)} tenant" + ("s" if len(slugs) != 1 else "")
 
 
 @tenant_app.command("keys")
