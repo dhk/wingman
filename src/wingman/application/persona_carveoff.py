@@ -321,6 +321,9 @@ def carve_off_persona(
     _refuse_another_tenants_workspace(target_dir, source_config)
     export = export_persona(name_or_id, source_storage)
     target_dir.mkdir(parents=True, exist_ok=True)
+    # Strict by default since #532, and correct here: this is somebody
+    # ELSE's new workspace being seeded. It should never resolve a key
+    # from the environment of whoever ran the carve-off.
     target_config = Config(data_dir=target_dir, data_dir_source="persona carve-off target")
     # Same directories 'wingman init' creates (cli.main._workspace_dirs):
     # a conflict landing here needs 'wingman profile resolve' to work right

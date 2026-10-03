@@ -1188,6 +1188,9 @@ def demo() -> None:
     config = Config(
         data_dir=real_config.data_dir / "demo",
         data_dir_source=f"demo workspace inside {real_config.data_dir}",
+        # The demo exists to run on whatever key this person already
+        # exported — the ambient ladder is the feature, not a leak (#532).
+        strict_provider_keys=False,
     )
     for directory in _workspace_dirs(config):
         directory.mkdir(parents=True, exist_ok=True)

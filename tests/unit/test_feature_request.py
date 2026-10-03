@@ -182,8 +182,28 @@ def test_resolve_github_key_falls_back_to_env_outside_strict_mode(
     from wingman.infrastructure.config import Config
 
     monkeypatch.setenv("GITHUB_SHARED_ISSUES_KEY", "shape-b-env-value")
-    config = Config(data_dir=Path("/nonexistent"), data_dir_source="test")
+    # Non-strict is now stated rather than inherited: since #532 a Config
+    # built without an opinion is STRICT, so a test about the ambient
+    # ladder has to ask for the ambient ladder.
+    config = Config(
+        data_dir=Path("/nonexistent"), data_dir_source="test", strict_provider_keys=False
+    )
     assert _resolve_github_key(config) == "shape-b-env-value"
+
+
+def test_a_config_built_without_an_opinion_does_not_inherit_ambient_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#532: the value a Config gets by not being thought about must be the
+    one that costs a refusal, not the one that spends somebody else's key.
+    'privileged' and 'funded' already worked this way; this one did not."""
+    from wingman.application.feature_request import _resolve_github_key
+    from wingman.infrastructure.config import Config
+
+    monkeypatch.setenv("GITHUB_SHARED_ISSUES_KEY", "somebody-elses-export")
+    config = Config(data_dir=Path("/nonexistent"), data_dir_source="test")
+    assert config.strict_provider_keys is True
+    assert _resolve_github_key(config) is None
 
 
 def _strict_config() -> Config:
