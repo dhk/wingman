@@ -344,6 +344,97 @@ def store_host_key(name: str, value: str, home: Path | None = None) -> Path:
     return path
 
 
+def global_key_permissions(path: Path | None = None) -> tuple[int, bool]:
+    """(mode, readable-by-a-group-member) for the box-wide secrets file.
+
+    The second value is the one that bites. This file is root-owned and
+    every OTHER account that needs it — the shared service account above
+    all — reads it through its group. Drop the group-read bit and the tier
+    goes silently empty for everyone: not an error, not a refusal, just a
+    key that appears not to exist (#442 is why that at least says
+    UNREADABLE now rather than 'not set').
+    """
+    mode = path_stat(path).st_mode & 0o777
+    return mode, bool(mode & 0o040)
+
+
+def path_stat(path: Path | None = None) -> os.stat_result:
+    return (path if path is not None else GLOBAL_KEYS_PATH).stat()
+
+
+def store_global_key(name: str, value: str, path: Path | None = None) -> tuple[Path, int, bool]:
+    """Store one key in the box-wide secrets file, preserving how it is shared.
+
+    Returns (path, mode, group_readable) so the caller can say what the
+    file now looks like rather than only that a write happened.
+
+    Three things this does that a text editor does not.
+
+    It REFUSES on an unreadable existing file instead of overwriting.
+    '_read_known_keys_file' answers ({}, denied) for a file it cannot read,
+    and treating that empty dict as the file's contents would rewrite it
+    with one key and drop every other — losing the box's Voyage and shared
+    GitHub credentials to fix its Anthropic one.
+
+    It writes ATOMICALLY, through a temp file in the same directory and a
+    rename, so an interrupted write cannot leave every account on the box
+    with half a secrets file.
+
+    And it PRESERVES owner, group and mode from the existing file, because
+    those are not incidental here — they are the whole mechanism by which
+    a root-owned file reaches the service account.
+    """
+    short = _require_name(name)
+    env_var = KNOWN_KEYS[short]
+    if not value.strip():
+        raise KeyStoreError("the key value is empty; nothing was stored.")
+    target = path if path is not None else GLOBAL_KEYS_PATH
+
+    existing: os.stat_result | None = None
+    if target.exists():
+        values, denied = _read_known_keys_file(target)
+        if denied:
+            raise KeyStoreError(
+                f"{target} exists but cannot be read by this account — refusing to write, "
+                "because rewriting it from what little is readable would drop every other "
+                "key in it. Run as root (or a member of its group)."
+            )
+        existing = target.stat()
+    else:
+        values = {}
+    values[env_var] = value.strip()
+
+    body = "".join(f"{key}={val}\n" for key, val in sorted(values.items()))
+    tmp = target.with_name(f".{target.name}.new")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(body, encoding="utf-8")
+        if existing is not None:
+            os.chmod(tmp, existing.st_mode & 0o777)
+            os.chown(tmp, existing.st_uid, existing.st_gid)
+        else:
+            # A file nobody has provisioned yet: 0640 is the shape RFC-047
+            # describes — root writes, one group reads. The caller reports
+            # the group so somebody can set it; creating it 0600 would look
+            # like success and leave the tier unreadable for every account
+            # that needs it.
+            os.chmod(tmp, 0o640)
+        os.replace(tmp, target)
+    except PermissionError as exc:
+        tmp.unlink(missing_ok=True)
+        raise KeyStoreError(
+            f"cannot write {target} ({exc.strerror}) — this file is root-owned by design; "
+            "run this command with sudo."
+        ) from exc
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise KeyStoreError(f"cannot write {target}: {exc}") from exc
+
+    _logger.info("global key stored var=%s", env_var)  # never the value
+    mode, group_readable = global_key_permissions(target)
+    return target, mode, group_readable
+
+
 def resolve_provider_key(env_var: str, data_dir: Path | None = None) -> str | None:
     """The value a provider should use for one known env var, read-only.
 
@@ -690,65 +781,103 @@ def describe_tenant_key_locations(
     data_dir: Path,
     funded: bool,
     global_path: Path | None = None,
+    home: Path | None = None,
 ) -> dict[str, list[KeyLocation]]:
     """Every tier a TENANT's key can come from, in the order the tenant's
     own process consults them — which is not the order 'describe_key_locations'
     reports.
 
     A tenant in the shared multi-tenant process runs with
-    'strict_provider_keys' (RFC-048), so 'providers.router.metered_key'
-    resolves exactly two tiers: the tenant's own workspace 'keys.env',
-    then — only when that tenant is 'funded' — the box-wide global file.
-    The operator's host file and the ambient process environment are
-    deliberately never consulted, which is the whole point of the
-    isolation: one tenant must not silently spend another account's
-    credential.
+    'strict_provider_keys' (RFC-048), so the ambient process environment is
+    never consulted. What IS consulted depends on the key, and this mirrors
+    the two resolvers exactly rather than describing a simpler ladder:
 
-    Reporting the single-account ladder for a tenant is therefore not a
-    near-miss, it names a file the tenant will never read. That is why this
-    is a separate function rather than a flag on 'describe_key_locations':
-    the two ladders share a row type and nothing else.
+    - the three METERED keys ('providers.router.metered_key'): the tenant's
+      workspace 'keys.env'; then, only when the tenant is 'funded' (#514),
+      the operator's declared tiers — the host file, then the global file
+      ('declared_shared_key'). An unfunded tenant with no workspace key has
+      NO key, and the rows say so by being uniformly absent.
+    - the shared GitHub issues key ('feature_request._resolve_github_key'):
+      the workspace file, then the same declared tiers, funded or not —
+      it is access to an operator-owned repo, not spend (#506).
 
-    An unfunded tenant with no workspace key has NO key — the returned rows
-    say so by being uniformly absent, rather than falling through to a tier
-    that would have answered for a different account.
+    The host file is the one belonging to the account running this, which is
+    why 'wingman tenant keys' must be run as the shared process's own
+    account: that is the file the process reads. Reporting workspace →
+    global for a funded tenant (as this did until the ladder was checked
+    against the resolver) named the global key as spent while the host
+    file's key, which outranks it, was the one actually billed.
+
+    A tier that could not be read suppresses every winner below it: the
+    unread file could hold the key that outranks them.
     """
-    values, denied = _read_known_keys_file(workspace_keys_path(data_dir))
     resolved_global = global_path if global_path is not None else GLOBAL_KEYS_PATH
-    global_values, global_denied = _read_known_keys_file(resolved_global)
+    resolved_host = host_keys_path(home)
+    tiers = {
+        "workspace": (
+            workspace_keys_path(data_dir),
+            *_read_known_keys_file(workspace_keys_path(data_dir)),
+        ),
+        "host": (resolved_host, *_read_known_keys_file(resolved_host)),
+        "global": (resolved_global, *_read_known_keys_file(resolved_global)),
+    }
 
     out: dict[str, list[KeyLocation]] = {}
     for short_name, env_var in KNOWN_KEYS.items():
+        if short_name == "github":
+            ladder = [
+                ("workspace", "workspace file"),
+                ("host", "host file (shared)"),
+                ("global", "global file (shared)"),
+            ]
+        elif funded:
+            ladder = [
+                ("workspace", "workspace file"),
+                ("host", "host file (funded fallback)"),
+                ("global", "global file (funded fallback)"),
+            ]
+        else:
+            ladder = [("workspace", "workspace file")]
         rows: list[KeyLocation] = []
-        workspace_value = values.get(env_var, "")
-        workspace_present = bool(workspace_value.strip())
-        rows.append(
-            KeyLocation(
-                tier="workspace file",
-                path=str(workspace_keys_path(data_dir)),
-                present=workspace_present,
-                fingerprint=fingerprint(workspace_value) if workspace_present else None,
-                # A denied workspace read must never read as a win: the file
-                # could hold a key that outranks everything below it.
-                winner=workspace_present and not denied,
-                readable=not denied,
-            )
-        )
-        if funded:
-            global_value = global_values.get(env_var, "")
-            global_present = bool(global_value.strip())
+        decided = False
+        for tier_id, label in ladder:
+            path, values, denied = tiers[tier_id]
+            value = values.get(env_var, "")
+            present = bool(value.strip())
+            winner = present and not denied and not decided
             rows.append(
                 KeyLocation(
-                    tier="global file (funded fallback)",
-                    path=str(resolved_global),
-                    present=global_present,
-                    fingerprint=fingerprint(global_value) if global_present else None,
-                    winner=global_present and not workspace_present and not denied,
-                    readable=not global_denied,
+                    tier=label,
+                    path=str(path),
+                    present=present,
+                    fingerprint=fingerprint(value) if present else None,
+                    winner=winner,
+                    readable=not denied,
                 )
             )
+            # Once a tier answers — or cannot be read, and so might have —
+            # nothing below it can be the key in use.
+            decided = decided or present or denied
         out[short_name] = rows
     return out
+
+
+def tenant_key_value(
+    data_dir: Path,
+    env_var: str,
+    tier: str,
+    global_path: Path | None = None,
+    home: Path | None = None,
+) -> str:
+    """The value behind one row of 'describe_tenant_key_locations', by its tier label."""
+    if tier.startswith("workspace"):
+        path = workspace_keys_path(data_dir)
+    elif tier.startswith("host"):
+        path = host_keys_path(home)
+    else:
+        path = global_path if global_path is not None else GLOBAL_KEYS_PATH
+    values, _ = _read_known_keys_file(path)
+    return values.get(env_var, "")
 
 
 def key_status(runner: Runner | None = None) -> list[tuple[str, str, str]]:
@@ -933,6 +1062,7 @@ def validate_tenant_keys(
     data_dir: Path,
     funded: bool,
     global_path: Path | None = None,
+    home: Path | None = None,
 ) -> list[KeyValidation]:
     """Live-test the key a TENANT's calls actually spend.
 
@@ -940,16 +1070,13 @@ def validate_tenant_keys(
     no workspace key of their own it falls through to the operator's host
     file and reports a healthy key that tenant never touches — a green
     check on a credential that is not theirs, which is worse than a red
-    one. This walks the strict RFC-048 ladder instead
+    one. This walks the tenant's own ladder instead
     ('describe_tenant_key_locations'), so a tenant with no key is reported
     as having no key.
 
     Costs at most one cheap, no-completion-tokens call per configured key.
     """
-    rows_by_key = describe_tenant_key_locations(data_dir, funded, global_path)
-    values, _ = _read_known_keys_file(workspace_keys_path(data_dir))
-    resolved_global = global_path if global_path is not None else GLOBAL_KEYS_PATH
-    global_values, _ = _read_known_keys_file(resolved_global)
+    rows_by_key = describe_tenant_key_locations(data_dir, funded, global_path, home)
 
     results: list[KeyValidation] = []
     for short_name, env_var in KNOWN_KEYS.items():
@@ -966,8 +1093,7 @@ def validate_tenant_keys(
                 KeyValidation(short_name, env_var, "not set", None, False, message, blind)
             )
             continue
-        source = values if winner.tier == "workspace file" else global_values
-        value = source.get(env_var, "")
+        value = tenant_key_value(data_dir, env_var, winner.tier, global_path, home)
         ok, message = test_key_value(short_name, value)
         results.append(
             KeyValidation(short_name, env_var, winner.tier, fingerprint(value), ok, message, blind)

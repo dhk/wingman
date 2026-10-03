@@ -161,6 +161,7 @@ from wingman.infrastructure.keys import (
     key_status,
     resolve_key_sources,
     set_key,
+    store_global_key,
     store_host_key,
     store_workspace_key,
     test_keys,
@@ -170,6 +171,7 @@ from wingman.infrastructure.keys import (
 )
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.mcp_process import server_status, stop_server
+from wingman.infrastructure.model_health import describe as describe_model_rejection
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.infrastructure.telemetry import (
     count_events as telemetry_count,
@@ -198,6 +200,7 @@ from wingman.providers.router import (
     get_embedding_provider,
     get_provider,
     metered_key,
+    model_rejection,
 )
 from wingman.reporting.export import (
     export_career,
@@ -1185,6 +1188,9 @@ def demo() -> None:
     config = Config(
         data_dir=real_config.data_dir / "demo",
         data_dir_source=f"demo workspace inside {real_config.data_dir}",
+        # The demo exists to run on whatever key this person already
+        # exported — the ambient ladder is the feature, not a leak (#532).
+        strict_provider_keys=False,
     )
     for directory in _workspace_dirs(config):
         directory.mkdir(parents=True, exist_ok=True)
@@ -1388,6 +1394,13 @@ def status() -> None:
             "assessments, briefs and every other model-backed step will fail. Everything "
             "above is read from local data and is unaffected. 'wingman keys where' names "
             "every tier and which copy wins."
+        )
+    elif (refused := model_rejection(config)) is not None:
+        typer.echo(
+            f"Model calls: UNAVAILABLE — {describe_model_rejection(refused)}. Values, assessments, briefs "
+            "and every other model-backed step will fail until that clears. Everything "
+            "above is read from local data and is unaffected. 'wingman keys where' names "
+            "the key being refused."
         )
 
 
@@ -3293,7 +3306,7 @@ def keys_set(
     scope: str = typer.Option(
         "keychain",
         "--scope",
-        help="Where to write it: keychain (default), host, or workspace.",
+        help="Where to write it: keychain (default), host, global, or workspace.",
     ),
     tenant: str = typer.Option(
         "", "--tenant", help="With --scope workspace: which tenant's workspace (operators)."
@@ -3307,7 +3320,9 @@ def keys_set(
     it, and nothing looks different.
 
       --scope keychain   macOS Keychain, this account (default)
-      --scope host       ~/.config/wingman/secrets.env — every consumer on the box
+      --scope host       ~/.config/wingman/secrets.env — every consumer on this account
+      --scope global     /etc/wingman/global-secrets.env — the whole box, and the
+                         fallback every funded tenant spends. Root-owned: needs sudo.
       --scope workspace  this workspace's keys.env — one person only, and it
                          outranks every other tier (BYOK)
 
@@ -3332,9 +3347,10 @@ def keys_set(
             secret = typer.prompt(f"{name} key", hide_input=True)
 
     choice = scope.strip().lower()
-    if choice not in ("keychain", "host", "workspace"):
+    if choice not in ("keychain", "host", "global", "workspace"):
         typer.echo(
-            f"keys set failed: unknown --scope {scope!r}; use keychain, host, or workspace.",
+            f"keys set failed: unknown --scope {scope!r}; "
+            "use keychain, host, global, or workspace.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -3349,6 +3365,18 @@ def keys_set(
         elif choice == "host":
             path = store_host_key(name, secret)
             typer.echo(f"Stored {env_var} in {path} (0600).")
+        elif choice == "global":
+            path, mode, group_readable = store_global_key(name, secret)
+            typer.echo(f"Stored {env_var} in {path} ({mode:04o}).")
+            if not group_readable:
+                # The silent-empty-tier failure, said out loud: this file is
+                # root-owned and every other account reaches it by group.
+                typer.echo(
+                    f"WARNING: {mode:04o} has no group-read bit, so no other account on "
+                    "this box can read this file — the tier will read as UNREADABLE for "
+                    "the service account and every tenant funded from it.",
+                    err=True,
+                )
         else:
             data_dir = load_config().data_dir
             if tenant:
@@ -3428,10 +3456,10 @@ _TENANT_FLAGS_MOVED = (
     "{cmd} answers for ONE ACCOUNT, on the single-account ladder: workspace, "
     "environment, Keychain, host file, global file.\n"
     "A tenant resolves on the strict RFC-048 ladder instead — their own workspace "
-    "file, then the global file only if funded — and never reads this account's host "
-    "file or this process's environment. Reporting one ladder for the other named a "
-    "file no tenant ever consults, so the tenant flags moved rather than staying "
-    "quietly wrong:\n\n  {replacement}\n"
+    "file, then (only if funded, or for the shared GitHub key) the shared process "
+    "account's host file and the global file — and never this process's environment. "
+    "Reporting one ladder for the other named the wrong file, so the tenant flags moved "
+    "rather than staying quietly wrong:\n\n  {replacement}\n"
 )
 
 
@@ -5284,10 +5312,11 @@ def tenant_keys_cmd(
     digests by eye across every block (#536).
 
     Reports the ladder a TENANT's own process really walks
-    (strict_provider_keys, RFC-048): their workspace 'keys.env', then the
-    box-wide global file only if they are funded. 'wingman keys where'
-    reports the single-account ladder instead, which names the operator's
-    host file — a file no tenant ever reads.
+    (strict_provider_keys, RFC-048): their workspace 'keys.env', then — only
+    if they are funded, or always for the shared GitHub key — the shared
+    process account's host file and the box-wide global file. 'wingman keys
+    where' reports the single-account ladder instead, environment and
+    Keychain included, which no tenant walks.
 
     Tenant workspaces are readable only by the account that owns them, so
     run this AS that account or the rows come back UNREADABLE:
@@ -5317,9 +5346,14 @@ def tenant_keys_cmd(
 
     typer.echo("Strict tenant ladder (RFC-048) - first one present wins:")
     typer.echo("  1. workspace file   <workspace>/keys.env   (this person's own key)")
-    typer.echo("  2. global file      /etc/wingman/global-secrets.env   (only if funded)")
-    typer.echo("\nThe operator host file and process environment are never consulted for a")
-    typer.echo("tenant. A fingerprint is prefix...#digest (len N) - same digest, same key.")
+    typer.echo(
+        "  2. host file        ~/.config/wingman/secrets.env   (this account's; only if funded)"
+    )
+    typer.echo("  3. global file      /etc/wingman/global-secrets.env   (only if funded)")
+    typer.echo("The shared GitHub issues key walks 2 and 3 for every tenant, funded or not.")
+    typer.echo("\nThe process environment is never consulted for a tenant. Run this as the")
+    typer.echo("shared process's own account, so tier 2 is the file that process reads.")
+    typer.echo("A fingerprint is prefix...#digest (len N) - same digest, same key.")
 
     drifted = False
     for entry in tenants:
