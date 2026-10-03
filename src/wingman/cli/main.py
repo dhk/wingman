@@ -5328,14 +5328,88 @@ def _echo_tenant_key_locations(
     return drifted
 
 
+def _echo_tenant_keys_by_fingerprint(entries: list[Tenant]) -> None:
+    """The inverse question: which people share one credential.
+
+    'wingman tenant keys' answers per tenant, which is the right shape for
+    "is this person set up". It is the wrong shape for the question a leak
+    asks — WHO is spending this key — because answering that from per-tenant
+    rows means comparing digests by eye across N blocks (#536).
+
+    Grouped by a full sha256 of the value, not by the displayed fingerprint:
+    that carries six hex digits, and two different keys sharing them would
+    merge into one apparent blast radius. A tenant whose ladder hit an
+    unreadable tier is its own group — the key may be sitting in the file
+    nobody could read, so "not configured" would be a guess.
+    """
+    import hashlib
+
+    from wingman.infrastructure.keys import (
+        KNOWN_KEYS,
+        describe_tenant_key_locations,
+        tenant_key_value,
+    )
+
+    typer.echo("\nGrouped by key — who shares which credential:")
+    for short_name, env_var in KNOWN_KEYS.items():
+        # identity -> (display fingerprint, tiers seen, slugs)
+        spent: dict[str, tuple[str, set[str], list[str]]] = {}
+        unconfigured: list[str] = []
+        unreadable: dict[str, list[str]] = {}
+        for entry in entries:
+            rows = describe_tenant_key_locations(entry.data_dir, entry.funded)[short_name]
+            winner = next((r for r in rows if r.winner), None)
+            if winner is not None and winner.fingerprint is not None:
+                value = tenant_key_value(entry.data_dir, env_var, winner.tier).strip()
+                identity = hashlib.sha256(value.encode("utf-8")).hexdigest()
+                group = spent.setdefault(identity, (winner.fingerprint, set(), []))
+                group[1].add(winner.tier)
+                group[2].append(entry.slug)
+                continue
+            blind = [r.tier for r in rows if not r.readable]
+            if blind:
+                unreadable.setdefault(", ".join(blind), []).append(entry.slug)
+            else:
+                unconfigured.append(entry.slug)
+
+        typer.echo(f"\n  {short_name:11s} {env_var}")
+        # Widest blast radius first; only real credentials compete for it.
+        for fingerprint_value, tiers, slugs in sorted(
+            spent.values(), key=lambda group: (-len(group[2]), group[0])
+        ):
+            typer.echo(f"    {fingerprint_value}")
+            typer.echo(f"      {_tenant_count(slugs):12s} {', '.join(sorted(slugs))}")
+            typer.echo(f"      from {', '.join(sorted(tiers))}")
+        if unconfigured:
+            typer.echo("    (not configured)")
+            typer.echo(f"      {_tenant_count(unconfigured):12s} {', '.join(sorted(unconfigured))}")
+        for blind_tiers, slugs in sorted(unreadable.items()):
+            typer.echo(f"    (cannot tell — unreadable: {blind_tiers})")
+            typer.echo(f"      {_tenant_count(slugs):12s} {', '.join(sorted(slugs))}")
+
+
+def _tenant_count(slugs: list[str]) -> str:
+    return f"{len(slugs)} tenant" + ("s" if len(slugs) != 1 else "")
+
+
 @tenant_app.command("keys")
 def tenant_keys_cmd(
     tenant: str = typer.Option("", "--tenant", help="One tenant by slug. Default: every tenant."),
     all_tenants: bool = typer.Option(
         False, "--all", help="Every tenant in the registry (the default when --tenant is omitted)."
     ),
+    by_key: bool = typer.Option(
+        False,
+        "--by-key",
+        help="Group by credential instead of by person: who shares which key.",
+    ),
 ) -> None:
     """Which key each person is actually using — by fingerprint, never by value.
+
+    '--by-key' inverts it: one block per credential, listing every tenant
+    spending it, widest blast radius first. That is the question a leaked
+    shared key asks, and answering it from per-tenant rows means comparing
+    digests by eye across every block (#536).
 
     Reports the ladder a TENANT's own process really walks
     (strict_provider_keys, RFC-048): their workspace 'keys.env', then — only
@@ -5365,6 +5439,10 @@ def tenant_keys_cmd(
         if not tenants:
             typer.echo(f"No tenant named {tenant!r} in {registry}.", err=True)
             raise typer.Exit(code=1)
+
+    if by_key:
+        _echo_tenant_keys_by_fingerprint(tenants)
+        return
 
     typer.echo("Strict tenant ladder (RFC-048) - first one present wins:")
     typer.echo("  1. workspace file   <workspace>/keys.env   (this person's own key)")
