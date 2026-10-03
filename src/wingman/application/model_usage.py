@@ -5,15 +5,39 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from wingman.domain.model_usage import ModelUsage
 from wingman.infrastructure.config import Config
+from wingman.infrastructure.storage import Storage
+
+if TYPE_CHECKING:
+    from wingman.infrastructure.tenants import Tenant
 
 
 @dataclass(frozen=True)
 class PricedUsage:
     usage: ModelUsage
     cost_usd: Decimal | None
+
+
+def render_tenant_usage(tenant: Tenant, limit: int) -> tuple[str, bool]:
+    """Read one tenant without creating its DB or hiding later tenants on failure."""
+    try:
+        config = tenant.config()
+        if not config.db_path.exists():
+            return f"Tenant {tenant.slug}: no workspace yet ({config.db_path} missing).", True
+        with Storage(config.db_path) as storage:
+            return (
+                render_usage(
+                    config,
+                    storage.list_model_usage(limit=limit),
+                    heading=f"Tenant {tenant.slug}",
+                ),
+                False,
+            )
+    except Exception as exc:  # noqa: BLE001 — one bad tenant must not hide the rest
+        return f"Tenant {tenant.slug}: could not be read — {exc}", True
 
 
 def price_usage(config: Config, rows: list[ModelUsage]) -> list[PricedUsage]:
@@ -33,6 +57,11 @@ def price_usage(config: Config, rows: list[ModelUsage]) -> list[PricedUsage]:
 
 def _row_cost(row: ModelUsage, entry: object) -> Decimal | None:
     if not isinstance(entry, dict):
+        return None
+    # Provider/model identifiers are durable billing provenance. Match them
+    # exactly: Wingman has no authoritative alias table, so normalization
+    # would risk pricing an old model with a different model's current rate.
+    if entry.get("provider") != row.provider or entry.get("model") != row.model:
         return None
     units = (
         (row.input_tokens, "input_usd_per_million", Decimal(1_000_000)),

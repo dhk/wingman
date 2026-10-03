@@ -5,11 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from wingman.application.model_usage import price_usage, render_usage
+from wingman.application.model_usage import price_usage, render_tenant_usage, render_usage
 from wingman.domain.model_usage import ModelUsage, Payer
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.storage import Storage
+from wingman.infrastructure.tenants import Tenant
+from wingman.providers import router
 from wingman.providers.base import CapabilityClass, ModelRequest, ModelResponse, ProviderError
+from wingman.providers.router import get_provider
 from wingman.providers.usage import UsageTrackingProvider
 
 
@@ -31,6 +34,28 @@ class _SuccessfulProvider:
 class _FailingProvider:
     def complete(self, request: ModelRequest) -> ModelResponse:
         raise ProviderError("provider failed")
+
+
+class _RoutedProvider:
+    def __init__(
+        self,
+        model: str,
+        api_key: str | None,
+        strict: bool,
+        health_path: Path | None = None,
+    ) -> None:
+        assert api_key == "resolved-key"
+        self.model = model
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        return ModelResponse(
+            text="ok",
+            provider="anthropic",
+            model=self.model,
+            input_tokens=1,
+            output_tokens=1,
+            latency_ms=1,
+        )
 
 
 def _config(tmp_path: Path) -> Config:
@@ -118,3 +143,88 @@ output_usd_per_million = 2.0
     assert rows[0].cost_usd == Decimal("2.00")
     assert rows[1].cost_usd is None
     assert "not counted as zero-cost" in render_usage(config, [priced, unpriced])
+
+
+def test_historical_row_is_unpriced_after_provider_or_model_changes(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.models_config_path.write_text(
+        """[models.extract_fast]
+provider = "new-provider"
+model = "new-model"
+input_usd_per_million = 99.0
+""",
+        encoding="utf-8",
+    )
+    historical = ModelUsage(
+        capability="extract_fast",
+        provider="old-provider",
+        model="old-model",
+        payer=Payer.BYOK,
+        input_tokens=1_000_000,
+        latency_ms=1,
+    )
+
+    assert price_usage(config, [historical])[0].cost_usd is None
+
+
+def test_tenant_usage_read_does_not_create_a_missing_database(tmp_path: Path) -> None:
+    tenant = Tenant(slug="missing", data_dir=tmp_path / "missing")
+
+    report, failed = render_tenant_usage(tenant, 100)
+
+    assert failed
+    assert "no workspace yet" in report
+    assert not (tenant.data_dir / "wingman.db").exists()
+
+
+def test_tenant_usage_read_reports_a_corrupt_database(tmp_path: Path) -> None:
+    tenant = Tenant(slug="broken", data_dir=tmp_path / "broken")
+    tenant.data_dir.mkdir()
+    tenant.data_dir.joinpath("wingman.db").write_text("not sqlite", encoding="utf-8")
+
+    report, failed = render_tenant_usage(tenant, 100)
+
+    assert failed
+    assert "Tenant broken: could not be read" in report
+
+
+@pytest.mark.parametrize(
+    ("config_changes", "credential_source", "expected_payer"),
+    [
+        ({"anthropic_api_key": "resolved-key"}, "byok", Payer.BYOK),
+        ({"strict_provider_keys": False}, "ambient", Payer.AMBIENT),
+        (
+            {"strict_provider_keys": True, "funded": True},
+            "funded",
+            Payer.FUNDED,
+        ),
+    ],
+)
+def test_router_records_resolved_payer_end_to_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_changes: dict[str, object],
+    credential_source: str,
+    expected_payer: Payer,
+) -> None:
+    config = _config(tmp_path).model_copy(update=config_changes)
+    config.models_config_path.write_text(
+        """[models.extract_fast]
+provider = "anthropic"
+model = "test-model"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(router, "AnthropicProvider", _RoutedProvider)
+    if credential_source == "ambient":
+        monkeypatch.setattr(router, "resolve_provider_key", lambda *_args: "resolved-key")
+    elif credential_source == "funded":
+        monkeypatch.setattr(router, "declared_shared_key", lambda *_args: "resolved-key")
+
+    provider = get_provider(CapabilityClass.EXTRACT_FAST, config)
+    provider.complete(ModelRequest(system="system", prompt="prompt"))
+
+    with Storage(config.db_path) as storage:
+        rows = storage.list_model_usage()
+    assert len(rows) == 1
+    assert rows[0].payer == expected_payer

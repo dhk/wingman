@@ -87,7 +87,7 @@ from wingman.application.focus import (
 )
 from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
-from wingman.application.model_usage import render_usage
+from wingman.application.model_usage import render_tenant_usage, render_usage
 from wingman.application.opportunities import list_opportunity_summaries, render_opportunity_listing
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pack import build_application_pack
@@ -379,15 +379,8 @@ def usage_all_tenants(limit_per_tenant: int = 100) -> str:
         return "All-tenant model usage: no tenants are registered."
     reports: list[str] = []
     for tenant in tenants:
-        tenant_config = tenant.config()
-        with Storage(tenant_config.db_path) as storage:
-            reports.append(
-                render_usage(
-                    tenant_config,
-                    storage.list_model_usage(limit=max(1, limit_per_tenant)),
-                    heading=f"Tenant {tenant.slug}",
-                )
-            )
+        report, _failed = render_tenant_usage(tenant, max(1, limit_per_tenant))
+        reports.append(report)
     return "\n\n".join(reports)
 
 

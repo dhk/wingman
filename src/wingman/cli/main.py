@@ -67,7 +67,7 @@ from wingman.application.focus import (
 from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
-from wingman.application.model_usage import render_usage
+from wingman.application.model_usage import render_tenant_usage, render_usage
 from wingman.application.news import STALE_AFTER_DAYS, fetch_person_news
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pack import build_application_pack
@@ -1430,16 +1430,17 @@ def usage(
     if not tenants:
         typer.echo("All-tenant model usage: no tenants are registered.")
         return
+    failures = 0
     for tenant in tenants:
-        tenant_config = tenant.config()
-        with Storage(tenant_config.db_path) as storage:
-            typer.echo(
-                render_usage(
-                    tenant_config,
-                    storage.list_model_usage(limit=limit),
-                    heading=f"Tenant {tenant.slug}",
-                )
-            )
+        report, failed = render_tenant_usage(tenant, limit)
+        typer.echo(report, err=failed)
+        failures += int(failed)
+    if failures:
+        typer.echo(
+            f"{failures} tenant workspace(s) could not be read; every other tenant was reported.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 def _human_size(size_bytes: int) -> str:
