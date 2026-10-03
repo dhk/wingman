@@ -35,6 +35,8 @@ def test_all_tools_are_registered() -> None:
     tools = {tool.name for tool in asyncio.run(server.list_tools())}
     assert tools == {
         "status",
+        "usage",
+        "usage_all_tenants",
         "evidence",
         "career_profile",
         "completeness",

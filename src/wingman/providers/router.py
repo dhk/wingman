@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
+from wingman.domain.model_usage import Payer
 from wingman.infrastructure.config import Config
-from wingman.infrastructure.keys import KNOWN_KEYS, declared_shared_key, resolve_provider_key
+from wingman.infrastructure.keys import (
+    KNOWN_KEYS,
+    declared_shared_key,
+    read_workspace_keys,
+    resolve_provider_key,
+)
 from wingman.infrastructure.model_health import ModelRejection, current_rejection, health_path
 from wingman.providers.anthropic_provider import AnthropicProvider
 from wingman.providers.base import CapabilityClass, ModelProvider
@@ -17,6 +24,7 @@ from wingman.providers.embeddings import (
 )
 from wingman.providers.openrouter_provider import OpenRouterProvider
 from wingman.providers.recorded import RecordedProvider
+from wingman.providers.usage import UsageTrackingEmbeddingProvider, UsageTrackingProvider
 
 DEFAULT_MODELS_TOML = """\
 # Maps capability classes (docs/RFC.md, RFC-004) to concrete providers and models.
@@ -27,6 +35,12 @@ DEFAULT_MODELS_TOML = """\
 [models.extract_fast]
 provider = "anthropic"
 model = "claude-haiku-4-5"
+# Optional usage prices are applied when a report is read, never stored in the ledger:
+# input_usd_per_million = 0.0
+# output_usd_per_million = 0.0
+# cache_read_usd_per_million = 0.0
+# cache_write_usd_per_million = 0.0
+# search_result_usd = 0.0
 
 [models.synthesize_balanced]
 provider = "anthropic"
@@ -65,6 +79,33 @@ class ModelConfigError(Exception):
     """The workspace model configuration is missing or invalid."""
 
 
+@dataclass(frozen=True)
+class MeteredCredential:
+    key: str | None
+    payer: Payer
+
+
+def resolve_metered_credential(
+    config: Config,
+    provider: str,
+    home: Path | None = None,
+    global_path: Path | None = None,
+) -> MeteredCredential:
+    """Resolve both the credential and who pays, without retaining the secret."""
+    declared: str | None = getattr(config, f"{provider}_api_key")
+    if declared is not None:
+        return MeteredCredential(declared, Payer.BYOK)
+    env_var = KNOWN_KEYS[provider]
+    workspace_key = read_workspace_keys(config.data_dir).get(env_var, "").strip()
+    if workspace_key:
+        return MeteredCredential(workspace_key, Payer.BYOK)
+    if not config.strict_provider_keys:
+        return MeteredCredential(resolve_provider_key(env_var, config.data_dir), Payer.AMBIENT)
+    if config.funded:
+        return MeteredCredential(declared_shared_key(env_var, home, global_path), Payer.FUNDED)
+    return MeteredCredential(None, Payer.BYOK)
+
+
 def metered_key(
     config: Config,
     provider: str,
@@ -98,15 +139,7 @@ def metered_key(
     instead of silently resolving — and live-testing — the real
     operator's credential.
     """
-    declared: str | None = getattr(config, f"{provider}_api_key")
-    if declared is not None:
-        return declared
-    env_var = KNOWN_KEYS[provider]
-    if not config.strict_provider_keys:
-        return resolve_provider_key(env_var, config.data_dir)
-    if config.funded:
-        return declared_shared_key(env_var, home, global_path)
-    return None
+    return resolve_metered_credential(config, provider, home, global_path).key
 
 
 def model_rejection(config: Config) -> ModelRejection | None:
@@ -143,24 +176,30 @@ def get_provider(capability: CapabilityClass, config: Config) -> ModelProvider:
         model = entry.get("model")
         if not isinstance(model, str) or not model:
             raise ModelConfigError(f"[models.{capability.value}] needs a 'model' name in {path}.")
-        api_key = metered_key(config, "anthropic")
-        return AnthropicProvider(
+        credential = resolve_metered_credential(config, "anthropic")
+        anthropic = AnthropicProvider(
             model=model,
-            api_key=api_key,
+            api_key=credential.key,
             strict=config.strict_provider_keys,
             health_path=health_path(config.data_dir),
         )
+        return UsageTrackingProvider(anthropic, config, capability, credential.payer)
     if provider == "openrouter":
         model = entry.get("model")
         if not isinstance(model, str) or not model:
             raise ModelConfigError(f"[models.{capability.value}] needs a 'model' name in {path}.")
-        api_key = metered_key(config, "openrouter")
-        return OpenRouterProvider(model=model, api_key=api_key, strict=config.strict_provider_keys)
+        credential = resolve_metered_credential(config, "openrouter")
+        openrouter = OpenRouterProvider(
+            model=model, api_key=credential.key, strict=config.strict_provider_keys
+        )
+        return UsageTrackingProvider(openrouter, config, capability, credential.payer)
     if provider == "recorded":
         raw_path = entry.get("path")
         if not isinstance(raw_path, str) or not raw_path:
             raise ModelConfigError(f"[models.{capability.value}] needs a 'path' in {path}.")
-        return RecordedProvider.from_file(Path(raw_path))
+        return UsageTrackingProvider(
+            RecordedProvider.from_file(Path(raw_path)), config, capability, Payer.AMBIENT
+        )
     raise ModelConfigError(
         f"[models.{capability.value}] in {path} names unknown provider {provider!r}; "
         "supported providers are 'anthropic', 'openrouter', and 'recorded'."
@@ -179,10 +218,16 @@ def get_embedding_provider(config: Config) -> EmbeddingProvider:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ModelConfigError(f"Model configuration {path} could not be parsed: {exc}") from exc
     entry = data.get("models", {}).get("embed_semantic")
-    voyage_api_key = metered_key(config, "voyage")
+    voyage_credential = resolve_metered_credential(config, "voyage")
     if entry is None:
-        return VoyageEmbeddingProvider(
-            model=DEFAULT_EMBEDDING[1], api_key=voyage_api_key, strict=config.strict_provider_keys
+        return UsageTrackingEmbeddingProvider(
+            VoyageEmbeddingProvider(
+                model=DEFAULT_EMBEDDING[1],
+                api_key=voyage_credential.key,
+                strict=config.strict_provider_keys,
+            ),
+            config,
+            voyage_credential.payer,
         )
     if not isinstance(entry, dict):
         raise ModelConfigError(f"[models.embed_semantic] in {path} must be a table.")
@@ -191,11 +236,17 @@ def get_embedding_provider(config: Config) -> EmbeddingProvider:
         model = entry.get("model")
         if not isinstance(model, str) or not model:
             raise ModelConfigError(f"[models.embed_semantic] needs a 'model' name in {path}.")
-        return VoyageEmbeddingProvider(
-            model=model, api_key=voyage_api_key, strict=config.strict_provider_keys
+        return UsageTrackingEmbeddingProvider(
+            VoyageEmbeddingProvider(
+                model=model,
+                api_key=voyage_credential.key,
+                strict=config.strict_provider_keys,
+            ),
+            config,
+            voyage_credential.payer,
         )
     if provider_name == "hashed":
-        return HashedEmbeddingProvider()
+        return UsageTrackingEmbeddingProvider(HashedEmbeddingProvider(), config, Payer.AMBIENT)
     raise ModelConfigError(
         f"[models.embed_semantic] in {path} names unknown provider {provider_name!r}; "
         "supported providers are 'voyage' and 'hashed'."

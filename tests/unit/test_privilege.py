@@ -196,13 +196,12 @@ def test_carve_off_persona_runs_on_a_solo_install(solo_workspace: Config, tmp_pa
 
 
 def test_no_other_tool_gained_a_gate() -> None:
-    """Cheap and specific: exactly two call sites, named. A third one added
-    without a deliberate decision (and an RFC-068 update) fails here."""
+    """Cheap and specific: only deliberately operator-wide tools are gated."""
     from wingman import mcp_server
 
     source = Path(mcp_server.__file__).read_text(encoding="utf-8")
     gated = re.findall(r'operator_only_refusal\(config, "(\w+)"\)', source)
-    assert gated == ["coach_persona", "carve_off_persona"]
+    assert gated == ["usage_all_tenants", "coach_persona", "carve_off_persona"]
 
 
 def test_an_ordinary_tool_still_works_for_an_unprivileged_tenant(

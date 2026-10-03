@@ -87,6 +87,7 @@ from wingman.application.focus import (
 )
 from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
+from wingman.application.model_usage import render_usage
 from wingman.application.opportunities import list_opportunity_summaries, render_opportunity_listing
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pack import build_application_pack
@@ -347,6 +348,47 @@ def status() -> str:
             "Keys takes effect at once; otherwise ask whoever runs this Wingman."
         )
     return "\n".join(lines)
+
+
+@server.tool()
+def usage(limit: int = 100) -> str:
+    """Successful model calls for this workspace, with read-time cost estimates.
+
+    The ledger contains units and provenance only, never prompts or responses.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        return render_usage(config, storage.list_model_usage(limit=max(1, limit)))
+
+
+@server.tool()
+def usage_all_tenants(limit_per_tenant: int = 100) -> str:
+    """Operator-only model usage rollup across registered workspaces."""
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    refusal = operator_only_refusal(config, "usage_all_tenants")
+    if refusal:
+        return refusal
+    from wingman.infrastructure.tenants import load_registry, tenant_registry_path
+
+    tenants = load_registry(tenant_registry_path())
+    if not tenants:
+        return "All-tenant model usage: no tenants are registered."
+    reports: list[str] = []
+    for tenant in tenants:
+        tenant_config = tenant.config()
+        with Storage(tenant_config.db_path) as storage:
+            reports.append(
+                render_usage(
+                    tenant_config,
+                    storage.list_model_usage(limit=max(1, limit_per_tenant)),
+                    heading=f"Tenant {tenant.slug}",
+                )
+            )
+    return "\n\n".join(reports)
 
 
 @server.tool()
