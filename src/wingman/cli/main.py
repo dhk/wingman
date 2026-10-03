@@ -139,6 +139,7 @@ from wingman.application.triage import (
     snooze_action,
     unmute_action,
 )
+from wingman.domain.model_usage import Payer
 from wingman.domain.outreach import OutreachPurpose
 from wingman.domain.person import Person
 from wingman.infrastructure import doctor_deep
@@ -204,6 +205,7 @@ from wingman.providers.router import (
     metered_key,
     model_rejection,
 )
+from wingman.providers.usage import UsageTrackingEmbeddingProvider
 from wingman.reporting.export import (
     export_career,
     export_company,
@@ -1265,7 +1267,9 @@ def demo() -> None:
                 "(keyword-level, no network). Set the key and re-run the demo for "
                 "real semantic quality."
             )
-            embedder = HashedEmbeddingProvider()
+            embedder = UsageTrackingEmbeddingProvider(
+                HashedEmbeddingProvider(), config, Payer.AMBIENT
+            )
         elif embedder is not None and embedder.provider_name == "voyage":
             typer.echo(
                 f"      Sending the fetched public posts to {embedder.provider_name}/"

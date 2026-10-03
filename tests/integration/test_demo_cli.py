@@ -9,6 +9,7 @@ import wingman.application.people as people_module
 from wingman.application.demo import DEMO_WATCHLIST
 from wingman.cli.main import app
 from wingman.infrastructure.config import ENV_DATA_DIR
+from wingman.infrastructure.storage import Storage
 
 runner = CliRunner()
 
@@ -63,6 +64,9 @@ def test_demo_end_to_end_without_any_keys(workspace: Path) -> None:
     # everything lives in the isolated demo workspace, not the real one
     assert (workspace / "demo" / "wingman.db").is_file()
     assert not (workspace / "wingman.db").exists()
+    with Storage(workspace / "demo" / "wingman.db") as storage:
+        usage = storage.list_model_usage()
+    assert any(row.provider == "hashed" and row.capability == "embed_semantic" for row in usage)
 
 
 def test_demo_never_touches_the_real_workspace(workspace: Path) -> None:

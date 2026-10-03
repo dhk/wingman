@@ -70,9 +70,10 @@ def _row_cost(row: ModelUsage, entry: object) -> Decimal | None:
         (row.cache_write_tokens, "cache_write_usd_per_million", Decimal(1_000_000)),
         (row.search_result_count, "search_result_usd", Decimal(1)),
     )
-    populated = [(count, key, divisor) for count, key, divisor in units if count is not None]
-    if not populated:
+    reported = [(count, key, divisor) for count, key, divisor in units if count is not None]
+    if not reported:
         return None
+    populated = [(count, key, divisor) for count, key, divisor in reported if count != 0]
     total = Decimal(0)
     for count, key, divisor in populated:
         price = entry.get(key)

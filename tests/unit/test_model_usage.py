@@ -12,8 +12,9 @@ from wingman.infrastructure.storage import Storage
 from wingman.infrastructure.tenants import Tenant
 from wingman.providers import router
 from wingman.providers.base import CapabilityClass, ModelRequest, ModelResponse, ProviderError
+from wingman.providers.embeddings import EmbeddingError
 from wingman.providers.router import get_provider
-from wingman.providers.usage import UsageTrackingProvider
+from wingman.providers.usage import UsageTrackingEmbeddingProvider, UsageTrackingProvider
 
 
 class _SuccessfulProvider:
@@ -56,6 +57,19 @@ class _RoutedProvider:
             output_tokens=1,
             latency_ms=1,
         )
+
+
+class _SuccessfulEmbeddingProvider:
+    provider_name = "test-embedding"
+    model = "embed-model"
+
+    def embed(self, texts: list[str], input_type: str) -> list[list[float]]:
+        return [[1.0, 0.0] for _text in texts]
+
+
+class _FailingEmbeddingProvider(_SuccessfulEmbeddingProvider):
+    def embed(self, texts: list[str], input_type: str) -> list[list[float]]:
+        raise EmbeddingError("embedding failed")
 
 
 def _config(tmp_path: Path) -> Config:
@@ -107,6 +121,41 @@ def test_recording_failure_never_changes_provider_result(
     response = provider.complete(ModelRequest(system="system", prompt="prompt"))
 
     assert response.text.startswith("private response")
+
+
+def test_successful_embedding_records_one_row_and_preserves_vectors(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    provider = UsageTrackingEmbeddingProvider(_SuccessfulEmbeddingProvider(), config, Payer.AMBIENT)
+
+    vectors = provider.embed(["one", "two"], "document")
+
+    assert vectors == [[1.0, 0.0], [1.0, 0.0]]
+    with Storage(config.db_path) as storage:
+        rows = storage.list_model_usage()
+    assert len(rows) == 1
+    assert rows[0].capability == "embed_semantic"
+    assert rows[0].provider == "test-embedding"
+
+
+def test_failed_embedding_records_no_row(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    provider = UsageTrackingEmbeddingProvider(_FailingEmbeddingProvider(), config, Payer.BYOK)
+
+    with pytest.raises(EmbeddingError):
+        provider.embed(["one"], "document")
+
+    with Storage(config.db_path) as storage:
+        assert storage.list_model_usage() == []
+
+
+def test_embedding_recording_failure_preserves_vectors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    provider = UsageTrackingEmbeddingProvider(_SuccessfulEmbeddingProvider(), config, Payer.AMBIENT)
+    monkeypatch.setattr(Storage, "add_model_usage", lambda *args: (_ for _ in ()).throw(OSError()))
+
+    assert provider.embed(["one"], "query") == [[1.0, 0.0]]
 
 
 def test_prices_are_applied_at_read_time_and_missing_prices_are_not_zero(tmp_path: Path) -> None:
@@ -165,6 +214,33 @@ input_usd_per_million = 99.0
     )
 
     assert price_usage(config, [historical])[0].cost_usd is None
+
+
+def test_zero_usage_counters_do_not_require_prices(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.models_config_path.write_text(
+        """[models.extract_fast]
+provider = "test-provider"
+model = "test-model"
+input_usd_per_million = 1.0
+output_usd_per_million = 2.0
+""",
+        encoding="utf-8",
+    )
+    row = ModelUsage(
+        capability="extract_fast",
+        provider="test-provider",
+        model="test-model",
+        payer=Payer.BYOK,
+        input_tokens=1_000_000,
+        output_tokens=0,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        search_result_count=0,
+        latency_ms=1,
+    )
+
+    assert price_usage(config, [row])[0].cost_usd == Decimal("1.0")
 
 
 def test_tenant_usage_read_does_not_create_a_missing_database(tmp_path: Path) -> None:
