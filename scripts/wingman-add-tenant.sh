@@ -133,14 +133,16 @@ else
       - THEY pay: they add their own key on their Wingman page (the URL
         above), under Manage -> Keys. Nothing on the box changes.
 
-      - YOU pay: put the key in a tier you declare — /etc/wingman/global-secrets.env
-        or the service account's ~/.config/wingman/secrets.env — then add
+      - YOU pay: put the key in a tier you declare —
+        'sudo wingman keys set anthropic --scope global' — then add
         'funded = true' to this tenant's entry in $REGISTRY_PATH and
-        restart the shared process (wg redeploy-shared).
+        apply it with 'wg reload'. That is a SIGHUP, not a restart, so
+        it interrupts nobody. The key itself needs no reload at all: a
+        funded tenant reads it from the file on the next call.
 
     See "Operator-funded inference" in docs/SERVER.md. Either way, tell
     them which — from inside their session the only symptom is a tool that
-    refuses. 'wingman keys where --all-tenants' shows where each stands.
+    refuses. 'wingman tenant keys' shows where each stands.
 
 NOTE
 fi

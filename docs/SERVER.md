@@ -1180,17 +1180,25 @@ An expired key on a shared box is rarely mysterious once you can see the
 tiers. Three commands, run as the account that serves:
 
 ```bash
-wg keys where                  # every tier, its path, and which copy wins
-wg keys where --all-tenants    # the same, per tenant
-wg keys validate               # call the provider with the key actually in use
-wg keys validate --all-tenants
+wg keys where       # THIS account's tiers, and which copy wins
+wg keys validate    # call the provider with the key this account really uses
+wg tenant keys      # what each TENANT uses — a different ladder, see below
+wg tenant validate
 ```
 
-`wg keys` forwards to the `wingman` CLI and says which account it ran as.
-The tenant-scoped flags run it as the account that owns the registry and
-every tenant's `keys.env` — read as anyone else those files come back
-"unreadable", which `keys where` now says plainly instead of reporting
-them absent (#442). Nothing to `sudo -iu` and no `PATH` to export.
+**Two ladders, and picking the wrong one is the usual mistake.** `keys
+where` reports the single-account ladder, which names the host file and
+the process environment. A tenant reads neither. A tenant walks the
+strict RFC-048 ladder — their own `keys.env`, then the box-wide global
+file and only if they are `funded`. Ask about a tenant with `wg tenant
+keys`; `keys where --all-tenants` still exists as a hidden redirect and
+will tell you the same thing.
+
+`wg` forwards to the `wingman` CLI and says which account it ran as.
+`tenant` subcommands run as the account owning the registry and every
+tenant's `keys.env` — read as anyone else those files come back
+"unreadable", which is said plainly rather than reported as absent
+(#442). Nothing to `sudo -iu` and no `PATH` to export.
 
 `keys where` prints a fingerprint per tier — `sk-ant-a...#ac9844 (len
 108)` — never a value. Same digest means the same key; different digests
@@ -1207,10 +1215,33 @@ convenient — writing to a tier that loses leaves the stale key winning
 and nothing looking different:
 
 ```bash
+sudo wingman keys set anthropic --scope global             # /etc/wingman/global-secrets.env
 wingman keys set anthropic --scope host                    # ~/.config/wingman/secrets.env
 wingman keys set anthropic --scope workspace --tenant bob  # one tenant only
 wingman keys set anthropic --scope keychain                # macOS, this account
 ```
+
+### What actually needs a restart
+
+Three different changes, three different answers. They were all documented
+as `wg redeploy-shared`, which is right for one of them and interrupts
+every tenant on the box for the other two (#535).
+
+| You changed | It needs | Why |
+|---|---|---|
+| A key a **funded tenant** uses | nothing | `declared_shared_key` reads the operator's declared files on every call. The next request already has it. |
+| A key **this account's own workspace** uses | a restart | `ensure_env` flattens the tiers into the process environment once, at startup. |
+| The **registry** — a new tenant, `funded`, `privileged` | `wg reload` | SIGHUP swaps the `TenantIndex` in place. No restart, nobody interrupted. |
+
+`wg reload` parses the registry before it signals. That matters because
+the reload handler deliberately swallows its own errors and keeps the
+index it already had — a typo while adding somebody must not take down a
+process serving everyone (#328) — so signalling a malformed registry
+would otherwise look exactly like success.
+
+`wg redeploy-shared` remains the right tool for a code change: it pulls,
+reinstalls, restarts and health-checks. Reach for it when the software
+changed, not when a key or a registry line did.
 
 ## 10. Google Drive push for backups + digests (RFC-053, #205)
 

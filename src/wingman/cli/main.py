@@ -4762,6 +4762,75 @@ def tenant_urls_cmd(
         raise typer.Exit(code=1)
 
 
+@tenant_app.command("reload")
+def tenant_reload() -> None:
+    """Make the running shared process re-read the tenant registry, without
+    restarting it.
+
+    A registry edit — adding a tenant, granting 'funded' or 'privileged' —
+    reaches a running process by SIGHUP, which swaps its TenantIndex in
+    place. Until this existed, the only thing that sent that signal was
+    'tenant rotate-token', so the documented way to apply a one-line
+    registry change was 'wg redeploy-shared': a pull, a reinstall and a
+    restart that briefly interrupts every tenant on the box (#534).
+
+    This parses the registry BEFORE signalling, deliberately. The reload
+    handler swallows its own errors and keeps the index it already had —
+    correct, because a typo while adding somebody must not take down a
+    process serving everyone (#328) — but it means signalling a malformed
+    registry looks exactly like success. Reading it here first turns that
+    silent no-op into a refusal you can act on.
+
+    Changing a KEY needs nothing from this: a funded tenant's key is read
+    from the operator's declared files per call. This is for the registry.
+    """
+    configure_logging()
+    from wingman.infrastructure.tenant_process import (
+        TenantProcessSignalError,
+        signal_reload,
+    )
+    from wingman.infrastructure.tenants import (
+        TenantRegistryError,
+        load_registry,
+        tenant_registry_path,
+    )
+
+    registry = tenant_registry_path()
+    if not registry.exists():
+        # load_registry answers [] for an absent file, which is a valid
+        # startup state but a poor thing to report as "parses cleanly" —
+        # saying a file is fine when it is not there is the same shape of
+        # lie this whole area keeps producing.
+        typer.echo(f"tenant reload failed: no registry at {registry}.", err=True)
+        raise typer.Exit(code=1)
+    try:
+        tenants = load_registry(registry)
+    except TenantRegistryError as exc:
+        typer.echo(f"tenant reload failed: {registry} will not parse — {exc}", err=True)
+        typer.echo("Nothing was signalled; the running process keeps the registry it has.")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        pid = signal_reload(registry)
+    except TenantProcessSignalError as exc:
+        typer.echo(f"tenant reload failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if pid is None:
+        typer.echo(
+            "No running shared process found, so nothing was signalled. "
+            f"{registry} parses cleanly and will be read when one starts."
+        )
+        return
+
+    funded = [t.slug for t in tenants if t.funded]
+    privileged = [t.slug for t in tenants if t.privileged]
+    typer.echo(f"Reloaded pid {pid} from {registry}.")
+    typer.echo(f"  tenants:    {len(tenants)} ({', '.join(t.slug for t in tenants)})")
+    typer.echo(f"  funded:     {', '.join(funded) if funded else 'none'}")
+    typer.echo(f"  privileged: {', '.join(privileged) if privileged else 'none'}")
+
+
 @tenant_app.command("rotate-token")
 def tenant_rotate_token_cmd(
     slug: str = typer.Argument(..., help="The tenant's slug in the registry."),

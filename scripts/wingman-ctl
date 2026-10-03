@@ -578,6 +578,9 @@ cmd_tenant() {
     keys)
       shift
       _run_as_shared tenant keys "$@" ;;
+    reload)
+      shift
+      _run_as_shared tenant reload "$@" ;;
     url)
       [ -n "$slug" ] || { say "usage: $0 tenant url <slug> [--port N] [--tunnel-prefix /path] ..."; return 2; }
       shift 2
@@ -594,6 +597,7 @@ cmd_tenant() {
       _run_as_shared tenant rotate-token "$slug" "$@" ;;
     *)
       say "usage: $0 tenant keys [--tenant <slug>] | tenant validate [--tenant <slug>]"
+      say "       $0 tenant reload   (apply a registry edit; no restart)"
       say "       $0 tenant url <slug> | tenant urls | tenant rotate-token <slug>"
       return 2 ;;
   esac
@@ -610,9 +614,10 @@ case "${1:-}" in
   redeploy-shared) shift; require_no_args redeploy-shared "$@"; cmd_redeploy_shared ;;
   hosts)       shift; cmd_hosts "$@" ;;
   keys)        shift; cmd_keys "$@" ;;
+  reload)      shift; require_no_args reload "$@"; cmd_tenant reload ;;
   tenant)      shift; cmd_tenant "$@" ;;
   *)
-    say "usage: $0 status|hosts|keys|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|redeploy-shared|tenant ..."
+    say "usage: $0 status|hosts|keys|reload|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|redeploy-shared|tenant ..."
     say "  status       what's running, who owns each process, what's safe to stop (YOU only)"
     say "  hosts        every wingman instance on this box: version, uptime, build drift,"
     say "               and whether any is running outside systemd's control (#263)"
@@ -636,6 +641,9 @@ case "${1:-}" in
     say "                              only if funded), never the operator's host file"
     say "  tenant validate [--tenant <slug>]  call the provider with the key that"
     say "                              person actually spends, on the strict ladder"
+    say "  reload       apply a tenant-registry edit to the RUNNING shared process"
+    say "               (SIGHUP, no restart). Changing a KEY needs nothing at all;"
+    say "               only registry edits need this. See 'redeploy-shared' (#534)"
     say "  tenant url <slug>           print a tenant's connector URLs (RFC-048, #209)"
     say "  tenant urls                 the same, for every registered tenant"
     say "  tenant rotate-token <slug>  invalidate + reissue a tenant's token in one step,"
