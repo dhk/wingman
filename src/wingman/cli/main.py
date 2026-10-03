@@ -3456,10 +3456,10 @@ _TENANT_FLAGS_MOVED = (
     "{cmd} answers for ONE ACCOUNT, on the single-account ladder: workspace, "
     "environment, Keychain, host file, global file.\n"
     "A tenant resolves on the strict RFC-048 ladder instead — their own workspace "
-    "file, then the global file only if funded — and never reads this account's host "
-    "file or this process's environment. Reporting one ladder for the other named a "
-    "file no tenant ever consults, so the tenant flags moved rather than staying "
-    "quietly wrong:\n\n  {replacement}\n"
+    "file, then (only if funded, or for the shared GitHub key) the shared process "
+    "account's host file and the global file — and never this process's environment. "
+    "Reporting one ladder for the other named the wrong file, so the tenant flags moved "
+    "rather than staying quietly wrong:\n\n  {replacement}\n"
 )
 
 
@@ -5269,10 +5269,11 @@ def tenant_keys_cmd(
     """Which key each person is actually using — by fingerprint, never by value.
 
     Reports the ladder a TENANT's own process really walks
-    (strict_provider_keys, RFC-048): their workspace 'keys.env', then the
-    box-wide global file only if they are funded. 'wingman keys where'
-    reports the single-account ladder instead, which names the operator's
-    host file — a file no tenant ever reads.
+    (strict_provider_keys, RFC-048): their workspace 'keys.env', then — only
+    if they are funded, or always for the shared GitHub key — the shared
+    process account's host file and the box-wide global file. 'wingman keys
+    where' reports the single-account ladder instead, environment and
+    Keychain included, which no tenant walks.
 
     Tenant workspaces are readable only by the account that owns them, so
     run this AS that account or the rows come back UNREADABLE:
@@ -5298,9 +5299,14 @@ def tenant_keys_cmd(
 
     typer.echo("Strict tenant ladder (RFC-048) - first one present wins:")
     typer.echo("  1. workspace file   <workspace>/keys.env   (this person's own key)")
-    typer.echo("  2. global file      /etc/wingman/global-secrets.env   (only if funded)")
-    typer.echo("\nThe operator host file and process environment are never consulted for a")
-    typer.echo("tenant. A fingerprint is prefix...#digest (len N) - same digest, same key.")
+    typer.echo(
+        "  2. host file        ~/.config/wingman/secrets.env   (this account's; only if funded)"
+    )
+    typer.echo("  3. global file      /etc/wingman/global-secrets.env   (only if funded)")
+    typer.echo("The shared GitHub issues key walks 2 and 3 for every tenant, funded or not.")
+    typer.echo("\nThe process environment is never consulted for a tenant. Run this as the")
+    typer.echo("shared process's own account, so tier 2 is the file that process reads.")
+    typer.echo("A fingerprint is prefix...#digest (len N) - same digest, same key.")
 
     drifted = False
     for entry in tenants:
