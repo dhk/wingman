@@ -167,3 +167,57 @@ def test_keys_validate_names_the_tier_and_fails_loudly(monkeypatch) -> None:
     assert "environment" in result.output
     assert "sk-ant-expired-value" not in result.output
     assert "keys set" in result.output
+
+
+def test_tenant_reload_refuses_when_there_is_no_registry(tmp_path, monkeypatch) -> None:
+    """#534: an absent registry is not 'parses cleanly'. Saying a file is
+    fine when it is not there is the failure this whole area keeps making."""
+    from wingman.infrastructure import tenants as tenants_module
+
+    monkeypatch.setattr(tenants_module, "DEFAULT_REGISTRY_PATH", tmp_path / "nope" / "tenants.toml")
+    result = runner.invoke(app, ["tenant", "reload"])
+    assert result.exit_code == 1
+    assert "no registry at" in result.output
+
+
+def test_tenant_reload_refuses_a_malformed_registry_without_signalling(
+    tmp_path, monkeypatch
+) -> None:
+    """The reload handler swallows its own errors and keeps the index it
+    had (#328), so signalling a broken registry looks exactly like
+    success. Parsing first is what turns that into something actionable."""
+    from wingman.infrastructure import tenant_process as process_module
+    from wingman.infrastructure import tenants as tenants_module
+
+    registry = tmp_path / "tenants.toml"
+    registry.write_text("[[tenant]]\nslug = \nbroken", encoding="utf-8")
+    monkeypatch.setattr(tenants_module, "DEFAULT_REGISTRY_PATH", registry)
+
+    def explode(*args, **kwargs):
+        raise AssertionError("must not signal a registry that will not parse")
+
+    monkeypatch.setattr(process_module, "signal_reload", explode)
+    result = runner.invoke(app, ["tenant", "reload"])
+    assert result.exit_code == 1
+    assert "will not parse" in result.output
+    assert "keeps the registry it has" in result.output
+
+
+def test_tenant_reload_has_help() -> None:
+    result = runner.invoke(app, ["tenant", "reload", "--help"])
+    assert result.exit_code == 0
+    assert "registry" in plain(result.output)
+
+
+def test_keys_set_accepts_global_scope_in_help() -> None:
+    result = runner.invoke(app, ["keys", "set", "--help"])
+    assert result.exit_code == 0
+    for scope in ("keychain", "host", "global", "workspace"):
+        assert scope in plain(result.output)
+
+
+def test_keys_set_rejects_an_unknown_scope_and_lists_global() -> None:
+    result = runner.invoke(app, ["keys", "set", "anthropic", "--value", "x", "--scope", "nope"])
+    assert result.exit_code == 1
+    assert "unknown --scope" in result.output
+    assert "global" in result.output

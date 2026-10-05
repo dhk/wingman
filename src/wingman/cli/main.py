@@ -161,6 +161,7 @@ from wingman.infrastructure.keys import (
     key_status,
     resolve_key_sources,
     set_key,
+    store_global_key,
     store_host_key,
     store_workspace_key,
     test_keys,
@@ -1187,6 +1188,9 @@ def demo() -> None:
     config = Config(
         data_dir=real_config.data_dir / "demo",
         data_dir_source=f"demo workspace inside {real_config.data_dir}",
+        # The demo exists to run on whatever key this person already
+        # exported — the ambient ladder is the feature, not a leak (#532).
+        strict_provider_keys=False,
     )
     for directory in _workspace_dirs(config):
         directory.mkdir(parents=True, exist_ok=True)
@@ -3302,7 +3306,7 @@ def keys_set(
     scope: str = typer.Option(
         "keychain",
         "--scope",
-        help="Where to write it: keychain (default), host, or workspace.",
+        help="Where to write it: keychain (default), host, global, or workspace.",
     ),
     tenant: str = typer.Option(
         "", "--tenant", help="With --scope workspace: which tenant's workspace (operators)."
@@ -3316,7 +3320,9 @@ def keys_set(
     it, and nothing looks different.
 
       --scope keychain   macOS Keychain, this account (default)
-      --scope host       ~/.config/wingman/secrets.env — every consumer on the box
+      --scope host       ~/.config/wingman/secrets.env — every consumer on this account
+      --scope global     /etc/wingman/global-secrets.env — the whole box, and the
+                         fallback every funded tenant spends. Root-owned: needs sudo.
       --scope workspace  this workspace's keys.env — one person only, and it
                          outranks every other tier (BYOK)
 
@@ -3341,9 +3347,10 @@ def keys_set(
             secret = typer.prompt(f"{name} key", hide_input=True)
 
     choice = scope.strip().lower()
-    if choice not in ("keychain", "host", "workspace"):
+    if choice not in ("keychain", "host", "global", "workspace"):
         typer.echo(
-            f"keys set failed: unknown --scope {scope!r}; use keychain, host, or workspace.",
+            f"keys set failed: unknown --scope {scope!r}; "
+            "use keychain, host, global, or workspace.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -3358,6 +3365,18 @@ def keys_set(
         elif choice == "host":
             path = store_host_key(name, secret)
             typer.echo(f"Stored {env_var} in {path} (0600).")
+        elif choice == "global":
+            path, mode, group_readable = store_global_key(name, secret)
+            typer.echo(f"Stored {env_var} in {path} ({mode:04o}).")
+            if not group_readable:
+                # The silent-empty-tier failure, said out loud: this file is
+                # root-owned and every other account reaches it by group.
+                typer.echo(
+                    f"WARNING: {mode:04o} has no group-read bit, so no other account on "
+                    "this box can read this file — the tier will read as UNREADABLE for "
+                    "the service account and every tenant funded from it.",
+                    err=True,
+                )
         else:
             data_dir = load_config().data_dir
             if tenant:
@@ -3437,10 +3456,10 @@ _TENANT_FLAGS_MOVED = (
     "{cmd} answers for ONE ACCOUNT, on the single-account ladder: workspace, "
     "environment, Keychain, host file, global file.\n"
     "A tenant resolves on the strict RFC-048 ladder instead — their own workspace "
-    "file, then the global file only if funded — and never reads this account's host "
-    "file or this process's environment. Reporting one ladder for the other named a "
-    "file no tenant ever consults, so the tenant flags moved rather than staying "
-    "quietly wrong:\n\n  {replacement}\n"
+    "file, then (only if funded, or for the shared GitHub key) the shared process "
+    "account's host file and the global file — and never this process's environment. "
+    "Reporting one ladder for the other named the wrong file, so the tenant flags moved "
+    "rather than staying quietly wrong:\n\n  {replacement}\n"
 )
 
 
@@ -4743,6 +4762,75 @@ def tenant_urls_cmd(
         raise typer.Exit(code=1)
 
 
+@tenant_app.command("reload")
+def tenant_reload() -> None:
+    """Make the running shared process re-read the tenant registry, without
+    restarting it.
+
+    A registry edit — adding a tenant, granting 'funded' or 'privileged' —
+    reaches a running process by SIGHUP, which swaps its TenantIndex in
+    place. Until this existed, the only thing that sent that signal was
+    'tenant rotate-token', so the documented way to apply a one-line
+    registry change was 'wg redeploy-shared': a pull, a reinstall and a
+    restart that briefly interrupts every tenant on the box (#534).
+
+    This parses the registry BEFORE signalling, deliberately. The reload
+    handler swallows its own errors and keeps the index it already had —
+    correct, because a typo while adding somebody must not take down a
+    process serving everyone (#328) — but it means signalling a malformed
+    registry looks exactly like success. Reading it here first turns that
+    silent no-op into a refusal you can act on.
+
+    Changing a KEY needs nothing from this: a funded tenant's key is read
+    from the operator's declared files per call. This is for the registry.
+    """
+    configure_logging()
+    from wingman.infrastructure.tenant_process import (
+        TenantProcessSignalError,
+        signal_reload,
+    )
+    from wingman.infrastructure.tenants import (
+        TenantRegistryError,
+        load_registry,
+        tenant_registry_path,
+    )
+
+    registry = tenant_registry_path()
+    if not registry.exists():
+        # load_registry answers [] for an absent file, which is a valid
+        # startup state but a poor thing to report as "parses cleanly" —
+        # saying a file is fine when it is not there is the same shape of
+        # lie this whole area keeps producing.
+        typer.echo(f"tenant reload failed: no registry at {registry}.", err=True)
+        raise typer.Exit(code=1)
+    try:
+        tenants = load_registry(registry)
+    except TenantRegistryError as exc:
+        typer.echo(f"tenant reload failed: {registry} will not parse — {exc}", err=True)
+        typer.echo("Nothing was signalled; the running process keeps the registry it has.")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        pid = signal_reload(registry)
+    except TenantProcessSignalError as exc:
+        typer.echo(f"tenant reload failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if pid is None:
+        typer.echo(
+            "No running shared process found, so nothing was signalled. "
+            f"{registry} parses cleanly and will be read when one starts."
+        )
+        return
+
+    funded = [t.slug for t in tenants if t.funded]
+    privileged = [t.slug for t in tenants if t.privileged]
+    typer.echo(f"Reloaded pid {pid} from {registry}.")
+    typer.echo(f"  tenants:    {len(tenants)} ({', '.join(t.slug for t in tenants)})")
+    typer.echo(f"  funded:     {', '.join(funded) if funded else 'none'}")
+    typer.echo(f"  privileged: {', '.join(privileged) if privileged else 'none'}")
+
+
 @tenant_app.command("rotate-token")
 def tenant_rotate_token_cmd(
     slug: str = typer.Argument(..., help="The tenant's slug in the registry."),
@@ -5240,20 +5328,95 @@ def _echo_tenant_key_locations(
     return drifted
 
 
+def _echo_tenant_keys_by_fingerprint(entries: list[Tenant]) -> None:
+    """The inverse question: which people share one credential.
+
+    'wingman tenant keys' answers per tenant, which is the right shape for
+    "is this person set up". It is the wrong shape for the question a leak
+    asks — WHO is spending this key — because answering that from per-tenant
+    rows means comparing digests by eye across N blocks (#536).
+
+    Grouped by a full sha256 of the value, not by the displayed fingerprint:
+    that carries six hex digits, and two different keys sharing them would
+    merge into one apparent blast radius. A tenant whose ladder hit an
+    unreadable tier is its own group — the key may be sitting in the file
+    nobody could read, so "not configured" would be a guess.
+    """
+    import hashlib
+
+    from wingman.infrastructure.keys import (
+        KNOWN_KEYS,
+        describe_tenant_key_locations,
+        tenant_key_value,
+    )
+
+    typer.echo("\nGrouped by key — who shares which credential:")
+    for short_name, env_var in KNOWN_KEYS.items():
+        # identity -> (display fingerprint, tiers seen, slugs)
+        spent: dict[str, tuple[str, set[str], list[str]]] = {}
+        unconfigured: list[str] = []
+        unreadable: dict[str, list[str]] = {}
+        for entry in entries:
+            rows = describe_tenant_key_locations(entry.data_dir, entry.funded)[short_name]
+            winner = next((r for r in rows if r.winner), None)
+            if winner is not None and winner.fingerprint is not None:
+                value = tenant_key_value(entry.data_dir, env_var, winner.tier).strip()
+                identity = hashlib.sha256(value.encode("utf-8")).hexdigest()
+                group = spent.setdefault(identity, (winner.fingerprint, set(), []))
+                group[1].add(winner.tier)
+                group[2].append(entry.slug)
+                continue
+            blind = [r.tier for r in rows if not r.readable]
+            if blind:
+                unreadable.setdefault(", ".join(blind), []).append(entry.slug)
+            else:
+                unconfigured.append(entry.slug)
+
+        typer.echo(f"\n  {short_name:11s} {env_var}")
+        # Widest blast radius first; only real credentials compete for it.
+        for fingerprint_value, tiers, slugs in sorted(
+            spent.values(), key=lambda group: (-len(group[2]), group[0])
+        ):
+            typer.echo(f"    {fingerprint_value}")
+            typer.echo(f"      {_tenant_count(slugs):12s} {', '.join(sorted(slugs))}")
+            typer.echo(f"      from {', '.join(sorted(tiers))}")
+        if unconfigured:
+            typer.echo("    (not configured)")
+            typer.echo(f"      {_tenant_count(unconfigured):12s} {', '.join(sorted(unconfigured))}")
+        for blind_tiers, slugs in sorted(unreadable.items()):
+            typer.echo(f"    (cannot tell — unreadable: {blind_tiers})")
+            typer.echo(f"      {_tenant_count(slugs):12s} {', '.join(sorted(slugs))}")
+
+
+def _tenant_count(slugs: list[str]) -> str:
+    return f"{len(slugs)} tenant" + ("s" if len(slugs) != 1 else "")
+
+
 @tenant_app.command("keys")
 def tenant_keys_cmd(
     tenant: str = typer.Option("", "--tenant", help="One tenant by slug. Default: every tenant."),
     all_tenants: bool = typer.Option(
         False, "--all", help="Every tenant in the registry (the default when --tenant is omitted)."
     ),
+    by_key: bool = typer.Option(
+        False,
+        "--by-key",
+        help="Group by credential instead of by person: who shares which key.",
+    ),
 ) -> None:
     """Which key each person is actually using — by fingerprint, never by value.
 
+    '--by-key' inverts it: one block per credential, listing every tenant
+    spending it, widest blast radius first. That is the question a leaked
+    shared key asks, and answering it from per-tenant rows means comparing
+    digests by eye across every block (#536).
+
     Reports the ladder a TENANT's own process really walks
-    (strict_provider_keys, RFC-048): their workspace 'keys.env', then the
-    box-wide global file only if they are funded. 'wingman keys where'
-    reports the single-account ladder instead, which names the operator's
-    host file — a file no tenant ever reads.
+    (strict_provider_keys, RFC-048): their workspace 'keys.env', then — only
+    if they are funded, or always for the shared GitHub key — the shared
+    process account's host file and the box-wide global file. 'wingman keys
+    where' reports the single-account ladder instead, environment and
+    Keychain included, which no tenant walks.
 
     Tenant workspaces are readable only by the account that owns them, so
     run this AS that account or the rows come back UNREADABLE:
@@ -5277,11 +5440,20 @@ def tenant_keys_cmd(
             typer.echo(f"No tenant named {tenant!r} in {registry}.", err=True)
             raise typer.Exit(code=1)
 
+    if by_key:
+        _echo_tenant_keys_by_fingerprint(tenants)
+        return
+
     typer.echo("Strict tenant ladder (RFC-048) - first one present wins:")
     typer.echo("  1. workspace file   <workspace>/keys.env   (this person's own key)")
-    typer.echo("  2. global file      /etc/wingman/global-secrets.env   (only if funded)")
-    typer.echo("\nThe operator host file and process environment are never consulted for a")
-    typer.echo("tenant. A fingerprint is prefix...#digest (len N) - same digest, same key.")
+    typer.echo(
+        "  2. host file        ~/.config/wingman/secrets.env   (this account's; only if funded)"
+    )
+    typer.echo("  3. global file      /etc/wingman/global-secrets.env   (only if funded)")
+    typer.echo("The shared GitHub issues key walks 2 and 3 for every tenant, funded or not.")
+    typer.echo("\nThe process environment is never consulted for a tenant. Run this as the")
+    typer.echo("shared process's own account, so tier 2 is the file that process reads.")
+    typer.echo("A fingerprint is prefix...#digest (len N) - same digest, same key.")
 
     drifted = False
     for entry in tenants:

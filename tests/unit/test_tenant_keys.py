@@ -1,10 +1,13 @@
 """The strict tenant ladder (RFC-048): a tenant reads their own workspace
-file, then the global file only if funded — never the operator's host file.
+file, then — only if funded, or always for the shared GitHub key — the
+shared process account's host file and then the global file. Never the
+process environment.
 
 'keys where' reported the single-account ladder for tenants, which named a
 file no tenant ever reads. These pin the ladder that matches
-'providers.router.metered_key', and the reporting rule that an unreadable
-tier suppresses any winner below it.
+'providers.router.metered_key' and 'feature_request._resolve_github_key',
+and the reporting rule that an unreadable tier suppresses any winner below
+it.
 """
 
 from __future__ import annotations
@@ -104,3 +107,64 @@ def test_unreadable_workspace_suppresses_any_winner(tmp_path):
     assert workspace.winner is False
     # funded fallback is present and readable, but must NOT be crowned
     assert _row(rows, "global").winner is False
+
+
+def _home_with(tmp_path: Path, text: str) -> Path:
+    home = tmp_path / "service-home"
+    _write(home / ".config" / "wingman" / "secrets.env", text)
+    return home
+
+
+def test_a_funded_tenant_spends_the_host_key_before_the_global_one(tmp_path):
+    """'declared_shared_key' reads the host file before the global file, so
+    a funded tenant with no key of their own is billed to the host copy.
+    Reporting workspace → global named the global key as spent while a
+    different one was."""
+    data_dir = tmp_path / "ws"
+    data_dir.mkdir()
+    glob = _write(tmp_path / "global.env", "ANTHROPIC_API_KEY=sk-ant-box-wide\n")
+    home = _home_with(tmp_path, "ANTHROPIC_API_KEY=sk-ant-service-account\n")
+
+    rows = describe_tenant_key_locations(data_dir, funded=True, global_path=glob, home=home)
+
+    assert [r.tier for r in rows["anthropic"]] == [
+        "workspace file",
+        "host file (funded fallback)",
+        "global file (funded fallback)",
+    ]
+    assert _row(rows, "host").winner is True
+    assert _row(rows, "global").winner is False
+
+
+def test_an_unfunded_tenant_still_reaches_the_shared_github_key(tmp_path):
+    """The issues key is access, not spend (#506): every tenant files
+    through the operator's declared copy, funded or not. Reporting it as
+    unconfigured sends somebody to fix a key that works."""
+    data_dir = tmp_path / "ws"
+    data_dir.mkdir()
+    glob = _write(tmp_path / "global.env", "GITHUB_SHARED_ISSUES_KEY=github_pat_shared\n")
+
+    rows = describe_tenant_key_locations(
+        data_dir, funded=False, global_path=glob, home=tmp_path / "empty-home"
+    )
+
+    github = rows["github"]
+    assert [r.tier for r in github] == [
+        "workspace file",
+        "host file (shared)",
+        "global file (shared)",
+    ]
+    assert next(r for r in github if r.winner).tier == "global file (shared)"
+
+
+def test_an_unfunded_tenant_is_never_offered_the_host_model_key(tmp_path):
+    data_dir = tmp_path / "ws"
+    data_dir.mkdir()
+    home = _home_with(tmp_path, "ANTHROPIC_API_KEY=sk-ant-service-account\n")
+
+    rows = describe_tenant_key_locations(
+        data_dir, funded=False, global_path=tmp_path / "none.env", home=home
+    )
+
+    assert [r.tier for r in rows["anthropic"]] == ["workspace file"]
+    assert not any(r.winner for r in rows["anthropic"])

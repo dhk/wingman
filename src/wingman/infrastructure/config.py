@@ -47,15 +47,25 @@ class Config(BaseModel):
     #: file per box and therefore cannot tell two tenants apart — so the
     #: tenant registry sets this explicitly from each entry's own slug.
     operator_name: str | None = None
-    # True only for a per-tenant Config built by a shared multi-tenant
-    # process (RFC-048, infrastructure.tenants.Tenant.config()). Tells
-    # providers.router to resolve keys from these two fields ALONE — never
+    # Resolve metered keys from this Config's own fields ALONE — never
     # keys.resolve_provider_key's env-or-workspace-file fallback, and never
-    # a provider's own internal env read — so a tenant with no key
+    # a provider's own internal env read — so a workspace with no key
     # configured fails loud instead of silently inheriting whatever key
-    # happens to be set in the shared process's environment. False
-    # (default) preserves today's single-tenant/CLI/stdio ladder exactly.
-    strict_provider_keys: bool = False
+    # happens to be set in the process environment (RFC-048).
+    #
+    # True at the class level, deliberately, for exactly the reason
+    # 'privileged' and 'funded' below are False: the value a Config gets
+    # by NOT being thought about must be the one that costs a refusal.
+    # This flag's safe value is the true one, so the default differs from
+    # theirs while the rule is the same. It was False until #532, which is
+    # the odd one out of three flags guarding one boundary — and the
+    # permissive value of the only one that spends somebody else's money.
+    #
+    # The two paths that genuinely want the ambient ladder say so: a solo
+    # install ('load_config' below — their own machine, their own keys)
+    # and the demo workspace, which exists to run on whatever key the
+    # person already exported.
+    strict_provider_keys: bool = True
     #: Where feature requests from this workspace go, when the tenant
     #: registry says so. None means fall back to the host setting and then
     #: the per-workspace file — see application.feature_request (#371).
@@ -191,9 +201,13 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             data_dir=Path(override).expanduser(),
             data_dir_source=f"{ENV_DATA_DIR} environment variable",
             privileged=True,
+            # A solo install: their machine, their exports, their keys.
+            # The ambient ladder is the point here, not a leak (#532).
+            strict_provider_keys=False,
         )
     return Config(
         data_dir=Path(user_data_dir(APP_NAME)),
         data_dir_source="platform user data directory",
         privileged=True,
+        strict_provider_keys=False,  # solo install — see above (#532)
     )

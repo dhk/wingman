@@ -426,27 +426,39 @@ require_no_args() {
 }
 
 _run_as_shared() {
+  # The tenant-owning account, by name. Kept as its own entry point because
+  # every caller but one means exactly this account.
+  _run_as "$SHARED_USER" "$@"
+}
+
+_run_as() {
+  # Re-exec 'wingman <args>' as a NAMED account. Generalised from
+  # _run_as_shared for #537: '--scope host' writes one account's
+  # secrets.env, so it has to name which, and 'the shared one' is only the
+  # commonest answer rather than the only one.
+  #
   # Re-exec 'wingman <args>' as the account that owns the tenant registry
   # and every tenant's keys.env / token file. Extracted from cmd_keys
   # (#444) so 'tenant' gets the identical treatment: every 'wingman tenant'
   # subcommand reads those same shared-account files, and read as anyone
   # else they come back "absent" — a permissions failure wearing a
   # finding's costume (#442).
-  id "$SHARED_USER" >/dev/null 2>&1 || {
-    say "no '$SHARED_USER' account on this box — is the RFC-048 shared process provisioned?"
-    say "(override the name with WINGMAN_SHARED_USER=...)"
+  local who="$1"; shift
+  id "$who" >/dev/null 2>&1 || {
+    say "no '$who' account on this box."
+    [ "$who" = "$SHARED_USER" ] && say "(is the RFC-048 shared process provisioned? override with WINGMAN_SHARED_USER=...)"
     return 1
   }
 
   # Already the owning account: run in-process. Without this, being
   # wingman-shared would still shell out through sudo to reach itself,
   # needing sudo rights the service account has no reason to hold.
-  if [ "$(id -un)" = "$SHARED_USER" ]; then
+  if [ "$(id -un)" = "$who" ]; then
     command -v wingman >/dev/null 2>&1 || {
-      say "no 'wingman' on PATH for $SHARED_USER — run '$0 upgrade-all' first"
+      say "no 'wingman' on PATH for $who — run '$0 upgrade-all' first"
       return 127
     }
-    say "→ as $SHARED_USER (this account already owns the tenant files)"
+    say "→ as $who (already this account)"
     wingman "$@"
     return $?
   fi
@@ -461,19 +473,19 @@ _run_as_shared() {
   # would read this account's ~/.config/wingman/secrets.env while announcing
   # it ran as somebody else. Silently answering about the wrong account is
   # the exact failure #442 exists to stop.
-  local shared_home bin
-  shared_home="$(_home_of "$SHARED_USER")"
-  [ -n "$shared_home" ] || {
-    say "cannot resolve $SHARED_USER's home directory — is the account complete?"
+  local target_home bin
+  target_home="$(_home_of "$who")"
+  [ -n "$target_home" ] || {
+    say "cannot resolve $who's home directory — is the account complete?"
     return 1
   }
-  bin="$shared_home/.local/bin/wingman"
-  sudo -H -u "$SHARED_USER" test -x "$bin" || {
+  bin="$target_home/.local/bin/wingman"
+  sudo -H -u "$who" test -x "$bin" || {
     say "no wingman at $bin — run '$0 upgrade-all' first"
     return 127
   }
-  say "→ as $SHARED_USER (owns the tenant registry and every tenant's keys.env)"
-  sudo -H -u "$SHARED_USER" "$bin" "$@"
+  say "→ as $who ($target_home)"
+  sudo -H -u "$who" "$bin" "$@"
 }
 
 cmd_keys() {
@@ -488,12 +500,52 @@ cmd_keys() {
   # Unlike 'tenant', this routes CONDITIONALLY: 'wg keys where' with no
   # flags is a question about the caller's OWN account, and answering it as
   # somebody else would be the same wrong-account bug in reverse.
-  local as_shared=0 arg
+  local as_shared=0 arg scope_host=0 named_account=0 prev=""
   for arg in "$@"; do
     case "$arg" in
       --all-tenants|--tenant|--tenant=*) as_shared=1 ;;
+      # '--scope host' writes ~/.config/wingman/secrets.env, and WHOSE home
+      # that is decides everything. Run as the caller it writes the caller's
+      # file and reports success, while the operator believes they set the
+      # box default -- the third outing for one bug (#442 called an
+      # unreadable tier absent; #447 wrote the caller's HOME under sudo -u;
+      # this is #537). An account-scoped write must name its account.
+      host) [ "$prev" = "--scope" ] && scope_host=1 ;;
+      --scope=host) scope_host=1 ;;
+      --as|--as=*) named_account=1 ;;
+    esac
+    prev="$arg"
+  done
+
+  if [ "$scope_host" -eq 1 ] && [ "$named_account" -eq 0 ]; then
+    say "$0 keys set --scope host: name the account whose file to write."
+    say "  this account:   $0 keys set <name> --scope host --as $(id -un)"
+    say "  the shared one: $0 keys set <name> --scope host --as $SHARED_USER"
+    say "Refusing rather than guessing: '--scope host' writes one account's"
+    say "secrets.env, and writing the wrong one looks exactly like success."
+    return 2
+  fi
+
+  # '--as <account>' is wingman-ctl's own flag: it picks whose CLI runs, and
+  # is stripped before forwarding so the Python side never sees it.
+  local target="" forwarded=() skip_next=0
+  for arg in "$@"; do
+    if [ "$skip_next" -eq 1 ]; then target="$arg"; skip_next=0; continue; fi
+    case "$arg" in
+      --as)   skip_next=1 ;;
+      --as=*) target="${arg#--as=}" ;;
+      *)      forwarded+=("$arg") ;;
     esac
   done
+  if [ -n "$target" ]; then
+    set -- ${forwarded[@]+"${forwarded[@]}"}
+    if [ "$target" = "$(id -un)" ]; then
+      as_shared=0
+    else
+      _run_as "$target" keys "$@"
+      return $?
+    fi
+  fi
 
   if [ "$as_shared" -eq 0 ]; then
     command -v wingman >/dev/null 2>&1 || {
@@ -526,6 +578,9 @@ cmd_tenant() {
     keys)
       shift
       _run_as_shared tenant keys "$@" ;;
+    reload)
+      shift
+      _run_as_shared tenant reload "$@" ;;
     url)
       [ -n "$slug" ] || { say "usage: $0 tenant url <slug> [--port N] [--tunnel-prefix /path] ..."; return 2; }
       shift 2
@@ -542,6 +597,7 @@ cmd_tenant() {
       _run_as_shared tenant rotate-token "$slug" "$@" ;;
     *)
       say "usage: $0 tenant keys [--tenant <slug>] | tenant validate [--tenant <slug>]"
+      say "       $0 tenant reload   (apply a registry edit; no restart)"
       say "       $0 tenant url <slug> | tenant urls | tenant rotate-token <slug>"
       return 2 ;;
   esac
@@ -558,9 +614,10 @@ case "${1:-}" in
   redeploy-shared) shift; require_no_args redeploy-shared "$@"; cmd_redeploy_shared ;;
   hosts)       shift; cmd_hosts "$@" ;;
   keys)        shift; cmd_keys "$@" ;;
+  reload)      shift; require_no_args reload "$@"; cmd_tenant reload ;;
   tenant)      shift; cmd_tenant "$@" ;;
   *)
-    say "usage: $0 status|hosts|keys|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|redeploy-shared|tenant ..."
+    say "usage: $0 status|hosts|keys|reload|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|redeploy-shared|tenant ..."
     say "  status       what's running, who owns each process, what's safe to stop (YOU only)"
     say "  hosts        every wingman instance on this box: version, uptime, build drift,"
     say "               and whether any is running outside systemd's control (#263)"
@@ -584,6 +641,9 @@ case "${1:-}" in
     say "                              only if funded), never the operator's host file"
     say "  tenant validate [--tenant <slug>]  call the provider with the key that"
     say "                              person actually spends, on the strict ladder"
+    say "  reload       apply a tenant-registry edit to the RUNNING shared process"
+    say "               (SIGHUP, no restart). Changing a KEY needs nothing at all;"
+    say "               only registry edits need this. See 'redeploy-shared' (#534)"
     say "  tenant url <slug>           print a tenant's connector URLs (RFC-048, #209)"
     say "  tenant urls                 the same, for every registered tenant"
     say "  tenant rotate-token <slug>  invalidate + reissue a tenant's token in one step,"
