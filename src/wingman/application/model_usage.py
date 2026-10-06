@@ -86,6 +86,11 @@ def _row_cost(row: ModelUsage, entry: object) -> Decimal | None:
         (row.cache_write_tokens, "cache_write_usd_per_million", Decimal(1_000_000)),
         (row.search_result_count, "search_result_usd", Decimal(1)),
     )
+    # A configured billing dimension is part of this model's known price
+    # formula. If the provider omitted that counter, the usage is unknown —
+    # not zero — so a partial total would understate spend.
+    if any(count is None and key in entry for count, key, _divisor in units):
+        return None
     reported = [(count, key, divisor) for count, key, divisor in units if count is not None]
     if not reported:
         return None

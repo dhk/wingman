@@ -372,9 +372,21 @@ def usage_all_tenants(limit_per_tenant: int = 100) -> str:
     refusal = operator_only_refusal(config, "usage_all_tenants")
     if refusal:
         return refusal
-    from wingman.infrastructure.tenants import load_registry, tenant_registry_path
+    from wingman.infrastructure.tenants import (
+        TenantRegistryError,
+        load_registry,
+        tenant_registry_path,
+    )
 
-    tenants = load_registry(tenant_registry_path())
+    registry_path = tenant_registry_path()
+    try:
+        tenants = load_registry(registry_path)
+    except TenantRegistryError as exc:
+        return (
+            f"Could not read the tenant registry ({registry_path}): {exc}. "
+            "No tenant workspaces were read or changed. Repair the registry contents or "
+            "permissions, then try again."
+        )
     if not tenants:
         return "All-tenant model usage: no tenants are registered."
     reports: list[str] = []

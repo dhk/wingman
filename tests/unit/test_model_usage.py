@@ -243,6 +243,39 @@ output_usd_per_million = 2.0
     assert price_usage(config, [row])[0].cost_usd == Decimal("1.0")
 
 
+@pytest.mark.parametrize(
+    ("rate_key", "usage_overrides"),
+    [
+        ("output_usd_per_million", {"output_tokens": None}),
+        ("search_result_usd", {"search_result_count": None}),
+    ],
+)
+def test_missing_configured_billing_counter_is_unpriced(
+    tmp_path: Path, rate_key: str, usage_overrides: dict[str, int | None]
+) -> None:
+    config = _config(tmp_path)
+    config.models_config_path.write_text(
+        f"""[models.extract_fast]
+provider = "test-provider"
+model = "test-model"
+input_usd_per_million = 1.0
+{rate_key} = 2.0
+""",
+        encoding="utf-8",
+    )
+    row = ModelUsage(
+        capability="extract_fast",
+        provider="test-provider",
+        model="test-model",
+        payer=Payer.BYOK,
+        input_tokens=1_000_000,
+        latency_ms=1,
+        **usage_overrides,
+    )
+
+    assert price_usage(config, [row])[0].cost_usd is None
+
+
 def test_unreadable_models_file_is_not_reported_as_missing_prices(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

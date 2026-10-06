@@ -13,6 +13,7 @@ from wingman.mcp_server import (
     ingest_resume_text,
     server,
     status,
+    usage_all_tenants,
 )
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
@@ -133,6 +134,29 @@ def test_tools_report_uninitialized_workspace(
     assert "not initialized" in status()
     assert "not initialized" in evidence("anything")
     assert "not initialized" in career_profile()
+
+
+def test_usage_all_tenants_reports_registry_failure_without_tool_exception(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure import tenants
+    from wingman.infrastructure.tenants import TenantRegistryError
+
+    registry_path = tmp_path / "tenants.toml"
+
+    def fail_registry(path: Path) -> list[tenants.Tenant]:
+        assert path == registry_path
+        raise TenantRegistryError("registry is malformed")
+
+    monkeypatch.setattr(tenants, "tenant_registry_path", lambda: registry_path)
+    monkeypatch.setattr(tenants, "load_registry", fail_registry)
+
+    result = usage_all_tenants()
+
+    assert f"Could not read the tenant registry ({registry_path})" in result
+    assert "registry is malformed" in result
+    assert "No tenant workspaces were read or changed" in result
+    assert "contents or permissions" in result
 
 
 def test_changelog_reports_curated_titles_without_a_workspace(
