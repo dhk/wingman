@@ -130,9 +130,8 @@ def read_tenant_process_pid(
 def signal_reload(registry_path: Path, command_of: CommandOf = _ps_command_of) -> int | None:
     """Send SIGHUP to the running shared process so it reloads its
     TenantIndex from disk. Returns the signaled pid, or None if no
-    verified-live shared process was found (the new token is still
-    written either way — it just won't be recognized until the process
-    starts or is otherwise reloaded)."""
+    verified-live shared process was found. The caller owns any state written
+    before this generic reload operation and must report its exact status."""
     pid = read_tenant_process_pid(registry_path, command_of=command_of)
     if pid is None:
         return None
@@ -150,8 +149,7 @@ def signal_reload(registry_path: Path, command_of: CommandOf = _ps_command_of) -
         # operator looking for a process that is running fine.
         raise TenantProcessSignalError(
             f"the shared process (pid {pid}) is running but this account may not signal it "
-            "— rerun as its owner (or via the redeploy script, which runs as root). The new "
-            "token is written; it just will not be recognized until that process reloads."
+            "— rerun as its owner or use `wg reload`. Nothing was reloaded."
         ) from None
     return pid
 

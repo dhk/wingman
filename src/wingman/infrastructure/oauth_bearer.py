@@ -36,6 +36,8 @@ import fcntl
 import json
 import os
 import tempfile
+import threading
+import time
 import tomllib
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -69,6 +71,11 @@ ALLOWED_ALGORITHMS = ("RS256", "ES256")
 
 #: Seconds of clock skew tolerated on 'exp'.
 _LEEWAY_SECONDS = 30
+
+# An attacker controls ``kid``. Without a shared miss cooldown, every novel
+# value makes PyJWKClient refresh the issuer synchronously, turning this
+# endpoint into an outbound-request amplifier and consuming the worker pool.
+_UNKNOWN_KEY_REFRESH_COOLDOWN_SECONDS = 30.0
 
 _WELL_KNOWN = "/.well-known/oauth-protected-resource"
 
@@ -145,7 +152,12 @@ def build_oauth_settings(
     return OAuthSettings(issuer=issuer, audience=audience, jwks_uri=jwks_uri, scopes=scopes)
 
 
-def jwks_key_resolver(jwks_uri: str) -> KeyResolver:
+def jwks_key_resolver(
+    jwks_uri: str,
+    *,
+    refresh_cooldown_seconds: float = _UNKNOWN_KEY_REFRESH_COOLDOWN_SECONDS,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> KeyResolver:
     """A resolver backed by the issuer's published JWKS.
 
     PyJWKClient caches fetched keys, but its first fetch (and any refresh on
@@ -154,9 +166,47 @@ def jwks_key_resolver(jwks_uri: str) -> KeyResolver:
     request, not the event loop every other tenant shares.
     """
     client = jwt.PyJWKClient(jwks_uri, cache_keys=True, timeout=5)
+    keys_by_id: dict[str, Any] = {}
+    refresh_lock = threading.Lock()
+    refresh_after = 0.0
 
     def resolve(token: str) -> Any:
-        return client.get_signing_key_from_jwt(token).key
+        nonlocal refresh_after
+        header = jwt.get_unverified_header(token)
+        algorithm = header.get("alg")
+        key_id = header.get("kid")
+        if algorithm not in ALLOWED_ALGORITHMS:
+            raise jwt.InvalidAlgorithmError("token algorithm is not allowed")
+        if not isinstance(key_id, str) or not key_id:
+            raise jwt.PyJWKClientError("token header has no usable kid")
+
+        cached = keys_by_id.get(key_id)
+        if cached is not None:
+            return cached
+
+        # Single-flight both the fetch and a failed/unknown-key cooldown.
+        # Cached valid keys bypass this lock and remain usable during an
+        # issuer outage or an attack made of novel key ids.
+        with refresh_lock:
+            cached = keys_by_id.get(key_id)
+            if cached is not None:
+                return cached
+            now = monotonic()
+            if now < refresh_after:
+                raise jwt.PyJWKClientError("unknown kid; JWKS refresh is cooling down")
+            try:
+                signing_keys = client.get_signing_keys(refresh=True)
+                for signing_key in signing_keys:
+                    if isinstance(signing_key.key_id, str) and signing_key.key_id:
+                        keys_by_id[signing_key.key_id] = signing_key.key
+            except Exception:
+                refresh_after = monotonic() + refresh_cooldown_seconds
+                raise
+            cached = keys_by_id.get(key_id)
+            if cached is None:
+                refresh_after = monotonic() + refresh_cooldown_seconds
+                raise jwt.PyJWKClientError("unable to find a signing key for token kid")
+            return cached
 
     return resolve
 
@@ -196,7 +246,14 @@ def validate_access_token(
     if not isinstance(subject, str) or not subject:
         raise BearerError("empty-subject")
     raw_scope = claims.get("scope", claims.get("scp", ""))
-    scopes = tuple(raw_scope.split()) if isinstance(raw_scope, str) else tuple(raw_scope or ())
+    if isinstance(raw_scope, str):
+        scopes = tuple(raw_scope.split())
+    elif isinstance(raw_scope, (list, tuple)) and all(
+        isinstance(scope, str) for scope in raw_scope
+    ):
+        scopes = tuple(raw_scope)
+    else:
+        raise BearerError("malformed-scope")
     return BearerIdentity(issuer=settings.issuer, subject=subject, scopes=scopes)
 
 
@@ -289,26 +346,51 @@ def _identity_map_lock(path: Path) -> Iterator[None]:
         os.close(fd)
 
 
-def bind_trusted_identity(path: Path, issuer: str, subject: str, slug: str) -> bool:
-    """Atomically bind one operator-approved identity; False means already exact."""
+def _identity_map_or_empty(path: Path) -> IdentityMap:
+    try:
+        return IdentityMap.from_toml(path)
+    except IdentityMapError as exc:
+        if not isinstance(exc.__cause__, FileNotFoundError):
+            raise
+        return IdentityMap({})
+
+
+def _validate_binding(identities: IdentityMap, issuer: str, subject: str, slug: str) -> bool:
+    """Return whether a write is needed; reject an ambiguous reassignment."""
     if not issuer or not subject or not slug:
         raise IdentityMapError("issuer, subject and slug must be non-empty")
+    existing = identities.entries().get((issuer, subject))
+    if existing == slug:
+        return False
+    if existing is not None:
+        raise IdentityMapError(
+            f"identity ({issuer!r}, {subject!r}) is already bound to {existing!r}"
+        )
+    return True
+
+
+def preflight_trusted_identity(path: Path, issuer: str, subject: str, slug: str) -> bool:
+    """Validate a proposed binding under the writer lock without changing the map.
+
+    This is used before tenant provisioning. A corrupt map or an identity already
+    owned by another tenant therefore cannot leave a workspace and registry row
+    behind with no usable login. False means the exact binding already exists.
+    """
+    try:
+        with _identity_map_lock(path):
+            return _validate_binding(_identity_map_or_empty(path), issuer, subject, slug)
+    except OSError as exc:
+        raise IdentityMapError(f"identity map {path} cannot be locked safely: {exc}") from exc
+
+
+def bind_trusted_identity(path: Path, issuer: str, subject: str, slug: str) -> bool:
+    """Atomically bind one operator-approved identity; False means already exact."""
     with _identity_map_lock(path):
-        try:
-            identities = IdentityMap.from_toml(path)
-        except IdentityMapError as exc:
-            if not isinstance(exc.__cause__, FileNotFoundError):
-                raise
-            identities = IdentityMap({})
+        identities = _identity_map_or_empty(path)
+        if not _validate_binding(identities, issuer, subject, slug):
+            return False
         entries = identities.entries()
         key = (issuer, subject)
-        existing = entries.get(key)
-        if existing == slug:
-            return False
-        if existing is not None:
-            raise IdentityMapError(
-                f"identity ({issuer!r}, {subject!r}) is already bound to {existing!r}"
-            )
         entries[key] = slug
         lines: list[str] = []
         for (row_issuer, row_subject), row_slug in sorted(entries.items()):

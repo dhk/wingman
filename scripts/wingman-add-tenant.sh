@@ -121,6 +121,22 @@ fi
 
 validate_oauth_identities_path
 
+# Check the shared identity map before creating the workspace or registry row.
+# The final bind repeats this under the same writer lock. If another operator
+# claims the identity after preflight, that bind refuses rather than silently
+# reassigning it.
+if [ "$oauth_fields" -eq 3 ]; then
+  say "preflighting the trusted OAuth identity"
+  sudo -iu "$SERVICE_USER" env \
+    PATH="/home/$SERVICE_USER/.local/bin:$PATH" \
+    wingman tenant oauth-bind "$SLUG" \
+      --issuer "$OAUTH_ISSUER" \
+      --subject "$OAUTH_SUBJECT" \
+      --identities "$OAUTH_IDENTITIES" \
+      --registry "$REGISTRY_PATH" \
+      --preflight
+fi
+
 if [ ! -f "$REGISTRY_PATH" ]; then
   echo "no registry at $REGISTRY_PATH — run wingman-provision-shared.sh first" >&2
   exit 1

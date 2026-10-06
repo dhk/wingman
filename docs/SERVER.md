@@ -807,7 +807,11 @@ sudo scripts/wingman-add-tenant.sh taylor --no-telemetry \
 
 The identity-map file must be readable and writable by `wingman-shared`, and
 its parent directory must be writable so bindings can be replaced atomically.
-The provisioning script checks this before creating the workspace.
+Before creating the workspace or registry row, the provisioning script takes
+the identity-map writer lock and preflights the exact `(iss, sub, slug)`
+binding. A malformed map or an identity already bound to another tenant is
+therefore refused before any tenant state is created. The final bind repeats
+the check under the same lock before writing.
 
 For an existing tenant, preserve their workspace and add only the binding:
 
@@ -823,7 +827,10 @@ The identity map is replaced atomically with mode `0600`, and the running
 shared server reloads it without a restart. Repeating the same binding is
 idempotent; trying to bind the same identity to another tenant is refused.
 Unknown authenticated identities remain unprovisioned. Do not use email as
-the key and do not copy a `sub` from an unverified source.
+the key and do not copy a `sub` from an unverified source. If the binding is
+written but the operator cannot signal the running process, the command exits
+nonzero and says that the on-disk map changed while the live process still has
+the previous map; it does not misreport that state as "no process found."
 
 `--telemetry` / `--no-telemetry` decide RFC-023's local usage journal for
 that tenant. **With neither flag it asks**, and with neither flag and no

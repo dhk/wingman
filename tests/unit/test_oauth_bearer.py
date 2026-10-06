@@ -10,15 +10,20 @@ The properties that matter, each tested directly rather than assumed:
 from __future__ import annotations
 
 import asyncio
+import json
+import threading
 import time
 from collections.abc import MutableMapping
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 import httpx
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
@@ -34,6 +39,7 @@ from wingman.infrastructure.oauth_bearer import (
     OAuthSettings,
     bind_oauth_routing,
     build_oauth_settings,
+    jwks_key_resolver,
 )
 from wingman.infrastructure.tenant_asgi import bind_tenant_routing
 from wingman.infrastructure.tenants import Tenant, TenantIndex
@@ -46,6 +52,7 @@ SETTINGS = OAuthSettings(
 
 _KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 _OTHER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+_EC_KEY = ec.generate_private_key(ec.SECP256R1())
 
 
 class _Inner:
@@ -68,6 +75,7 @@ def _token(
     *,
     key: Any = _KEY,
     algorithm: str = "RS256",
+    headers: dict[str, Any] | None = None,
     **overrides: Any,
 ) -> str:
     claims: dict[str, Any] = {
@@ -78,7 +86,7 @@ def _token(
     }
     claims.update(overrides)
     claims = {k: v for k, v in claims.items() if v is not None}
-    return jwt.encode(claims, key, algorithm=algorithm)
+    return jwt.encode(claims, key, algorithm=algorithm, headers=headers)
 
 
 def _tenant(tmp_path: Path, slug: str, token: str) -> Tenant:
@@ -94,6 +102,8 @@ class _World:
         tmp_path: Path,
         inner: _Inner | None = None,
         resolve_key: Any = None,
+        settings: OAuthSettings = SETTINGS,
+        raise_server_exceptions: bool = True,
     ) -> None:
         tmp_path.mkdir(parents=True, exist_ok=True)
         self.inner = inner or _Inner()
@@ -118,10 +128,10 @@ class _World:
             "/mcp",
             self.index,
             self.identities,
-            SETTINGS,
+            settings,
             resolve_key or (lambda _token: _KEY.public_key()),
         )
-        self.client = TestClient(self.app)
+        self.client = TestClient(self.app, raise_server_exceptions=raise_server_exceptions)
 
     def get(self, token: str | None = None, **kwargs: Any) -> httpx.Response:
         headers = dict(kwargs.pop("headers", {}))
@@ -283,6 +293,151 @@ def test_a_failing_key_lookup_fails_closed_not_500(tmp_path: Path) -> None:
     response = TestClient(world.app).get(
         "/mcp", headers={"Authorization": f"Bearer {_token('sub-jason')}"}
     )
+    assert response.status_code == 401
+    assert world.inner.calls == 0
+
+
+@pytest.mark.parametrize("scope", [1, {"mcp": True}, ["mcp", 7]])
+def test_a_malformed_scope_claim_is_refused_before_the_inner_app_runs(
+    tmp_path: Path, scope: object
+) -> None:
+    world = _World(tmp_path, raise_server_exceptions=False)
+
+    response = world.get(_token("sub-jason", scope=scope))
+
+    assert response.status_code == 401
+    assert 'error="invalid_token"' in response.headers["www-authenticate"]
+    assert world.inner.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [
+        ({}, ()),
+        ({"scope": "mcp profile"}, ("mcp", "profile")),
+        ({"scope": ["mcp", "profile"]}, ("mcp", "profile")),
+        ({"scp": ("mcp",)}, ("mcp",)),
+    ],
+)
+def test_supported_scope_claim_shapes_are_normalized(
+    claim: dict[str, object], expected: tuple[str, ...]
+) -> None:
+    from wingman.infrastructure.oauth_bearer import validate_access_token
+
+    identity = validate_access_token(
+        _token("sub-jason", **claim), SETTINGS, lambda _token: _KEY.public_key()
+    )
+
+    assert identity.scopes == expected
+
+
+class _JwksState:
+    def __init__(self, keys: list[dict[str, Any]]) -> None:
+        self.keys = keys
+        self.status = 200
+        self.requests = 0
+        self.lock = threading.Lock()
+
+
+@contextmanager
+def _jwks_server(state: _JwksState) -> Any:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 — stdlib callback name
+            with state.lock:
+                state.requests += 1
+                status = state.status
+                body = json.dumps({"keys": state.keys}).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield f"http://{host}:{port}/jwks"
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+
+def _public_jwk(key: Any, kid: str, algorithm: str) -> dict[str, Any]:
+    algorithm_class = jwt.algorithms.get_default_algorithms()[algorithm]
+    jwk = algorithm_class.to_jwk(key.public_key(), as_dict=True)
+    return {**jwk, "kid": kid, "alg": algorithm, "use": "sig"}
+
+
+@pytest.mark.parametrize(
+    ("key", "kid", "algorithm"),
+    [(_KEY, "rsa-key", "RS256"), (_EC_KEY, "ec-key", "ES256")],
+)
+def test_the_production_jwks_resolver_accepts_supported_keys_end_to_end(
+    tmp_path: Path, key: Any, kid: str, algorithm: str
+) -> None:
+    state = _JwksState([_public_jwk(key, kid, algorithm)])
+    with _jwks_server(state) as uri:
+        settings = OAuthSettings(issuer=ISSUER, audience=AUDIENCE, jwks_uri=uri)
+        world = _World(tmp_path, settings=settings, resolve_key=jwks_key_resolver(uri))
+
+        response = world.get(
+            _token("sub-jason", key=key, algorithm=algorithm, headers={"kid": kid})
+        )
+
+    assert response.status_code == 200
+    assert response.text == str(world.jason.data_dir)
+    assert state.requests == 1
+
+
+def test_unknown_kids_share_one_failed_refresh_during_the_cooldown() -> None:
+    state = _JwksState([_public_jwk(_KEY, "known", "RS256")])
+    with _jwks_server(state) as uri:
+        resolver = jwks_key_resolver(uri)
+        tokens = [_token(headers={"kid": f"unknown-{position}"}) for position in range(12)]
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            results = list(executor.map(lambda token: _resolve_error(resolver, token), tokens))
+
+    assert all(isinstance(result, jwt.PyJWKClientError) for result in results)
+    assert state.requests == 1
+
+
+def _resolve_error(resolver: Any, token: str) -> Exception | None:
+    try:
+        resolver(token)
+    except Exception as exc:  # noqa: BLE001 — test captures the resolver contract
+        return exc
+    return None
+
+
+def test_a_cached_valid_key_still_works_during_an_unknown_key_cooldown() -> None:
+    state = _JwksState([_public_jwk(_KEY, "known", "RS256")])
+    known = _token(headers={"kid": "known"})
+    unknown = _token(headers={"kid": "unknown"})
+    with _jwks_server(state) as uri:
+        resolver = jwks_key_resolver(uri)
+        assert resolver(known) is not None
+        with pytest.raises(jwt.PyJWKClientError):
+            resolver(unknown)
+        before_cached_lookup = state.requests
+        assert resolver(known) is not None
+
+    assert state.requests == before_cached_lookup
+
+
+def test_a_jwks_outage_is_a_401_and_never_reaches_the_inner_app(tmp_path: Path) -> None:
+    state = _JwksState([_public_jwk(_KEY, "known", "RS256")])
+    state.status = 503
+    with _jwks_server(state) as uri:
+        settings = OAuthSettings(issuer=ISSUER, audience=AUDIENCE, jwks_uri=uri)
+        world = _World(tmp_path, settings=settings, resolve_key=jwks_key_resolver(uri))
+        response = world.get(_token(headers={"kid": "known"}))
+
     assert response.status_code == 401
     assert world.inner.calls == 0
 

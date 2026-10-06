@@ -347,7 +347,8 @@ def test_a_process_we_may_not_signal_says_so_instead_of_not_found(
 
     monkeypatch.setattr(os, "kill", not_permitted)
     try:
-        with pytest.raises(TenantProcessSignalError, match="may not signal it"):
+        with pytest.raises(TenantProcessSignalError, match="may not signal it") as raised:
             signal_reload(registry, command_of=command_of)
+        assert "new token" not in str(raised.value).lower()
     finally:
         clear_tenant_pidfile(registry)

@@ -137,6 +137,107 @@ def test_malformed_identity_map_is_preserved(tmp_path: Path) -> None:
     assert identities.read_text(encoding="utf-8") == malformed
 
 
+def test_preflight_checks_a_new_tenant_binding_without_needing_registry_state(
+    tmp_path: Path,
+) -> None:
+    identities = tmp_path / "oauth-identities.toml"
+
+    result = cli.invoke(
+        app,
+        [
+            "tenant",
+            "oauth-bind",
+            "not-created-yet",
+            "--issuer",
+            ISSUER,
+            "--subject",
+            "user_123",
+            "--identities",
+            str(identities),
+            "--registry",
+            str(tmp_path / "absent-registry.toml"),
+            "--preflight",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "available" in result.output
+    assert not identities.exists()
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ("[[identity]\n", "not valid TOML"),
+        (
+            f'[[identity]]\niss = "{ISSUER}"\nsub = "user_123"\nslug = "somebody-else"\n',
+            "already bound to 'somebody-else'",
+        ),
+    ],
+)
+def test_preflight_refuses_bad_or_unavailable_bindings_without_changing_the_map(
+    tmp_path: Path, body: str, message: str
+) -> None:
+    identities = tmp_path / "oauth-identities.toml"
+    identities.write_text(body, encoding="utf-8")
+
+    result = cli.invoke(
+        app,
+        [
+            "tenant",
+            "oauth-bind",
+            "new-person",
+            "--issuer",
+            ISSUER,
+            "--subject",
+            "user_123",
+            "--identities",
+            str(identities),
+            "--preflight",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert message in result.output
+    assert identities.read_text(encoding="utf-8") == body
+
+
+def test_oauth_binding_reports_when_disk_changed_but_live_reload_was_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure import tenant_process
+
+    registry = _registry(tmp_path, "jason")
+    identities = tmp_path / "oauth-identities.toml"
+
+    def denied(_registry: Path) -> int | None:
+        raise tenant_process.TenantProcessSignalError("process is running but signal was denied")
+
+    monkeypatch.setattr(tenant_process, "signal_reload", denied)
+    result = cli.invoke(
+        app,
+        [
+            "tenant",
+            "oauth-bind",
+            "jason",
+            "--issuer",
+            ISSUER,
+            "--subject",
+            "user_123",
+            "--identities",
+            str(identities),
+            "--registry",
+            str(registry),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Binding is on disk" in result.output
+    assert "running process still uses the previous identity map" in result.output
+    assert "No running shared process found" not in result.output
+    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "jason"
+
+
 def test_concurrent_bindings_serialize_the_read_modify_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

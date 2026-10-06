@@ -4617,6 +4617,11 @@ def tenant_oauth_bind_cmd(
     registry: Path | None = typer.Option(
         None, "--registry", help="Tenant registry path (default: host setting)."
     ),
+    preflight: bool = typer.Option(
+        False,
+        "--preflight",
+        help="Validate identity-map availability without changing tenant or identity state.",
+    ),
 ) -> None:
     """Bind one operator-trusted OAuth identity to an existing tenant.
 
@@ -4625,11 +4630,27 @@ def tenant_oauth_bind_cmd(
     a workspace, and no email, privilege, or funded access is inferred.
     """
     configure_logging()
-    from wingman.infrastructure.oauth_bearer import IdentityMapError, bind_trusted_identity
+    from wingman.infrastructure.oauth_bearer import (
+        IdentityMapError,
+        bind_trusted_identity,
+        preflight_trusted_identity,
+    )
     from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
 
-    _tenant, registry_path = _load_tenant_or_exit(slug, registry)
     identity_path = identities.expanduser()
+    if preflight:
+        try:
+            changed = preflight_trusted_identity(identity_path, issuer, subject, slug)
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        if changed:
+            typer.echo(f"Trusted OAuth identity is available to bind to {slug!r}.")
+        else:
+            typer.echo(f"That trusted OAuth identity is already bound to {slug!r}.")
+        return
+
+    _tenant, registry_path = _load_tenant_or_exit(slug, registry)
     try:
         changed = bind_trusted_identity(identity_path, issuer, subject, slug)
     except IdentityMapError as exc:
@@ -4641,8 +4662,13 @@ def tenant_oauth_bind_cmd(
     try:
         signaled_pid = signal_reload(registry_path)
     except TenantProcessSignalError as exc:
-        typer.echo(str(exc), err=True)
-        signaled_pid = None
+        typer.echo(f"Bound trusted OAuth identity to tenant {slug!r} in {identity_path}.")
+        typer.echo(
+            "Binding is on disk, but the running process still uses the previous identity map: "
+            f"{exc}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
     typer.echo(f"Bound trusted OAuth identity to tenant {slug!r} in {identity_path}.")
     if signaled_pid is not None:
         typer.echo(f"Signaled the running shared process (pid {signaled_pid}) to reload.")
