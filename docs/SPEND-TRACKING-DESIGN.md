@@ -26,6 +26,10 @@ If a used unit has no current price, that call is **unpriced**, never silently z
 Changing prices changes future reports without rewriting historical usage units.
 Zero-valued counters do not require a rate because no unit was consumed; a missing counter
 still means its usage is unknown rather than zero.
+An absent `models.toml` means no prices are configured. An unreadable or malformed file is
+reported distinctly while raw usage remains available; it is never described as missing
+prices.
+Negative and non-finite (`inf`/`nan`) rates are invalid and leave affected calls unpriced.
 Prices apply only when the capability's current provider and model exactly match the
 recorded row. Wingman intentionally performs no alias normalization: after a provider or
 model switch, historical rows remain unpriced unless an authoritative matching price is

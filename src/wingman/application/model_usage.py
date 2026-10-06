@@ -42,17 +42,33 @@ def render_tenant_usage(tenant: Tenant, limit: int) -> tuple[str, bool]:
 
 def price_usage(config: Config, rows: list[ModelUsage]) -> list[PricedUsage]:
     """Apply current workspace prices without changing the immutable raw units."""
+    priced, _diagnostic = _price_usage(config, rows)
+    return priced
+
+
+def _price_usage(config: Config, rows: list[ModelUsage]) -> tuple[list[PricedUsage], str | None]:
     try:
         models = tomllib.loads(config.models_config_path.read_text(encoding="utf-8")).get(
             "models", {}
         )
-    except (OSError, tomllib.TOMLDecodeError):
+        diagnostic = None
+    except (FileNotFoundError, NotADirectoryError):
         models = {}
+        diagnostic = None
+    except PermissionError as exc:
+        models = {}
+        diagnostic = f"models.toml could not be read (permission denied: {exc})"
+    except OSError as exc:
+        models = {}
+        diagnostic = f"models.toml could not be read ({exc})"
+    except tomllib.TOMLDecodeError as exc:
+        models = {}
+        diagnostic = f"models.toml is malformed ({exc})"
     result: list[PricedUsage] = []
     for row in rows:
         entry = models.get(row.capability, {}) if isinstance(models, dict) else {}
         result.append(PricedUsage(row, _row_cost(row, entry)))
-    return result
+    return result, diagnostic
 
 
 def _row_cost(row: ModelUsage, entry: object) -> Decimal | None:
@@ -77,14 +93,17 @@ def _row_cost(row: ModelUsage, entry: object) -> Decimal | None:
     total = Decimal(0)
     for count, key, divisor in populated:
         price = entry.get(key)
-        if not isinstance(price, (int, float)) or isinstance(price, bool) or price < 0:
+        if not isinstance(price, (int, float)) or isinstance(price, bool):
             return None
-        total += Decimal(count) * Decimal(str(price)) / divisor
+        unit_price = Decimal(str(price))
+        if not unit_price.is_finite() or unit_price < 0:
+            return None
+        total += Decimal(count) * unit_price / divisor
     return total
 
 
 def render_usage(config: Config, rows: list[ModelUsage], *, heading: str = "Model usage") -> str:
-    priced = price_usage(config, rows)
+    priced, pricing_diagnostic = _price_usage(config, rows)
     if not priced:
         return f"{heading}: no successful model calls recorded."
     totals: dict[tuple[str, str, str, str], list[Decimal | int]] = {}
@@ -103,7 +122,12 @@ def render_usage(config: Config, rows: list[ModelUsage], *, heading: str = "Mode
     for (payer, capability, provider, model), (calls, missing, cost) in sorted(totals.items()):
         price = "unpriced" if missing else f"${Decimal(cost):.6f}"
         lines.append(f"- {payer} | {capability} | {provider}/{model}: {calls} call(s), {price}")
-    if unpriced:
+    if pricing_diagnostic:
+        lines.append(
+            f"Pricing unavailable: {pricing_diagnostic}. Raw usage remains available; "
+            "these calls are unpriced, not zero-cost."
+        )
+    elif unpriced:
         lines.append(
             f"{unpriced} call(s) are unpriced because models.toml lacks a required current "
             "unit price; they are not counted as zero-cost."

@@ -243,6 +243,57 @@ output_usd_per_million = 2.0
     assert price_usage(config, [row])[0].cost_usd == Decimal("1.0")
 
 
+def test_unreadable_models_file_is_not_reported_as_missing_prices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    config.models_config_path.write_text("[models.extract_fast]\n", encoding="utf-8")
+    row = ModelUsage(
+        capability="extract_fast",
+        provider="test-provider",
+        model="test-model",
+        payer=Payer.BYOK,
+        input_tokens=1,
+        latency_ms=1,
+    )
+    original_read_text = Path.read_text
+
+    def refuse_models(path: Path, *args: object, **kwargs: object) -> str:
+        if path == config.models_config_path:
+            raise PermissionError("permission denied")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", refuse_models)
+
+    report = render_usage(config, [row])
+
+    assert "models.toml could not be read" in report
+    assert "lacks a required current unit price" not in report
+
+
+@pytest.mark.parametrize("rate", ["inf", "nan"])
+def test_non_finite_prices_are_unpriced(tmp_path: Path, rate: str) -> None:
+    config = _config(tmp_path)
+    config.models_config_path.write_text(
+        f"""[models.extract_fast]
+provider = "test-provider"
+model = "test-model"
+input_usd_per_million = {rate}
+""",
+        encoding="utf-8",
+    )
+    row = ModelUsage(
+        capability="extract_fast",
+        provider="test-provider",
+        model="test-model",
+        payer=Payer.BYOK,
+        input_tokens=1,
+        latency_ms=1,
+    )
+
+    assert price_usage(config, [row])[0].cost_usd is None
+
+
 def test_tenant_usage_read_does_not_create_a_missing_database(tmp_path: Path) -> None:
     tenant = Tenant(slug="missing", data_dir=tmp_path / "missing")
 
