@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from wingman.infrastructure.oauth_bearer import IdentityMap
 from wingman.infrastructure.tenant_process import (
     clear_tenant_pidfile,
     read_tenant_process_pid,
@@ -125,6 +126,93 @@ def test_register_reload_handler_reloads_the_index_on_sighup(tmp_path: Path) -> 
         signal.signal(signal.SIGHUP, old_handler)
 
 
+def test_sighup_reloads_registry_and_oauth_map_together(tmp_path: Path) -> None:
+    import signal
+
+    jason_dir = tmp_path / "jason"
+    jason_dir.mkdir()
+    (jason_dir / "mcp-http-token").write_text("tok-old", encoding="utf-8")
+    taylor_dir = tmp_path / "taylor"
+    taylor_dir.mkdir()
+    (taylor_dir / "mcp-http-token").write_text("tok-taylor", encoding="utf-8")
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n', encoding="utf-8")
+    identity_path = tmp_path / "identities.toml"
+    identity_path.write_text(
+        '[[identity]]\niss = "https://issuer.example"\nsub = "old"\nslug = "jason"\n',
+        encoding="utf-8",
+    )
+    index = TenantIndex.from_registry_path(registry)
+    identities = IdentityMap.from_toml(identity_path)
+    old_handler = signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    try:
+        register_reload_handler(index, registry, identities, identity_path)
+        registry.write_text(
+            f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n\n'
+            f'[[tenant]]\nslug = "taylor"\ndata_dir = "{taylor_dir}"\n',
+            encoding="utf-8",
+        )
+        (jason_dir / "mcp-http-token").write_text("tok-new", encoding="utf-8")
+        identity_path.write_text(
+            '[[identity]]\niss = "https://issuer.example"\nsub = "new"\nslug = "jason"\n\n'
+            '[[identity]]\niss = "https://issuer.example"\nsub = "taylor"\nslug = "taylor"\n',
+            encoding="utf-8",
+        )
+        os.kill(os.getpid(), signal.SIGHUP)
+        assert index.resolve("tok-old") is None
+        assert index.resolve("tok-new").slug == "jason"  # type: ignore[union-attr]
+        assert index.resolve("tok-taylor").slug == "taylor"  # type: ignore[union-attr]
+        assert identities.slug_for("https://issuer.example", "old") is None
+        assert identities.slug_for("https://issuer.example", "new") == "jason"
+        assert identities.slug_for("https://issuer.example", "taylor") == "taylor"
+    finally:
+        signal.signal(signal.SIGHUP, old_handler)
+
+
+def test_failed_oauth_reload_keeps_both_previous_snapshots(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import signal
+
+    jason_dir = tmp_path / "jason"
+    jason_dir.mkdir()
+    (jason_dir / "mcp-http-token").write_text("tok-old", encoding="utf-8")
+    taylor_dir = tmp_path / "taylor"
+    taylor_dir.mkdir()
+    (taylor_dir / "mcp-http-token").write_text("tok-taylor", encoding="utf-8")
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n', encoding="utf-8")
+    identity_path = tmp_path / "identities.toml"
+    identity_path.write_text(
+        '[[identity]]\niss = "https://issuer.example"\nsub = "old"\nslug = "jason"\n',
+        encoding="utf-8",
+    )
+    index = TenantIndex.from_registry_path(registry)
+    identities = IdentityMap.from_toml(identity_path)
+    old_handler = signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    try:
+        register_reload_handler(index, registry, identities, identity_path)
+        registry.write_text(
+            f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n\n'
+            f'[[tenant]]\nslug = "taylor"\ndata_dir = "{taylor_dir}"\n',
+            encoding="utf-8",
+        )
+        (jason_dir / "mcp-http-token").write_text("tok-new", encoding="utf-8")
+        identity_path.write_text("[[identity]\n", encoding="utf-8")
+        os.kill(os.getpid(), signal.SIGHUP)
+        assert index.resolve("tok-old").slug == "jason"  # type: ignore[union-attr]
+        assert index.resolve("tok-new") is None
+        assert index.by_slug("taylor") is None
+        assert identities.slug_for("https://issuer.example", "old") == "jason"
+        assert len(identities) == 1
+        assert "retaining the previous tenant registry" in caplog.text
+        assert "and OAuth identity map" in caplog.text
+        assert str(registry) in caplog.text
+        assert str(identity_path) in caplog.text
+    finally:
+        signal.signal(signal.SIGHUP, old_handler)
+
+
 def test_tenant_index_still_isolated_after_reload(tmp_path: Path) -> None:
     """Sanity check that reload doesn't accidentally merge tenants."""
     jason = Tenant(slug="jason", data_dir=tmp_path / "jason")
@@ -138,6 +226,31 @@ def test_tenant_index_still_isolated_after_reload(tmp_path: Path) -> None:
     )
     index.reload(registry)
     assert index.resolve("tok-jason").slug == "jason"  # type: ignore[union-attr]
+
+
+def test_sighup_reloads_the_oauth_identity_map_too(tmp_path: Path) -> None:
+    import signal
+
+    data_dir = tmp_path / "jason"
+    data_dir.mkdir()
+    registry = tmp_path / "tenants.toml"
+    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{data_dir}"\n', encoding="utf-8")
+    identity_path = tmp_path / "oauth-identities.toml"
+    identity_path.write_text("", encoding="utf-8")
+    index = TenantIndex.from_registry_path(registry)
+    identities = IdentityMap.from_toml(identity_path)
+
+    old_handler = signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    try:
+        register_reload_handler(index, registry, identities, identity_path)
+        identity_path.write_text(
+            '[[identity]]\niss = "https://issuer.example"\nsub = "user_123"\nslug = "jason"\n',
+            encoding="utf-8",
+        )
+        os.kill(os.getpid(), signal.SIGHUP)
+        assert identities.slug_for("https://issuer.example", "user_123") == "jason"
+    finally:
+        signal.signal(signal.SIGHUP, old_handler)
 
 
 def test_a_malformed_registry_does_not_take_the_shared_process_down(
@@ -234,7 +347,8 @@ def test_a_process_we_may_not_signal_says_so_instead_of_not_found(
 
     monkeypatch.setattr(os, "kill", not_permitted)
     try:
-        with pytest.raises(TenantProcessSignalError, match="may not signal it"):
+        with pytest.raises(TenantProcessSignalError, match="may not signal it") as raised:
             signal_reload(registry, command_of=command_of)
+        assert "new token" not in str(raised.value).lower()
     finally:
         clear_tenant_pidfile(registry)

@@ -4606,6 +4606,156 @@ def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path
     return tenant, registry_path
 
 
+@tenant_app.command("oauth-bind")
+def tenant_oauth_bind_cmd(
+    slug: str = typer.Argument(..., help="Existing tenant slug to receive this identity."),
+    issuer: str = typer.Option(..., "--issuer", help="Exact verified token issuer (`iss`)."),
+    subject: str = typer.Option(..., "--subject", help="Exact verified WorkOS subject (`sub`)."),
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+    registry: Path | None = typer.Option(
+        None, "--registry", help="Tenant registry path (default: host setting)."
+    ),
+    preflight: bool = typer.Option(
+        False,
+        "--preflight",
+        help="Validate identity-map availability without changing tenant or identity state.",
+    ),
+    reserve: bool = typer.Option(
+        False,
+        "--reserve",
+        help="Reserve this identity while a new tenant is provisioned; prints a claim token.",
+    ),
+    reservation: str | None = typer.Option(
+        None,
+        "--reservation",
+        help="Claim token returned by --reserve for the final provisioning bind.",
+    ),
+    release_reservation: str | None = typer.Option(
+        None,
+        "--release-reservation",
+        help="Release a failed provisioning attempt's claim token without binding.",
+    ),
+    renew_reservation: str | None = typer.Option(
+        None,
+        "--renew-reservation",
+        help="Extend an active provisioning claim immediately before registry mutation.",
+    ),
+) -> None:
+    """Bind one operator-trusted OAuth identity to an existing tenant.
+
+    For a newly trusted person, first create their isolated tenant with
+    wingman-add-tenant.sh, then run this command. Login alone never creates
+    a workspace, and no email, privilege, or funded access is inferred.
+    """
+    configure_logging()
+    from wingman.infrastructure.oauth_bearer import (
+        IdentityMapError,
+        bind_trusted_identity,
+        preflight_trusted_identity,
+        release_trusted_identity_reservation,
+        renew_trusted_identity_reservation,
+        reserve_trusted_identity,
+    )
+    from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
+
+    identity_path = identities.expanduser()
+    selected_modes = sum(
+        (preflight, reserve, release_reservation is not None, renew_reservation is not None)
+    )
+    if selected_modes > 1 or (reservation is not None and selected_modes):
+        typer.echo(
+            "Choose only one of --preflight, --reserve, --release-reservation, "
+            "--renew-reservation, or --reservation.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    if reserve:
+        try:
+            token = reserve_trusted_identity(identity_path, issuer, subject, slug)
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo(token)
+        return
+
+    if renew_reservation is not None:
+        try:
+            renewed = renew_trusted_identity_reservation(
+                identity_path, issuer, subject, renew_reservation
+            )
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        if not renewed:
+            typer.echo("OAuth provisioning reservation is absent, expired, or owned elsewhere.")
+            raise typer.Exit(code=1)
+        typer.echo(f"Renewed OAuth provisioning reservation for {slug!r}.")
+        return
+
+    if release_reservation is not None:
+        try:
+            released = release_trusted_identity_reservation(
+                identity_path, issuer, subject, release_reservation
+            )
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        if released:
+            typer.echo(f"Released OAuth provisioning reservation for {slug!r}.")
+        else:
+            typer.echo("No matching OAuth provisioning reservation was active.")
+        return
+
+    if preflight:
+        try:
+            changed = preflight_trusted_identity(identity_path, issuer, subject, slug)
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        if changed:
+            typer.echo(f"Trusted OAuth identity is available to bind to {slug!r}.")
+        else:
+            typer.echo(f"That trusted OAuth identity is already bound to {slug!r}.")
+        return
+
+    _tenant, registry_path = _load_tenant_or_exit(slug, registry)
+    try:
+        changed = bind_trusted_identity(
+            identity_path, issuer, subject, slug, reservation=reservation
+        )
+    except IdentityMapError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if changed:
+        binding_status = f"Bound trusted OAuth identity to tenant {slug!r} in {identity_path}."
+    else:
+        binding_status = (
+            f"Trusted OAuth binding for tenant {slug!r} already existed in {identity_path}."
+        )
+    try:
+        signaled_pid = signal_reload(registry_path)
+    except TenantProcessSignalError as exc:
+        typer.echo(binding_status)
+        typer.echo(
+            "Binding is on disk, but the running process still uses the previous identity map: "
+            f"{exc}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    typer.echo(binding_status)
+    if signaled_pid is not None:
+        typer.echo(f"Signaled the running shared process (pid {signaled_pid}) to reload.")
+    else:
+        typer.echo(
+            "No running shared process found; the binding will take effect when it starts "
+            "or is reloaded.",
+            err=True,
+        )
+
+
 @tenant_app.command("url")
 def tenant_url_cmd(
     slug: str = typer.Argument(..., help="The tenant's slug in the registry."),

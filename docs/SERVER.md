@@ -794,6 +794,106 @@ sudo scripts/wingman-add-tenant.sh jason --telemetry
 sudo scripts/wingman-add-tenant.sh bob --no-telemetry
 ```
 
+Before adding any OAuth-only tenant, enable OAuth on the shared service itself.
+All four values are required together; the provisioner saves the non-secret
+configuration in `/etc/wingman/oauth.env`, adds it to the systemd command, and
+restarts the shared service when it changes:
+
+```bash
+sudo env \
+  WINGMAN_SHARED_OAUTH_ISSUER=https://your-project.authkit.app \
+  WINGMAN_SHARED_OAUTH_AUDIENCE=https://your-host.example/shared/mcp \
+  WINGMAN_SHARED_OAUTH_JWKS_URI=https://your-project.authkit.app/oauth2/jwks \
+  WINGMAN_SHARED_OAUTH_IDENTITIES=/home/wingman-shared/.config/wingman/oauth-identities.toml \
+  scripts/wingman-provision-shared.sh
+```
+
+For a deliberately trusted OAuth user, then bind the exact verified WorkOS
+`(iss, sub)` instead of issuing a capability URL. A newly trusted user gets
+an isolated workspace and the binding in one operator action:
+
+```bash
+sudo scripts/wingman-add-tenant.sh taylor --no-telemetry \
+  --oauth-issuer https://your-project.authkit.app \
+  --oauth-subject user_01EXAMPLE \
+  --oauth-identities /home/wingman-shared/.config/wingman/oauth-identities.toml
+```
+
+The identity-map file must be readable and writable by `wingman-shared`, and
+its parent directory must be writable so bindings can be replaced atomically.
+The shared provisioner creates a missing parent for the service account, but
+never changes ownership or permissions on an existing directory; it verifies
+access and refuses with the path named if the account cannot use it.
+Before creating the workspace or registry row, the provisioning script checks
+that the saved service configuration matches the requested issuer and identity
+map, then reads the live protected-resource metadata from the shared process.
+It also creates an atomic, expiring reservation for the exact
+`(iss, sub, slug)` binding. A malformed map, an identity already claimed by
+another tenant, a competing provisioning operation, or a service that is not
+actually serving OAuth is therefore refused before tenant state is created.
+The telemetry choice is completed before the reservation starts. After
+workspace initialization, the script renews and revalidates the reservation
+immediately before registry mutation. The final bind consumes it; a failed
+attempt releases it.
+
+For an existing tenant, preserve their workspace and add only the binding:
+
+```bash
+sudo -iu wingman-shared wingman tenant oauth-bind jason \
+  --issuer https://your-project.authkit.app \
+  --subject user_01EXAMPLE \
+  --identities ~/.config/wingman/oauth-identities.toml \
+  --registry /etc/wingman/tenants.toml
+```
+
+The identity map is replaced atomically with mode `0600`, and the running
+shared server reloads it without a restart. Repeating the same binding is
+idempotent but still retries the live reload, so rerunning after a prior signal
+permission failure is a recovery operation. Trying to bind the same identity
+to another tenant is refused.
+Unknown authenticated identities remain unprovisioned. Do not use email as
+the key and do not copy a `sub` from an unverified source. If the binding is
+written but the operator cannot signal the running process, the command exits
+nonzero and says that the on-disk map changed while the live process still has
+the previous map; it does not misreport that state as "no process found."
+
+The resource server caches validated JWKS keys for at most five minutes.
+After that it refreshes from the issuer and fails closed if the issuer is
+unavailable; a key removed by WorkOS is never accepted indefinitely merely
+because this process has not restarted. Unknown-key and outage refreshes are
+single-flight with a short cooldown, so bogus key IDs cannot fan out into one
+issuer request per bearer request.
+
+Every streamable-HTTP MCP session is also bound to the tenant that
+authenticated its initialize request. The capability-token and OAuth routes
+share that binding table: presenting tenant A's session id with tenant B's
+otherwise-valid credential is refused before FastMCP can resume A's
+long-lived task. Bindings are removed after successful session termination,
+expire after 30 idle minutes, and are capped at 4,096 entries. Unknown or
+expired session ids fail closed and must reinitialize; a full table refuses a
+new session rather than growing without bound. Supplying OAuth flags with
+empty values likewise refuses startup instead of silently falling back to
+capability-only service.
+
+Identity-map lock, reservation, and atomic-replacement failures are reported
+as operator errors rather than tracebacks. A failed replacement explicitly
+says the previous map was preserved. Preflight checks active reservations as
+well as permanent bindings, so it never reports an identity as available
+while another onboarding operation holds it.
+
+OAuth requests retain their real HTTP origin for user guidance, but never
+invent a capability URL. `my_urls` names the OAuth connector address when its
+public mount is knowable and says plainly that this release has no
+OAuth-authenticated browser UI. Shared-path preflight also distinguishes a
+confirmed missing identity-map path from permission denial; it names the path,
+says that nothing changed, and never emits a Python traceback.
+
+OAuth-only tenants do not yet have an authenticated browser path to
+Manage → Keys. Do not promise self-funded browser key entry in this slice.
+Model-free tools work immediately; model-backed tools require the operator to
+configure the declared global provider key, set `funded = true` on that tenant,
+and run `wg reload`, as described under “Operator-funded inference.”
+
 `--telemetry` / `--no-telemetry` decide RFC-023's local usage journal for
 that tenant. **With neither flag it asks**, and with neither flag and no
 terminal it fails rather than guessing (#299). Default-off is right for
