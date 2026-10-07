@@ -808,6 +808,16 @@ sudo env \
   scripts/wingman-provision-shared.sh
 ```
 
+The end-to-end migration, invite canary, isolation checks, and rollback gates
+are in [`OAUTH-LAUNCH-RUNBOOK.md`](OAUTH-LAUNCH-RUNBOOK.md). On a service with
+that OAuth configuration present, a plain `wingman-add-tenant.sh <slug>` is
+refused before state is created: new people must provide a verified OAuth
+identity and must not receive a permanent capability URL. The explicit
+`--existing-capability-migration` escape hatch is reserved for
+`wingman-migrate-tenant.sh` after it has restored a real existing workspace;
+it preserves recoverability for current users without reopening legacy URLs
+for new invitees.
+
 For a deliberately trusted OAuth user, then bind the exact verified WorkOS
 `(iss, sub)` instead of issuing a capability URL. A newly trusted user gets
 an isolated workspace and the binding in one operator action:

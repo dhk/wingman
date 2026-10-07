@@ -246,11 +246,19 @@ say "8/8 host service registry"
 "$(dirname "$0")/wingman-register-service.sh"
 
 echo
-say "Done. Add tenants with: sudo ./wingman-add-tenant.sh <slug>"
-say "Check status with:      sudo -iu $SERVICE_USER bash -c 'export PATH=\"\$HOME/.local/bin:\$PATH\"; wingman tenant url <slug> --port $PORT --tunnel-prefix $TAILSCALE_PATH'"
-say "                        ('wingman' directly, not the 'wg' alias — that only"
-say "                        exists in an interactive shell that's sourced its own"
-say "                        .bashrc, which $SERVICE_USER was never given)"
+if [ "$oauth_fields" -eq 4 ]; then
+  say "Done. OAuth is enabled: new tenants require a verified invite identity."
+  say "Use the invite/approval flow, or the explicit --oauth-* form documented"
+  say "in docs/SERVER.md. Neither path mints a permanent capability URL."
+  say "Existing capability tenants remain available during the migration window;"
+  say "do not run 'wingman tenant url' for a new OAuth invitee."
+else
+  say "Done. Add tenants with: sudo ./wingman-add-tenant.sh <slug>"
+  say "Check status with:      sudo -iu $SERVICE_USER bash -c 'export PATH=\"\$HOME/.local/bin:\$PATH\"; wingman tenant url <slug> --port $PORT --tunnel-prefix $TAILSCALE_PATH'"
+  say "                        ('wingman' directly, not the 'wg' alias — that only"
+  say "                        exists in an interactive shell that's sourced its own"
+  say "                        .bashrc, which $SERVICE_USER was never given)"
+fi
 say "One more step, by hand: add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS in"
 say "root's wingman-upgrade-all.service (docs/SERVER.md §7/§9), so this account's"
 say "checkout gets swept into the same nightly automated upgrade as everyone else."

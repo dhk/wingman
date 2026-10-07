@@ -149,8 +149,12 @@ else
   echo "[dry-run] would read ANTHROPIC_API_KEY/VOYAGE_API_KEY/GITHUB_API_ISSUES_KEY from $SECRETS_FILE and write $DATA_DIR/keys.env (mode 600)"
 fi
 
-say "4/6 registering '$SLUG' in the tenant registry and issuing its first token"
-run "$ADD_TENANT_SCRIPT" "$SLUG"
+say "4/6 registering '$SLUG' in the tenant registry and preserving capability access"
+# This exact flag is the migration-window escape hatch enforced by
+# wingman-add-tenant.sh. It is accepted only after an existing workspace has
+# been restored, so it cannot accidentally turn a new OAuth invitee into a
+# permanent URL-token tenant.
+run "$ADD_TENANT_SCRIPT" "$SLUG" --existing-capability-migration
 
 say "5/6 recording that this migration happened (see this script's own header)"
 if [ "$DRY_RUN" -eq 0 ]; then

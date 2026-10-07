@@ -251,6 +251,49 @@ def test_shared_provisioner_wires_saved_oauth_settings_into_the_service() -> Non
     assert "systemctl --user restart wingman-mcp.service" in body
 
 
+def test_oauth_enabled_service_refuses_a_new_legacy_tenant_before_creating_state(
+    tmp_path: Path,
+) -> None:
+    commands = _fake_root_commands(tmp_path)
+    wingman_command = commands / "wingman"
+    calls = tmp_path / "calls"
+    wingman_command.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$WINGMAN_TEST_CALLS"\n',
+        encoding="utf-8",
+    )
+    wingman_command.chmod(0o755)
+    registry = tmp_path / "tenants.toml"
+    registry.write_text("", encoding="utf-8")
+    oauth_config = tmp_path / "oauth.env"
+    oauth_config.write_text("oauth is enabled\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "new-person", "--no-telemetry"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{commands}:{os.environ['PATH']}",
+            "WINGMAN_TEST_CALLS": str(calls),
+            "WINGMAN_SHARED_REGISTRY": str(registry),
+            "WINGMAN_SHARED_OAUTH_CONFIG": str(oauth_config),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "OAuth is enabled" in result.stderr
+    assert "no tenant state was created" in result.stderr
+    assert registry.read_text(encoding="utf-8") == ""
+    assert not calls.exists()
+
+
+def test_existing_account_migration_uses_the_explicit_legacy_escape_hatch() -> None:
+    migration = (ROOT / "scripts" / "wingman-migrate-tenant.sh").read_text(encoding="utf-8")
+
+    assert 'run "$ADD_TENANT_SCRIPT" "$SLUG" --existing-capability-migration' in migration
+
+
 def test_shared_provisioner_never_reowns_an_existing_identity_directory() -> None:
     body = PROVISION_SCRIPT.read_text(encoding="utf-8")
 
