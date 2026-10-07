@@ -78,7 +78,7 @@ Retire an existing capability token only after all of these are true:
 Reserve the slug before sending the connector address:
 
 ```bash
-sudo -iu wingman-shared wingman tenant oauth-invite <slug> \
+sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-invite <slug> \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
   --registry /etc/wingman/tenants.toml
 ```
@@ -89,7 +89,7 @@ queue. Inspect that queue, confirm the person out of band, and approve the
 exact verified identity:
 
 ```bash
-sudo -iu wingman-shared wingman tenant oauth-pending \
+sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-pending \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml
 
 sudo wingman tenant oauth-approve <slug> \

@@ -46,7 +46,27 @@ read -r -a TAILSCALE_PATH_LIST <<<"${TAILSCALE_PATHS//,/ }"
 TAILSCALE_PATH="${TAILSCALE_PATH_LIST[0]}"   # the prefix tenant URLs are printed with
 REPO_URL="git@github.com:dhk/wingman.git"
 REGISTRY_PATH="/etc/wingman/tenants.toml"
-OAUTH_CONFIG_PATH="${WINGMAN_SHARED_OAUTH_CONFIG:-/etc/wingman/oauth.env}"
+OAUTH_CONFIG_POINTER="${WINGMAN_SHARED_OAUTH_CONFIG_POINTER:-/etc/wingman/oauth-config-path}"
+if [ -n "${WINGMAN_SHARED_OAUTH_CONFIG:-}" ]; then
+  OAUTH_CONFIG_PATH="$WINGMAN_SHARED_OAUTH_CONFIG"
+elif [ -e "$OAUTH_CONFIG_POINTER" ]; then
+  if [ ! -f "$OAUTH_CONFIG_POINTER" ] || [ ! -r "$OAUTH_CONFIG_POINTER" ]; then
+    echo "saved OAuth config pointer is not a readable regular file: $OAUTH_CONFIG_POINTER" >&2
+    exit 1
+  fi
+  oauth_config_pointer_lines="$(awk 'END { print NR }' "$OAUTH_CONFIG_POINTER")"
+  OAUTH_CONFIG_PATH="$(sed -n '1p' "$OAUTH_CONFIG_POINTER")"
+  if [ "$oauth_config_pointer_lines" -ne 1 ] || [ -z "$OAUTH_CONFIG_PATH" ]; then
+    echo "saved OAuth config pointer must contain exactly one non-empty path: $OAUTH_CONFIG_POINTER" >&2
+    exit 1
+  fi
+else
+  OAUTH_CONFIG_PATH="/etc/wingman/oauth.env"
+fi
+case "$OAUTH_CONFIG_PATH" in
+  /*) ;;
+  *) echo "shared OAuth config path must be absolute: $OAUTH_CONFIG_PATH" >&2; exit 2 ;;
+esac
 OAUTH_ISSUER="${WINGMAN_SHARED_OAUTH_ISSUER:-}"
 OAUTH_AUDIENCE="${WINGMAN_SHARED_OAUTH_AUDIENCE:-}"
 OAUTH_JWKS_URI="${WINGMAN_SHARED_OAUTH_JWKS_URI:-}"
@@ -59,6 +79,14 @@ oauth_fields=0
 if [ "$oauth_fields" -ne 0 ] && [ "$oauth_fields" -ne 4 ]; then
   echo "Shared OAuth needs all four WINGMAN_SHARED_OAUTH_* settings together." >&2
   exit 2
+fi
+EFFECTIVE_OAUTH_ENABLED=0
+if [ "$oauth_fields" -eq 4 ] || [ -f "$OAUTH_CONFIG_PATH" ]; then
+  EFFECTIVE_OAUTH_ENABLED=1
+elif [ -e "$OAUTH_CONFIG_POINTER" ]; then
+  echo "saved OAuth config is missing or not a regular file: $OAUTH_CONFIG_PATH" >&2
+  echo "The shared service was not changed; restore the config or supply all four OAuth settings." >&2
+  exit 1
 fi
 if [ "$oauth_fields" -eq 4 ]; then
   for value in "$OAUTH_ISSUER" "$OAUTH_AUDIENCE" "$OAUTH_JWKS_URI" "$OAUTH_IDENTITIES"; do
@@ -131,6 +159,14 @@ EOF
     install -D -m 644 -o root -g wingman "$OAUTH_CONFIG_TEMP" "$OAUTH_CONFIG_PATH"
   fi
   rm -f "$OAUTH_CONFIG_TEMP"
+fi
+if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ]; then
+  OAUTH_POINTER_TEMP="$(mktemp)"
+  printf '%s\n' "$OAUTH_CONFIG_PATH" > "$OAUTH_POINTER_TEMP"
+  if [ ! -f "$OAUTH_CONFIG_POINTER" ] || ! cmp -s "$OAUTH_POINTER_TEMP" "$OAUTH_CONFIG_POINTER"; then
+    install -D -m 644 -o root -g wingman "$OAUTH_POINTER_TEMP" "$OAUTH_CONFIG_POINTER"
+  fi
+  rm -f "$OAUTH_POINTER_TEMP"
 fi
 
 say "4/7 SSH deploy key — this account has no GitHub identity of its own"
@@ -246,7 +282,7 @@ say "8/8 host service registry"
 "$(dirname "$0")/wingman-register-service.sh"
 
 echo
-if [ "$oauth_fields" -eq 4 ]; then
+if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ]; then
   say "Done. OAuth is enabled: new tenants require a verified invite identity."
   say "Use the invite/approval flow, or the explicit --oauth-* form documented"
   say "in docs/SERVER.md. Neither path mints a permanent capability URL."

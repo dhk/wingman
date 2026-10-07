@@ -31,7 +31,29 @@ SERVICE_USER="${WINGMAN_SHARED_USER:-wingman-shared}"
 PORT="${WINGMAN_SHARED_PORT:-8789}"
 TAILSCALE_PATH="${WINGMAN_SHARED_TAILSCALE_PATH:-/shared}"
 REGISTRY_PATH="${WINGMAN_SHARED_REGISTRY:-/etc/wingman/tenants.toml}"
-OAUTH_SERVICE_CONFIG="${WINGMAN_SHARED_OAUTH_CONFIG:-/etc/wingman/oauth.env}"
+OAUTH_CONFIG_POINTER="${WINGMAN_SHARED_OAUTH_CONFIG_POINTER:-/etc/wingman/oauth-config-path}"
+OAUTH_SERVICE_EXPECTED=0
+if [ -n "${WINGMAN_SHARED_OAUTH_CONFIG:-}" ]; then
+  OAUTH_SERVICE_CONFIG="$WINGMAN_SHARED_OAUTH_CONFIG"
+elif [ -e "$OAUTH_CONFIG_POINTER" ]; then
+  OAUTH_SERVICE_EXPECTED=1
+  if [ ! -f "$OAUTH_CONFIG_POINTER" ] || [ ! -r "$OAUTH_CONFIG_POINTER" ]; then
+    echo "saved OAuth config pointer is not a readable regular file: $OAUTH_CONFIG_POINTER. No tenant state was created." >&2
+    exit 1
+  fi
+  oauth_config_pointer_lines="$(awk 'END { print NR }' "$OAUTH_CONFIG_POINTER")"
+  OAUTH_SERVICE_CONFIG="$(sed -n '1p' "$OAUTH_CONFIG_POINTER")"
+  if [ "$oauth_config_pointer_lines" -ne 1 ] || [ -z "$OAUTH_SERVICE_CONFIG" ]; then
+    echo "saved OAuth config pointer must contain exactly one non-empty path: $OAUTH_CONFIG_POINTER. No tenant state was created." >&2
+    exit 1
+  fi
+else
+  OAUTH_SERVICE_CONFIG="/etc/wingman/oauth.env"
+fi
+case "$OAUTH_SERVICE_CONFIG" in
+  /*) ;;
+  *) echo "shared OAuth config path must be absolute: $OAUTH_SERVICE_CONFIG. No tenant state was created." >&2; exit 2 ;;
+esac
 SLUG="${1:?usage: $0 <slug> [--telemetry|--no-telemetry]}"
 shift
 TELEMETRY=""
@@ -237,7 +259,7 @@ fi
 # shape-B accounts retain a deliberately narrow escape hatch while they move
 # through the dual-auth migration window; wingman-migrate-tenant.sh supplies
 # it only after restoring an existing workspace.
-if [ -f "$OAUTH_SERVICE_CONFIG" ] \
+if { [ "$OAUTH_SERVICE_EXPECTED" -eq 1 ] || [ -f "$OAUTH_SERVICE_CONFIG" ]; } \
   && [ "$oauth_fields" -eq 0 ] \
   && [ "$EXISTING_CAPABILITY_MIGRATION" -eq 0 ]; then
   echo "OAuth is enabled for this shared service. New tenants require a verified OAuth identity; no tenant state was created." >&2
