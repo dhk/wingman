@@ -123,7 +123,7 @@ back. Default off; nothing is ever transmitted.
 
 ## Use from Claude (MCP)
 
-`wingman-mcp` exposes the workspace as 40 MCP tools running the same
+`wingman-mcp` exposes the workspace as MCP tools running the same
 deterministic validation as the CLI (RFC-008) — stdio for Claude Code and
 Claude Desktop on your machine, and an opt-in loopback HTTP transport with
 a rotatable capability path for claude.ai web/mobile through a tunnel you

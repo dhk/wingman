@@ -1157,9 +1157,9 @@ top level for the same reason as `privileged` and more sharply: a
 box-wide default would put every tenant added later on your invoice
 without anyone deciding to. Absent means false, so every registry
 written before this keeps meaning what it meant. Bare boolean,
-unquoted; `"true"` is refused rather than guessed at. Restart the shared
-process (`wg redeploy-shared`) after either change — the registry and
-the key files are read at startup.
+unquoted; `"true"` is refused rather than guessed at. After either
+change, run `wg reload`: it re-reads the registry without interrupting
+anyone (see [What actually needs a restart](#what-actually-needs-a-restart)).
 
 A funded tenant reaches the **declared** tiers only: the host file and
 the global file, in that order, never the ambient process environment.
