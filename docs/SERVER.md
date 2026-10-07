@@ -864,6 +864,19 @@ because this process has not restarted. Unknown-key and outage refreshes are
 single-flight with a short cooldown, so bogus key IDs cannot fan out into one
 issuer request per bearer request.
 
+Every streamable-HTTP MCP session is also bound to the tenant that
+authenticated its initialize request. The capability-token and OAuth routes
+share that binding table: presenting tenant A's session id with tenant B's
+otherwise-valid credential is refused before FastMCP can resume A's
+long-lived task. Supplying OAuth flags with empty values likewise refuses
+startup instead of silently falling back to capability-only service.
+
+Identity-map lock, reservation, and atomic-replacement failures are reported
+as operator errors rather than tracebacks. A failed replacement explicitly
+says the previous map was preserved. Preflight checks active reservations as
+well as permanent bindings, so it never reports an identity as available
+while another onboarding operation holds it.
+
 OAuth-only tenants do not yet have an authenticated browser path to
 Manage → Keys. Do not promise self-funded browser key entry in this slice.
 Model-free tools work immediately; model-backed tools require the operator to

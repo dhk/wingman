@@ -5325,8 +5325,8 @@ def main(argv: list[str] | None = None) -> None:
         args.oauth_jwks_uri,
         args.oauth_identities,
     )
-    if any(oauth_flags):
-        if not all(oauth_flags):
+    if any(value is not None for value in oauth_flags):
+        if not all(isinstance(value, str) and value for value in oauth_flags):
             parser.error(
                 "the --oauth-* flags work only together: --oauth-issuer, --oauth-audience, "
                 "--oauth-jwks-uri and --oauth-identities"

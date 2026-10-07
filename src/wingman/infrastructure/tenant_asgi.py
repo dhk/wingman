@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextvars
 import json
 import subprocess
+import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -40,6 +41,91 @@ from wingman.infrastructure.tenants import Tenant, TenantIndex
 
 #: (argv) -> stdout, or None if the command could not be run.
 Capture = Callable[[list[str]], str | None]
+
+_MCP_SESSION_ID = b"mcp-session-id"
+
+
+def _session_id(headers: list[tuple[bytes, bytes]]) -> str | None:
+    """Return the one well-formed MCP session id, or reject ambiguity."""
+    values = [
+        bytes(value).decode("latin-1")
+        for key, value in headers
+        if bytes(key).lower() == _MCP_SESSION_ID
+    ]
+    if not values:
+        return None
+    if len(values) != 1 or not values[0] or values[0] != values[0].strip():
+        raise ValueError("malformed MCP session id")
+    return values[0]
+
+
+class TenantSessionBindings:
+    """Bind FastMCP session ids to the tenant that authenticated them.
+
+    Both the capability and OAuth routes share one instance. FastMCP keeps a
+    long-lived task per streamable-HTTP session; without this outer binding,
+    a valid credential for tenant B could resume a task created under tenant
+    A's context merely by presenting A's session id.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._tenants: dict[str, str] = {}
+
+    def belongs_to_another_tenant(self, session_id: str, slug: str) -> bool:
+        with self._lock:
+            owner = self._tenants.get(session_id)
+            return owner is not None and owner != slug
+
+    def bind(self, session_id: str, slug: str) -> bool:
+        """Bind a new session, or confirm an existing binding atomically."""
+        with self._lock:
+            owner = self._tenants.setdefault(session_id, slug)
+            return owner == slug
+
+    async def call(
+        self,
+        slug: str,
+        inner: Any,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        try:
+            presented = _session_id(list(scope.get("headers", [])))
+        except ValueError:
+            await PlainTextResponse("Malformed MCP session", status_code=400)(scope, receive, send)
+            return
+        if presented is not None and self.belongs_to_another_tenant(presented, slug):
+            await PlainTextResponse("MCP session belongs to another tenant", status_code=403)(
+                scope, receive, send
+            )
+            return
+
+        blocked = False
+
+        async def bind_response(message: dict[str, Any]) -> None:
+            nonlocal blocked
+            if blocked:
+                return
+            if message["type"] == "http.response.start":
+                try:
+                    issued = _session_id(list(message.get("headers", [])))
+                except ValueError:
+                    blocked = True
+                    await PlainTextResponse("Malformed MCP session", status_code=500)(
+                        scope, receive, send
+                    )
+                    return
+                if issued is not None and not self.bind(issued, slug):
+                    blocked = True
+                    await PlainTextResponse(
+                        "MCP session belongs to another tenant", status_code=403
+                    )(scope, receive, send)
+                    return
+            await send(message)
+
+        await inner(scope, receive, bind_response)
 
 
 def _default_capture(argv: list[str]) -> str | None:
@@ -229,15 +315,26 @@ class TenantRoutingASGIApp:
     session/message handling at all, let alone any tool body.
     """
 
-    def __init__(self, inner: Any, index: TenantIndex) -> None:
+    def __init__(
+        self,
+        inner: Any,
+        index: TenantIndex,
+        session_bindings: TenantSessionBindings | None = None,
+    ) -> None:
         self._inner = inner
         self._index = index
+        self._session_bindings = session_bindings or TenantSessionBindings()
 
     @property
     def inner(self) -> Any:
         """The app this wraps — for a second route (see oauth_bearer) that
         fronts the same MCP endpoint with a different credential."""
         return self._inner
+
+    @property
+    def session_bindings(self) -> TenantSessionBindings:
+        """The guard shared by every credential route to this transport."""
+        return self._session_bindings
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -261,7 +358,7 @@ class TenantRoutingASGIApp:
             tenant_config_scope(lambda: self._config_for(tenant)),
             request_origin_scope(request_origin(scope, token)),
         ):
-            await self._inner(scope, receive, send)
+            await self._session_bindings.call(tenant.slug, self._inner, scope, receive, send)
 
     def _config_for(self, resolved: Tenant) -> Config:
         """This tenant's Config as the registry stands right now.

@@ -60,6 +60,7 @@ from wingman.infrastructure.config import tenant_config_scope
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.tenant_asgi import (
     TenantRoutingASGIApp,
+    TenantSessionBindings,
     current_tenant_config,
     request_origin_scope,
 )
@@ -347,18 +348,37 @@ class IdentityMap:
 @contextmanager
 def _identity_map_lock(path: Path) -> Iterator[None]:
     """Serialize all read-modify-write updates across operator processes."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_name(f".{path.name}.lock")
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    fd: int | None = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_name(f".{path.name}.lock")
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         os.fchmod(fd, 0o600)
         fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise IdentityMapError(f"identity map {path} cannot be locked safely: {exc}") from exc
+    assert fd is not None  # successful os.open above; narrows the cleanup path for mypy
+    try:
+        yield
     finally:
-        os.close(fd)
+        release_error: OSError | None = None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError as exc:
+            release_error = exc
+        try:
+            os.close(fd)
+        except OSError as exc:
+            release_error = release_error or exc
+        if release_error is not None:
+            raise IdentityMapError(
+                f"identity map {path} lock could not be released safely: {release_error}"
+            ) from release_error
 
 
 def _identity_map_or_empty(path: Path) -> IdentityMap:
@@ -407,7 +427,13 @@ def _read_reservation(
     if not isinstance(expires_at, (int, float)):
         raise IdentityMapError(f"OAuth provisioning reservation {reservation_path} is malformed")
     if expires_at <= now:
-        reservation_path.unlink(missing_ok=True)
+        try:
+            reservation_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise IdentityMapError(
+                f"expired OAuth provisioning reservation {reservation_path} could not be "
+                f"removed: {exc}"
+            ) from exc
         return None
     if (
         value.get("issuer") != issuer
@@ -421,8 +447,9 @@ def _read_reservation(
 
 def _write_reservation(path: Path, issuer: str, subject: str, value: dict[str, Any]) -> None:
     reservation_path = _reservation_path(path, issuer, subject)
-    fd, temporary = tempfile.mkstemp(prefix=f".{reservation_path.name}.", dir=path.parent)
+    temporary: str | None = None
     try:
+        fd, temporary = tempfile.mkstemp(prefix=f".{reservation_path.name}.", dir=path.parent)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(value, handle, sort_keys=True)
             handle.write("\n")
@@ -430,9 +457,16 @@ def _write_reservation(path: Path, issuer: str, subject: str, value: dict[str, A
             os.fsync(handle.fileno())
         Path(temporary).chmod(0o600)
         os.replace(temporary, reservation_path)
-    except Exception:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+    except OSError as exc:
+        if temporary is not None:
+            try:
+                Path(temporary).unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise IdentityMapError(
+            f"OAuth provisioning reservation {reservation_path} could not be written; "
+            f"no identity binding changed: {exc}"
+        ) from exc
 
 
 def reserve_trusted_identity(
@@ -477,7 +511,13 @@ def release_trusted_identity_reservation(
         existing = _read_reservation(path, issuer, subject, now=time.time())
         if existing is None or not secrets.compare_digest(existing["token"], reservation):
             return False
-        _reservation_path(path, issuer, subject).unlink(missing_ok=True)
+        reservation_path = _reservation_path(path, issuer, subject)
+        try:
+            reservation_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise IdentityMapError(
+                f"OAuth provisioning reservation {reservation_path} could not be released: {exc}"
+            ) from exc
         return True
 
 
@@ -507,11 +547,15 @@ def preflight_trusted_identity(path: Path, issuer: str, subject: str, slug: str)
     owned by another tenant therefore cannot leave a workspace and registry row
     behind with no usable login. False means the exact binding already exists.
     """
-    try:
-        with _identity_map_lock(path):
-            return _validate_binding(_identity_map_or_empty(path), issuer, subject, slug)
-    except OSError as exc:
-        raise IdentityMapError(f"identity map {path} cannot be locked safely: {exc}") from exc
+    with _identity_map_lock(path):
+        available = _validate_binding(_identity_map_or_empty(path), issuer, subject, slug)
+        active = _read_reservation(path, issuer, subject, now=time.time())
+        if active is not None:
+            raise IdentityMapError(
+                f"identity ({issuer!r}, {subject!r}) is reserved for provisioning "
+                f"tenant {active['slug']!r}"
+            )
+        return available
 
 
 def bind_trusted_identity(
@@ -543,7 +587,14 @@ def bind_trusted_identity(
             raise IdentityMapError("OAuth provisioning reservation token is absent or expired")
         if not _validate_binding(identities, issuer, subject, slug):
             if active is not None:
-                _reservation_path(path, issuer, subject).unlink(missing_ok=True)
+                reservation_path = _reservation_path(path, issuer, subject)
+                try:
+                    reservation_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    raise IdentityMapError(
+                        f"the identity binding already exists, but provisioning reservation "
+                        f"{reservation_path} could not be removed: {exc}"
+                    ) from exc
             return False
         entries = identities.entries()
         key = (issuer, subject)
@@ -559,19 +610,34 @@ def bind_trusted_identity(
                     "",
                 )
             )
-        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        temporary: str | None = None
         try:
+            fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write("\n".join(lines))
                 handle.flush()
                 os.fsync(handle.fileno())
             Path(temporary).chmod(0o600)
             os.replace(temporary, path)
-        except Exception:
-            Path(temporary).unlink(missing_ok=True)
-            raise
+        except OSError as exc:
+            if temporary is not None:
+                try:
+                    Path(temporary).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise IdentityMapError(
+                f"identity map {path} could not be replaced; the previous identity map "
+                f"was preserved: {exc}"
+            ) from exc
         if active is not None:
-            _reservation_path(path, issuer, subject).unlink(missing_ok=True)
+            reservation_path = _reservation_path(path, issuer, subject)
+            try:
+                reservation_path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise IdentityMapError(
+                    f"identity binding was written to {path}, but provisioning reservation "
+                    f"{reservation_path} could not be removed: {exc}"
+                ) from exc
     return True
 
 
@@ -621,6 +687,7 @@ class BearerRoutingASGIApp:
         settings: OAuthSettings,
         resolve_key: KeyResolver,
         local_mcp_path: str = "/mcp",
+        session_bindings: TenantSessionBindings | None = None,
     ) -> None:
         self._inner = inner
         self._index = index
@@ -628,6 +695,7 @@ class BearerRoutingASGIApp:
         self._settings = settings
         self._resolve_key = resolve_key
         self._local_mcp_path = local_mcp_path
+        self._session_bindings = session_bindings or TenantSessionBindings()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -670,7 +738,7 @@ class BearerRoutingASGIApp:
             tenant_config_scope(lambda: current_tenant_config(self._index, tenant)),
             request_origin_scope(None),
         ):
-            await self._inner(scope, receive, send)
+            await self._session_bindings.call(tenant.slug, self._inner, scope, receive, send)
 
 
 def _metadata_paths(settings: OAuthSettings, local_mcp_path: str) -> list[str]:
@@ -713,6 +781,11 @@ def bind_oauth_routing(
         if isinstance(route, Route) and route.path == legacy_path:
             endpoint = route.app
             inner = endpoint.inner if isinstance(endpoint, TenantRoutingASGIApp) else endpoint
+            session_bindings = (
+                endpoint.session_bindings
+                if isinstance(endpoint, TenantRoutingASGIApp)
+                else TenantSessionBindings()
+            )
             break
     else:
         raise RuntimeError(
@@ -731,7 +804,13 @@ def bind_oauth_routing(
         return JSONResponse(document)
 
     wrapped = BearerRoutingASGIApp(
-        inner, index, identities, settings, resolve_key, local_mcp_path=oauth_path
+        inner,
+        index,
+        identities,
+        settings,
+        resolve_key,
+        local_mcp_path=oauth_path,
+        session_bindings=session_bindings,
     )
     added: list[Route] = [Route(oauth_path, endpoint=wrapped)]
     added.extend(

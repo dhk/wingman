@@ -70,6 +70,39 @@ class _Inner:
         await PlainTextResponse(str(load_config().data_dir))(scope, receive, send)
 
 
+class _SessionInner:
+    """A minimal streamable-HTTP session transport.
+
+    The initialize response creates a session whose task keeps the tenant
+    context it inherited. Later requests resume that task by header, exactly
+    the boundary the authentication wrappers must protect.
+    """
+
+    def __init__(self) -> None:
+        self._next_session = 0
+        self._tenants: dict[str, str] = {}
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        headers = {
+            bytes(key).lower(): bytes(value).decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        session_id = headers.get(b"mcp-session-id")
+        if session_id is None:
+            self._next_session += 1
+            session_id = f"session-{self._next_session}"
+            self._tenants[session_id] = str(load_config().data_dir)
+            await PlainTextResponse(
+                self._tenants[session_id], headers={"Mcp-Session-Id": session_id}
+            )(scope, receive, send)
+            return
+        tenant = self._tenants.get(session_id)
+        if tenant is None:
+            await PlainTextResponse("unknown session", status_code=404)(scope, receive, send)
+            return
+        await PlainTextResponse(tenant)(scope, receive, send)
+
+
 def _token(
     sub: str | None = "sub-jason",
     *,
@@ -192,6 +225,28 @@ def test_a_bearer_header_does_not_authenticate_the_token_route(world: _World) ->
     )
     assert response.status_code == 401
     assert world.inner.calls == 0
+
+
+def test_an_oauth_tenant_cannot_resume_a_capability_tenants_session(tmp_path: Path) -> None:
+    world = _World(tmp_path, inner=_SessionInner())
+    opened = world.client.get("/mcp/tok-jason")
+    session_id = opened.headers["mcp-session-id"]
+
+    crossed = world.get(_token("sub-bob"), headers={"Mcp-Session-Id": session_id})
+
+    assert crossed.status_code == 403
+    assert "session" in crossed.text.lower()
+
+
+def test_a_capability_tenant_cannot_resume_an_oauth_tenants_session(tmp_path: Path) -> None:
+    world = _World(tmp_path, inner=_SessionInner())
+    opened = world.get(_token("sub-jason"))
+    session_id = opened.headers["mcp-session-id"]
+
+    crossed = world.client.get("/mcp/tok-bob", headers={"Mcp-Session-Id": session_id})
+
+    assert crossed.status_code == 403
+    assert "session" in crossed.text.lower()
 
 
 # --- every way a token can be wrong ------------------------------------------------
@@ -724,6 +779,36 @@ def test_partial_oauth_flags_refuse_to_start(tmp_path: Path) -> None:
     del argv[argv.index("--oauth-jwks-uri") : argv.index("--oauth-jwks-uri") + 2]
     with pytest.raises(SystemExit) as raised:
         main(argv)
+    assert raised.value.code == 2
+
+
+def test_explicitly_empty_oauth_flags_refuse_to_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman import mcp_server
+
+    monkeypatch.setattr(
+        mcp_server,
+        "_run_tenant_server",
+        lambda *_args: pytest.fail("empty OAuth values reached server startup"),
+    )
+    argv = [
+        "--http",
+        "--tenant-registry",
+        str(tmp_path / "tenants.toml"),
+        "--oauth-issuer",
+        "",
+        "--oauth-audience",
+        "",
+        "--oauth-jwks-uri",
+        "",
+        "--oauth-identities",
+        "",
+    ]
+
+    with pytest.raises(SystemExit) as raised:
+        mcp_server.main(argv)
+
     assert raised.value.code == 2
 
 

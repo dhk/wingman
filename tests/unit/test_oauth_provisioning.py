@@ -210,6 +210,82 @@ def test_preflight_refuses_bad_or_unavailable_bindings_without_changing_the_map(
     assert identities.read_text(encoding="utf-8") == body
 
 
+def test_preflight_reports_an_active_provisioning_reservation(tmp_path: Path) -> None:
+    identities = tmp_path / "oauth-identities.toml"
+    reserve_trusted_identity(identities, ISSUER, "user_123", "first")
+
+    result = cli.invoke(
+        app,
+        [
+            "tenant",
+            "oauth-bind",
+            "second",
+            "--issuer",
+            ISSUER,
+            "--subject",
+            "user_123",
+            "--identities",
+            str(identities),
+            "--preflight",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "reserved for provisioning tenant 'first'" in result.output
+
+
+def test_lock_failure_is_reported_without_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure import oauth_bearer
+
+    identities = tmp_path / "oauth-identities.toml"
+
+    def denied(*_args: object, **_kwargs: object) -> int:
+        raise PermissionError("operator cannot open the lock")
+
+    monkeypatch.setattr(oauth_bearer.os, "open", denied)
+    result = cli.invoke(
+        app,
+        [
+            "tenant",
+            "oauth-bind",
+            "new-person",
+            "--issuer",
+            ISSUER,
+            "--subject",
+            "user_123",
+            "--identities",
+            str(identities),
+            "--reserve",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "cannot be locked safely" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_failed_atomic_replace_preserves_the_previous_identity_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure import oauth_bearer
+
+    identities = tmp_path / "oauth-identities.toml"
+    original = f'[[identity]]\niss = "{ISSUER}"\nsub = "existing"\nslug = "first"\n'
+    identities.write_text(original, encoding="utf-8")
+
+    def full_disk(_source: object, _destination: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(oauth_bearer.os, "replace", full_disk)
+    with pytest.raises(IdentityMapError, match="previous identity map was preserved"):
+        bind_trusted_identity(identities, ISSUER, "new-user", "second")
+
+    assert identities.read_text(encoding="utf-8") == original
+    assert list(tmp_path.glob(f".{identities.name}.*")) == [tmp_path / f".{identities.name}.lock"]
+
+
 def test_oauth_binding_reports_when_disk_changed_but_live_reload_was_denied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
