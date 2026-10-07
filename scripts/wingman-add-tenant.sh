@@ -27,7 +27,7 @@ set -euo pipefail
 SERVICE_USER="${WINGMAN_SHARED_USER:-wingman-shared}"
 PORT="${WINGMAN_SHARED_PORT:-8789}"
 TAILSCALE_PATH="${WINGMAN_SHARED_TAILSCALE_PATH:-/shared}"
-REGISTRY_PATH="/etc/wingman/tenants.toml"
+REGISTRY_PATH="${WINGMAN_SHARED_REGISTRY:-/etc/wingman/tenants.toml}"
 OAUTH_SERVICE_CONFIG="${WINGMAN_SHARED_OAUTH_CONFIG:-/etc/wingman/oauth.env}"
 SLUG="${1:?usage: $0 <slug> [--telemetry|--no-telemetry]}"
 shift
@@ -197,33 +197,6 @@ fi
 validate_oauth_identities_path
 validate_oauth_service
 
-RESERVATION=""
-release_reservation() {
-  [ -n "$RESERVATION" ] || return 0
-  sudo -iu "$SERVICE_USER" env \
-    PATH="/home/$SERVICE_USER/.local/bin:$PATH" \
-    wingman tenant oauth-bind "$SLUG" \
-      --issuer "$OAUTH_ISSUER" \
-      --subject "$OAUTH_SUBJECT" \
-      --identities "$OAUTH_IDENTITIES" \
-      --release-reservation "$RESERVATION" >/dev/null 2>&1 || true
-}
-trap release_reservation EXIT
-
-# Atomically reserve the identity before creating the workspace or registry
-# row. Competing provisioning or manual binding attempts fail while this
-# reservation is active; the final bind consumes it.
-if [ "$oauth_fields" -eq 3 ]; then
-  say "reserving the trusted OAuth identity"
-  RESERVATION="$(sudo -iu "$SERVICE_USER" env \
-    PATH="/home/$SERVICE_USER/.local/bin:$PATH" \
-    wingman tenant oauth-bind "$SLUG" \
-      --issuer "$OAUTH_ISSUER" \
-      --subject "$OAUTH_SUBJECT" \
-      --identities "$OAUTH_IDENTITIES" \
-      --reserve)"
-fi
-
 if [ ! -f "$REGISTRY_PATH" ]; then
   echo "no registry at $REGISTRY_PATH — run wingman-provision-shared.sh first" >&2
   exit 1
@@ -238,6 +211,32 @@ DATA_DIR="/home/$SERVICE_USER/tenants/$SLUG"
 
 resolve_telemetry
 
+RESERVATION=""
+release_reservation() {
+  [ -n "$RESERVATION" ] || return 0
+  sudo -iu "$SERVICE_USER" env \
+    PATH="/home/$SERVICE_USER/.local/bin:$PATH" \
+    wingman tenant oauth-bind "$SLUG" \
+      --issuer "$OAUTH_ISSUER" \
+      --subject "$OAUTH_SUBJECT" \
+      --identities "$OAUTH_IDENTITIES" \
+      --release-reservation "$RESERVATION" >/dev/null 2>&1 || true
+}
+trap release_reservation EXIT
+
+# The only unbounded operator interaction is complete. Atomically reserve the
+# identity before creating tenant state; the final bind consumes it.
+if [ "$oauth_fields" -eq 3 ]; then
+  say "reserving the trusted OAuth identity"
+  RESERVATION="$(sudo -iu "$SERVICE_USER" env \
+    PATH="/home/$SERVICE_USER/.local/bin:$PATH" \
+    wingman tenant oauth-bind "$SLUG" \
+      --issuer "$OAUTH_ISSUER" \
+      --subject "$OAUTH_SUBJECT" \
+      --identities "$OAUTH_IDENTITIES" \
+      --reserve)"
+fi
+
 if [ -f "$DATA_DIR/wingman.db" ]; then
   say "workspace for '$SLUG' already exists at $DATA_DIR — skipping init"
 else
@@ -250,6 +249,19 @@ if [ "$TELEMETRY" = "--telemetry" ]; then
   sudo -iu "$SERVICE_USER" bash -c "export PATH=\"\$HOME/.local/bin:\$PATH\"; WINGMAN_DATA_DIR=$DATA_DIR wingman telemetry on"
 else
   say "leaving the usage journal OFF for '$SLUG' (wingman telemetry on, to change)"
+fi
+
+# Workspace initialization is not interactive, but it can still be slow. Do
+# not append a registry row unless this process still owns the identity.
+if [ "$oauth_fields" -eq 3 ]; then
+  say "renewing the trusted OAuth identity reservation"
+  sudo -iu "$SERVICE_USER" env \
+    PATH="/home/$SERVICE_USER/.local/bin:$PATH" \
+    wingman tenant oauth-bind "$SLUG" \
+      --issuer "$OAUTH_ISSUER" \
+      --subject "$OAUTH_SUBJECT" \
+      --identities "$OAUTH_IDENTITIES" \
+      --renew-reservation "$RESERVATION"
 fi
 
 say "registering '$SLUG' in $REGISTRY_PATH"
@@ -291,7 +303,28 @@ if [ -s "$DATA_DIR/keys.env" ] && grep -q '^ANTHROPIC_API_KEY=.' "$DATA_DIR/keys
 elif grep -A2 "slug = \"$SLUG\"" "$REGISTRY_PATH" | grep -q '^funded = true'; then
   say "'$SLUG' is marked funded — metered calls fall back to your declared key"
 else
-  cat <<NOTE
+  if [ "$oauth_fields" -eq 3 ]; then
+    cat <<NOTE
+
+==> OAuth-only tenant can make NO model call yet, so values, assessments
+    and briefs will fail while everything that only reads local data works.
+
+    Self-funded browser key entry is not available for OAuth-only tenants yet.
+    Do not send them to Manage -> Keys: this OAuth slice authenticates MCP,
+    not the browser settings page.
+
+    To fund '$SLUG', put the key in a tier you explicitly declare —
+    'sudo wingman keys set anthropic --scope global' — then add
+    'funded = true' to this tenant's entry in $REGISTRY_PATH and apply it
+    with 'wg reload'. That is a SIGHUP, not a restart, so it interrupts
+    nobody. The key itself is read on the next call and needs no reload.
+
+    See "Operator-funded inference" in docs/SERVER.md. Tell the person that
+    model-backed tools remain unavailable until you complete these steps.
+
+NOTE
+  else
+    cat <<NOTE
 
 ==> '$SLUG' can make NO model call yet, so values, assessments and briefs
     will all fail for them while everything that only reads local data
@@ -313,4 +346,5 @@ else
     refuses. 'wingman tenant keys' shows where each stands.
 
 NOTE
+  fi
 fi

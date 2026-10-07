@@ -14,6 +14,7 @@ from wingman.infrastructure.oauth_bearer import (
     IdentityMapError,
     bind_trusted_identity,
     release_trusted_identity_reservation,
+    renew_trusted_identity_reservation,
     reserve_trusted_identity,
 )
 
@@ -338,3 +339,64 @@ def test_a_crashed_provisioning_reservation_expires(tmp_path: Path) -> None:
 
     assert second != first
     assert bind_trusted_identity(identities, ISSUER, "user_123", "second", reservation=second)
+
+
+def test_the_reservation_owner_can_renew_before_registry_mutation(tmp_path: Path) -> None:
+    identities = tmp_path / "oauth-identities.toml"
+    clock = [time.time()]
+    reservation = reserve_trusted_identity(
+        identities, ISSUER, "user_123", "jason", now=lambda: clock[0]
+    )
+    clock[0] += 3599.0
+
+    assert renew_trusted_identity_reservation(
+        identities,
+        ISSUER,
+        "user_123",
+        reservation,
+        now=lambda: clock[0],
+    )
+    clock[0] += 2.0
+    with pytest.raises(IdentityMapError, match="reserved.*jason"):
+        reserve_trusted_identity(identities, ISSUER, "user_123", "other", now=lambda: clock[0])
+
+
+def test_existing_binding_still_retries_the_live_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure import tenant_process
+
+    registry = _registry(tmp_path, "jason")
+    identities = tmp_path / "oauth-identities.toml"
+    identities.write_text(
+        f'[[identity]]\niss = "{ISSUER}"\nsub = "user_123"\nslug = "jason"\n',
+        encoding="utf-8",
+    )
+    signaled: list[Path] = []
+
+    def signal(registry_path: Path) -> int:
+        signaled.append(registry_path)
+        return 4321
+
+    monkeypatch.setattr(tenant_process, "signal_reload", signal)
+    result = cli.invoke(
+        app,
+        [
+            "tenant",
+            "oauth-bind",
+            "jason",
+            "--issuer",
+            ISSUER,
+            "--subject",
+            "user_123",
+            "--identities",
+            str(identities),
+            "--registry",
+            str(registry),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert signaled == [registry]
+    assert "already existed" in result.output
+    assert "Signaled the running shared process (pid 4321)" in result.output

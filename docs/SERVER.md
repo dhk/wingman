@@ -821,6 +821,9 @@ sudo scripts/wingman-add-tenant.sh taylor --no-telemetry \
 
 The identity-map file must be readable and writable by `wingman-shared`, and
 its parent directory must be writable so bindings can be replaced atomically.
+The shared provisioner creates a missing parent for the service account, but
+never changes ownership or permissions on an existing directory; it verifies
+access and refuses with the path named if the account cannot use it.
 Before creating the workspace or registry row, the provisioning script checks
 that the saved service configuration matches the requested issuer and identity
 map, then reads the live protected-resource metadata from the shared process.
@@ -828,7 +831,10 @@ It also creates an atomic, expiring reservation for the exact
 `(iss, sub, slug)` binding. A malformed map, an identity already claimed by
 another tenant, a competing provisioning operation, or a service that is not
 actually serving OAuth is therefore refused before tenant state is created.
-The final bind consumes the reservation; a failed attempt releases it.
+The telemetry choice is completed before the reservation starts. After
+workspace initialization, the script renews and revalidates the reservation
+immediately before registry mutation. The final bind consumes it; a failed
+attempt releases it.
 
 For an existing tenant, preserve their workspace and add only the binding:
 
@@ -842,7 +848,9 @@ sudo -iu wingman-shared wingman tenant oauth-bind jason \
 
 The identity map is replaced atomically with mode `0600`, and the running
 shared server reloads it without a restart. Repeating the same binding is
-idempotent; trying to bind the same identity to another tenant is refused.
+idempotent but still retries the live reload, so rerunning after a prior signal
+permission failure is a recovery operation. Trying to bind the same identity
+to another tenant is refused.
 Unknown authenticated identities remain unprovisioned. Do not use email as
 the key and do not copy a `sub` from an unverified source. If the binding is
 written but the operator cannot signal the running process, the command exits
@@ -855,6 +863,12 @@ unavailable; a key removed by WorkOS is never accepted indefinitely merely
 because this process has not restarted. Unknown-key and outage refreshes are
 single-flight with a short cooldown, so bogus key IDs cannot fan out into one
 issuer request per bearer request.
+
+OAuth-only tenants do not yet have an authenticated browser path to
+Manage → Keys. Do not promise self-funded browser key entry in this slice.
+Model-free tools work immediately; model-backed tools require the operator to
+configure the declared global provider key, set `funded = true` on that tenant,
+and run `wg reload`, as described under “Operator-funded inference.”
 
 `--telemetry` / `--no-telemetry` decide RFC-023's local usage journal for
 that tenant. **With neither flag it asks**, and with neither flag and no

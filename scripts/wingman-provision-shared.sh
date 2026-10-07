@@ -100,8 +100,24 @@ install -d -m 750 -o root -g wingman /etc/wingman
 [ -f "$REGISTRY_PATH" ] || install -m 644 /dev/null "$REGISTRY_PATH"
 OAUTH_CONFIG_CHANGED=0
 if [ "$oauth_fields" -eq 4 ]; then
-  install -d -m 700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$(dirname "$OAUTH_IDENTITIES")"
-  [ -f "$OAUTH_IDENTITIES" ] || install -m 600 -o "$SERVICE_USER" -g "$SERVICE_USER" /dev/null "$OAUTH_IDENTITIES"
+  OAUTH_IDENTITIES_PARENT="$(dirname "$OAUTH_IDENTITIES")"
+  if [ ! -d "$OAUTH_IDENTITIES_PARENT" ]; then
+    install -d -m 700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$OAUTH_IDENTITIES_PARENT"
+  elif ! sudo -u "$SERVICE_USER" test -w "$OAUTH_IDENTITIES_PARENT" \
+    || ! sudo -u "$SERVICE_USER" test -x "$OAUTH_IDENTITIES_PARENT"; then
+    echo "existing OAuth identity-map parent is not writable and traversable by $SERVICE_USER: $OAUTH_IDENTITIES_PARENT" >&2
+    exit 1
+  fi
+  if [ -e "$OAUTH_IDENTITIES" ]; then
+    if [ ! -f "$OAUTH_IDENTITIES" ] \
+      || ! sudo -u "$SERVICE_USER" test -r "$OAUTH_IDENTITIES" \
+      || ! sudo -u "$SERVICE_USER" test -w "$OAUTH_IDENTITIES"; then
+      echo "existing OAuth identity map is not a readable, writable regular file for $SERVICE_USER: $OAUTH_IDENTITIES" >&2
+      exit 1
+    fi
+  else
+    install -m 600 -o "$SERVICE_USER" -g "$SERVICE_USER" /dev/null "$OAUTH_IDENTITIES"
+  fi
   OAUTH_CONFIG_TEMP="$(mktemp)"
   cat > "$OAUTH_CONFIG_TEMP" <<EOF
 WINGMAN_OAUTH_ISSUER=$OAUTH_ISSUER

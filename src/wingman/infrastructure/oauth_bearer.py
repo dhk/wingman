@@ -481,6 +481,25 @@ def release_trusted_identity_reservation(
         return True
 
 
+def renew_trusted_identity_reservation(
+    path: Path,
+    issuer: str,
+    subject: str,
+    reservation: str,
+    *,
+    now: Callable[[], float] = time.time,
+) -> bool:
+    """Extend only the caller's own still-active provisioning reservation."""
+    with _identity_map_lock(path):
+        current_time = now()
+        existing = _read_reservation(path, issuer, subject, now=current_time)
+        if existing is None or not secrets.compare_digest(existing["token"], reservation):
+            return False
+        existing["expires_at"] = current_time + _PROVISIONING_RESERVATION_TTL_SECONDS
+        _write_reservation(path, issuer, subject, existing)
+        return True
+
+
 def preflight_trusted_identity(path: Path, issuer: str, subject: str, slug: str) -> bool:
     """Validate a proposed binding under the writer lock without changing the map.
 

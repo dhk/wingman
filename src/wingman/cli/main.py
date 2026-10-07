@@ -4637,6 +4637,11 @@ def tenant_oauth_bind_cmd(
         "--release-reservation",
         help="Release a failed provisioning attempt's claim token without binding.",
     ),
+    renew_reservation: str | None = typer.Option(
+        None,
+        "--renew-reservation",
+        help="Extend an active provisioning claim immediately before registry mutation.",
+    ),
 ) -> None:
     """Bind one operator-trusted OAuth identity to an existing tenant.
 
@@ -4650,15 +4655,19 @@ def tenant_oauth_bind_cmd(
         bind_trusted_identity,
         preflight_trusted_identity,
         release_trusted_identity_reservation,
+        renew_trusted_identity_reservation,
         reserve_trusted_identity,
     )
     from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
 
     identity_path = identities.expanduser()
-    selected_modes = sum((preflight, reserve, release_reservation is not None))
+    selected_modes = sum(
+        (preflight, reserve, release_reservation is not None, renew_reservation is not None)
+    )
     if selected_modes > 1 or (reservation is not None and selected_modes):
         typer.echo(
-            "Choose only one of --preflight, --reserve, --release-reservation, or --reservation.",
+            "Choose only one of --preflight, --reserve, --release-reservation, "
+            "--renew-reservation, or --reservation.",
             err=True,
         )
         raise typer.Exit(code=2)
@@ -4670,6 +4679,20 @@ def tenant_oauth_bind_cmd(
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=1) from exc
         typer.echo(token)
+        return
+
+    if renew_reservation is not None:
+        try:
+            renewed = renew_trusted_identity_reservation(
+                identity_path, issuer, subject, renew_reservation
+            )
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        if not renewed:
+            typer.echo("OAuth provisioning reservation is absent, expired, or owned elsewhere.")
+            raise typer.Exit(code=1)
+        typer.echo(f"Renewed OAuth provisioning reservation for {slug!r}.")
         return
 
     if release_reservation is not None:
@@ -4706,20 +4729,23 @@ def tenant_oauth_bind_cmd(
     except IdentityMapError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    if not changed:
-        typer.echo(f"That trusted OAuth identity is already bound to {slug!r}; nothing changed.")
-        return
+    if changed:
+        binding_status = f"Bound trusted OAuth identity to tenant {slug!r} in {identity_path}."
+    else:
+        binding_status = (
+            f"Trusted OAuth binding for tenant {slug!r} already existed in {identity_path}."
+        )
     try:
         signaled_pid = signal_reload(registry_path)
     except TenantProcessSignalError as exc:
-        typer.echo(f"Bound trusted OAuth identity to tenant {slug!r} in {identity_path}.")
+        typer.echo(binding_status)
         typer.echo(
             "Binding is on disk, but the running process still uses the previous identity map: "
             f"{exc}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
-    typer.echo(f"Bound trusted OAuth identity to tenant {slug!r} in {identity_path}.")
+    typer.echo(binding_status)
     if signaled_pid is not None:
         typer.echo(f"Signaled the running shared process (pid {signaled_pid}) to reload.")
     else:

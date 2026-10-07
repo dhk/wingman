@@ -87,6 +87,8 @@ def test_add_tenant_preflights_the_binding_before_creating_tenant_state(tmp_path
     identities = tmp_path / "oauth-identities.toml"
     identities.write_text("", encoding="utf-8")
     config = _oauth_service_fixture(commands, tmp_path, identities)
+    registry = tmp_path / "tenants.toml"
+    registry.write_text("", encoding="utf-8")
 
     result = subprocess.run(
         [
@@ -109,6 +111,7 @@ def test_add_tenant_preflights_the_binding_before_creating_tenant_state(tmp_path
             "PATH": f"{commands}:{os.environ['PATH']}",
             "WINGMAN_TEST_CALLS": str(calls),
             "WINGMAN_SHARED_OAUTH_CONFIG": str(config),
+            "WINGMAN_SHARED_REGISTRY": str(registry),
         },
     )
 
@@ -208,3 +211,31 @@ def test_shared_provisioner_wires_saved_oauth_settings_into_the_service() -> Non
     assert "EnvironmentFile=-$OAUTH_CONFIG_PATH" in body
     assert "\\$WINGMAN_OAUTH_ARGS" in body
     assert "systemctl --user restart wingman-mcp.service" in body
+
+
+def test_shared_provisioner_never_reowns_an_existing_identity_directory() -> None:
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+
+    create_guard = 'if [ ! -d "$OAUTH_IDENTITIES_PARENT" ]; then'
+    create_command = (
+        'install -d -m 700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$OAUTH_IDENTITIES_PARENT"'
+    )
+    assert create_guard in body
+    assert body.index(create_guard) < body.index(create_command)
+    assert "existing OAuth identity-map parent is not writable" in body
+
+
+def test_interactive_choice_precedes_reservation_and_reservation_is_renewed_before_registry() -> (
+    None
+):
+    body = SCRIPT.read_text(encoding="utf-8")
+
+    assert body.index("\nresolve_telemetry\n") < body.index("--reserve)")
+    assert body.index("--renew-reservation") < body.index('say "registering')
+
+
+def test_oauth_only_funding_guidance_does_not_claim_a_browser_key_page_exists() -> None:
+    body = SCRIPT.read_text(encoding="utf-8")
+
+    assert "Self-funded browser key entry is not available for OAuth-only tenants yet" in body
+    assert "OAuth-only tenant can make NO model call yet" in body
