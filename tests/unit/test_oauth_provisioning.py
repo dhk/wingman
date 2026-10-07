@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -8,7 +9,13 @@ import pytest
 from typer.testing import CliRunner
 
 from wingman.cli.main import app
-from wingman.infrastructure.oauth_bearer import IdentityMap, bind_trusted_identity
+from wingman.infrastructure.oauth_bearer import (
+    IdentityMap,
+    IdentityMapError,
+    bind_trusted_identity,
+    release_trusted_identity_reservation,
+    reserve_trusted_identity,
+)
 
 cli = CliRunner()
 ISSUER = "https://example.authkit.app"
@@ -284,3 +291,50 @@ def test_concurrent_bindings_serialize_the_read_modify_write(
     mapping = IdentityMap.from_toml(identities)
     assert mapping.slug_for(ISSUER, "first") == "first"
     assert mapping.slug_for(ISSUER, "second") == "second"
+
+
+def test_a_provisioning_reservation_blocks_a_competing_tenant_until_released(
+    tmp_path: Path,
+) -> None:
+    identities = tmp_path / "oauth-identities.toml"
+
+    reservation = reserve_trusted_identity(identities, ISSUER, "user_123", "first")
+
+    with pytest.raises(IdentityMapError, match="reserved.*first"):
+        reserve_trusted_identity(identities, ISSUER, "user_123", "second")
+    with pytest.raises(IdentityMapError, match="reserved.*first"):
+        bind_trusted_identity(identities, ISSUER, "user_123", "second")
+    assert not identities.exists()
+
+    assert release_trusted_identity_reservation(identities, ISSUER, "user_123", reservation)
+    second = reserve_trusted_identity(identities, ISSUER, "user_123", "second")
+    assert bind_trusted_identity(identities, ISSUER, "user_123", "second", reservation=second)
+    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "second"
+
+
+def test_only_the_reservation_owner_can_finish_or_release_provisioning(tmp_path: Path) -> None:
+    identities = tmp_path / "oauth-identities.toml"
+    reservation = reserve_trusted_identity(identities, ISSUER, "user_123", "jason")
+
+    with pytest.raises(IdentityMapError, match="reservation token"):
+        bind_trusted_identity(identities, ISSUER, "user_123", "jason", reservation="not-the-token")
+    assert not release_trusted_identity_reservation(identities, ISSUER, "user_123", "not-the-token")
+
+    assert bind_trusted_identity(identities, ISSUER, "user_123", "jason", reservation=reservation)
+
+
+def test_a_crashed_provisioning_reservation_expires(tmp_path: Path) -> None:
+    identities = tmp_path / "oauth-identities.toml"
+    clock = [time.time()]
+    first = reserve_trusted_identity(identities, ISSUER, "user_123", "first", now=lambda: clock[0])
+    reservation_files = list(tmp_path.glob(".*.reservation-*.json"))
+    assert len(reservation_files) == 1
+    assert reservation_files[0].stat().st_mode & 0o777 == 0o600
+
+    clock[0] += 3601.0
+    second = reserve_trusted_identity(
+        identities, ISSUER, "user_123", "second", now=lambda: clock[0]
+    )
+
+    assert second != first
+    assert bind_trusted_identity(identities, ISSUER, "user_123", "second", reservation=second)

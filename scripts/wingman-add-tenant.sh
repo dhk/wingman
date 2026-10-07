@@ -28,6 +28,7 @@ SERVICE_USER="${WINGMAN_SHARED_USER:-wingman-shared}"
 PORT="${WINGMAN_SHARED_PORT:-8789}"
 TAILSCALE_PATH="${WINGMAN_SHARED_TAILSCALE_PATH:-/shared}"
 REGISTRY_PATH="/etc/wingman/tenants.toml"
+OAUTH_SERVICE_CONFIG="${WINGMAN_SHARED_OAUTH_CONFIG:-/etc/wingman/oauth.env}"
 SLUG="${1:?usage: $0 <slug> [--telemetry|--no-telemetry]}"
 shift
 TELEMETRY=""
@@ -86,6 +87,80 @@ PY
   fi
 }
 
+validate_oauth_service() {
+  [ "$oauth_fields" -eq 3 ] || return 0
+  if [ ! -f "$OAUTH_SERVICE_CONFIG" ]; then
+    echo "shared service is not configured for OAuth: no $OAUTH_SERVICE_CONFIG. Run wingman-provision-shared.sh with all WINGMAN_SHARED_OAUTH_* settings first." >&2
+    exit 1
+  fi
+  local values
+  if ! values="$(python3 - "$OAUTH_SERVICE_CONFIG" "$OAUTH_ISSUER" "$OAUTH_IDENTITIES" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+requested_issuer = sys.argv[2]
+requested_identities = Path(sys.argv[3]).expanduser().resolve()
+values = {}
+for line in path.read_text(encoding="utf-8").splitlines():
+    line = line.strip()
+    if not line or line.startswith("#"):
+        continue
+    key, separator, value = line.partition("=")
+    if not separator:
+        print(f"malformed OAuth service configuration line: {line!r}", file=sys.stderr)
+        raise SystemExit(1)
+    values[key] = value
+
+required = (
+    "WINGMAN_OAUTH_ISSUER",
+    "WINGMAN_OAUTH_AUDIENCE",
+    "WINGMAN_OAUTH_JWKS_URI",
+    "WINGMAN_OAUTH_IDENTITIES",
+)
+missing = [key for key in required if not values.get(key)]
+if missing:
+    print("OAuth service configuration is incomplete: " + ", ".join(missing), file=sys.stderr)
+    raise SystemExit(1)
+if values["WINGMAN_OAUTH_ISSUER"] != requested_issuer:
+    print("OAuth tenant issuer does not match the shared service configuration", file=sys.stderr)
+    raise SystemExit(1)
+if Path(values["WINGMAN_OAUTH_IDENTITIES"]).expanduser().resolve() != requested_identities:
+    print("OAuth tenant identity map does not match the shared service configuration", file=sys.stderr)
+    raise SystemExit(1)
+print(values["WINGMAN_OAUTH_AUDIENCE"])
+PY
+)"; then
+    echo "shared service OAuth configuration does not match this tenant request." >&2
+    exit 1
+  fi
+
+  local metadata
+  if ! metadata="$(curl --fail --silent --show-error \
+    "http://127.0.0.1:$PORT/.well-known/oauth-protected-resource/mcp")"; then
+    echo "shared service OAuth metadata is not live on port $PORT; no tenant state was created." >&2
+    exit 1
+  fi
+  if ! python3 - "$values" "$OAUTH_ISSUER" "$metadata" <<'PY'
+import json
+import sys
+
+audience, issuer, raw = sys.argv[1:]
+try:
+    metadata = json.loads(raw)
+except json.JSONDecodeError as exc:
+    print(f"shared service returned malformed OAuth metadata: {exc}", file=sys.stderr)
+    raise SystemExit(1) from exc
+if metadata.get("resource") != audience or issuer not in metadata.get("authorization_servers", []):
+    print("shared service OAuth metadata does not match its saved configuration", file=sys.stderr)
+    raise SystemExit(1)
+PY
+  then
+    echo "shared service OAuth route is not ready; no tenant state was created." >&2
+    exit 1
+  fi
+}
+
 # Asked before the workspace exists, so a "no" costs nothing to honour.
 resolve_telemetry() {
   [ -n "$TELEMETRY" ] && return 0
@@ -120,21 +195,33 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 validate_oauth_identities_path
+validate_oauth_service
 
-# Check the shared identity map before creating the workspace or registry row.
-# The final bind repeats this under the same writer lock. If another operator
-# claims the identity after preflight, that bind refuses rather than silently
-# reassigning it.
-if [ "$oauth_fields" -eq 3 ]; then
-  say "preflighting the trusted OAuth identity"
+RESERVATION=""
+release_reservation() {
+  [ -n "$RESERVATION" ] || return 0
   sudo -iu "$SERVICE_USER" env \
     PATH="/home/$SERVICE_USER/.local/bin:$PATH" \
     wingman tenant oauth-bind "$SLUG" \
       --issuer "$OAUTH_ISSUER" \
       --subject "$OAUTH_SUBJECT" \
       --identities "$OAUTH_IDENTITIES" \
-      --registry "$REGISTRY_PATH" \
-      --preflight
+      --release-reservation "$RESERVATION" >/dev/null 2>&1 || true
+}
+trap release_reservation EXIT
+
+# Atomically reserve the identity before creating the workspace or registry
+# row. Competing provisioning or manual binding attempts fail while this
+# reservation is active; the final bind consumes it.
+if [ "$oauth_fields" -eq 3 ]; then
+  say "reserving the trusted OAuth identity"
+  RESERVATION="$(sudo -iu "$SERVICE_USER" env \
+    PATH="/home/$SERVICE_USER/.local/bin:$PATH" \
+    wingman tenant oauth-bind "$SLUG" \
+      --issuer "$OAUTH_ISSUER" \
+      --subject "$OAUTH_SUBJECT" \
+      --identities "$OAUTH_IDENTITIES" \
+      --reserve)"
 fi
 
 if [ ! -f "$REGISTRY_PATH" ]; then
@@ -181,7 +268,9 @@ if [ "$oauth_fields" -eq 3 ]; then
       --issuer "$OAUTH_ISSUER" \
       --subject "$OAUTH_SUBJECT" \
       --identities "$OAUTH_IDENTITIES" \
-      --registry "$REGISTRY_PATH"
+      --registry "$REGISTRY_PATH" \
+      --reservation "$RESERVATION"
+  RESERVATION=""
 else
   say "issuing first token and reloading the running server"
   # --tunnel-prefix matches this same script's tailscale mount (see

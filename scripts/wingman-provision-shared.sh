@@ -21,6 +21,11 @@
 #                WINGMAN_SHARED_TAILSCALE_PATHS (default "/shared"; space- or
 #                  comma-separated for a service fronting more than one path),
 #                WINGMAN_SHARED_TAILSCALE_PATH (deprecated single-path alias)
+# OAuth (all four together, or none):
+#                WINGMAN_SHARED_OAUTH_ISSUER
+#                WINGMAN_SHARED_OAUTH_AUDIENCE
+#                WINGMAN_SHARED_OAUTH_JWKS_URI
+#                WINGMAN_SHARED_OAUTH_IDENTITIES
 #
 # What this does NOT do: create per-tenant workspaces or tokens — run
 # 'wingman-add-tenant.sh <slug>' once per tenant afterward. Nor does it
@@ -41,6 +46,31 @@ read -r -a TAILSCALE_PATH_LIST <<<"${TAILSCALE_PATHS//,/ }"
 TAILSCALE_PATH="${TAILSCALE_PATH_LIST[0]}"   # the prefix tenant URLs are printed with
 REPO_URL="git@github.com:dhk/wingman.git"
 REGISTRY_PATH="/etc/wingman/tenants.toml"
+OAUTH_CONFIG_PATH="${WINGMAN_SHARED_OAUTH_CONFIG:-/etc/wingman/oauth.env}"
+OAUTH_ISSUER="${WINGMAN_SHARED_OAUTH_ISSUER:-}"
+OAUTH_AUDIENCE="${WINGMAN_SHARED_OAUTH_AUDIENCE:-}"
+OAUTH_JWKS_URI="${WINGMAN_SHARED_OAUTH_JWKS_URI:-}"
+OAUTH_IDENTITIES="${WINGMAN_SHARED_OAUTH_IDENTITIES:-}"
+oauth_fields=0
+[ -n "$OAUTH_ISSUER" ] && oauth_fields=$((oauth_fields + 1))
+[ -n "$OAUTH_AUDIENCE" ] && oauth_fields=$((oauth_fields + 1))
+[ -n "$OAUTH_JWKS_URI" ] && oauth_fields=$((oauth_fields + 1))
+[ -n "$OAUTH_IDENTITIES" ] && oauth_fields=$((oauth_fields + 1))
+if [ "$oauth_fields" -ne 0 ] && [ "$oauth_fields" -ne 4 ]; then
+  echo "Shared OAuth needs all four WINGMAN_SHARED_OAUTH_* settings together." >&2
+  exit 2
+fi
+if [ "$oauth_fields" -eq 4 ]; then
+  for value in "$OAUTH_ISSUER" "$OAUTH_AUDIENCE" "$OAUTH_JWKS_URI" "$OAUTH_IDENTITIES"; do
+    case "$value" in
+      *[[:space:]]*) echo "Shared OAuth settings must not contain whitespace: $value" >&2; exit 2 ;;
+    esac
+  done
+  case "$OAUTH_IDENTITIES" in
+    /*) ;;
+    *) echo "WINGMAN_SHARED_OAUTH_IDENTITIES must be an absolute path." >&2; exit 2 ;;
+  esac
+fi
 
 say() { printf '==> %s\n' "$*"; }
 
@@ -68,6 +98,24 @@ systemctl start "user@${SERVICE_UID}.service" 2>/dev/null || true
 say "3/7 registry directory + file (root-owned, group-readable, no secrets in it)"
 install -d -m 750 -o root -g wingman /etc/wingman
 [ -f "$REGISTRY_PATH" ] || install -m 644 /dev/null "$REGISTRY_PATH"
+OAUTH_CONFIG_CHANGED=0
+if [ "$oauth_fields" -eq 4 ]; then
+  install -d -m 700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$(dirname "$OAUTH_IDENTITIES")"
+  [ -f "$OAUTH_IDENTITIES" ] || install -m 600 -o "$SERVICE_USER" -g "$SERVICE_USER" /dev/null "$OAUTH_IDENTITIES"
+  OAUTH_CONFIG_TEMP="$(mktemp)"
+  cat > "$OAUTH_CONFIG_TEMP" <<EOF
+WINGMAN_OAUTH_ISSUER=$OAUTH_ISSUER
+WINGMAN_OAUTH_AUDIENCE=$OAUTH_AUDIENCE
+WINGMAN_OAUTH_JWKS_URI=$OAUTH_JWKS_URI
+WINGMAN_OAUTH_IDENTITIES=$OAUTH_IDENTITIES
+WINGMAN_OAUTH_ARGS=--oauth-issuer $OAUTH_ISSUER --oauth-audience $OAUTH_AUDIENCE --oauth-jwks-uri $OAUTH_JWKS_URI --oauth-identities $OAUTH_IDENTITIES
+EOF
+  if [ ! -f "$OAUTH_CONFIG_PATH" ] || ! cmp -s "$OAUTH_CONFIG_TEMP" "$OAUTH_CONFIG_PATH"; then
+    OAUTH_CONFIG_CHANGED=1
+    install -D -m 644 -o root -g wingman "$OAUTH_CONFIG_TEMP" "$OAUTH_CONFIG_PATH"
+  fi
+  rm -f "$OAUTH_CONFIG_TEMP"
+fi
 
 say "4/7 SSH deploy key — this account has no GitHub identity of its own"
 SSH_DIR="/home/$SERVICE_USER/.ssh"
@@ -95,7 +143,9 @@ sudo -iu "$SERVICE_USER" bash -c "~/src/wingman/scripts/wingman-tool-install.sh 
 say "6/7 systemd unit"
 UNIT_DIR="/home/$SERVICE_USER/.config/systemd/user"
 sudo -iu "$SERVICE_USER" mkdir -p "$UNIT_DIR"
-cat > "$UNIT_DIR/wingman-mcp.service" <<EOF
+UNIT_PATH="$UNIT_DIR/wingman-mcp.service"
+UNIT_TEMP="$(mktemp)"
+cat > "$UNIT_TEMP" <<EOF
 [Unit]
 Description=Wingman shared multi-tenant MCP server (RFC-048)
 After=network.target
@@ -103,7 +153,8 @@ After=network.target
 [Service]
 EnvironmentFile=-%h/.config/wingman/wingman.env
 EnvironmentFile=-%h/.config/wingman/secrets.env
-ExecStart=%h/.local/bin/wingman-mcp --http --port $PORT --tenant-registry $REGISTRY_PATH
+EnvironmentFile=-$OAUTH_CONFIG_PATH
+ExecStart=%h/.local/bin/wingman-mcp --http --port $PORT --tenant-registry $REGISTRY_PATH \$WINGMAN_OAUTH_ARGS
 Restart=on-failure
 RestartSec=2
 # A slow port release must never become a PERMANENT outage (#415).
@@ -124,7 +175,12 @@ StartLimitBurst=0
 [Install]
 WantedBy=default.target
 EOF
-chown "$SERVICE_USER:$SERVICE_USER" "$UNIT_DIR/wingman-mcp.service"
+UNIT_CHANGED=0
+if [ ! -f "$UNIT_PATH" ] || ! cmp -s "$UNIT_TEMP" "$UNIT_PATH"; then
+  UNIT_CHANGED=1
+  install -m 644 -o "$SERVICE_USER" -g "$SERVICE_USER" "$UNIT_TEMP" "$UNIT_PATH"
+fi
+rm -f "$UNIT_TEMP"
 # 'systemctl --user' needs XDG_RUNTIME_DIR pointed at this account's own
 # runtime dir to reach its session bus at all when invoked via sudo from
 # root — 'sudo -iu' alone isn't enough (this is the exact fix
@@ -132,8 +188,18 @@ chown "$SERVICE_USER:$SERVICE_USER" "$UNIT_DIR/wingman-mcp.service"
 # this fails with "Failed to connect to bus: No medium found".
 sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
   systemctl --user daemon-reload
+SERVICE_WAS_ACTIVE=0
+if sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
+  systemctl --user is-active --quiet wingman-mcp.service; then
+  SERVICE_WAS_ACTIVE=1
+fi
 sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
   systemctl --user enable --now wingman-mcp.service
+if [ "$SERVICE_WAS_ACTIVE" -eq 1 ] && { [ "$OAUTH_CONFIG_CHANGED" -eq 1 ] || [ "$UNIT_CHANGED" -eq 1 ]; }; then
+  say "  service configuration changed — restarting the shared service"
+  sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
+    systemctl --user restart wingman-mcp.service
+fi
 
 say "7/8 tailscale mount (stripping proxy — the shared process itself runs with no --prefix)"
 # 'funnel', never plain 'serve': funnel is a per-HOSTNAME toggle, not a

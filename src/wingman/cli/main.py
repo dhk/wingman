@@ -4622,6 +4622,21 @@ def tenant_oauth_bind_cmd(
         "--preflight",
         help="Validate identity-map availability without changing tenant or identity state.",
     ),
+    reserve: bool = typer.Option(
+        False,
+        "--reserve",
+        help="Reserve this identity while a new tenant is provisioned; prints a claim token.",
+    ),
+    reservation: str | None = typer.Option(
+        None,
+        "--reservation",
+        help="Claim token returned by --reserve for the final provisioning bind.",
+    ),
+    release_reservation: str | None = typer.Option(
+        None,
+        "--release-reservation",
+        help="Release a failed provisioning attempt's claim token without binding.",
+    ),
 ) -> None:
     """Bind one operator-trusted OAuth identity to an existing tenant.
 
@@ -4634,10 +4649,43 @@ def tenant_oauth_bind_cmd(
         IdentityMapError,
         bind_trusted_identity,
         preflight_trusted_identity,
+        release_trusted_identity_reservation,
+        reserve_trusted_identity,
     )
     from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
 
     identity_path = identities.expanduser()
+    selected_modes = sum((preflight, reserve, release_reservation is not None))
+    if selected_modes > 1 or (reservation is not None and selected_modes):
+        typer.echo(
+            "Choose only one of --preflight, --reserve, --release-reservation, or --reservation.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    if reserve:
+        try:
+            token = reserve_trusted_identity(identity_path, issuer, subject, slug)
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo(token)
+        return
+
+    if release_reservation is not None:
+        try:
+            released = release_trusted_identity_reservation(
+                identity_path, issuer, subject, release_reservation
+            )
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        if released:
+            typer.echo(f"Released OAuth provisioning reservation for {slug!r}.")
+        else:
+            typer.echo("No matching OAuth provisioning reservation was active.")
+        return
+
     if preflight:
         try:
             changed = preflight_trusted_identity(identity_path, issuer, subject, slug)
@@ -4652,7 +4700,9 @@ def tenant_oauth_bind_cmd(
 
     _tenant, registry_path = _load_tenant_or_exit(slug, registry)
     try:
-        changed = bind_trusted_identity(identity_path, issuer, subject, slug)
+        changed = bind_trusted_identity(
+            identity_path, issuer, subject, slug, reservation=reservation
+        )
     except IdentityMapError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc

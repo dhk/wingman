@@ -430,6 +430,38 @@ def test_a_cached_valid_key_still_works_during_an_unknown_key_cooldown() -> None
     assert state.requests == before_cached_lookup
 
 
+def test_cached_keys_expire_and_a_removed_key_is_refused_after_refresh() -> None:
+    state = _JwksState([_public_jwk(_KEY, "rotated-out", "RS256")])
+    token = _token(headers={"kid": "rotated-out"})
+    clock = [100.0]
+    with _jwks_server(state) as uri:
+        resolver = jwks_key_resolver(uri, cache_ttl_seconds=300.0, monotonic=lambda: clock[0])
+        assert resolver(token) is not None
+        state.keys = [_public_jwk(_OTHER_KEY, "replacement", "RS256")]
+        clock[0] += 301.0
+
+        with pytest.raises(jwt.PyJWKClientError):
+            resolver(token)
+
+    assert state.requests == 2
+
+
+def test_expired_keys_fail_closed_when_the_jwks_endpoint_is_down() -> None:
+    state = _JwksState([_public_jwk(_KEY, "known", "RS256")])
+    token = _token(headers={"kid": "known"})
+    clock = [100.0]
+    with _jwks_server(state) as uri:
+        resolver = jwks_key_resolver(uri, cache_ttl_seconds=300.0, monotonic=lambda: clock[0])
+        assert resolver(token) is not None
+        state.status = 503
+        clock[0] += 301.0
+
+        with pytest.raises(jwt.PyJWKClientError):
+            resolver(token)
+
+    assert state.requests == 2
+
+
 def test_a_jwks_outage_is_a_401_and_never_reaches_the_inner_app(tmp_path: Path) -> None:
     state = _JwksState([_public_jwk(_KEY, "known", "RS256")])
     state.status = 503

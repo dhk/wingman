@@ -794,7 +794,21 @@ sudo scripts/wingman-add-tenant.sh jason --telemetry
 sudo scripts/wingman-add-tenant.sh bob --no-telemetry
 ```
 
-For a deliberately trusted OAuth user, bind the exact verified WorkOS
+Before adding any OAuth-only tenant, enable OAuth on the shared service itself.
+All four values are required together; the provisioner saves the non-secret
+configuration in `/etc/wingman/oauth.env`, adds it to the systemd command, and
+restarts the shared service when it changes:
+
+```bash
+sudo env \
+  WINGMAN_SHARED_OAUTH_ISSUER=https://your-project.authkit.app \
+  WINGMAN_SHARED_OAUTH_AUDIENCE=https://your-host.example/shared/mcp \
+  WINGMAN_SHARED_OAUTH_JWKS_URI=https://your-project.authkit.app/oauth2/jwks \
+  WINGMAN_SHARED_OAUTH_IDENTITIES=/home/wingman-shared/.config/wingman/oauth-identities.toml \
+  scripts/wingman-provision-shared.sh
+```
+
+For a deliberately trusted OAuth user, then bind the exact verified WorkOS
 `(iss, sub)` instead of issuing a capability URL. A newly trusted user gets
 an isolated workspace and the binding in one operator action:
 
@@ -807,11 +821,14 @@ sudo scripts/wingman-add-tenant.sh taylor --no-telemetry \
 
 The identity-map file must be readable and writable by `wingman-shared`, and
 its parent directory must be writable so bindings can be replaced atomically.
-Before creating the workspace or registry row, the provisioning script takes
-the identity-map writer lock and preflights the exact `(iss, sub, slug)`
-binding. A malformed map or an identity already bound to another tenant is
-therefore refused before any tenant state is created. The final bind repeats
-the check under the same lock before writing.
+Before creating the workspace or registry row, the provisioning script checks
+that the saved service configuration matches the requested issuer and identity
+map, then reads the live protected-resource metadata from the shared process.
+It also creates an atomic, expiring reservation for the exact
+`(iss, sub, slug)` binding. A malformed map, an identity already claimed by
+another tenant, a competing provisioning operation, or a service that is not
+actually serving OAuth is therefore refused before tenant state is created.
+The final bind consumes the reservation; a failed attempt releases it.
 
 For an existing tenant, preserve their workspace and add only the binding:
 
@@ -831,6 +848,13 @@ the key and do not copy a `sub` from an unverified source. If the binding is
 written but the operator cannot signal the running process, the command exits
 nonzero and says that the on-disk map changed while the live process still has
 the previous map; it does not misreport that state as "no process found."
+
+The resource server caches validated JWKS keys for at most five minutes.
+After that it refreshes from the issuer and fails closed if the issuer is
+unavailable; a key removed by WorkOS is never accepted indefinitely merely
+because this process has not restarted. Unknown-key and outage refreshes are
+single-flight with a short cooldown, so bogus key IDs cannot fan out into one
+issuer request per bearer request.
 
 `--telemetry` / `--no-telemetry` decide RFC-023's local usage journal for
 that tenant. **With neither flag it asks**, and with neither flag and no

@@ -33,8 +33,10 @@ cannot send a bearer header from a browser link).
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
+import secrets
 import tempfile
 import threading
 import time
@@ -76,6 +78,13 @@ _LEEWAY_SECONDS = 30
 # value makes PyJWKClient refresh the issuer synchronously, turning this
 # endpoint into an outbound-request amplifier and consuming the worker pool.
 _UNKNOWN_KEY_REFRESH_COOLDOWN_SECONDS = 30.0
+
+# WorkOS key removal must take effect without waiting for a process restart.
+# Expired keys fail closed if the issuer is unavailable.
+_JWKS_CACHE_TTL_SECONDS = 300.0
+
+# A crashed provisioning command must not reserve an identity forever.
+_PROVISIONING_RESERVATION_TTL_SECONDS = 3600.0
 
 _WELL_KNOWN = "/.well-known/oauth-protected-resource"
 
@@ -156,6 +165,7 @@ def jwks_key_resolver(
     jwks_uri: str,
     *,
     refresh_cooldown_seconds: float = _UNKNOWN_KEY_REFRESH_COOLDOWN_SECONDS,
+    cache_ttl_seconds: float = _JWKS_CACHE_TTL_SECONDS,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> KeyResolver:
     """A resolver backed by the issuer's published JWKS.
@@ -169,9 +179,10 @@ def jwks_key_resolver(
     keys_by_id: dict[str, Any] = {}
     refresh_lock = threading.Lock()
     refresh_after = 0.0
+    keys_expire_at = 0.0
 
     def resolve(token: str) -> Any:
-        nonlocal refresh_after
+        nonlocal keys_by_id, keys_expire_at, refresh_after
         header = jwt.get_unverified_header(token)
         algorithm = header.get("alg")
         key_id = header.get("kid")
@@ -180,28 +191,32 @@ def jwks_key_resolver(
         if not isinstance(key_id, str) or not key_id:
             raise jwt.PyJWKClientError("token header has no usable kid")
 
+        now = monotonic()
         cached = keys_by_id.get(key_id)
-        if cached is not None:
+        if cached is not None and now < keys_expire_at:
             return cached
 
         # Single-flight both the fetch and a failed/unknown-key cooldown.
         # Cached valid keys bypass this lock and remain usable during an
         # issuer outage or an attack made of novel key ids.
         with refresh_lock:
-            cached = keys_by_id.get(key_id)
-            if cached is not None:
-                return cached
             now = monotonic()
+            cached = keys_by_id.get(key_id)
+            if cached is not None and now < keys_expire_at:
+                return cached
             if now < refresh_after:
                 raise jwt.PyJWKClientError("unknown kid; JWKS refresh is cooling down")
             try:
                 signing_keys = client.get_signing_keys(refresh=True)
+                fresh_keys: dict[str, Any] = {}
                 for signing_key in signing_keys:
                     if isinstance(signing_key.key_id, str) and signing_key.key_id:
-                        keys_by_id[signing_key.key_id] = signing_key.key
+                        fresh_keys[signing_key.key_id] = signing_key.key
             except Exception:
                 refresh_after = monotonic() + refresh_cooldown_seconds
                 raise
+            keys_by_id = fresh_keys
+            keys_expire_at = monotonic() + cache_ttl_seconds
             cached = keys_by_id.get(key_id)
             if cached is None:
                 refresh_after = monotonic() + refresh_cooldown_seconds
@@ -369,6 +384,103 @@ def _validate_binding(identities: IdentityMap, issuer: str, subject: str, slug: 
     return True
 
 
+def _reservation_path(path: Path, issuer: str, subject: str) -> Path:
+    digest = hashlib.sha256(f"{issuer}\0{subject}".encode()).hexdigest()
+    return path.with_name(f".{path.name}.reservation-{digest}.json")
+
+
+def _read_reservation(
+    path: Path, issuer: str, subject: str, *, now: float
+) -> dict[str, Any] | None:
+    reservation_path = _reservation_path(path, issuer, subject)
+    try:
+        value = json.loads(reservation_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise IdentityMapError(
+            f"OAuth provisioning reservation {reservation_path} is unreadable: {exc}"
+        ) from exc
+    if not isinstance(value, dict):
+        raise IdentityMapError(f"OAuth provisioning reservation {reservation_path} is malformed")
+    expires_at = value.get("expires_at")
+    if not isinstance(expires_at, (int, float)):
+        raise IdentityMapError(f"OAuth provisioning reservation {reservation_path} is malformed")
+    if expires_at <= now:
+        reservation_path.unlink(missing_ok=True)
+        return None
+    if (
+        value.get("issuer") != issuer
+        or value.get("subject") != subject
+        or not isinstance(value.get("slug"), str)
+        or not isinstance(value.get("token"), str)
+    ):
+        raise IdentityMapError(f"OAuth provisioning reservation {reservation_path} is malformed")
+    return value
+
+
+def _write_reservation(path: Path, issuer: str, subject: str, value: dict[str, Any]) -> None:
+    reservation_path = _reservation_path(path, issuer, subject)
+    fd, temporary = tempfile.mkstemp(prefix=f".{reservation_path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        Path(temporary).chmod(0o600)
+        os.replace(temporary, reservation_path)
+    except Exception:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def reserve_trusted_identity(
+    path: Path,
+    issuer: str,
+    subject: str,
+    slug: str,
+    *,
+    now: Callable[[], float] = time.time,
+) -> str:
+    """Reserve an identity for one provisioning operation before state is created."""
+    with _identity_map_lock(path):
+        _validate_binding(_identity_map_or_empty(path), issuer, subject, slug)
+        current_time = now()
+        existing = _read_reservation(path, issuer, subject, now=current_time)
+        if existing is not None:
+            raise IdentityMapError(
+                f"identity ({issuer!r}, {subject!r}) is reserved for provisioning "
+                f"tenant {existing['slug']!r}"
+            )
+        token = secrets.token_urlsafe(24)
+        _write_reservation(
+            path,
+            issuer,
+            subject,
+            {
+                "issuer": issuer,
+                "subject": subject,
+                "slug": slug,
+                "token": token,
+                "expires_at": current_time + _PROVISIONING_RESERVATION_TTL_SECONDS,
+            },
+        )
+        return token
+
+
+def release_trusted_identity_reservation(
+    path: Path, issuer: str, subject: str, reservation: str
+) -> bool:
+    """Release only the caller's own still-active provisioning reservation."""
+    with _identity_map_lock(path):
+        existing = _read_reservation(path, issuer, subject, now=time.time())
+        if existing is None or not secrets.compare_digest(existing["token"], reservation):
+            return False
+        _reservation_path(path, issuer, subject).unlink(missing_ok=True)
+        return True
+
+
 def preflight_trusted_identity(path: Path, issuer: str, subject: str, slug: str) -> bool:
     """Validate a proposed binding under the writer lock without changing the map.
 
@@ -383,11 +495,36 @@ def preflight_trusted_identity(path: Path, issuer: str, subject: str, slug: str)
         raise IdentityMapError(f"identity map {path} cannot be locked safely: {exc}") from exc
 
 
-def bind_trusted_identity(path: Path, issuer: str, subject: str, slug: str) -> bool:
+def bind_trusted_identity(
+    path: Path,
+    issuer: str,
+    subject: str,
+    slug: str,
+    *,
+    reservation: str | None = None,
+) -> bool:
     """Atomically bind one operator-approved identity; False means already exact."""
     with _identity_map_lock(path):
         identities = _identity_map_or_empty(path)
+        active = _read_reservation(path, issuer, subject, now=time.time())
+        if active is not None:
+            matches = (
+                reservation is not None
+                and active["slug"] == slug
+                and secrets.compare_digest(active["token"], reservation)
+            )
+            if not matches:
+                if reservation is not None:
+                    raise IdentityMapError("OAuth provisioning reservation token does not match")
+                raise IdentityMapError(
+                    f"identity ({issuer!r}, {subject!r}) is reserved for provisioning "
+                    f"tenant {active['slug']!r}"
+                )
+        elif reservation is not None:
+            raise IdentityMapError("OAuth provisioning reservation token is absent or expired")
         if not _validate_binding(identities, issuer, subject, slug):
+            if active is not None:
+                _reservation_path(path, issuer, subject).unlink(missing_ok=True)
             return False
         entries = identities.entries()
         key = (issuer, subject)
@@ -414,6 +551,8 @@ def bind_trusted_identity(path: Path, issuer: str, subject: str, slug: str) -> b
         except Exception:
             Path(temporary).unlink(missing_ok=True)
             raise
+        if active is not None:
+            _reservation_path(path, issuer, subject).unlink(missing_ok=True)
     return True
 
 
