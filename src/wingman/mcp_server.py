@@ -5327,6 +5327,27 @@ def main(argv: list[str] | None = None) -> None:
         help="TOML file of [[identity]] entries (iss, sub, slug) mapping a verified "
         "identity to a tenant slug in the registry.",
     )
+    parser.add_argument(
+        "--oauth-web-client-id",
+        metavar="ID",
+        help="WorkOS client ID for the browser setup login. Requires all --oauth-web-* "
+        "flags and WINGMAN_OAUTH_WEB_CLIENT_SECRET in the service environment.",
+    )
+    parser.add_argument(
+        "--oauth-web-authorize-url",
+        metavar="URL",
+        help="Exact WorkOS authorization endpoint for browser setup login.",
+    )
+    parser.add_argument(
+        "--oauth-web-token-url",
+        metavar="URL",
+        help="Exact WorkOS token endpoint for server-side code exchange.",
+    )
+    parser.add_argument(
+        "--oauth-web-redirect-uri",
+        metavar="URL",
+        help="Exact registered callback URL (usually <public-mount>/oauth/callback).",
+    )
     args = parser.parse_args(argv)
     configure_logging()
     get_logger("mcp").info("wingman-mcp %s starting", wingman_version())
@@ -5351,6 +5372,21 @@ def main(argv: list[str] | None = None) -> None:
             )
         if not args.tenant_registry:
             parser.error("--oauth-* only makes sense with --tenant-registry")
+    oauth_web_flags = (
+        args.oauth_web_client_id,
+        args.oauth_web_authorize_url,
+        args.oauth_web_token_url,
+        args.oauth_web_redirect_uri,
+    )
+    if any(value is not None for value in oauth_web_flags):
+        if not all(isinstance(value, str) and value for value in oauth_web_flags):
+            parser.error(
+                "the --oauth-web-* flags work only together: --oauth-web-client-id, "
+                "--oauth-web-authorize-url, --oauth-web-token-url and "
+                "--oauth-web-redirect-uri"
+            )
+        if not all(isinstance(value, str) and value for value in oauth_flags):
+            parser.error("--oauth-web-* requires the complete --oauth-* resource-server setup")
     # One-time move off the legacy flat '~/.config/keys.env' (RFC-046) —
     # idempotent, so this logs nothing on every subsequent start; called
     # here (not just inside 'ensure_env') so a migration on someone's
@@ -5510,6 +5546,7 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
             file=sys.stderr,
         )
         sys.exit(1)
+    resolve_key = jwks_key_resolver(settings.jwks_uri)
     bind_oauth_routing(
         app,
         f"{prefix}/mcp/{{token}}",
@@ -5517,12 +5554,43 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         index,
         identities,
         settings,
-        jwks_key_resolver(settings.jwks_uri),
+        resolve_key,
     )
+    oauth_web_client_id = getattr(args, "oauth_web_client_id", None)
+    if oauth_web_client_id:
+        from wingman.infrastructure.oauth_browser import (
+            OAuthBrowserSessions,
+            bind_oauth_browser,
+            build_oauth_browser_settings,
+        )
+
+        try:
+            browser_settings = build_oauth_browser_settings(
+                oauth_web_client_id,
+                args.oauth_web_authorize_url,
+                args.oauth_web_token_url,
+                args.oauth_web_redirect_uri,
+            )
+        except OAuthConfigError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+        bind_oauth_browser(
+            app,
+            prefix,
+            OAuthBrowserSessions(
+                browser_settings,
+                settings,
+                identities,
+                index,
+                resolve_key,
+            ),
+        )
     print(
         f"OAuth bearer (RFC-081 draft spike): {settings.audience}, "
         f"{len(identities)} identity mapping(s), issuer {settings.issuer}"
     )
+    if oauth_web_client_id:
+        print(f"OAuth browser setup: {args.oauth_web_redirect_uri} -> {prefix or '/'}setup/")
     return identities, identity_path
 
 
