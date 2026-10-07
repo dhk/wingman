@@ -26,6 +26,7 @@ import contextvars
 import json
 import subprocess
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -43,6 +44,8 @@ from wingman.infrastructure.tenants import Tenant, TenantIndex
 Capture = Callable[[list[str]], str | None]
 
 _MCP_SESSION_ID = b"mcp-session-id"
+_SESSION_BINDING_TTL_SECONDS = 1800.0
+_MAX_SESSION_BINDINGS = 4096
 
 
 def _session_id(headers: list[tuple[bytes, bytes]]) -> str | None:
@@ -68,20 +71,67 @@ class TenantSessionBindings:
     A's context merely by presenting A's session id.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = _SESSION_BINDING_TTL_SECONDS,
+        max_bindings: int = _MAX_SESSION_BINDINGS,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if ttl_seconds <= 0 or max_bindings <= 0:
+            raise ValueError("session binding TTL and capacity must be positive")
         self._lock = threading.Lock()
-        self._tenants: dict[str, str] = {}
+        self._tenants: dict[str, tuple[str, float]] = {}
+        self._ttl_seconds = ttl_seconds
+        self._max_bindings = max_bindings
+        self._monotonic = monotonic
 
-    def belongs_to_another_tenant(self, session_id: str, slug: str) -> bool:
-        with self._lock:
-            owner = self._tenants.get(session_id)
-            return owner is not None and owner != slug
+    def _purge_expired(self, now: float) -> None:
+        expired = [
+            session_id
+            for session_id, (_slug, last_seen) in self._tenants.items()
+            if now - last_seen >= self._ttl_seconds
+        ]
+        for session_id in expired:
+            del self._tenants[session_id]
 
-    def bind(self, session_id: str, slug: str) -> bool:
-        """Bind a new session, or confirm an existing binding atomically."""
+    def authorize(self, session_id: str, slug: str) -> str:
+        """Return ok, unknown, or other for a presented session id."""
         with self._lock:
-            owner = self._tenants.setdefault(session_id, slug)
-            return owner == slug
+            now = self._monotonic()
+            self._purge_expired(now)
+            binding = self._tenants.get(session_id)
+            if binding is None:
+                return "unknown"
+            owner, _last_seen = binding
+            if owner != slug:
+                return "other"
+            self._tenants[session_id] = (owner, now)
+            return "ok"
+
+    def bind(self, session_id: str, slug: str) -> str:
+        """Return ok, other, or capacity while binding an issued session."""
+        with self._lock:
+            now = self._monotonic()
+            self._purge_expired(now)
+            binding = self._tenants.get(session_id)
+            if binding is not None:
+                owner, _last_seen = binding
+                if owner != slug:
+                    return "other"
+                self._tenants[session_id] = (owner, now)
+                return "ok"
+            if len(self._tenants) >= self._max_bindings:
+                return "capacity"
+            self._tenants[session_id] = (slug, now)
+            return "ok"
+
+    def release(self, session_id: str, slug: str) -> None:
+        """Forget only the authenticated tenant's successfully deleted session."""
+        with self._lock:
+            binding = self._tenants.get(session_id)
+            if binding is not None and binding[0] == slug:
+                del self._tenants[session_id]
 
     async def call(
         self,
@@ -96,11 +146,18 @@ class TenantSessionBindings:
         except ValueError:
             await PlainTextResponse("Malformed MCP session", status_code=400)(scope, receive, send)
             return
-        if presented is not None and self.belongs_to_another_tenant(presented, slug):
-            await PlainTextResponse("MCP session belongs to another tenant", status_code=403)(
-                scope, receive, send
-            )
-            return
+        if presented is not None:
+            authorization = self.authorize(presented, slug)
+            if authorization == "unknown":
+                await PlainTextResponse("Unknown or expired MCP session", status_code=404)(
+                    scope, receive, send
+                )
+                return
+            if authorization == "other":
+                await PlainTextResponse("MCP session belongs to another tenant", status_code=403)(
+                    scope, receive, send
+                )
+                return
 
         blocked = False
 
@@ -117,12 +174,27 @@ class TenantSessionBindings:
                         scope, receive, send
                     )
                     return
-                if issued is not None and not self.bind(issued, slug):
-                    blocked = True
-                    await PlainTextResponse(
-                        "MCP session belongs to another tenant", status_code=403
-                    )(scope, receive, send)
-                    return
+                if issued is not None:
+                    binding = self.bind(issued, slug)
+                    if binding != "ok":
+                        blocked = True
+                        if binding == "capacity":
+                            await PlainTextResponse(
+                                "MCP session capacity reached; reconnect after an idle session expires",
+                                status_code=503,
+                            )(scope, receive, send)
+                        else:
+                            await PlainTextResponse(
+                                "MCP session belongs to another tenant", status_code=403
+                            )(scope, receive, send)
+                        return
+                status = int(message.get("status", 0))
+                if (
+                    presented is not None
+                    and scope.get("method") == "DELETE"
+                    and 200 <= status < 300
+                ):
+                    self.release(presented, slug)
             await send(message)
 
         await inner(scope, receive, bind_response)
@@ -220,7 +292,8 @@ class RequestOrigin:
     #: process never sees it (#417). Never treat this as authoritative for
     #: a public URL; ask 'resolve_prefix' instead.
     prefix: str
-    token: str
+    #: The capability token for legacy routes, or None for OAuth.
+    token: str | None
     #: The port this process was reached on, from the ASGI scope. What the
     #: live funnel lookup matches against.
     local_port: int | None = None
@@ -233,13 +306,16 @@ class RequestOrigin:
         return host in {"127.0.0.1", "::1", "localhost"}
 
     def mcp_url(self, prefix: str = "") -> str:
-        return f"{self.scheme}://{self.authority}{prefix}/mcp/{self.token}"
+        suffix = "/mcp" if self.token is None else f"/mcp/{self.token}"
+        return f"{self.scheme}://{self.authority}{prefix}{suffix}"
 
     def ui_url(self, prefix: str = "") -> str:
+        if self.token is None:
+            raise ValueError("OAuth requests do not have a capability-token web UI URL")
         return f"{self.scheme}://{self.authority}{prefix}/ui/{self.token}/"
 
 
-def request_origin(scope: Scope, token: str) -> RequestOrigin | None:
+def request_origin(scope: Scope, token: str | None) -> RequestOrigin | None:
     """The public base this request arrived on, or None if unreconstructable.
 
     Trusts the forwarded headers a reverse proxy sets, because the only
@@ -261,7 +337,7 @@ def request_origin(scope: Scope, token: str) -> RequestOrigin | None:
     # the app itself never sees a prefix.
     raw = scope.get("raw_path") or b""
     path = raw.decode("latin-1") if raw else scope.get("path", "")
-    marker = f"/mcp/{token}"
+    marker = f"/mcp/{token}" if token is not None else "/mcp"
     prefix = path.split(marker)[0] if marker in path else ""
     server = tuple(scope.get("server") or ())
     local_port = server[1] if len(server) > 1 and isinstance(server[1], int) else None
@@ -372,7 +448,13 @@ class TenantRoutingASGIApp:
         return current_tenant_config(self._index, resolved)
 
 
-def bind_tenant_routing(app: Starlette, path: str, index: TenantIndex) -> None:
+def bind_tenant_routing(
+    app: Starlette,
+    path: str,
+    index: TenantIndex,
+    *,
+    session_bindings: TenantSessionBindings | None = None,
+) -> None:
     """Replace the ASGI app mounted at 'path' with a tenant-resolving
     wrapper around whatever was originally mounted there.
 
@@ -384,7 +466,7 @@ def bind_tenant_routing(app: Starlette, path: str, index: TenantIndex) -> None:
     """
     for route in app.routes:
         if isinstance(route, Route) and route.path == path:
-            route.app = TenantRoutingASGIApp(route.app, index)
+            route.app = TenantRoutingASGIApp(route.app, index, session_bindings)
             return
     raise RuntimeError(
         f"no Starlette route at {path!r} to bind tenant routing to — "

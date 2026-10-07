@@ -72,6 +72,44 @@ def test_add_tenant_rejects_an_unusable_oauth_identities_path_early(tmp_path: Pa
     assert "initializing workspace" not in result.stdout
 
 
+def test_add_tenant_reports_permission_denied_without_claiming_the_path_is_missing(
+    tmp_path: Path,
+) -> None:
+    commands = _fake_root_commands(tmp_path)
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    identities = blocked / "oauth-identities.toml"
+    blocked.chmod(0)
+    try:
+        result = subprocess.run(
+            [
+                "bash",
+                str(SCRIPT),
+                "taylor",
+                "--no-telemetry",
+                "--oauth-issuer",
+                "https://issuer.example",
+                "--oauth-subject",
+                "user_123",
+                "--oauth-identities",
+                str(identities),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PATH": f"{commands}:{os.environ['PATH']}"},
+        )
+    finally:
+        blocked.chmod(0o700)
+
+    assert result.returncode != 0
+    assert "permission denied" in result.stderr.lower()
+    assert str(blocked) in result.stderr
+    assert "nothing was created or changed" in result.stderr.lower()
+    assert "Traceback" not in result.stderr
+    assert "does not exist" not in result.stderr
+
+
 def test_add_tenant_preflights_the_binding_before_creating_tenant_state(tmp_path: Path) -> None:
     commands = _fake_root_commands(tmp_path)
     wingman_command = commands / "wingman"

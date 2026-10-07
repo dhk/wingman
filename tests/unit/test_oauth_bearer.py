@@ -41,7 +41,7 @@ from wingman.infrastructure.oauth_bearer import (
     build_oauth_settings,
     jwks_key_resolver,
 )
-from wingman.infrastructure.tenant_asgi import bind_tenant_routing
+from wingman.infrastructure.tenant_asgi import TenantSessionBindings, bind_tenant_routing
 from wingman.infrastructure.tenants import Tenant, TenantIndex
 
 ISSUER = "https://idp.example.com"
@@ -88,6 +88,9 @@ class _SessionInner:
             for key, value in scope.get("headers", [])
         }
         session_id = headers.get(b"mcp-session-id")
+        if scope.get("method") == "DELETE":
+            await PlainTextResponse("terminated")(scope, receive, send)
+            return
         if session_id is None:
             self._next_session += 1
             session_id = f"session-{self._next_session}"
@@ -137,6 +140,7 @@ class _World:
         resolve_key: Any = None,
         settings: OAuthSettings = SETTINGS,
         raise_server_exceptions: bool = True,
+        session_bindings: TenantSessionBindings | None = None,
     ) -> None:
         tmp_path.mkdir(parents=True, exist_ok=True)
         self.inner = inner or _Inner()
@@ -154,7 +158,12 @@ class _World:
             }
         )
         self.app = Starlette(routes=[Route("/mcp/{token}", endpoint=self.inner)])
-        bind_tenant_routing(self.app, "/mcp/{token}", self.index)
+        bind_tenant_routing(
+            self.app,
+            "/mcp/{token}",
+            self.index,
+            session_bindings=session_bindings,
+        )
         bind_oauth_routing(
             self.app,
             "/mcp/{token}",
@@ -185,6 +194,28 @@ def world(tmp_path: Path) -> _World:
 def test_a_valid_token_reaches_the_tenant_its_identity_names(world: _World) -> None:
     assert world.get(_token("sub-jason")).text == str(world.jason.data_dir)
     assert world.get(_token("sub-bob")).text == str(world.bob.data_dir)
+
+
+def test_oauth_calls_preserve_truthful_http_origin_guidance(tmp_path: Path) -> None:
+    from wingman.infrastructure.storage import Storage
+    from wingman.mcp_server import my_urls
+
+    class _CallMyUrls:
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            await PlainTextResponse(my_urls())(scope, receive, send)
+
+    world = _World(tmp_path, inner=_CallMyUrls())
+    Storage(world.jason.data_dir / "wingman.db").close()
+
+    response = world.get(
+        _token("sub-jason"),
+        headers={"Host": "wingman.example.com", "X-Forwarded-Proto": "https"},
+    )
+
+    assert response.status_code == 200
+    assert "OAuth-authenticated HTTP session" in response.text
+    assert "did not arrive over HTTP" not in response.text
+    assert "/ui/" not in response.text
 
 
 def test_two_identities_of_one_person_reach_the_same_tenant(world: _World) -> None:
@@ -247,6 +278,52 @@ def test_a_capability_tenant_cannot_resume_an_oauth_tenants_session(tmp_path: Pa
 
     assert crossed.status_code == 403
     assert "session" in crossed.text.lower()
+
+
+def test_expired_session_bindings_fail_closed_instead_of_crossing_tenants(
+    tmp_path: Path,
+) -> None:
+    clock = [100.0]
+    bindings = TenantSessionBindings(
+        ttl_seconds=30.0,
+        max_bindings=10,
+        monotonic=lambda: clock[0],
+    )
+    world = _World(tmp_path, inner=_SessionInner(), session_bindings=bindings)
+    opened = world.client.get("/mcp/tok-jason")
+    session_id = opened.headers["mcp-session-id"]
+    clock[0] += 31.0
+
+    owner_resume = world.client.get("/mcp/tok-jason", headers={"Mcp-Session-Id": session_id})
+    crossed_resume = world.get(_token("sub-bob"), headers={"Mcp-Session-Id": session_id})
+
+    assert owner_resume.status_code == 404
+    assert crossed_resume.status_code == 404
+
+
+def test_session_binding_table_refuses_new_sessions_at_its_hard_limit(
+    tmp_path: Path,
+) -> None:
+    bindings = TenantSessionBindings(ttl_seconds=300.0, max_bindings=1)
+    world = _World(tmp_path, inner=_SessionInner(), session_bindings=bindings)
+
+    assert world.client.get("/mcp/tok-jason").status_code == 200
+    refused = world.client.get("/mcp/tok-jason")
+
+    assert refused.status_code == 503
+    assert "session capacity" in refused.text.lower()
+
+
+def test_successful_session_delete_releases_the_outer_tenant_binding(tmp_path: Path) -> None:
+    world = _World(tmp_path, inner=_SessionInner())
+    opened = world.client.get("/mcp/tok-jason")
+    session_id = opened.headers["mcp-session-id"]
+
+    deleted = world.client.delete("/mcp/tok-jason", headers={"Mcp-Session-Id": session_id})
+    after_delete = world.get(_token("sub-bob"), headers={"Mcp-Session-Id": session_id})
+
+    assert deleted.status_code == 200
+    assert after_delete.status_code == 404
 
 
 # --- every way a token can be wrong ------------------------------------------------

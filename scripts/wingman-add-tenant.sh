@@ -59,12 +59,35 @@ validate_oauth_identities_path() {
   [ "$oauth_fields" -eq 3 ] || return 0
   if ! sudo -iu "$SERVICE_USER" python3 - "$OAUTH_IDENTITIES" <<'PY'
 import os
+import stat
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1]).expanduser()
-if path.exists():
-    if not path.is_file():
+
+def metadata(candidate: Path):
+    try:
+        return candidate.stat()
+    except FileNotFoundError:
+        return None
+    except PermissionError:
+        print(
+            f"Permission denied while examining OAuth identity-map path: {candidate}. "
+            "Nothing was created or changed.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    except OSError as exc:
+        print(
+            f"Cannot examine OAuth identity-map path {candidate}: {exc}. "
+            "Nothing was created or changed.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+path_metadata = metadata(path)
+if path_metadata is not None:
+    if not stat.S_ISREG(path_metadata.st_mode):
         print(f"OAuth identity-map path is not a regular file: {path}", file=sys.stderr)
         raise SystemExit(1)
     if not os.access(path, os.R_OK | os.W_OK):
@@ -72,9 +95,15 @@ if path.exists():
         raise SystemExit(1)
 
 parent = path.parent
-while not parent.exists() and parent != parent.parent:
+parent_metadata = metadata(parent)
+while parent_metadata is None and parent != parent.parent:
     parent = parent.parent
-if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
+    parent_metadata = metadata(parent)
+if (
+    parent_metadata is None
+    or not stat.S_ISDIR(parent_metadata.st_mode)
+    or not os.access(parent, os.W_OK | os.X_OK)
+):
     print(
         f"OAuth identity-map parent is not a writable directory: {parent}",
         file=sys.stderr,

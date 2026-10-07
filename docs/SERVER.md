@@ -868,14 +868,25 @@ Every streamable-HTTP MCP session is also bound to the tenant that
 authenticated its initialize request. The capability-token and OAuth routes
 share that binding table: presenting tenant A's session id with tenant B's
 otherwise-valid credential is refused before FastMCP can resume A's
-long-lived task. Supplying OAuth flags with empty values likewise refuses
-startup instead of silently falling back to capability-only service.
+long-lived task. Bindings are removed after successful session termination,
+expire after 30 idle minutes, and are capped at 4,096 entries. Unknown or
+expired session ids fail closed and must reinitialize; a full table refuses a
+new session rather than growing without bound. Supplying OAuth flags with
+empty values likewise refuses startup instead of silently falling back to
+capability-only service.
 
 Identity-map lock, reservation, and atomic-replacement failures are reported
 as operator errors rather than tracebacks. A failed replacement explicitly
 says the previous map was preserved. Preflight checks active reservations as
 well as permanent bindings, so it never reports an identity as available
 while another onboarding operation holds it.
+
+OAuth requests retain their real HTTP origin for user guidance, but never
+invent a capability URL. `my_urls` names the OAuth connector address when its
+public mount is knowable and says plainly that this release has no
+OAuth-authenticated browser UI. Shared-path preflight also distinguishes a
+confirmed missing identity-map path from permission denial; it names the path,
+says that nothing changed, and never emits a Python traceback.
 
 OAuth-only tenants do not yet have an authenticated browser path to
 Manage → Keys. Do not promise self-funded browser key entry in this slice.

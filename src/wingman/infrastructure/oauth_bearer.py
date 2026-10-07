@@ -62,6 +62,7 @@ from wingman.infrastructure.tenant_asgi import (
     TenantRoutingASGIApp,
     TenantSessionBindings,
     current_tenant_config,
+    request_origin,
     request_origin_scope,
 )
 from wingman.infrastructure.tenants import TenantIndex
@@ -736,7 +737,7 @@ class BearerRoutingASGIApp:
         # A resolver, not a frozen Config — same reason as the token path (#404).
         with (
             tenant_config_scope(lambda: current_tenant_config(self._index, tenant)),
-            request_origin_scope(None),
+            request_origin_scope(request_origin(scope, None)),
         ):
             await self._session_bindings.call(tenant.slug, self._inner, scope, receive, send)
 

@@ -260,6 +260,24 @@ def my_urls() -> str:
             "a shared process, ask whoever runs the machine."
         )
     prefix = resolve_prefix(origin)
+    if origin.token is None:
+        if prefix is None:
+            address = f"{origin.scheme}://{origin.authority}"
+            connector = (
+                f"This OAuth-authenticated HTTP session reached {address}, but Wingman cannot "
+                "determine the public mount prefix, so it will not guess a connector URL."
+            )
+        else:
+            connector = (
+                "This OAuth-authenticated HTTP session uses:\n"
+                f"  MCP connector: {origin.mcp_url(prefix)}"
+            )
+        return (
+            connector + "\n\nOAuth sessions do not carry a capability-token URL. The authenticated "
+            "browser UI is not included in this release, so there is no Manage → Keys or "
+            "upload URL to provide here; ask whoever runs this Wingman for those operator-"
+            "assisted steps."
+        )
     if prefix is None:
         # A stripping front removed the mount path and the live funnel could
         # not be read, so the public prefix is genuinely unknown (#417).
