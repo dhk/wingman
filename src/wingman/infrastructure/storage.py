@@ -20,6 +20,7 @@ from wingman.domain.corpus import CorpusDocument
 from wingman.domain.delivered_message import DeliveredMessage
 from wingman.domain.examples import Example
 from wingman.domain.heap import HeapItem
+from wingman.domain.model_usage import ModelUsage
 from wingman.domain.operator_answer import OperatorAnswer
 from wingman.domain.opportunity import Opportunity
 from wingman.domain.outreach import OutreachBrief
@@ -276,6 +277,22 @@ CREATE TABLE IF NOT EXISTS delivered_messages (
     payload TEXT NOT NULL,
     delivered_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS model_usage (
+    usage_id TEXT PRIMARY KEY,
+    recorded_at TEXT NOT NULL,
+    capability TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    payer TEXT NOT NULL CHECK (payer IN ('byok', 'funded', 'ambient')),
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    search_result_count INTEGER,
+    latency_ms INTEGER NOT NULL,
+    caller_name TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_model_usage_recorded_at ON model_usage (recorded_at);
 """
 
 
@@ -1842,6 +1859,56 @@ class Storage:
             (limit,),
         )
         return [DeliveredMessage.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def add_model_usage(self, usage: ModelUsage) -> None:
+        self._conn.execute(
+            "INSERT INTO model_usage (usage_id, recorded_at, capability, provider, model, payer, "
+            "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
+            "search_result_count, latency_ms, caller_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                usage.usage_id,
+                usage.recorded_at.isoformat(),
+                usage.capability,
+                usage.provider,
+                usage.model,
+                usage.payer.value,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_tokens,
+                usage.cache_write_tokens,
+                usage.search_result_count,
+                usage.latency_ms,
+                usage.caller_name,
+            ),
+        )
+        self._conn.commit()
+
+    def list_model_usage(self, limit: int = 1000) -> list[ModelUsage]:
+        cursor = self._conn.execute(
+            "SELECT usage_id, recorded_at, capability, provider, model, payer, input_tokens, "
+            "output_tokens, cache_read_tokens, cache_write_tokens, search_result_count, "
+            "latency_ms, caller_name FROM model_usage "
+            "ORDER BY recorded_at DESC, rowid DESC LIMIT ?",
+            (limit,),
+        )
+        return [
+            ModelUsage(
+                usage_id=row[0],
+                recorded_at=datetime.fromisoformat(row[1]),
+                capability=row[2],
+                provider=row[3],
+                model=row[4],
+                payer=row[5],
+                input_tokens=row[6],
+                output_tokens=row[7],
+                cache_read_tokens=row[8],
+                cache_write_tokens=row[9],
+                search_result_count=row[10],
+                latency_ms=row[11],
+                caller_name=row[12],
+            )
+            for row in cursor.fetchall()
+        ]
 
     def count_commentary_entries(self) -> int:
         cursor = self._conn.execute("SELECT COUNT(*) FROM commentary_entries")

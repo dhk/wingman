@@ -33,6 +33,9 @@ class ModelResponse(BaseModel):
     model: str
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    search_result_count: int | None = None
     # The API's own reason generation stopped ("stop", "length",
     # "content_filter", ...) when the provider reports one — an
     # authoritative truncation signal (#261), not something callers should

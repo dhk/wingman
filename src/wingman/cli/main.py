@@ -67,6 +67,7 @@ from wingman.application.focus import (
 from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
+from wingman.application.model_usage import render_tenant_usage, render_usage
 from wingman.application.news import STALE_AFTER_DAYS, fetch_person_news
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pack import build_application_pack
@@ -138,6 +139,7 @@ from wingman.application.triage import (
     snooze_action,
     unmute_action,
 )
+from wingman.domain.model_usage import Payer
 from wingman.domain.outreach import OutreachPurpose
 from wingman.domain.person import Person
 from wingman.infrastructure import doctor_deep
@@ -172,6 +174,7 @@ from wingman.infrastructure.keys import (
 from wingman.infrastructure.logs import configure_logging
 from wingman.infrastructure.mcp_process import server_status, stop_server
 from wingman.infrastructure.model_health import describe as describe_model_rejection
+from wingman.infrastructure.privilege import operator_only_refusal
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.infrastructure.telemetry import (
     count_events as telemetry_count,
@@ -202,6 +205,7 @@ from wingman.providers.router import (
     metered_key,
     model_rejection,
 )
+from wingman.providers.usage import UsageTrackingEmbeddingProvider
 from wingman.reporting.export import (
     export_career,
     export_company,
@@ -1263,7 +1267,9 @@ def demo() -> None:
                 "(keyword-level, no network). Set the key and re-run the demo for "
                 "real semantic quality."
             )
-            embedder = HashedEmbeddingProvider()
+            embedder = UsageTrackingEmbeddingProvider(
+                HashedEmbeddingProvider(), config, Payer.AMBIENT
+            )
         elif embedder is not None and embedder.provider_name == "voyage":
             typer.echo(
                 f"      Sending the fetched public posts to {embedder.provider_name}/"
@@ -1402,6 +1408,43 @@ def status() -> None:
             "above is read from local data and is unaffected. 'wingman keys where' names "
             "the key being refused."
         )
+
+
+@app.command()
+def usage(
+    limit: int = typer.Option(1000, "--limit", min=1, help="Most recent calls to include."),
+    all_tenants: bool = typer.Option(
+        False, "--all-tenants", help="Operator-only rollup across registered tenants."
+    ),
+) -> None:
+    """Show raw model-call counts and read-time cost estimates."""
+    config = load_config()
+    if not all_tenants:
+        _require_workspace(config, "reported")
+        with Storage(config.db_path) as storage:
+            typer.echo(render_usage(config, storage.list_model_usage(limit=limit)))
+        return
+    refusal = operator_only_refusal(config, "usage --all-tenants")
+    if refusal:
+        typer.echo(refusal, err=True)
+        raise typer.Exit(code=1)
+    from wingman.infrastructure.tenants import load_registry, tenant_registry_path
+
+    tenants = load_registry(tenant_registry_path())
+    if not tenants:
+        typer.echo("All-tenant model usage: no tenants are registered.")
+        return
+    failures = 0
+    for tenant in tenants:
+        report, failed = render_tenant_usage(tenant, limit)
+        typer.echo(report, err=failed)
+        failures += int(failed)
+    if failures:
+        typer.echo(
+            f"{failures} tenant workspace(s) could not be read; every other tenant was reported.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 def _human_size(size_bytes: int) -> str:
