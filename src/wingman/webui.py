@@ -816,6 +816,11 @@ def _has_extraction_key(config: Config) -> bool:
     )
 
 
+def oauth_upload_ready(config: Config) -> bool:
+    """Public preflight for the OAuth wrapper, before multipart parsing."""
+    return _has_extraction_key(config)
+
+
 async def ui_oauth_setup(request: Request) -> Response:
     """Small OAuth-only setup surface: no capability URLs and no model chat."""
     config = _authorized(request)

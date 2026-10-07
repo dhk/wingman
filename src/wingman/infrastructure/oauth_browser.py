@@ -18,11 +18,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+import anyio
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
@@ -53,6 +53,11 @@ class OAuthBrowserSettings:
     token_url: str
     redirect_uri: str
     client_secret_env: str = "WINGMAN_OAUTH_WEB_CLIENT_SECRET"
+
+    @property
+    def callback_cookie_path(self) -> str:
+        """Public callback path, which may include a proxy-stripped mount."""
+        return urllib.parse.urlparse(self.redirect_uri).path or "/"
 
     def client_secret(self) -> str:
         value = os.environ.get(self.client_secret_env, "").strip()
@@ -134,6 +139,10 @@ class OAuthBrowserSessions:
         self._pending: dict[str, _Pending] = {}
         self._sessions: dict[str, _Session] = {}
         self._lock = threading.Lock()
+
+    @property
+    def callback_cookie_path(self) -> str:
+        return self._settings.callback_cookie_path
 
     def _prune(self, now: float) -> None:
         self._pending = {
@@ -276,7 +285,7 @@ def bind_oauth_browser(
             secure=True,
             httponly=True,
             samesite="lax",
-            path=f"{prefix}/oauth/callback",
+            path=sessions.callback_cookie_path,
         )
         return response
 
@@ -287,13 +296,13 @@ def bind_oauth_browser(
         if verifier is None or not code:
             return PlainTextResponse("OAuth callback was invalid or expired", status_code=400)
         try:
-            session_id = sessions.finish(code, verifier)
+            session_id = await anyio.to_thread.run_sync(sessions.finish, code, verifier)
         except PermissionError:
             return PlainTextResponse("Signed in, but this account is not approved", status_code=403)
         except (BearerError, OAuthConfigError):
             return PlainTextResponse("OAuth sign-in failed", status_code=401)
         response = RedirectResponse(f"{prefix}/setup/", status_code=303)
-        response.delete_cookie(_STATE_COOKIE, path=f"{prefix}/oauth/callback")
+        response.delete_cookie(_STATE_COOKIE, path=sessions.callback_cookie_path)
         response.set_cookie(
             _COOKIE,
             session_id,
@@ -305,30 +314,30 @@ def bind_oauth_browser(
         )
         return response
 
-    @contextmanager
-    def authorized(request: Request) -> Iterator[tuple[str, str] | None]:
+    async def authorized(request: Request) -> tuple[Any, str, str] | None:
         session_id = request.cookies.get(_COOKIE, "")
-        result = sessions.authorize(session_id)
+        result = await anyio.to_thread.run_sync(sessions.authorize, session_id)
         if result is None:
-            yield None
-            return
+            return None
         config, csrf_token = result
-        with browser_setup_scope(config, csrf_token):
-            yield (session_id, csrf_token)
+        return config, session_id, csrf_token
 
     async def setup(request: Request) -> Response:
-        with authorized(request) as auth:
-            if auth is None:
-                return RedirectResponse(f"{prefix}/login", status_code=303)
+        auth = await authorized(request)
+        if auth is None:
+            return RedirectResponse(f"{prefix}/login", status_code=303)
+        config, _session_id, csrf_token = auth
+        with browser_setup_scope(config, csrf_token):
             return await ui_oauth_setup(request)
 
     async def write(
         request: Request, endpoint: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        with authorized(request) as auth:
-            if auth is None:
-                return PlainTextResponse("Unauthorized", status_code=401)
-            _session_id, csrf_token = auth
+        auth = await authorized(request)
+        if auth is None:
+            return PlainTextResponse("Unauthorized", status_code=401)
+        config, _session_id, csrf_token = auth
+        with browser_setup_scope(config, csrf_token):
             form = await request.form()
             presented = form.get("_csrf")
             if not isinstance(presented, str) or not secrets.compare_digest(presented, csrf_token):
@@ -339,13 +348,30 @@ def bind_oauth_browser(
         return await write(request, ui_keys)
 
     async def upload(request: Request) -> Response:
-        return await write(request, ui_upload)
+        auth = await authorized(request)
+        if auth is None:
+            return PlainTextResponse("Unauthorized", status_code=401)
+        config, _session_id, csrf_token = auth
+        with browser_setup_scope(config, csrf_token):
+            # A multipart form may spool the file while parsing. Run the
+            # model-key gate before parsing anything, then let ui_upload
+            # produce the same deterministic user-facing explanation.
+            from wingman.webui import oauth_upload_ready
+
+            if not oauth_upload_ready(config):
+                return await ui_upload(request)
+            form = await request.form()
+            presented = form.get("_csrf")
+            if not isinstance(presented, str) or not secrets.compare_digest(presented, csrf_token):
+                return PlainTextResponse("Forbidden", status_code=403)
+            return await ui_upload(request)
 
     async def logout(request: Request) -> Response:
-        with authorized(request) as auth:
-            if auth is None:
-                return PlainTextResponse("Unauthorized", status_code=401)
-            session_id, csrf_token = auth
+        auth = await authorized(request)
+        if auth is None:
+            return PlainTextResponse("Unauthorized", status_code=401)
+        config, session_id, csrf_token = auth
+        with browser_setup_scope(config, csrf_token):
             form = await request.form()
             presented = form.get("_csrf")
             if not isinstance(presented, str) or not secrets.compare_digest(presented, csrf_token):

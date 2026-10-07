@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from pathlib import Path
 
+import httpx
 import pytest
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.testclient import TestClient
 
 import wingman.infrastructure.oauth_browser as browser_module
@@ -65,7 +69,9 @@ def _sign_in(client: TestClient, code: str = "good") -> None:
     state = re.search(r"[?&]state=([^&]+)", location)
     assert state is not None
     callback = client.get(
-        f"/oauth/callback?code={code}&state={state.group(1)}", follow_redirects=False
+        f"/oauth/callback?code={code}&state={state.group(1)}",
+        headers={"Cookie": f"wingman_oauth_state={client.cookies.get('wingman_oauth_state')}"},
+        follow_redirects=False,
     )
     assert callback.status_code == 303
     assert callback.headers["location"] == "/setup/"
@@ -133,16 +139,86 @@ def test_cv_upload_is_refused_before_key_without_reading_or_storing_it(
     assert not (tenant.data_dir / "inbox").exists()
 
 
-def test_state_is_one_time_and_unapproved_identity_never_gets_a_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_state_is_one_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     client, _tenant, _validated = _world(tmp_path, monkeypatch)
     login = client.get("/login", follow_redirects=False)
     state = re.search(r"[?&]state=([^&]+)", login.headers["location"])
     assert state is not None
     url = f"/oauth/callback?code=good&state={state.group(1)}"
-    assert client.get(url, follow_redirects=False).status_code == 303
-    assert client.get(url, follow_redirects=False).status_code == 400
+    cookie = {"Cookie": f"wingman_oauth_state={client.cookies.get('wingman_oauth_state')}"}
+    assert client.get(url, headers=cookie, follow_redirects=False).status_code == 303
+    assert client.get(url, headers=cookie, follow_redirects=False).status_code == 400
+
+
+def test_state_cookie_is_scoped_to_the_registered_public_callback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+    login = client.get("/login", follow_redirects=False)
+
+    assert "Path=/shared/oauth/callback" in login.headers["set-cookie"]
+
+
+def test_token_exchange_does_not_block_other_async_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = OAuthBrowserSessions.finish
+
+    def slow_finish(self: OAuthBrowserSessions, code: str, verifier: str) -> str:
+        time.sleep(0.3)
+        return original(self, code, verifier)
+
+    monkeypatch.setattr(OAuthBrowserSessions, "finish", slow_finish)
+    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+
+    async def scenario() -> float:
+        transport = httpx.ASGITransport(app=client.app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="https://wingman.example.com"
+        ) as async_client:
+            login = await async_client.get("/login", follow_redirects=False)
+            state = re.search(r"[?&]state=([^&]+)", login.headers["location"])
+            assert state is not None
+            callback = asyncio.create_task(
+                async_client.get(
+                    f"/oauth/callback?code=good&state={state.group(1)}",
+                    headers={
+                        "Cookie": (
+                            f"wingman_oauth_state={async_client.cookies.get('wingman_oauth_state')}"
+                        )
+                    },
+                    follow_redirects=False,
+                )
+            )
+            started = time.monotonic()
+            await asyncio.sleep(0.01)
+            probe = await async_client.get("/login", follow_redirects=False)
+            elapsed = time.monotonic() - started
+            assert probe.status_code == 302
+            assert (await callback).status_code == 303
+            return elapsed
+
+    assert asyncio.run(scenario()) < 0.15
+
+
+def test_missing_key_preflight_happens_before_multipart_parsing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, tenant, _validated = _world(tmp_path, monkeypatch)
+    _sign_in(client)
+
+    async def unexpected_form_parse(_request: Request):
+        raise AssertionError("multipart body was parsed before key preflight")
+
+    monkeypatch.setattr(Request, "form", unexpected_form_parse)
+    response = client.post(
+        "/setup/upload",
+        files={"file": ("resume.md", b"PRIVATE CV", "text/markdown")},
+    )
+
+    assert response.status_code == 200
+    assert "No model call was made" in response.text
+    assert not (tenant.data_dir / "inbox").exists()
 
 
 def test_verified_but_unapproved_identity_is_refused_before_setup(
@@ -159,7 +235,9 @@ def test_verified_but_unapproved_identity_is_refused_before_setup(
     assert state is not None
 
     callback = client.get(
-        f"/oauth/callback?code=good&state={state.group(1)}", follow_redirects=False
+        f"/oauth/callback?code=good&state={state.group(1)}",
+        headers={"Cookie": f"wingman_oauth_state={client.cookies.get('wingman_oauth_state')}"},
+        follow_redirects=False,
     )
 
     assert callback.status_code == 403
