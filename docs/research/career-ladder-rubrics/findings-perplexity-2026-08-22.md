@@ -1,7 +1,7 @@
 # Career ladder rubrics: what is actually published, and under what terms
 
 **Status.** Findings, 2026-08-22. Commissioned to resolve Q1 of
-[`../QUESTION-BLOCKS-DESIGN.md`](../QUESTION-BLOCKS-DESIGN.md) — where
+[`../../QUESTION-BLOCKS-DESIGN.md`](../../QUESTION-BLOCKS-DESIGN.md) — where
 rubric content comes from and how its provenance stays honest.
 
 **Source.** Perplexity, run against a brief asking specifically for
