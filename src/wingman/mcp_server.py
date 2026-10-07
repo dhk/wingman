@@ -5494,6 +5494,10 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         build_oauth_settings,
         jwks_key_resolver,
     )
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingStore,
+        onboarding_path_for,
+    )
 
     try:
         settings = build_oauth_settings(args.oauth_issuer, args.oauth_audience, args.oauth_jwks_uri)
@@ -5518,6 +5522,7 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         identities,
         settings,
         jwks_key_resolver(settings.jwks_uri),
+        OAuthOnboardingStore(onboarding_path_for(identity_path)).record_pending,
     )
     print(
         f"OAuth bearer (RFC-081 draft spike): {settings.audience}, "

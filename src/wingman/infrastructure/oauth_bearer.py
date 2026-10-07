@@ -689,6 +689,7 @@ class BearerRoutingASGIApp:
         resolve_key: KeyResolver,
         local_mcp_path: str = "/mcp",
         session_bindings: TenantSessionBindings | None = None,
+        record_pending: Callable[[str, str], bool] | None = None,
     ) -> None:
         self._inner = inner
         self._index = index
@@ -697,6 +698,7 @@ class BearerRoutingASGIApp:
         self._resolve_key = resolve_key
         self._local_mcp_path = local_mcp_path
         self._session_bindings = session_bindings or TenantSessionBindings()
+        self._record_pending = record_pending
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -732,6 +734,16 @@ class BearerRoutingASGIApp:
             # has left the registry). Same answer for both, so it cannot be
             # used to learn which tenants exist.
             _logger.info("bearer verified but unprovisioned: sub=%s", identity.subject)
+            if self._record_pending is not None and slug is None:
+                try:
+                    recorded = await anyio.to_thread.run_sync(
+                        self._record_pending, identity.issuer, identity.subject
+                    )
+                except Exception as exc:  # noqa: BLE001 — admission stays fail closed
+                    _logger.error("verified identity could not be added to pending queue: %s", exc)
+                else:
+                    if not recorded:
+                        _logger.warning("verified identity was not recorded: pending queue is full")
             await PlainTextResponse("Forbidden", status_code=403)(scope, receive, send)
             return
         # A resolver, not a frozen Config — same reason as the token path (#404).
@@ -771,6 +783,7 @@ def bind_oauth_routing(
     identities: IdentityMap,
     settings: OAuthSettings,
     resolve_key: KeyResolver,
+    record_pending: Callable[[str, str], bool] | None = None,
 ) -> None:
     """Add a bearer-authenticated MCP route and the metadata routes.
 
@@ -812,6 +825,7 @@ def bind_oauth_routing(
         resolve_key,
         local_mcp_path=oauth_path,
         session_bindings=session_bindings,
+        record_pending=record_pending,
     )
     added: list[Route] = [Route(oauth_path, endpoint=wrapped)]
     added.extend(
