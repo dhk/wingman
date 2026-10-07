@@ -1290,8 +1290,10 @@ issued after initialization is bound to the tenant that authenticated it, in
 the same bounded table used by capability-path requests. A credential for one
 tenant cannot resume another tenant's session. Bindings expire after 30 idle
 minutes, are released after successful termination and are capped at 4,096;
-unknown or expired sessions reinitialize, while a full table refuses new work
-rather than growing without bound. JWKS keys have a five-minute hard lifetime;
+unknown or expired session ids are refused with HTTP 404 before FastMCP. The
+client recovers by sending a fresh initialize request without the stale session
+id. A full table refuses new work rather than growing without bound. JWKS keys
+have a five-minute hard lifetime;
 refresh is single-flight with a short failure cooldown, and expiry plus an
 issuer outage fails closed.
 
