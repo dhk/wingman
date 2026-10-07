@@ -1,4 +1,4 @@
-"""OAuth bearer validation for the shared multi-tenant process (RFC-081 draft spike).
+"""OAuth bearer validation for the shared multi-tenant process (RFC-081).
 
 The properties that matter, each tested directly rather than assumed:
   * a valid token reaches exactly the tenant its identity names, and two

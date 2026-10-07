@@ -225,6 +225,12 @@ Two deferrals, on the demonstrated-need rule:
 
 ## RFC-017: Remote MCP — a local HTTP listener behind a user-managed tunnel
 
+**Amended by RFC-081.** Capability-path access remains supported for existing
+and operator-provisioned tenants. A shared service may now also expose the
+plain `/mcp` resource to deliberately trusted tenants through externally
+issued OAuth bearer tokens. RFC-081, not this entry's rejected alternative,
+defines that parallel path and its narrower invite-only trust model.
+
 **Decision.** `wingman-mcp --http [--port N]` serves the existing MCP tool surface over streamable HTTP, **bound to 127.0.0.1 by default**, at a capability path `/mcp/<token>` where the token is generated once into the workspace (`mcp-http-token`, mode 0600) and rotated on demand with `--rotate-token` — rotation is revocation. Reaching it from claude.ai web/mobile is the user's tunnel choice, documented but not embedded: `tailscale serve` for tailnet-only access from their own devices, `tailscale funnel` (or an equivalent authenticated tunnel) when claude.ai's connector infrastructure must reach it. Wingman itself never opens a public listener: binding a non-loopback address requires an explicit `--host` and prints a warning naming what is being exposed. The stdio transport and the tool surface are unchanged — one server, two transports, zero new tools.
 
 **The exposure trade, stated plainly.** The MCP surface can read the whole workspace and trigger fetches and model calls, so exposing it is exposing the workspace. The mitigations are layered and honest about their limits: loopback-only default (exposure requires a second, deliberate act — running a tunnel); an unguessable capability path (an attacker who cannot read the URL cannot speak to the server — but anyone who obtains the URL can, so treat it like a password and rotate on any doubt); TLS from the tunnel (Tailscale terminates HTTPS; wingman serves plain HTTP on loopback and never pretends otherwise). RFC-006 still holds at the bottom: nothing the remote surface can invoke sends anything on the user's behalf.
@@ -445,6 +451,12 @@ restoring env-wins.
 
 ## RFC-033: The read surface — a small web UI for glancing and files
 
+**Amended by RFC-081.** This capability-token UI remains the implemented
+browser surface. OAuth for MCP does not make `/ui/<token>/` safe to hand to an
+OAuth-only tenant, and this entry's rejection of a home-grown account/session
+system still stands. An OAuth-authenticated browser setup surface is a
+separate, not-yet-implemented launch slice described by RFC-081.
+
 **Decision.** `wingman-mcp --http` now also serves `/ui/<token>` — the first surface that is neither CLI nor MCP, scoped by one sentence: conversation is for thinking; the web page is for what conversation is bad at, glancing and files. It serves what the workspace already renders — today's digest (the styled HTML twin) as the landing link, then every digest, pack, dossier, and export under `reports/`, grouped and dated — plus a single upload form for the two artifacts that cannot travel through a chat: a LinkedIn export zip and a resume file. Uploads are size-capped, land in the inbox with an archive stamp like any other ingested artifact, and flow through the ordinary pipelines (`import_linkedin`, `ingest_resume` — lineage, supersede, and evidence rules all apply); the result page is the ingest report. The security shape is RFC-017's, reused rather than invented: the same capability-path token (constant-time compared; wrong token and wrong path return the same plain 404, so there is no token oracle), loopback bind, the user's own tunnel for reach. File serving is confined to `reports/` by resolved-path check with an allow-listed suffix set — the database, inbox, and token file next door are structurally unreachable. This is a deliberate RFC-008 parity exception in the third direction: the UI must never grow write surfaces beyond the upload form (no search, no triage buttons, no graph browsing) — the conversational client is that interface, and duplicating it here is the road to the hosted-product pivot that stays parked.
 
 **Alternatives.** A separate web app with accounts and sessions (a security surface wingman deliberately doesn't have; the capability token is already the session, and a second auth system would be the most dangerous code in the repo); serving raw markdown only (the styled twins exist precisely to be read; a UI that ignores them re-creates the problem); pushing uploads through MCP (a zip cannot be pasted into a chat, and a resume traveling through model context to reach the ingest pipeline is a needless detour for a file the pipeline reads directly); building nothing (the second-user onboarding then requires SSH for every artifact, which is exactly the friction this removes).
@@ -622,6 +634,13 @@ Resolution is now BYOK first, then the operator's **declared files** (host, then
 **Revisit if.** Trent (or anyone else) gets their own GitHub account and a personal fine-grained PAT — `stamp_operator` already degrades gracefully (no-op once `WINGMAN_OPERATOR_NAME` is unset), so the transition is additive, not a rewrite; the global tier gains a second resident beyond `GITHUB_API_ISSUES_KEY` (the file and the group already exist; nothing else needs designing); or `wingman feature-request` grows callers beyond `gh issue create` (a comment or close action would need its own review of whether the shared PAT's scope still matches — the safety argument above assumes wingman's own code stays this narrow).
 
 ## RFC-048: One shared multi-tenant process — share-nothing data, capability tokens per tenant
+
+**Auth amended by RFC-081.** The shared-process and share-nothing database
+decisions below remain binding. Capability tokens remain supported, but are no
+longer the only authentication path: trusted OAuth identities may be mapped to
+the same tenant registry and request-scoped `Config`. RFC-081 partially
+supersedes the statements below that say “no OAuth”; it does not replace the
+tenant data model or weaken its isolation rules.
 
 **Durable decision, explicitly supersedes `docs/OAUTH-MULTITENANCY-CONSIDERATION.md`'s "not yet."** That document's core argument — OS-level UID isolation between `dhk` and `trent` is currently free, and multi-tenancy would make wingman's own code the trust boundary instead of the kernel — was correct at n=2, and is not being re-derived or overturned here. What changed is the number: onboarding two more people (`jason`, a real second tenant; `bob`, an owner-controlled test/staging tenant) under shape B's one-Unix-account-per-person model means two more accounts, ports, systemd units, and an ever-growing `WINGMAN_UPGRADE_USERS` list — precisely the trigger `docs/MULTI-INSTANCE-DESIGN.md` and the OAuth document both named in their own "Revisit if" clauses: *"A third user appears… three friends is a product; the hosted-tiers assessment stops being parked."* At four tenants, the owner made the call explicitly, in daylight, as its own decision — not inferred from operational pain, matching exactly what the OAuth document asked for before this calculus should be redone.
 
@@ -1236,3 +1255,116 @@ instead, and the gap is stated rather than papered over.
 **Alternatives.** *Give every strict tenant the global metered keys* (rejected — the invoice problem above; also makes `strict_provider_keys` mean nothing for the keys it was written for). *A `funded` list of slugs in `[defaults]`* (rejected — the same two-sources-of-identity failure RFC-068 rejected for `privileged`, with money attached). *Per-provider flags, `funded_anthropic` and friends* (rejected as a schema fitted to a guess; nothing wants to fund half a person, and one boolean widens to an enum mechanically if something does, because every reader goes through `metered_key`). *A spend cap or quota per tenant* (rejected as out of scope and undeliverable here — wingman sees no billing data and cannot enforce a cap it cannot measure; the honest primitive today is yes-or-no, and a cap belongs at the provider account). *Let the flag also relax `strict_provider_keys` wholesale* (rejected — strict mode also governs where keys are *written* and what a tenant's workspace may reach; funding is a statement about the fallback, not a general loosening). *Fix only the error message and the completeness recommendation, leaving funding for later* (rejected on the reporter's behalf: those two make the wall legible without making it passable, and the operator on this box wants to pay for this tenant today).
 
 **Revisit if.** A second funder appears — one tenant paying for another, a team-level key — at which point `funded` becomes a pointer to whose key rather than a boolean, and the interesting question is attribution rather than access. Or a tenant needs to be funded for inference and not embeddings, which is the per-provider split rejected above and should arrive with the actual bill that motivated it. Or `ensure_env` grows a way to keep tier provenance through the flattening, which would let the declared-versus-ambient distinction be expressed once in `keys` instead of by every caller that cares — two callers now, and a third would be the trigger. Or spend becomes visible enough to cap, at which point this flag is the natural place to hang a limit.
+
+## RFC-081: Invite-only OAuth for the shared service — verified identity selects an isolated tenant
+
+**Durable decision (2026-10-07; partially supersedes the auth portions of
+RFC-017, RFC-033 and RFC-048).** Wingman's hosted launch is for existing and
+newly invited trusted users, not the public at large. The shared process may
+accept OAuth 2.1 bearer tokens at `/mcp` alongside the existing per-tenant
+capability paths. One SQLite workspace per tenant, request-scoped `Config`,
+strict key isolation and every external-action boundary remain unchanged.
+
+**What is implemented.** Wingman is a resource server, never an authorization
+server. An external issuer authenticates the person and issues the token;
+Wingman requires one `Authorization: Bearer` header, an RS256 or ES256
+signature from the configured JWKS, and valid `iss`, `aud`, `exp` and `sub`
+claims. The audience is this MCP resource. Query-string tokens, malformed or
+duplicate headers, unsupported algorithms and unverifiable tokens are refused
+before a tool runs. RFC 9728 protected-resource metadata tells a compliant
+client where to authenticate. The implementation is issuer-neutral at this
+boundary; WorkOS AuthKit is the configured launch issuer, not a domain type in
+Wingman.
+
+Authentication and tenancy are two distinct gates. A verified `(iss, sub)`
+must appear in an operator-controlled identity map and point to a slug already
+in the tenant registry. Email is never an identity key. A verified but unmapped
+identity gets no workspace, and its refusal does not reveal whether a named
+tenant exists. The map reloads without restarting the shared process and is
+replaced atomically. Provisioning reserves an identity before workspace or
+registry mutation, renews the reservation before the registry write and
+consumes it in the final bind; competing or stale attempts fail closed.
+
+Bearer-token checks do not replace MCP session isolation. The session id
+issued after initialization is bound to the tenant that authenticated it, in
+the same bounded table used by capability-path requests. A credential for one
+tenant cannot resume another tenant's session. Bindings expire after 30 idle
+minutes, are released after successful termination and are capped at 4,096;
+unknown or expired sessions reinitialize, while a full table refuses new work
+rather than growing without bound. JWKS keys have a five-minute hard lifetime;
+refresh is single-flight with a short failure cooldown, and expiry plus an
+issuer outage fails closed.
+
+**The launch trust gate.** OAuth proves who presented the token; it does not
+decide who receives Wingman. At launch, an operator deliberately approves each
+existing or invited identity. A newly approved tenant starts unprivileged and
+unfunded, and the OAuth provisioning path mints no permanent capability URL.
+The presently shipped operation binds an exact verified `(iss, sub)` supplied
+by the operator. Capturing an invited person's first verified sign-in as
+pending, matching it to an invite and approving it into a tenant is the next
+implementation slice, not a capability claimed by this RFC as already live.
+Public self-service signup and automatic approval are explicitly deferred.
+
+**BYOK and browser setup.** RFC-019a/RFC-034a remain the key policy: a
+workspace's own validated provider key wins over every operator tier. The
+launch decision is therefore bring-your-own-key by default; operator funding
+remains an explicit per-tenant exception under RFC-080, never a signup
+default. The current OAuth route authenticates MCP only. It does not authorize
+`/ui/<token>/`, and `my_urls` deliberately refuses to invent either a
+capability URL or an OAuth browser page. Until the follow-on browser slice
+ships, an OAuth-only tenant can use model-free tools but needs the operator to
+mark that tenant funded before model-backed tools work. The follow-on browser
+surface must use the same external identity, confine reads and writes to the
+mapped tenant, validate a provider key before storing it through the existing
+RFC-034 path, and never send that key through MCP or model context. Those are
+accepted constraints, not a claim that the browser flow exists today.
+
+**Migration and coexistence.** Existing capability tenants continue to work;
+turning OAuth on requires all issuer, audience, JWKS and identity-map settings
+together and otherwise refuses startup rather than silently weakening auth.
+An existing tenant may gain an OAuth identity binding without moving or
+rewriting its workspace. Newly approved OAuth-only tenants receive no legacy
+token. Retiring existing capability URLs is a later, explicit migration step
+after the invite, browser-setup and production-canary slices are proven. There
+is no calendar-based forced cutover in this decision and no claim that current
+capability tenants have already migrated.
+
+**Explicitly deferred.** Scope claims are normalized but not authorization
+policy; no tool-level scope enforcement is claimed. Token introspection and
+instant issuer-side revocation are not implemented; issuer-set token expiry and
+the bounded JWKS lifetime are the current revocation envelope. Also deferred are
+public signup, automatic tenant approval, account linking, additional login
+methods (including Apple), a Wingman-run authorization server, public-stranger
+scale, a free operator-funded tier, spend caps, encrypted custody for unknown
+users' keys and row-level multi-tenancy. Invite capture/approval and the
+OAuth-authenticated BYOK/CV setup page are committed launch slices still to be
+built, not reasons to expose the service publicly in the meantime.
+
+**Alternatives.** Keeping capability URLs for every new tenant was rejected
+for the launch path: a bearer token gives the connector an expiring,
+audience-bound credential without placing it in a URL, while identity approval
+remains independently operator-controlled. Running Wingman's own authorization
+server was rejected because token issuance, recovery and login security are
+not career-intelligence capabilities. Public self-service provisioning was
+rejected for now because authentication alone supplies neither an invitation
+decision nor safe cost control. Replacing per-tenant databases with one shared
+schema was rejected again for RFC-048's reason: share-nothing storage removes
+an entire class of query-scoping failures.
+
+**Rationale.** The old documents correctly rejected OAuth when four known
+people already had working capability URLs. The new need is narrower than the
+abandoned public-product draft and stronger than a cosmetic login page: let a
+known or invited person reconnect through a standard identity without holding
+a permanent secret URL, while preserving the operator's approval decision and
+the tenant boundary already proven by RFC-048. Adding one bearer-validation
+choke point beside the legacy route achieves that without moving data,
+inventing accounts, or treating a successful Google sign-in as permission to
+create a workspace or spend money.
+
+**Revisit if.** Public signup becomes an actual product decision; then abuse,
+cost limits, encrypted secret custody, asynchronous/noisy-neighbour isolation
+and self-service lifecycle management need a separate decision before the
+trust gate opens. Revisit scope enforcement when two materially different
+OAuth grants exist, account linking before a second sign-in method ships, and
+the legacy route only after observed migration and the launch canary show that
+every existing tenant can reconnect without it.

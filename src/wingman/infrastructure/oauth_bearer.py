@@ -1,8 +1,8 @@
 """OAuth 2.1 bearer-token validation for the shared multi-tenant process.
 
-SPIKE for docs/RFC-081-DRAFT-hosted-oauth.md. Off unless the operator passes
-every '--oauth-*' flag; with it off nothing here is imported at request time
-and the capability-token path behaves exactly as before.
+Implements RFC-081. Off unless the operator passes every '--oauth-*' flag;
+with it off nothing here is imported at request time and the capability-token
+path behaves exactly as before.
 
 Wingman is a pure *resource server* here (MCP authorization spec): it never
 issues tokens. An external authorization server does that; this module only
@@ -69,7 +69,7 @@ from wingman.infrastructure.tenants import TenantIndex
 
 _logger = get_logger("oauth_bearer")
 
-#: Asymmetric only. Deliberately not configurable in the spike: allowing HS*
+#: Asymmetric only. Deliberately not configurable: allowing HS*
 #: with a public key as the "secret" is the classic algorithm-confusion hole.
 ALLOWED_ALGORITHMS = ("RS256", "ES256")
 

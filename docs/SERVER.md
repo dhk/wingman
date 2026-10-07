@@ -3,9 +3,9 @@
 The deployment this guide builds: one Linux box that owns the workspace,
 runs `wingman overnight` on a timer, keeps the MCP server up as a service,
 and is reachable from claude.ai (web, desktop, phone) over your Tailscale
-network. Your career data still lives on a machine you own — this is
-local-first with a longer extension cord, not hosting (RFC-002 holds; the
-hosted tiers remain a separate, parked decision).
+network. Your career data still lives on a machine you own. RFC-081 extends
+this shape to deliberately trusted OAuth invitees; it is still local-first
+with a longer extension cord, not public self-service hosting.
 
 Everything here is Ubuntu 22.04+/Debian-family; adjust package commands
 for other distros.
@@ -745,14 +745,15 @@ file on the box. Assumes each listed user's checkout lives at
 deviates isn't a candidate for automatic upgrade and should be upgraded
 by hand.
 
-## 9. Shared multi-tenant deployment (RFC-048)
+## 9. Shared multi-tenant deployment (RFC-048, OAuth amendment RFC-081)
 
 Everything above is shape B: one Unix account, one workspace, one port,
 per person. RFC-048 adds a second shape for when per-account overhead
 stops paying for itself (a third-plus person, per `docs/RFC.md`'s own
 trigger) — one shared process, share-nothing data (one SQLite DB per
-tenant, unchanged), capability tokens per tenant. dhk and trent are not
-required to move onto this — the two shapes coexist on the same box,
+tenant, unchanged), capability tokens per existing/operator tenant plus an
+optional OAuth bearer route for deliberately trusted identities. dhk and trent
+are not required to move onto this — the two shapes coexist on the same box,
 each on its own port.
 
 **Run the provisioning scripts, don't hand-type this.** The steps below
