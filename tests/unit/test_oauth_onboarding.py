@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import jwt
+import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
@@ -16,6 +17,7 @@ from typer.testing import CliRunner
 
 from wingman.cli.main import app
 from wingman.infrastructure.oauth_onboarding import (
+    OAuthOnboardingError,
     OAuthOnboardingStore,
     onboarding_path_for,
 )
@@ -147,6 +149,79 @@ def test_pending_queue_is_bounded_and_keeps_existing_entries(tmp_path: Path) -> 
     assert store.record_pending(ISSUER, "second", now=2.0)
     assert not store.record_pending(ISSUER, "third", now=3.0)
     assert [item.subject for item in store.pending()] == ["first", "second"]
+
+
+def test_disk_binding_wins_over_a_stale_live_map_when_recording_pending(tmp_path: Path) -> None:
+    from wingman.infrastructure.oauth_bearer import bind_trusted_identity
+    from wingman.infrastructure.oauth_onboarding import record_verified_pending
+
+    identities = tmp_path / "identities.toml"
+    bind_trusted_identity(identities, ISSUER, "already-approved", "taylor")
+    store = OAuthOnboardingStore(onboarding_path_for(identities))
+
+    assert not record_verified_pending(identities, store, ISSUER, "already-approved")
+    assert store.pending() == []
+
+
+def test_malformed_queue_row_is_rejected_as_an_onboarding_error(tmp_path: Path) -> None:
+    path = tmp_path / "onboarding.json"
+    path.write_text(
+        '{"version": 1, "invites": [], "pending": [{"issuer": "only-one-field"}]}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OAuthOnboardingError, match="malformed pending entry"):
+        OAuthOnboardingStore(path).pending()
+
+
+def test_approval_reports_reload_as_signaled_not_completed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identities = tmp_path / "oauth-identities.toml"
+    identities.write_text("", encoding="utf-8")
+    registry = tmp_path / "tenants.toml"
+    registry.write_text("", encoding="utf-8")
+    service_user = pwd.getpwuid(os.getuid()).pw_name
+    reserve = cli.invoke(
+        app,
+        [
+            "tenant",
+            "oauth-invite",
+            "taylor",
+            "--identities",
+            str(identities),
+            "--registry",
+            str(registry),
+        ],
+    )
+    assert reserve.exit_code == 0, reserve.output
+    OAuthOnboardingStore(onboarding_path_for(identities)).record_pending(ISSUER, "user_taylor")
+    monkeypatch.setattr("wingman.infrastructure.tenant_process.signal_reload", lambda _path: 42)
+
+    approved = cli.invoke(
+        app,
+        [
+            "tenant",
+            "oauth-approve",
+            "taylor",
+            "--issuer",
+            ISSUER,
+            "--subject",
+            "user_taylor",
+            "--identities",
+            str(identities),
+            "--registry",
+            str(registry),
+            "--data-root",
+            str(tmp_path / "tenants"),
+            "--service-user",
+            service_user,
+        ],
+    )
+
+    assert approved.exit_code == 0, approved.output
+    assert "Signaled the running shared service (pid 42) to reload" in approved.output
+    assert "Reloaded the running shared service" not in approved.output
 
 
 def test_approval_refuses_an_identity_that_never_completed_sign_in(tmp_path: Path) -> None:

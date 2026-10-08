@@ -743,7 +743,10 @@ class BearerRoutingASGIApp:
                     _logger.error("verified identity could not be added to pending queue: %s", exc)
                 else:
                     if not recorded:
-                        _logger.warning("verified identity was not recorded: pending queue is full")
+                        _logger.info(
+                            "verified identity was not added to pending queue: it is already "
+                            "bound on disk or the queue is full"
+                        )
             await PlainTextResponse("Forbidden", status_code=403)(scope, receive, send)
             return
         # A resolver, not a frozen Config — same reason as the token path (#404).

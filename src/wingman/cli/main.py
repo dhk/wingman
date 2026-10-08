@@ -4886,7 +4886,11 @@ def tenant_oauth_approve_cmd(
         raise typer.Exit(code=1) from exc
     typer.echo(f"Approved {slug!r}: isolated workspace {data_dir}; privileged=false; funded=false.")
     if signaled_pid is not None:
-        typer.echo(f"Reloaded the running shared service (pid {signaled_pid}).")
+        typer.echo(
+            f"Signaled the running shared service (pid {signaled_pid}) to reload. "
+            "The signal was delivered; this command does not claim the asynchronous "
+            "reload has completed."
+        )
     else:
         typer.echo("No running shared service was found; the approval loads at next start.")
 

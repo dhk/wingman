@@ -842,10 +842,21 @@ sudo wingman tenant oauth-approve taylor \
 Approval is the only step that creates a workspace. It claims both the invite
 and identity against competing operators, writes an isolated workspace and
 registry entry, binds the exact verified identity, consumes the pending row,
-and reloads the shared process. The registry entry deliberately omits both
-`privileged` and `funded`, so both remain false. Each durable step is
-idempotent: after interruption, rerunning the same approval completes the safe
-partial state instead of assigning it to somebody else.
+and signals the shared process to reload. Signal delivery is reported exactly;
+the CLI does not claim that the asynchronous reload has already completed. The
+registry entry deliberately omits both `privileged` and `funded`, so both
+remain false. Each durable step is idempotent: after interruption, rerunning
+the same approval completes the safe partial state instead of assigning it to
+somebody else.
+
+Pending-state rows are fully schema-validated before use, so a damaged queue is
+reported as an onboarding-state error rather than becoming a traceback or a
+partially interpreted approval. After approval, the request path checks the
+current on-disk identity map while holding the identity writer lock before it
+records any unknown identity. That closes the short reload window in which the
+server's older in-memory map could otherwise put an already-approved person
+back into the pending queue; access remains governed by the live map until the
+reload actually takes effect.
 
 The lower-level direct provisioning path remains available for an operator
 who already has a verified WorkOS `(iss, sub)` and deliberately does not need

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import os
 import pwd
 import re
@@ -104,7 +105,79 @@ class OAuthOnboardingStore:
         pending = raw.get("pending")
         if not isinstance(invites, list) or not isinstance(pending, list):
             raise OAuthOnboardingError(f"OAuth onboarding state {self.path} has malformed queues")
+        self._validate_rows(invites, pending)
         return raw
+
+    def _validate_rows(self, invites: list[Any], pending: list[Any]) -> None:
+        """Reject malformed durable state before any caller indexes into it."""
+
+        def number(value: object) -> bool:
+            return (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+            )
+
+        invite_slugs: set[str] = set()
+        for position, item in enumerate(invites, start=1):
+            slug = item.get("slug") if isinstance(item, dict) else None
+            created_at = item.get("created_at") if isinstance(item, dict) else None
+            if not isinstance(slug, str) or _SLUG.fullmatch(slug) is None or not number(created_at):
+                raise OAuthOnboardingError(
+                    f"OAuth onboarding state {self.path} has malformed invite entry {position}"
+                )
+            if slug in invite_slugs:
+                raise OAuthOnboardingError(
+                    f"OAuth onboarding state {self.path} repeats invite slug {slug!r}"
+                )
+            invite_slugs.add(slug)
+            claim = item.get("claim")
+            if claim is not None and (
+                not isinstance(claim, dict)
+                or not all(
+                    isinstance(claim.get(field), str) and bool(claim.get(field))
+                    for field in ("issuer", "subject", "token")
+                )
+                or not number(claim.get("expires_at"))
+            ):
+                raise OAuthOnboardingError(
+                    f"OAuth onboarding state {self.path} has malformed approval claim "
+                    f"for invite {slug!r}"
+                )
+
+        if len(pending) > self.pending_limit:
+            raise OAuthOnboardingError(
+                f"OAuth onboarding state {self.path} exceeds the pending queue limit "
+                f"of {self.pending_limit}"
+            )
+        pending_keys: set[tuple[str, str]] = set()
+        for position, item in enumerate(pending, start=1):
+            issuer = item.get("issuer") if isinstance(item, dict) else None
+            subject = item.get("subject") if isinstance(item, dict) else None
+            first_seen = item.get("first_seen") if isinstance(item, dict) else None
+            last_seen = item.get("last_seen") if isinstance(item, dict) else None
+            sign_in_count = item.get("sign_in_count") if isinstance(item, dict) else None
+            if (
+                not isinstance(issuer, str)
+                or not issuer
+                or not isinstance(subject, str)
+                or not subject
+                or not number(first_seen)
+                or not number(last_seen)
+                or not isinstance(sign_in_count, int)
+                or isinstance(sign_in_count, bool)
+                or sign_in_count < 1
+            ):
+                raise OAuthOnboardingError(
+                    f"OAuth onboarding state {self.path} has malformed pending entry {position}"
+                )
+            key = (issuer, subject)
+            if key in pending_keys:
+                raise OAuthOnboardingError(
+                    f"OAuth onboarding state {self.path} repeats pending identity "
+                    f"({issuer!r}, {subject!r})"
+                )
+            pending_keys.add(key)
 
     def _write(self, state: dict[str, Any]) -> None:
         temporary: str | None = None
@@ -253,6 +326,26 @@ class OAuthOnboardingStore:
                 str(claim.get("token", "")), token
             ):
                 invite.pop("claim", None)
+
+
+def record_verified_pending(
+    identity_path: Path,
+    store: OAuthOnboardingStore,
+    issuer: str,
+    subject: str,
+) -> bool:
+    """Queue an identity only if the current on-disk map is still unbound.
+
+    The live server map reloads asynchronously after approval.  Holding the
+    same writer lock used by binding closes the interval in which that stale
+    in-memory map could re-add an identity that approval just removed.
+    """
+    from wingman.infrastructure.oauth_bearer import _identity_map_lock, _identity_map_or_empty
+
+    with _identity_map_lock(identity_path):
+        if _identity_map_or_empty(identity_path).slug_for(issuer, subject) is not None:
+            return False
+        return store.record_pending(issuer, subject)
 
 
 @contextmanager
