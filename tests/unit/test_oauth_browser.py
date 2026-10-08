@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import json
 import re
 import time
 import urllib.parse
@@ -16,7 +19,12 @@ from starlette.testclient import TestClient
 
 import wingman.infrastructure.oauth_browser as browser_module
 import wingman.webui as webui_module
-from wingman.infrastructure.oauth_bearer import BearerIdentity, IdentityMap, OAuthSettings
+from wingman.infrastructure.oauth_bearer import (
+    BearerIdentity,
+    IdentityMap,
+    OAuthConfigError,
+    OAuthSettings,
+)
 from wingman.infrastructure.oauth_browser import (
     OAuthBrowserSessions,
     bind_oauth_browser,
@@ -43,23 +51,42 @@ def _world(
         f"https://wingman.example.com{public_mount}/oauth/callback",
     )
     validated: list[str] = []
+    challenges: dict[str, str] = {}
 
     def validate(token: str, _settings: OAuthSettings, _resolver: object) -> BearerIdentity:
         validated.append(token)
         return BearerIdentity(ISSUER, "user_taylor", ())
 
     monkeypatch.setattr(browser_module, "validate_access_token", validate)
+
+    def exchange(code: str, verifier: str) -> str:
+        actual = (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest())
+            .rstrip(b"=")
+            .decode("ascii")
+        )
+        if challenges.get(code) != actual:
+            raise OAuthConfigError("authorization code is not bound to this verifier")
+        return f"access-{code}"
+
     sessions = OAuthBrowserSessions(
         settings,
         OAuthSettings(ISSUER, AUDIENCE, f"{ISSUER}/oauth2/jwks"),
         identities,
         index,
         lambda _token: object(),
-        token_exchange=lambda code, _verifier: f"access-{code}",
+        token_exchange=exchange,
     )
     app = Starlette()
+    app.state.oauth_challenges = challenges
+    app.state.oauth_sessions = sessions
     bind_oauth_browser(app, "", sessions)
     return TestClient(app, base_url="https://wingman.example.com"), tenant, validated
+
+
+def _issue_code(client: TestClient, code: str, authorization_url: str) -> None:
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(authorization_url).query)
+    client.app.state.oauth_challenges[code] = query["code_challenge"][0]
 
 
 def _sign_in(client: TestClient, code: str = "good") -> None:
@@ -69,6 +96,7 @@ def _sign_in(client: TestClient, code: str = "good") -> None:
     assert "code_challenge_method=S256" in location
     assert "client_secret" not in location
     assert "/ui/" not in location and "/mcp/" not in location
+    _issue_code(client, code, location)
     state = re.search(r"[?&]state=([^&]+)", location)
     assert state is not None
     callback = client.get(
@@ -87,6 +115,44 @@ def _csrf(page: str) -> str:
     match = re.search(r'name="_csrf" value="([^"]+)"', page)
     assert match is not None
     return match.group(1)
+
+
+def test_workos_code_exchange_uses_documented_json_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+    requests: list[object] = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"access_token":"access-good"}'
+
+    def open_request(request: object, *, timeout: int):
+        requests.append(request)
+        assert timeout == 10
+        return Response()
+
+    monkeypatch.setattr(browser_module.urllib.request, "urlopen", open_request)
+    sessions = client.app.state.oauth_sessions
+
+    token = sessions._exchange_code("code-good", "verifier-good")
+
+    assert token == "access-good"
+    request = requests[0]
+    assert request.headers["Content-type"] == "application/json"
+    assert json.loads(request.data) == {
+        "client_id": "client_123",
+        "client_secret": "super-secret",
+        "grant_type": "authorization_code",
+        "code": "code-good",
+        "code_verifier": "verifier-good",
+    }
 
 
 def test_login_revalidates_identity_and_never_exposes_capability_url(
@@ -145,6 +211,7 @@ def test_cv_upload_is_refused_before_key_without_reading_or_storing_it(
 def test_state_is_one_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     client, _tenant, _validated = _world(tmp_path, monkeypatch)
     login = client.get("/login", follow_redirects=False)
+    _issue_code(client, "good", login.headers["location"])
     state = re.search(r"[?&]state=([^&]+)", login.headers["location"])
     assert state is not None
     url = f"/oauth/callback?code=good&state={state.group(1)}"
@@ -157,7 +224,8 @@ def test_callback_uses_cookie_state_when_provider_omits_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client, _tenant, _validated = _world(tmp_path, monkeypatch)
-    client.get("/login", follow_redirects=False)
+    login = client.get("/login", follow_redirects=False)
+    _issue_code(client, "good", login.headers["location"])
 
     callback = client.get("/oauth/callback?code=good", follow_redirects=False)
 
@@ -176,6 +244,53 @@ def test_callback_rejects_explicit_state_mismatch(
     )
 
     assert callback.status_code == 400
+
+
+def test_callback_rejects_explicit_empty_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+    login = client.get("/login", follow_redirects=False)
+    _issue_code(client, "good", login.headers["location"])
+
+    callback = client.get("/oauth/callback?code=good&state=", follow_redirects=False)
+
+    assert callback.status_code == 400
+
+
+def test_cookie_only_callback_requires_the_browser_cookie(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+    login = client.get("/login", follow_redirects=False)
+    _issue_code(client, "good", login.headers["location"])
+    other_browser = TestClient(client.app, base_url="https://wingman.example.com")
+
+    callback = other_browser.get("/oauth/callback?code=good", follow_redirects=False)
+
+    assert callback.status_code == 400
+
+
+def test_cookie_only_callback_is_one_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+    login = client.get("/login", follow_redirects=False)
+    _issue_code(client, "good", login.headers["location"])
+
+    assert client.get("/oauth/callback?code=good", follow_redirects=False).status_code == 303
+    assert client.get("/oauth/callback?code=good", follow_redirects=False).status_code == 400
+
+
+def test_cookie_only_callback_rejects_code_from_another_login(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+    first = client.get("/login", follow_redirects=False)
+    _issue_code(client, "first", first.headers["location"])
+    client.get("/login", follow_redirects=False)
+
+    callback = client.get("/oauth/callback?code=first", follow_redirects=False)
+
+    assert callback.status_code == 401
 
 
 def test_state_cookie_is_scoped_to_the_registered_public_callback(
@@ -201,6 +316,7 @@ def test_browser_redirects_and_session_cookie_preserve_public_mount(
 ) -> None:
     client, _tenant, _validated = _world(tmp_path, monkeypatch, public_mount="/shared")
     login = client.get("/login", follow_redirects=False)
+    _issue_code(client, "good", login.headers["location"])
     state = re.search(r"[?&]state=([^&]+)", login.headers["location"])
     assert state is not None
     callback = client.get(
@@ -247,6 +363,7 @@ def test_token_exchange_does_not_block_other_async_requests(
             transport=transport, base_url="https://wingman.example.com"
         ) as async_client:
             login = await async_client.get("/login", follow_redirects=False)
+            _issue_code(client, "good", login.headers["location"])
             state = re.search(r"[?&]state=([^&]+)", login.headers["location"])
             assert state is not None
             callback = asyncio.create_task(
@@ -301,6 +418,7 @@ def test_verified_but_unapproved_identity_is_refused_before_setup(
         lambda _token, _settings, _resolver: BearerIdentity(ISSUER, "not-approved", ()),
     )
     login = client.get("/login", follow_redirects=False)
+    _issue_code(client, "good", login.headers["location"])
     state = re.search(r"[?&]state=([^&]+)", login.headers["location"])
     assert state is not None
 
