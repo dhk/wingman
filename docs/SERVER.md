@@ -1047,6 +1047,37 @@ precondition first. `WINGMAN_SHARED_USER`/`WINGMAN_SHARED_PORT`/
 `WINGMAN_SHARED_TAILSCALE_PATH` env vars override the defaults
 (`wingman-shared`, `8789`, `/shared`).
 
+**Request log: did the client reach us, and what did we answer?** The
+shared process writes one line per HTTP request on logger `wingman.access`:
+
+```text
+ts=… level=INFO logger=wingman.access msg=method=POST path=/mcp status=401 ms=4 ua="Claude-User/1.0"
+```
+
+Method, path, status, duration in milliseconds, and the user-agent cut to 60
+characters. **Never** query strings (OAuth `code`/`state`), headers
+(`Authorization`, cookies) or bodies. The path is allowlisted, not
+redacted: the OAuth `/mcp` route, `/.well-known/…`, `/login`,
+`/oauth/callback`, `/setup…` and `/health` appear as seen; capability routes
+appear as `/mcp/<token>`, `/ui/<token>/…` and `/admin/<token>/…`, with no
+file names; anything else is `<other>`, because a mistyped capability URL
+is still a credential. uvicorn's own access log stays disabled (#70).
+Read it from any account in the `adm` group, no sudo needed:
+
+```bash
+journalctl _UID=$(id -u wingman-shared) --since today | grep 'logger=wingman.access'
+```
+
+A 401 on `/mcp` followed by `GET` on the metadata path means discovery
+reached us; a 403 means the token was valid but the identity is not bound
+(`wingman tenant oauth-pending`); no lines at all means nothing arrived.
+
+Under journald every event is one line: when stderr is not a terminal the
+Rich handler FastMCP installs is replaced by the key-value format, and
+newlines inside a message or traceback are escaped as `\n`. Grep for the
+whole message, e.g. `grep 'bearer verified but unprovisioned'`.
+An interactive terminal keeps Rich.
+
 **Recovering or rotating a tenant's URL** (#209/#210) — no self-service
 flow, no new credential, by design (RFC-048's trust surface stays
 exactly the tenant registry + per-tenant token files, nothing added for
