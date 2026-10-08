@@ -843,7 +843,7 @@ sudo -iu wingman-shared wingman tenant oauth-pending \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml
 
 sudo wingman tenant oauth-approve taylor \
-  --issuer https://your-project.authkit.app \
+  --issuer 'the exact issuer printed by oauth-pending' \
   --subject user_01EXAMPLE \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
   --registry /etc/wingman/tenants.toml \
@@ -993,10 +993,18 @@ Repeat those probes if the WorkOS application or its authentication mode
 changes. The code exchange uses WorkOS's documented JSON request shape and no
 undocumented redirect or resource fields. After callback it sets a 30-minute
 opaque cookie scoped only to `/shared/setup`; the access token remains
-server-side and its signature, issuer, audience, expiry, approved `(iss, sub)`
-binding, and live tenant row are rechecked for every setup request. Sessions
-are memory-only, bounded, and lost on restart (the user signs in again). No
-refresh token is requested or stored.
+server-side. WorkOS returns a User Management **session token** here, not the
+audience-bound resource token used by `/mcp`: Wingman verifies it against
+`https://api.workos.com/sso/jwks/<client_id>`, requires the exact issuer
+`https://api.workos.com/user_management/<client_id>`, expiry, subject and exact
+`client_id`, and does not invent an audience requirement when WorkOS supplies
+none. The MCP validator remains separate and still requires the configured
+resource audience. The browser token's signature and claims, approved exact
+`(iss, sub)` binding, and live tenant row are rechecked for every setup
+request. Use the exact issuer shown by `oauth-pending` when approving a browser
+identity; it is intentionally different from the MCP resource-token issuer.
+Sessions are memory-only, bounded, and lost on restart (the user signs in
+again). No refresh token is requested or stored.
 
 The setup page accepts API keys only through its CSRF-protected browser form;
 keys never pass through the MCP/model conversation and are never echoed back.

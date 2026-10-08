@@ -1,9 +1,12 @@
 """WorkOS-backed browser sessions for the OAuth tenant setup surface.
 
 The MCP bearer route and this browser flow share the same verified identity
-map, tenant registry, JWT rules, and JWKS resolver.  The browser never receives
-a capability URL.  Its cookie is an opaque, short-lived handle; the access
-token stays server-side and is revalidated before every setup request.
+map and tenant registry, but they accept different WorkOS token classes.  MCP
+resource tokens remain audience-bound; browser login returns a User Management
+session token with its own issuer, client-id claim, and JWKS.  The browser
+never receives a capability URL.  Its cookie is an opaque, short-lived handle;
+the access token stays server-side and is revalidated before every setup
+request.
 """
 
 from __future__ import annotations
@@ -23,18 +26,21 @@ from dataclasses import dataclass
 from typing import Any
 
 import anyio
+import jwt
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.oauth_bearer import (
+    ALLOWED_ALGORITHMS,
     BearerError,
+    BearerIdentity,
     IdentityMap,
     KeyResolver,
     OAuthConfigError,
     OAuthSettings,
-    validate_access_token,
 )
 from wingman.infrastructure.tenants import TenantIndex
 
@@ -45,6 +51,11 @@ _SESSION_TTL_SECONDS = 1800.0
 _MAX_PENDING = 256
 _MAX_SESSIONS = 4096
 _CALLBACK_PATH = "/oauth/callback"
+_WORKOS_SESSION_ISSUER = "https://api.workos.com/user_management/{client_id}"
+_WORKOS_SESSION_JWKS = "https://api.workos.com/sso/jwks/{client_id}"
+_LEEWAY_SECONDS = 30
+
+_logger = get_logger("oauth_browser")
 
 
 @dataclass(frozen=True)
@@ -72,6 +83,14 @@ class OAuthBrowserSettings:
         if not value:
             raise OAuthConfigError(f"{self.client_secret_env} is required for OAuth browser login")
         return value
+
+    @property
+    def session_issuer(self) -> str:
+        return _WORKOS_SESSION_ISSUER.format(client_id=self.client_id)
+
+    @property
+    def session_jwks_uri(self) -> str:
+        return _WORKOS_SESSION_JWKS.format(client_id=self.client_id)
 
 
 def build_oauth_browser_settings(
@@ -120,6 +139,57 @@ class _Session:
 
 
 TokenExchange = Callable[[str, str], str]
+PendingRecorder = Callable[[str, str], bool]
+
+
+def validate_browser_session_token(
+    token: str,
+    settings: OAuthBrowserSettings,
+    resolve_key: KeyResolver,
+) -> BearerIdentity:
+    """Verify the User Management session token returned by AuthKit.
+
+    WorkOS session tokens are not MCP resource tokens: the production token
+    has no audience, names the confidential application in ``client_id``, and
+    is signed by the WorkOS session JWKS.  Keeping this validator separate
+    prevents browser compatibility from weakening the MCP audience boundary.
+    """
+    try:
+        key = resolve_key(token)
+        claims = jwt.decode(
+            token,
+            key,
+            algorithms=list(ALLOWED_ALGORITHMS),
+            issuer=settings.session_issuer,
+            leeway=_LEEWAY_SECONDS,
+            options={
+                "require": ["exp", "iss", "sub", "client_id"],
+                "verify_aud": False,
+            },
+        )
+    except jwt.PyJWTError as exc:
+        raise BearerError(type(exc).__name__) from exc
+    except Exception as exc:  # noqa: BLE001 — JWKS/network failure must fail closed
+        raise BearerError(f"key-resolution:{type(exc).__name__}") from exc
+    if claims.get("client_id") != settings.client_id:
+        raise BearerError("wrong-client-id")
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject:
+        raise BearerError("empty-subject")
+    raw_scope = claims.get("scope", claims.get("scp", ""))
+    if isinstance(raw_scope, str):
+        scopes = tuple(raw_scope.split())
+    elif isinstance(raw_scope, (list, tuple)) and all(
+        isinstance(scope, str) for scope in raw_scope
+    ):
+        scopes = tuple(raw_scope)
+    else:
+        raise BearerError("malformed-scope")
+    return BearerIdentity(
+        issuer=settings.session_issuer,
+        subject=subject,
+        scopes=scopes,
+    )
 
 
 class OAuthBrowserSessions:
@@ -137,6 +207,7 @@ class OAuthBrowserSessions:
         resolve_key: KeyResolver,
         *,
         token_exchange: TokenExchange | None = None,
+        record_pending: PendingRecorder | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings = settings
@@ -145,6 +216,7 @@ class OAuthBrowserSessions:
         self._index = index
         self._resolve_key = resolve_key
         self._exchange = token_exchange or self._exchange_code
+        self._record_pending = record_pending
         self._monotonic = monotonic
         self._pending: dict[str, _Pending] = {}
         self._sessions: dict[str, _Session] = {}
@@ -204,9 +276,23 @@ class OAuthBrowserSessions:
 
     def finish(self, code: str, verifier: str) -> str:
         access_token = self._exchange(code, verifier)
-        identity = validate_access_token(access_token, self._oauth, self._resolve_key)
+        identity = validate_browser_session_token(access_token, self._settings, self._resolve_key)
         slug = self._identities.slug_for(identity.issuer, identity.subject)
         if not slug or self._index.by_slug(slug) is None:
+            _logger.info("browser identity verified but unprovisioned: sub=%s", identity.subject)
+            if self._record_pending is not None and slug is None:
+                try:
+                    recorded = self._record_pending(identity.issuer, identity.subject)
+                except Exception as exc:  # noqa: BLE001 — admission stays fail closed
+                    _logger.error(
+                        "verified browser identity could not be added to pending queue: %s", exc
+                    )
+                else:
+                    if not recorded:
+                        _logger.info(
+                            "verified browser identity was not added to pending queue: it is "
+                            "already bound on disk or the queue is full"
+                        )
             raise PermissionError("authenticated identity is not provisioned")
         now = self._monotonic()
         with self._lock:
@@ -229,7 +315,9 @@ class OAuthBrowserSessions:
         if session is None:
             return None
         try:
-            identity = validate_access_token(session.access_token, self._oauth, self._resolve_key)
+            identity = validate_browser_session_token(
+                session.access_token, self._settings, self._resolve_key
+            )
         except BearerError:
             self.remove(session_id)
             return None
@@ -415,4 +503,5 @@ __all__ = [
     "OAuthBrowserSettings",
     "bind_oauth_browser",
     "build_oauth_browser_settings",
+    "validate_browser_session_token",
 ]

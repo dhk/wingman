@@ -5552,6 +5552,13 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         )
         sys.exit(1)
     resolve_key = jwks_key_resolver(settings.jwks_uri)
+    onboarding_store = OAuthOnboardingStore(onboarding_path_for(identity_path))
+    record_pending = lambda issuer, subject: record_verified_pending(
+        identity_path,
+        onboarding_store,
+        issuer,
+        subject,
+    )
     bind_oauth_routing(
         app,
         f"{prefix}/mcp/{{token}}",
@@ -5560,12 +5567,7 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         identities,
         settings,
         resolve_key,
-        lambda issuer, subject: record_verified_pending(
-            identity_path,
-            OAuthOnboardingStore(onboarding_path_for(identity_path)),
-            issuer,
-            subject,
-        ),
+        record_pending,
     )
     oauth_web_client_id = getattr(args, "oauth_web_client_id", None)
     if oauth_web_client_id:
@@ -5593,7 +5595,8 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
                 settings,
                 identities,
                 index,
-                resolve_key,
+                jwks_key_resolver(browser_settings.session_jwks_uri),
+                record_pending=record_pending,
             ),
         )
     print(
