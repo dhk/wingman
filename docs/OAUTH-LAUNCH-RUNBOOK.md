@@ -93,19 +93,30 @@ sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-inv
 
 The invitee's first verified sign-in remains forbidden and creates no
 workspace. It records the opaque issuer/subject pair in the bounded pending
-queue. Inspect that queue, confirm the person out of band, and approve the
-exact verified identity:
+queue. Browser setup and MCP use different WorkOS token classes and issuers,
+so have the invitee attempt both flows before approval. `oauth-pending` may
+show two rows for that person. Confirm both identities out of band; do not
+assume their opaque `sub` values are equal or infer a link from them.
+
+Approve one exact verified identity to create the reserved tenant, then bind
+the other exact verified identity to that same tenant:
 
 ```bash
 sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-pending \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml
 
 sudo /home/wingman-shared/.local/bin/wingman tenant oauth-approve <slug> \
-  --issuer <exact-verified-iss> \
-  --subject <exact-verified-sub> \
+  --issuer <exact-verified-iss-for-one-surface> \
+  --subject <exact-verified-sub-for-one-surface> \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
   --registry /etc/wingman/tenants.toml \
   --data-root /home/wingman-shared/tenants
+
+sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-bind <slug> \
+  --issuer <exact-verified-iss-for-the-other-surface> \
+  --subject <exact-verified-sub-for-the-other-surface> \
+  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
+  --registry /etc/wingman/tenants.toml
 ```
 
 Do not obtain `sub` from email, a screenshot, or user input; use the verified
@@ -134,16 +145,20 @@ canary B. Do not use production tenant data as the test marker.
 For canary A:
 
 1. Reserve the invite slug.
-2. Sign in through WorkOS.
-3. Confirm the verified-but-unapproved identity can see no tenant data.
-4. Approve it into a new unprivileged, unfunded workspace.
-5. Sign in again and confirm it reaches the approved slug.
-6. Open the OAuth-protected `/login` → `/setup/` surface, add a BYOK credential, and upload a
+2. Attempt both the browser `/login` flow and the MCP connector flow through
+   WorkOS.
+3. Confirm each verified-but-unapproved identity can see no tenant data.
+4. Confirm the browser and MCP attempts produced their two exact pending
+   identities. Do not assume their `sub` values match.
+5. Approve one identity into a new unprivileged, unfunded workspace, then use
+   `oauth-bind` to bind the other verified identity to the same slug.
+6. Sign in again and confirm both surfaces reach the approved slug.
+7. Open the OAuth-protected `/login` → `/setup/` surface, add a BYOK credential, and upload a
    harmless test CV. Confirm the credential never appears in chat, logs, or
    browser URLs.
-7. Connect the MCP client and call one read-only status tool.
-8. Add a unique, non-sensitive canary record through the normal Wingman tool.
-9. Disconnect, sign in again, and confirm the same workspace and record return.
+8. Connect the MCP client and call one read-only status tool.
+9. Add a unique, non-sensitive canary record through the normal Wingman tool.
+10. Disconnect, sign in again, and confirm the same workspace and record return.
 
 For canary B:
 

@@ -831,9 +831,13 @@ sudo -iu wingman-shared wingman tenant oauth-invite taylor \
 Their first successful WorkOS sign-in is still refused with 403. It records
 only the verified opaque `(iss, sub)`, first/last-seen times, and sign-in count
 in `oauth-identities-onboarding.json`; no bearer token or email is stored, no
-workspace exists, and no tenant data is reachable. The pending queue is capped
-at 128 identities. Once full it keeps its existing records and refuses to
-persist new ones, while every unapproved request remains forbidden.
+workspace exists, and no tenant data is reachable. Browser setup and MCP use
+different WorkOS token classes and issuers, so one person may produce two
+pending rows. Those rows may also have different opaque `sub` values; never
+infer that they belong together. Confirm each identity out of band. The
+pending queue is capped at 128 identities, so two token identities can consume
+two slots. Once full it keeps its existing records and refuses to persist new
+ones, while every unapproved request remains forbidden.
 
 List the reserved slugs and verified pending identities, then explicitly pair
 the expected person with their reserved slug:
@@ -843,11 +847,17 @@ sudo -iu wingman-shared wingman tenant oauth-pending \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml
 
 sudo wingman tenant oauth-approve taylor \
-  --issuer 'the exact issuer printed by oauth-pending' \
-  --subject user_01EXAMPLE \
+  --issuer 'the exact issuer printed for one verified surface' \
+  --subject user_01EXAMPLE_FOR_ONE_SURFACE \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
   --registry /etc/wingman/tenants.toml \
   --data-root /home/wingman-shared/tenants
+
+sudo -iu wingman-shared wingman tenant oauth-bind taylor \
+  --issuer 'the exact issuer printed for the other verified surface' \
+  --subject user_01EXAMPLE_FOR_THE_OTHER_SURFACE \
+  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
+  --registry /etc/wingman/tenants.toml
 ```
 
 Approval is the only step that creates a workspace. It claims both the invite
@@ -859,6 +869,12 @@ registry entry deliberately omits both `privileged` and `funded`, so both
 remain false. Each durable step is idempotent: after interruption, rerunning
 the same approval completes the safe partial state instead of assigning it to
 somebody else.
+
+`oauth-approve` consumes the invite after binding one pending identity. Use
+`oauth-bind` for the second verified identity; do not try to approve the same
+invite twice. Both exact `(iss, sub)` pairs may point to the same tenant, but
+neither email nor a coincidentally matching `sub` is proof that they belong to
+the same person.
 
 Pending-state rows are fully schema-validated before use, so a damaged queue is
 reported as an onboarding-state error rather than becoming a traceback or a
