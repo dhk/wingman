@@ -981,12 +981,22 @@ separate `0600`, service-account-owned `/etc/wingman/oauth-web.env`; it does
 not put the secret in `ExecStart`, the non-secret OAuth file, or a tenant file.
 
 Send the invitee to `https://your-host.example/shared/login`. The server uses
-authorization code with PKCE and one-time, ten-minute state. After callback it
-sets a 30-minute `Secure`, `HttpOnly`, `SameSite=Lax` opaque cookie scoped only
-to `/shared/setup`; the access token remains server-side and its signature,
-issuer, audience, expiry, approved `(iss, sub)` binding, and live tenant row are
-rechecked for every setup request. Sessions are memory-only, bounded, and lost
-on restart (the user signs in again). No refresh token is requested or stored.
+authorization code with PKCE and one-time, ten-minute state. WorkOS User
+Management omitted `state` from the successful callback in the 2026-10-08
+launch canary; in that case Wingman uses the same one-time value from its
+`Secure`, `HttpOnly`, `SameSite=Lax` callback cookie. An explicitly returned
+state, including an empty value, must still match that cookie. This fallback
+depends on WorkOS enforcing PKCE. The same canary verified the exact production
+client: a matching challenge and verifier returned a token, while a wrong
+verifier and a code issued without a challenge both returned `invalid_grant`.
+Repeat those probes if the WorkOS application or its authentication mode
+changes. The code exchange uses WorkOS's documented JSON request shape and no
+undocumented redirect or resource fields. After callback it sets a 30-minute
+opaque cookie scoped only to `/shared/setup`; the access token remains
+server-side and its signature, issuer, audience, expiry, approved `(iss, sub)`
+binding, and live tenant row are rechecked for every setup request. Sessions
+are memory-only, bounded, and lost on restart (the user signs in again). No
+refresh token is requested or stored.
 
 The setup page accepts API keys only through its CSRF-protected browser form;
 keys never pass through the MCP/model conversation and are never echoed back.

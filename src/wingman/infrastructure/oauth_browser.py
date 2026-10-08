@@ -245,23 +245,22 @@ class OAuthBrowserSessions:
             self._sessions.pop(session_id, None)
 
     def _exchange_code(self, code: str, verifier: str) -> str:
-        body = urllib.parse.urlencode(
+        body = json.dumps(
             {
-                "grant_type": "authorization_code",
                 "client_id": self._settings.client_id,
                 "client_secret": self._settings.client_secret(),
+                "grant_type": "authorization_code",
                 "code": code,
                 "code_verifier": verifier,
-                "redirect_uri": self._settings.redirect_uri,
-                "resource": self._oauth.audience,
-            }
-        ).encode("ascii")
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
         request = urllib.request.Request(
             self._settings.token_url,
             data=body,
             headers={
                 "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded",
+                "Content-Type": "application/json",
             },
             method="POST",
         )
@@ -304,9 +303,14 @@ def bind_oauth_browser(
         return response
 
     async def callback(request: Request) -> Response:
-        state = request.query_params.get("state", "")
+        cookie_state = request.cookies.get(_STATE_COOKIE, "")
+        state = (
+            request.query_params.get("state", "")
+            if "state" in request.query_params
+            else cookie_state
+        )
         code = request.query_params.get("code", "")
-        verifier = sessions.consume_state(state, request.cookies.get(_STATE_COOKIE, ""))
+        verifier = sessions.consume_state(state, cookie_state)
         if verifier is None or not code:
             return PlainTextResponse("OAuth callback was invalid or expired", status_code=400)
         try:
