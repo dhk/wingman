@@ -135,6 +135,21 @@ fi
 
 say() { printf '==> %s\n' "$*"; }
 
+# The RFC 9728 host-root well-known path for an OAuth resource URL:
+# https://host/shared/mcp -> /.well-known/oauth-protected-resource/shared/mcp.
+# Prints nothing for a resource at the host root (or an empty audience).
+oauth_metadata_route() {
+  local rest="${1#*://}" path=""
+  case "$rest" in
+    */*) path="/${rest#*/}" ;;
+  esac
+  path="${path%%[?#]*}"
+  path="${path%/}"
+  if [ -n "$path" ]; then
+    printf '/.well-known/oauth-protected-resource%s\n' "$path"
+  fi
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "run as root: sudo $0" >&2
   exit 1
@@ -316,16 +331,48 @@ say "7/8 tailscale mount (stripping proxy — the shared process itself runs wit
 # when this script was first written, and a later re-run of the
 # (idempotent) provisioning script replayed the same mistake against
 # production.
+#
+# With OAuth, also publish the RFC 9728 metadata at the host-ROOT well-known
+# path for the resource (https://host/shared/mcp ->
+# /.well-known/oauth-protected-resource/shared/mcp). A client that computes
+# that path instead of following the 401's resource_metadata URL never
+# reaches a mount under /shared. The app serves the path itself
+# (_metadata_paths in oauth_bearer.py); the target carries the path because
+# --set-path strips the matched prefix before proxying. It was added by hand
+# on lobster during the 2026-10-08 connector debugging and would have been
+# lost on the next rebuild.
+OAUTH_METADATA_ROUTE=""
+if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ]; then
+  metadata_audience="$OAUTH_AUDIENCE"
+  if [ -z "$metadata_audience" ] && [ -r "$OAUTH_CONFIG_PATH" ]; then
+    metadata_audience="$(sed -n 's/^WINGMAN_OAUTH_AUDIENCE=//p' "$OAUTH_CONFIG_PATH" | head -n 1)"
+  fi
+  OAUTH_METADATA_ROUTE="$(oauth_metadata_route "$metadata_audience")"
+  for mount_path in "${TAILSCALE_PATH_LIST[@]}"; do
+    # A root mount already proxies the well-known path through unchanged.
+    if [ "$mount_path" = "/" ]; then
+      OAUTH_METADATA_ROUTE=""
+    fi
+  done
+fi
 if command -v tailscale >/dev/null 2>&1; then
   for mount_path in "${TAILSCALE_PATH_LIST[@]}"; do
     say "  mounting $mount_path"
     tailscale funnel --bg --set-path "$mount_path" "http://127.0.0.1:$PORT"
   done
+  if [ -n "$OAUTH_METADATA_ROUTE" ]; then
+    say "  mounting $OAUTH_METADATA_ROUTE (OAuth protected-resource metadata)"
+    tailscale funnel --bg --set-path "$OAUTH_METADATA_ROUTE" \
+      "http://127.0.0.1:$PORT$OAUTH_METADATA_ROUTE"
+  fi
 else
   say "tailscale not found — skipping. Run manually later:"
   for mount_path in "${TAILSCALE_PATH_LIST[@]}"; do
     say "  tailscale funnel --bg --set-path $mount_path http://127.0.0.1:$PORT"
   done
+  if [ -n "$OAUTH_METADATA_ROUTE" ]; then
+    say "  tailscale funnel --bg --set-path $OAUTH_METADATA_ROUTE http://127.0.0.1:$PORT$OAUTH_METADATA_ROUTE"
+  fi
 fi
 
 say "8/8 host service registry"

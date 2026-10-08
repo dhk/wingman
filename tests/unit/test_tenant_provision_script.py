@@ -456,3 +456,64 @@ def test_oauth_only_funding_guidance_does_not_claim_a_browser_key_page_exists() 
 
     assert "Self-funded browser key entry is not available for OAuth-only tenants yet" in body
     assert "OAuth-only tenant can make NO model call yet" in body
+
+
+def _metadata_route(audience: str) -> str:
+    """Run the provisioner's own oauth_metadata_route on one audience."""
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+    start = body.index("oauth_metadata_route() {")
+    end = body.index("\n}\n", start) + 3
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'set -euo pipefail\n{body[start:end]}\noauth_metadata_route "$1"',
+            "_",
+            audience,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def test_root_metadata_route_follows_rfc_9728_for_the_resource_path() -> None:
+    assert (
+        _metadata_route("https://box.example.ts.net/shared/mcp")
+        == "/.well-known/oauth-protected-resource/shared/mcp"
+    )
+    assert (
+        _metadata_route("https://box.example.ts.net/shared/mcp/")
+        == "/.well-known/oauth-protected-resource/shared/mcp"
+    )
+    assert _metadata_route("https://box.example.ts.net") == ""
+    assert _metadata_route("https://box.example.ts.net/") == ""
+    assert _metadata_route("") == ""
+
+
+def test_the_app_serves_the_path_the_root_metadata_route_proxies_to() -> None:
+    # The Funnel route proxies to the same path on the local port, so the
+    # app must answer it, or the route publishes a 404.
+    from wingman.infrastructure.oauth_bearer import OAuthSettings, _metadata_paths
+
+    audience = "https://box.example.ts.net/shared/mcp"
+    settings = OAuthSettings("https://issuer.example", audience, "https://issuer.example/jwks")
+
+    assert _metadata_route(audience) in _metadata_paths(settings, "/mcp")
+
+
+def test_shared_provisioner_publishes_the_root_metadata_route_with_oauth() -> None:
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+
+    # Funnel, never plain serve: serve drops Funnel for the whole hostname.
+    assert 'tailscale funnel --bg --set-path "$OAUTH_METADATA_ROUTE"' in body
+    assert '"http://127.0.0.1:$PORT$OAUTH_METADATA_ROUTE"' in body
+    assert "tailscale serve --bg --set-path" not in body
+    # Printed for the operator when tailscale is not on PATH.
+    assert (
+        "tailscale funnel --bg --set-path $OAUTH_METADATA_ROUTE "
+        "http://127.0.0.1:$PORT$OAUTH_METADATA_ROUTE" in body
+    )
+    # A redeploy reads the audience back from the saved config.
+    assert "s/^WINGMAN_OAUTH_AUDIENCE=//p" in body

@@ -73,12 +73,21 @@ try:
 except ValueError:
     raise SystemExit(1)
 target = sys.argv[1]
+
+
+def ours(proxy):
+    # The port itself, or a path on it: the RFC 9728 root metadata route
+    # proxies to /.well-known/... on this port, and an exact-target match
+    # left it live on the funnel and claimed by nobody.
+    return proxy == target or str(proxy or "").startswith(target + "/")
+
+
 paths = sorted(
     {
         path
         for host in (payload.get("Web") or {}).values()
         for path, handler in ((host or {}).get("Handlers") or {}).items()
-        if (handler or {}).get("Proxy") == target
+        if ours((handler or {}).get("Proxy"))
     }
 )
 if not paths:
