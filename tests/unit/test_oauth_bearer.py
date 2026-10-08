@@ -954,6 +954,37 @@ def test_bind_oauth_adds_routes_when_everything_lines_up(
     assert "OAuth bearer" in capsys.readouterr().out
 
 
+def test_bind_oauth_uses_separate_workos_session_jwks_for_browser_tokens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from wingman import mcp_server
+    from wingman.infrastructure import oauth_bearer
+
+    world = _World(tmp_path / "w")
+    app = Starlette(routes=[Route("/mcp/{token}", endpoint=world.inner)])
+    args = _namespace(tmp_path, f'[[identity]]\niss = "{ISSUER}"\nsub = "a"\nslug = "jason"\n')
+    args.oauth_web_client_id = "client_123"
+    args.oauth_web_authorize_url = "https://api.workos.com/user_management/authorize"
+    args.oauth_web_token_url = "https://api.workos.com/user_management/authenticate"
+    args.oauth_web_redirect_uri = "https://wingman.example.com/oauth/callback"
+    monkeypatch.setenv("WINGMAN_OAUTH_WEB_CLIENT_SECRET", "super-secret")
+    resolver_uris: list[str] = []
+
+    def resolver(uri: str):
+        resolver_uris.append(uri)
+        return lambda _token: _KEY.public_key()
+
+    monkeypatch.setattr(oauth_bearer, "jwks_key_resolver", resolver)
+
+    mcp_server._bind_oauth(app, args, "", world.index)
+
+    assert resolver_uris == [
+        f"{ISSUER}/jwks",
+        "https://api.workos.com/sso/jwks/client_123",
+    ]
+
+
 def test_bind_oauth_refuses_an_identity_naming_a_tenant_not_in_the_registry(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

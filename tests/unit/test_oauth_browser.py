@@ -12,7 +12,9 @@ import urllib.parse
 from pathlib import Path
 
 import httpx
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.testclient import TestClient
@@ -20,6 +22,7 @@ from starlette.testclient import TestClient
 import wingman.infrastructure.oauth_browser as browser_module
 import wingman.webui as webui_module
 from wingman.infrastructure.oauth_bearer import (
+    BearerError,
     BearerIdentity,
     IdentityMap,
     OAuthConfigError,
@@ -29,11 +32,118 @@ from wingman.infrastructure.oauth_browser import (
     OAuthBrowserSessions,
     bind_oauth_browser,
     build_oauth_browser_settings,
+    validate_browser_session_token,
 )
 from wingman.infrastructure.tenants import Tenant, TenantIndex
 
 ISSUER = "https://example.authkit.app"
 AUDIENCE = "https://wingman.example.com/shared/mcp"
+BROWSER_CLIENT_ID = "client_123"
+BROWSER_ISSUER = f"https://api.workos.com/user_management/{BROWSER_CLIENT_ID}"
+_SESSION_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+def _session_token(**overrides: object) -> str:
+    claims: dict[str, object] = {
+        "iss": BROWSER_ISSUER,
+        "sub": "user_taylor",
+        "client_id": BROWSER_CLIENT_ID,
+        "exp": int(time.time()) + 300,
+    }
+    claims.update(overrides)
+    return jwt.encode(claims, _SESSION_KEY, algorithm="RS256", headers={"kid": "session-key"})
+
+
+def test_browser_session_token_accepts_workos_claim_shape_without_audience(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WINGMAN_OAUTH_WEB_CLIENT_SECRET", "super-secret")
+    settings = build_oauth_browser_settings(
+        BROWSER_CLIENT_ID,
+        "https://api.workos.com/user_management/authorize",
+        "https://api.workos.com/user_management/authenticate",
+        "https://wingman.example.com/oauth/callback",
+    )
+
+    identity = validate_browser_session_token(
+        _session_token(), settings, lambda _token: _SESSION_KEY.public_key()
+    )
+
+    assert identity.issuer == BROWSER_ISSUER
+    assert identity.subject == "user_taylor"
+
+
+@pytest.mark.parametrize(
+    ("claims", "expected_reason"),
+    [
+        ({"iss": "https://attacker.example"}, "InvalidIssuerError"),
+        ({"client_id": "client_attacker"}, "wrong-client-id"),
+    ],
+)
+def test_browser_session_token_rejects_wrong_trust_claims(
+    monkeypatch: pytest.MonkeyPatch,
+    claims: dict[str, object],
+    expected_reason: str,
+) -> None:
+    monkeypatch.setenv("WINGMAN_OAUTH_WEB_CLIENT_SECRET", "super-secret")
+    settings = build_oauth_browser_settings(
+        BROWSER_CLIENT_ID,
+        "https://api.workos.com/user_management/authorize",
+        "https://api.workos.com/user_management/authenticate",
+        "https://wingman.example.com/oauth/callback",
+    )
+
+    with pytest.raises(BearerError, match=expected_reason):
+        validate_browser_session_token(
+            _session_token(**claims), settings, lambda _token: _SESSION_KEY.public_key()
+        )
+
+
+def test_browser_session_token_rejects_wrong_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WINGMAN_OAUTH_WEB_CLIENT_SECRET", "super-secret")
+    settings = build_oauth_browser_settings(
+        BROWSER_CLIENT_ID,
+        "https://api.workos.com/user_management/authorize",
+        "https://api.workos.com/user_management/authenticate",
+        "https://wingman.example.com/oauth/callback",
+    )
+    other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    with pytest.raises(BearerError, match="InvalidSignatureError"):
+        validate_browser_session_token(
+            _session_token(), settings, lambda _token: other_key.public_key()
+        )
+
+
+def test_browser_session_token_rejects_symmetric_algorithm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WINGMAN_OAUTH_WEB_CLIENT_SECRET", "super-secret")
+    settings = build_oauth_browser_settings(
+        BROWSER_CLIENT_ID,
+        "https://api.workos.com/user_management/authorize",
+        "https://api.workos.com/user_management/authenticate",
+        "https://wingman.example.com/oauth/callback",
+    )
+    token = jwt.encode(
+        {
+            "iss": BROWSER_ISSUER,
+            "sub": "user_taylor",
+            "client_id": BROWSER_CLIENT_ID,
+            "exp": int(time.time()) + 300,
+        },
+        "a-test-secret-that-is-long-enough-for-hs256",
+        algorithm="HS256",
+    )
+
+    with pytest.raises(BearerError, match="InvalidAlgorithmError"):
+        validate_browser_session_token(
+            token,
+            settings,
+            lambda _token: "a-test-secret-that-is-long-enough-for-hs256",
+        )
 
 
 def _world(
@@ -42,7 +152,7 @@ def _world(
     tenant = Tenant(slug="taylor", data_dir=tmp_path / "taylor")
     tenant.data_dir.mkdir(parents=True)
     index = TenantIndex([tenant])
-    identities = IdentityMap({(ISSUER, "user_taylor"): "taylor"})
+    identities = IdentityMap({(BROWSER_ISSUER, "user_taylor"): "taylor"})
     monkeypatch.setenv("WINGMAN_OAUTH_WEB_CLIENT_SECRET", "super-secret")
     settings = build_oauth_browser_settings(
         "client_123",
@@ -53,11 +163,11 @@ def _world(
     validated: list[str] = []
     challenges: dict[str, str] = {}
 
-    def validate(token: str, _settings: OAuthSettings, _resolver: object) -> BearerIdentity:
+    def validate(token: str, _settings: object, _resolver: object) -> BearerIdentity:
         validated.append(token)
-        return BearerIdentity(ISSUER, "user_taylor", ())
+        return BearerIdentity(BROWSER_ISSUER, "user_taylor", ())
 
-    monkeypatch.setattr(browser_module, "validate_access_token", validate)
+    monkeypatch.setattr(browser_module, "validate_browser_session_token", validate)
 
     def exchange(code: str, verifier: str) -> str:
         actual = (
@@ -69,6 +179,7 @@ def _world(
             raise OAuthConfigError("authorization code is not bound to this verifier")
         return f"access-{code}"
 
+    pending: list[tuple[str, str]] = []
     sessions = OAuthBrowserSessions(
         settings,
         OAuthSettings(ISSUER, AUDIENCE, f"{ISSUER}/oauth2/jwks"),
@@ -76,10 +187,12 @@ def _world(
         index,
         lambda _token: object(),
         token_exchange=exchange,
+        record_pending=lambda issuer, subject: not pending.append((issuer, subject)),
     )
     app = Starlette()
     app.state.oauth_challenges = challenges
     app.state.oauth_sessions = sessions
+    app.state.oauth_pending = pending
     bind_oauth_browser(app, "", sessions)
     return TestClient(app, base_url="https://wingman.example.com"), tenant, validated
 
@@ -414,8 +527,8 @@ def test_verified_but_unapproved_identity_is_refused_before_setup(
     client, _tenant, _validated = _world(tmp_path, monkeypatch)
     monkeypatch.setattr(
         browser_module,
-        "validate_access_token",
-        lambda _token, _settings, _resolver: BearerIdentity(ISSUER, "not-approved", ()),
+        "validate_browser_session_token",
+        lambda _token, _settings, _resolver: BearerIdentity(BROWSER_ISSUER, "not-approved", ()),
     )
     login = client.get("/login", follow_redirects=False)
     _issue_code(client, "good", login.headers["location"])
@@ -431,6 +544,7 @@ def test_verified_but_unapproved_identity_is_refused_before_setup(
     assert callback.status_code == 403
     assert "not approved" in callback.text
     assert "wingman_setup_session" not in callback.headers.get("set-cookie", "")
+    assert client.app.state.oauth_pending == [(BROWSER_ISSUER, "not-approved")]
 
 
 def test_logout_requires_csrf_before_destroying_the_session(

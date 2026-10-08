@@ -831,9 +831,13 @@ sudo -iu wingman-shared wingman tenant oauth-invite taylor \
 Their first successful WorkOS sign-in is still refused with 403. It records
 only the verified opaque `(iss, sub)`, first/last-seen times, and sign-in count
 in `oauth-identities-onboarding.json`; no bearer token or email is stored, no
-workspace exists, and no tenant data is reachable. The pending queue is capped
-at 128 identities. Once full it keeps its existing records and refuses to
-persist new ones, while every unapproved request remains forbidden.
+workspace exists, and no tenant data is reachable. Browser setup and MCP use
+different WorkOS token classes and issuers, so one person may produce two
+pending rows. Those rows may also have different opaque `sub` values; never
+infer that they belong together. Confirm each identity out of band. The
+pending queue is capped at 128 identities, so two token identities can consume
+two slots. Once full it keeps its existing records and refuses to persist new
+ones, while every unapproved request remains forbidden.
 
 List the reserved slugs and verified pending identities, then explicitly pair
 the expected person with their reserved slug:
@@ -843,11 +847,17 @@ sudo -iu wingman-shared wingman tenant oauth-pending \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml
 
 sudo wingman tenant oauth-approve taylor \
-  --issuer https://your-project.authkit.app \
-  --subject user_01EXAMPLE \
+  --issuer 'the exact issuer printed for one verified surface' \
+  --subject user_01EXAMPLE_FOR_ONE_SURFACE \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
   --registry /etc/wingman/tenants.toml \
   --data-root /home/wingman-shared/tenants
+
+sudo -iu wingman-shared wingman tenant oauth-bind taylor \
+  --issuer 'the exact issuer printed for the other verified surface' \
+  --subject user_01EXAMPLE_FOR_THE_OTHER_SURFACE \
+  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
+  --registry /etc/wingman/tenants.toml
 ```
 
 Approval is the only step that creates a workspace. It claims both the invite
@@ -859,6 +869,12 @@ registry entry deliberately omits both `privileged` and `funded`, so both
 remain false. Each durable step is idempotent: after interruption, rerunning
 the same approval completes the safe partial state instead of assigning it to
 somebody else.
+
+`oauth-approve` consumes the invite after binding one pending identity. Use
+`oauth-bind` for the second verified identity; do not try to approve the same
+invite twice. Both exact `(iss, sub)` pairs may point to the same tenant, but
+neither email nor a coincidentally matching `sub` is proof that they belong to
+the same person.
 
 Pending-state rows are fully schema-validated before use, so a damaged queue is
 reported as an onboarding-state error rather than becoming a traceback or a
@@ -993,10 +1009,18 @@ Repeat those probes if the WorkOS application or its authentication mode
 changes. The code exchange uses WorkOS's documented JSON request shape and no
 undocumented redirect or resource fields. After callback it sets a 30-minute
 opaque cookie scoped only to `/shared/setup`; the access token remains
-server-side and its signature, issuer, audience, expiry, approved `(iss, sub)`
-binding, and live tenant row are rechecked for every setup request. Sessions
-are memory-only, bounded, and lost on restart (the user signs in again). No
-refresh token is requested or stored.
+server-side. WorkOS returns a User Management **session token** here, not the
+audience-bound resource token used by `/mcp`: Wingman verifies it against
+`https://api.workos.com/sso/jwks/<client_id>`, requires the exact issuer
+`https://api.workos.com/user_management/<client_id>`, expiry, subject and exact
+`client_id`, and does not invent an audience requirement when WorkOS supplies
+none. The MCP validator remains separate and still requires the configured
+resource audience. The browser token's signature and claims, approved exact
+`(iss, sub)` binding, and live tenant row are rechecked for every setup
+request. Use the exact issuer shown by `oauth-pending` when approving a browser
+identity; it is intentionally different from the MCP resource-token issuer.
+Sessions are memory-only, bounded, and lost on restart (the user signs in
+again). No refresh token is requested or stored.
 
 The setup page accepts API keys only through its CSRF-protected browser form;
 keys never pass through the MCP/model conversation and are never echoed back.

@@ -1301,25 +1301,34 @@ issuer outage fails closed.
 decide who receives Wingman. At launch, an operator deliberately approves each
 existing or invited identity. A newly approved tenant starts unprivileged and
 unfunded, and the OAuth provisioning path mints no permanent capability URL.
-The presently shipped operation binds an exact verified `(iss, sub)` supplied
-by the operator. Capturing an invited person's first verified sign-in as
-pending, matching it to an invite and approving it into a tenant is the next
-implementation slice, not a capability claimed by this RFC as already live.
-Public self-service signup and automatic approval are explicitly deferred.
+The invite flow captures an invited person's first verified sign-in as
+pending, still refuses access, and lets the operator match that exact identity
+to a reserved tenant slug. Approval—not authentication—is the step that
+creates the workspace and binding. Public self-service signup and automatic
+approval are explicitly deferred.
 
 **BYOK and browser setup.** RFC-019a/RFC-034a remain the key policy: a
 workspace's own validated provider key wins over every operator tier. The
 launch decision is therefore bring-your-own-key by default; operator funding
 remains an explicit per-tenant exception under RFC-080, never a signup
-default. The current OAuth route authenticates MCP only. It does not authorize
-`/ui/<token>/`, and `my_urls` deliberately refuses to invent either a
-capability URL or an OAuth browser page. Until the follow-on browser slice
-ships, an OAuth-only tenant can use model-free tools but needs the operator to
-mark that tenant funded before model-backed tools work. The follow-on browser
-surface must use the same external identity, confine reads and writes to the
-mapped tenant, validate a provider key before storing it through the existing
-RFC-034 path, and never send that key through MCP or model context. Those are
-accepted constraints, not a claim that the browser flow exists today.
+default. The OAuth browser setup surface uses the same operator-controlled
+identity map, confines reads and writes to the mapped tenant, validates a
+provider key before storing it through the existing RFC-034 path, and never
+sends that key through MCP or model context. It does not authorize
+`/ui/<token>/`, and `my_urls` never invents a capability URL.
+
+**Browser-session amendment (2026-10-08; Durable decision).** The browser
+setup slice is now implemented, including verified pending-identity capture.
+WorkOS User Management returns a session token from the authorization-code
+exchange, not the audience-bound resource token accepted at `/mcp`. The two
+validators therefore remain deliberately separate. Browser sessions require
+an asymmetric WorkOS session-JWKS signature, the exact
+`https://api.workos.com/user_management/<client_id>` issuer, expiry, subject,
+and exact `client_id`; the production token has no audience, so browser
+validation does not require one. MCP resource tokens continue to require the
+configured issuer and exact resource audience. A verified, unmapped browser
+identity is recorded in the bounded pending queue and still receives 403; only
+operator approval creates a workspace or grants access.
 
 **Migration and coexistence.** Existing capability tenants continue to work;
 turning OAuth on requires all issuer, audience, JWKS and identity-map settings
@@ -1338,9 +1347,9 @@ the bounded JWKS lifetime are the current revocation envelope. Also deferred are
 public signup, automatic tenant approval, account linking, additional login
 methods (including Apple), a Wingman-run authorization server, public-stranger
 scale, a free operator-funded tier, spend caps, encrypted custody for unknown
-users' keys and row-level multi-tenancy. Invite capture/approval and the
-OAuth-authenticated BYOK/CV setup page are committed launch slices still to be
-built, not reasons to expose the service publicly in the meantime.
+users' keys and row-level multi-tenancy. The implemented invite and browser
+setup slices are not reasons to expose the service publicly: operator approval
+remains mandatory.
 
 **Alternatives.** Keeping capability URLs for every new tenant was rejected
 for the launch path: a bearer token gives the connector an expiring,
