@@ -153,6 +153,31 @@ def test_state_is_one_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert client.get(url, headers=cookie, follow_redirects=False).status_code == 400
 
 
+def test_callback_uses_cookie_state_when_provider_omits_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+    client.get("/login", follow_redirects=False)
+
+    callback = client.get("/oauth/callback?code=good", follow_redirects=False)
+
+    assert callback.status_code == 303
+    assert callback.headers["location"] == "/setup/"
+
+
+def test_callback_rejects_explicit_state_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+    client.get("/login", follow_redirects=False)
+
+    callback = client.get(
+        "/oauth/callback?code=good&state=attacker-controlled", follow_redirects=False
+    )
+
+    assert callback.status_code == 400
+
+
 def test_state_cookie_is_scoped_to_the_registered_public_callback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

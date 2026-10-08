@@ -981,12 +981,15 @@ separate `0600`, service-account-owned `/etc/wingman/oauth-web.env`; it does
 not put the secret in `ExecStart`, the non-secret OAuth file, or a tenant file.
 
 Send the invitee to `https://your-host.example/shared/login`. The server uses
-authorization code with PKCE and one-time, ten-minute state. After callback it
-sets a 30-minute `Secure`, `HttpOnly`, `SameSite=Lax` opaque cookie scoped only
-to `/shared/setup`; the access token remains server-side and its signature,
-issuer, audience, expiry, approved `(iss, sub)` binding, and live tenant row are
-rechecked for every setup request. Sessions are memory-only, bounded, and lost
-on restart (the user signs in again). No refresh token is requested or stored.
+authorization code with PKCE and one-time, ten-minute state. WorkOS User
+Management may omit `state` from its callback; in that case Wingman uses the
+same one-time value from its `Secure`, `HttpOnly`, `SameSite=Lax` callback
+cookie. An explicitly returned state must still match that cookie. After
+callback it sets a 30-minute opaque cookie scoped only to `/shared/setup`; the
+access token remains server-side and its signature, issuer, audience, expiry,
+approved `(iss, sub)` binding, and live tenant row are rechecked for every
+setup request. Sessions are memory-only, bounded, and lost on restart (the user
+signs in again). No refresh token is requested or stored.
 
 The setup page accepts API keys only through its CSRF-protected browser form;
 keys never pass through the MCP/model conversation and are never echoed back.

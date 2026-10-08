@@ -304,9 +304,10 @@ def bind_oauth_browser(
         return response
 
     async def callback(request: Request) -> Response:
-        state = request.query_params.get("state", "")
+        cookie_state = request.cookies.get(_STATE_COOKIE, "")
+        state = request.query_params.get("state") or cookie_state
         code = request.query_params.get("code", "")
-        verifier = sessions.consume_state(state, request.cookies.get(_STATE_COOKIE, ""))
+        verifier = sessions.consume_state(state, cookie_state)
         if verifier is None or not code:
             return PlainTextResponse("OAuth callback was invalid or expired", status_code=400)
         try:
