@@ -160,6 +160,12 @@ EOF
   fi
   rm -f "$OAUTH_CONFIG_TEMP"
 fi
+if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ] \
+  && ! sudo -u "$SERVICE_USER" test -r "$OAUTH_CONFIG_PATH"; then
+  echo "saved OAuth config is not readable by $SERVICE_USER: $OAUTH_CONFIG_PATH" >&2
+  echo "The service unit was not replaced or restarted; fix path permissions before retrying." >&2
+  exit 1
+fi
 if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ]; then
   OAUTH_POINTER_TEMP="$(mktemp)"
   printf '%s\n' "$OAUTH_CONFIG_PATH" > "$OAUTH_POINTER_TEMP"

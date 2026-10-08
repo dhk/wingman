@@ -329,6 +329,46 @@ def test_add_tenant_discovers_a_custom_saved_oauth_config_before_creating_state(
     assert not calls.exists()
 
 
+def test_explicit_missing_oauth_config_fails_closed_before_legacy_tenant_creation(
+    tmp_path: Path,
+) -> None:
+    commands = _fake_root_commands(tmp_path)
+    calls = tmp_path / "calls"
+    wingman_command = commands / "wingman"
+    wingman_command.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$WINGMAN_TEST_CALLS"\n',
+        encoding="utf-8",
+    )
+    wingman_command.chmod(0o755)
+    registry = tmp_path / "tenants.toml"
+    registry.write_text("", encoding="utf-8")
+    pointer = tmp_path / "oauth-config-path"
+    saved_config = tmp_path / "saved-oauth.env"
+    saved_config.write_text("oauth is enabled\n", encoding="utf-8")
+    pointer.write_text(f"{saved_config}\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "new-person", "--no-telemetry"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{commands}:{os.environ['PATH']}",
+            "WINGMAN_TEST_CALLS": str(calls),
+            "WINGMAN_SHARED_REGISTRY": str(registry),
+            "WINGMAN_SHARED_OAUTH_CONFIG_POINTER": str(pointer),
+            "WINGMAN_SHARED_OAUTH_CONFIG": str(tmp_path / "mistyped-missing.env"),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "OAuth is enabled" in result.stderr
+    assert "no tenant state was created" in result.stderr
+    assert registry.read_text(encoding="utf-8") == ""
+    assert not calls.exists()
+
+
 def test_existing_account_migration_uses_the_explicit_legacy_escape_hatch() -> None:
     migration = (ROOT / "scripts" / "wingman-migrate-tenant.sh").read_text(encoding="utf-8")
 
@@ -354,6 +394,13 @@ def test_shared_provisioner_reuses_saved_custom_oauth_config_on_redeploy() -> No
     assert 'OAUTH_CONFIG_PATH="$(sed -n \'1p\' "$OAUTH_CONFIG_POINTER")"' in body
     assert "EFFECTIVE_OAUTH_ENABLED=1" in body
     assert 'if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ]; then' in body
+
+
+def test_shared_provisioner_checks_saved_oauth_config_as_the_service_user() -> None:
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'sudo -u "$SERVICE_USER" test -r "$OAUTH_CONFIG_PATH"' in body
+    assert "saved OAuth config is not readable by $SERVICE_USER" in body
 
 
 def test_oauth_runbook_uses_the_installed_service_account_binary() -> None:
