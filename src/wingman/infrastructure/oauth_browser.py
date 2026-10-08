@@ -44,6 +44,7 @@ _STATE_TTL_SECONDS = 600.0
 _SESSION_TTL_SECONDS = 1800.0
 _MAX_PENDING = 256
 _MAX_SESSIONS = 4096
+_CALLBACK_PATH = "/oauth/callback"
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,13 @@ class OAuthBrowserSettings:
     def callback_cookie_path(self) -> str:
         """Public callback path, which may include a proxy-stripped mount."""
         return urllib.parse.urlparse(self.redirect_uri).path or "/"
+
+    @property
+    def public_mount(self) -> str:
+        return self.callback_cookie_path[: -len(_CALLBACK_PATH)]
+
+    def public_path(self, path: str) -> str:
+        return f"{self.public_mount}/{path.lstrip('/')}"
 
     def client_secret(self) -> str:
         value = os.environ.get(self.client_secret_env, "").strip()
@@ -92,6 +100,8 @@ def build_oauth_browser_settings(
         redirect_uri=redirect_uri,
         client_secret_env=client_secret_env,
     )
+    if not settings.callback_cookie_path.endswith(_CALLBACK_PATH):
+        raise OAuthConfigError(f"--oauth-web-redirect-uri path must end in {_CALLBACK_PATH!r}")
     settings.client_secret()  # fail closed at startup, not after the first click
     return settings
 
@@ -143,6 +153,9 @@ class OAuthBrowserSessions:
     @property
     def callback_cookie_path(self) -> str:
         return self._settings.callback_cookie_path
+
+    def public_path(self, path: str) -> str:
+        return self._settings.public_path(path)
 
     def _prune(self, now: float) -> None:
         self._pending = {
@@ -301,7 +314,7 @@ def bind_oauth_browser(
             return PlainTextResponse("Signed in, but this account is not approved", status_code=403)
         except (BearerError, OAuthConfigError):
             return PlainTextResponse("OAuth sign-in failed", status_code=401)
-        response = RedirectResponse(f"{prefix}/setup/", status_code=303)
+        response = RedirectResponse(sessions.public_path("/setup/"), status_code=303)
         response.delete_cookie(_STATE_COOKIE, path=sessions.callback_cookie_path)
         response.set_cookie(
             _COOKIE,
@@ -310,7 +323,7 @@ def bind_oauth_browser(
             secure=True,
             httponly=True,
             samesite="lax",
-            path=f"{prefix}/setup",
+            path=sessions.public_path("/setup"),
         )
         return response
 
@@ -325,7 +338,7 @@ def bind_oauth_browser(
     async def setup(request: Request) -> Response:
         auth = await authorized(request)
         if auth is None:
-            return RedirectResponse(f"{prefix}/login", status_code=303)
+            return RedirectResponse(sessions.public_path("/login"), status_code=303)
         config, _session_id, csrf_token = auth
         with browser_setup_scope(config, csrf_token):
             return await ui_oauth_setup(request)
@@ -377,8 +390,8 @@ def bind_oauth_browser(
             if not isinstance(presented, str) or not secrets.compare_digest(presented, csrf_token):
                 return PlainTextResponse("Forbidden", status_code=403)
             sessions.remove(session_id)
-        response = RedirectResponse(f"{prefix}/login", status_code=303)
-        response.delete_cookie(_COOKIE, path=f"{prefix}/setup")
+        response = RedirectResponse(sessions.public_path("/login"), status_code=303)
+        response.delete_cookie(_COOKIE, path=sessions.public_path("/setup"))
         return response
 
     app.router.routes[0:0] = [

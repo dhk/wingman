@@ -27,7 +27,9 @@ ISSUER = "https://example.authkit.app"
 AUDIENCE = "https://wingman.example.com/shared/mcp"
 
 
-def _world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, Tenant, list[str]]:
+def _world(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, public_mount: str = ""
+) -> tuple[TestClient, Tenant, list[str]]:
     tenant = Tenant(slug="taylor", data_dir=tmp_path / "taylor")
     tenant.data_dir.mkdir(parents=True)
     index = TenantIndex([tenant])
@@ -37,7 +39,7 @@ def _world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient,
         "client_123",
         "https://api.workos.com/user_management/authorize",
         "https://api.workos.com/user_management/authenticate",
-        "https://wingman.example.com/shared/oauth/callback",
+        f"https://wingman.example.com{public_mount}/oauth/callback",
     )
     validated: list[str] = []
 
@@ -153,10 +155,43 @@ def test_state_is_one_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 def test_state_cookie_is_scoped_to_the_registered_public_callback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+    client, _tenant, _validated = _world(tmp_path, monkeypatch, public_mount="/shared")
     login = client.get("/login", follow_redirects=False)
 
     assert "Path=/shared/oauth/callback" in login.headers["set-cookie"]
+
+
+def test_browser_redirects_and_session_cookie_preserve_public_mount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _tenant, _validated = _world(tmp_path, monkeypatch, public_mount="/shared")
+    login = client.get("/login", follow_redirects=False)
+    state = re.search(r"[?&]state=([^&]+)", login.headers["location"])
+    assert state is not None
+    callback = client.get(
+        f"/oauth/callback?code=good&state={state.group(1)}",
+        headers={"Cookie": f"wingman_oauth_state={client.cookies.get('wingman_oauth_state')}"},
+        follow_redirects=False,
+    )
+
+    assert callback.headers["location"] == "/shared/setup/"
+    assert "Path=/shared/setup" in callback.headers["set-cookie"]
+    unauthorized = TestClient(client.app, base_url="https://wingman.example.com").get(
+        "/setup/", follow_redirects=False
+    )
+    assert unauthorized.headers["location"] == "/shared/login"
+    session_cookie = {
+        "Cookie": f"wingman_setup_session={client.cookies.get('wingman_setup_session')}"
+    }
+    page = client.get("/setup/", headers=session_cookie)
+    logout = client.post(
+        "/setup/logout",
+        headers=session_cookie,
+        data={"_csrf": _csrf(page.text)},
+        follow_redirects=False,
+    )
+    assert logout.headers["location"] == "/shared/login"
+    assert "Path=/shared/setup" in logout.headers["set-cookie"]
 
 
 def test_token_exchange_does_not_block_other_async_requests(
