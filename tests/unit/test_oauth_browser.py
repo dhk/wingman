@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+import urllib.parse
 from pathlib import Path
 
 import httpx
@@ -159,6 +160,15 @@ def test_state_cookie_is_scoped_to_the_registered_public_callback(
     login = client.get("/login", follow_redirects=False)
 
     assert "Path=/shared/oauth/callback" in login.headers["set-cookie"]
+
+
+def test_login_selects_authkit_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+
+    login = client.get("/login", follow_redirects=False)
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(login.headers["location"]).query)
+
+    assert query["provider"] == ["authkit"]
 
 
 def test_browser_redirects_and_session_cookie_preserve_public_mount(

@@ -973,6 +973,9 @@ configuration, and `WINGMAN_OAUTH_WEB_CLIENT_SECRET` are required together;
 startup fails closed if any is absent, empty, non-HTTPS (apart from loopback),
 or malformed. Never put the client secret on the command line or in the tenant
 registry.
+The browser authorization request explicitly selects WorkOS's `authkit`
+provider; omitting that selector makes User Management refuse the request
+before sign-in with `invalid-connection-selector`.
 The provisioner writes the secret and the browser argument bundle to a
 separate `0600`, service-account-owned `/etc/wingman/oauth-web.env`; it does
 not put the secret in `ExecStart`, the non-secret OAuth file, or a tenant file.
