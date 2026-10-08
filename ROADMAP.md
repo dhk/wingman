@@ -17,8 +17,8 @@ Each phase must leave Wingman in a usable state.
 | 8 — Controlled Connectors | Not started (explicit imports only, by design so far) |
 | 9 — Outcome Post-Mortems | Not started |
 
-Shipped alongside the phases: MCP parity across the whole surface (RFC-008,
-48 tools; remote transport RFC-017), design-system PDF exports, backup/
+Shipped alongside the phases: MCP parity across the whole surface (RFC-008;
+remote transport RFC-017), design-system PDF exports, backup/
 restore, Keychain-backed keys (RFC-019), object rename/delete/fix for people
 and companies (RFC-021), unified ranked search with a semantic pass
 (RFC-022), opt-in local telemetry (RFC-023), gated feature-request capture

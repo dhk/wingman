@@ -4756,6 +4756,145 @@ def tenant_oauth_bind_cmd(
         )
 
 
+@tenant_app.command("oauth-invite")
+def tenant_oauth_invite_cmd(
+    slug: str = typer.Argument(..., help="Slug reserved for one trusted invitee."),
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+    registry: Path | None = typer.Option(
+        None, "--registry", help="Tenant registry path (default: host setting)."
+    ),
+) -> None:
+    """Reserve a tenant slug before a trusted invitee signs in."""
+    configure_logging()
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        OAuthOnboardingStore,
+        onboarding_path_for,
+    )
+
+    tenants, registry_path = _load_registry_or_exit(registry)
+    store = OAuthOnboardingStore(onboarding_path_for(identities.expanduser()))
+    try:
+        store.reserve_invite(slug, existing_slugs={tenant.slug for tenant in tenants})
+    except OAuthOnboardingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"Reserved invite slug {slug!r}. No workspace or access was created. "
+        f"After sign-in, inspect it with `wingman tenant oauth-pending --identities "
+        f"{identities}` (registry: {registry_path})."
+    )
+
+
+@tenant_app.command("oauth-pending")
+def tenant_oauth_pending_cmd(
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+) -> None:
+    """List reserved slugs and verified identities awaiting approval."""
+    configure_logging()
+    from datetime import UTC, datetime
+
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        OAuthOnboardingStore,
+        onboarding_path_for,
+    )
+
+    store = OAuthOnboardingStore(onboarding_path_for(identities.expanduser()))
+    try:
+        invites = store.invites()
+        pending = store.pending()
+    except OAuthOnboardingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo("Reserved invite slugs:")
+    if invites:
+        for invite in invites:
+            typer.echo(f"  {invite.slug}")
+    else:
+        typer.echo("  none")
+    typer.echo("Verified identities awaiting approval:")
+    if pending:
+        for identity in pending:
+            seen = datetime.fromtimestamp(identity.last_seen, tz=UTC).isoformat()
+            typer.echo(
+                f"  issuer={identity.issuer} subject={identity.subject} "
+                f"last_seen={seen} sign_ins={identity.sign_in_count}"
+            )
+    else:
+        typer.echo("  none")
+
+
+@tenant_app.command("oauth-approve")
+def tenant_oauth_approve_cmd(
+    slug: str = typer.Argument(..., help="Previously reserved invite slug."),
+    issuer: str = typer.Option(..., "--issuer", help="Exact pending token issuer (`iss`)."),
+    subject: str = typer.Option(..., "--subject", help="Exact pending WorkOS subject (`sub`)."),
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+    registry: Path | None = typer.Option(
+        None, "--registry", help="Tenant registry path (default: host setting)."
+    ),
+    data_root: Path = typer.Option(
+        ...,
+        "--data-root",
+        help="Parent directory for isolated tenant workspaces (for example, "
+        "/home/wingman-shared/tenants).",
+    ),
+    service_user: str = typer.Option(
+        "wingman-shared",
+        "--service-user",
+        help="OS account that owns OAuth state and tenant workspaces.",
+    ),
+) -> None:
+    """Approve one verified pending identity into its reserved tenant."""
+    configure_logging()
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        approve_pending_tenant,
+    )
+    from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
+    from wingman.infrastructure.tenants import tenant_registry_path
+
+    registry_path = (registry or tenant_registry_path()).expanduser()
+    try:
+        data_dir = approve_pending_tenant(
+            identity_path=identities.expanduser(),
+            registry_path=registry_path,
+            data_root=data_root.expanduser(),
+            slug=slug,
+            issuer=issuer,
+            subject=subject,
+            service_user=service_user,
+        )
+    except OAuthOnboardingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        signaled_pid = signal_reload(registry_path)
+    except TenantProcessSignalError as exc:
+        typer.echo(
+            f"Approved {slug!r} on disk at {data_dir}, but the running service still has "
+            f"its previous tenant and identity maps: {exc}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Approved {slug!r}: isolated workspace {data_dir}; privileged=false; funded=false.")
+    if signaled_pid is not None:
+        typer.echo(
+            f"Signaled the running shared service (pid {signaled_pid}) to reload. "
+            "The signal was delivered; this command does not claim the asynchronous "
+            "reload has completed."
+        )
+    else:
+        typer.echo("No running shared service was found; the approval loads at next start.")
+
+
 @tenant_app.command("url")
 def tenant_url_cmd(
     slug: str = typer.Argument(..., help="The tenant's slug in the registry."),

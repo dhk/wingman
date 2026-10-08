@@ -3,9 +3,9 @@
 The deployment this guide builds: one Linux box that owns the workspace,
 runs `wingman overnight` on a timer, keeps the MCP server up as a service,
 and is reachable from claude.ai (web, desktop, phone) over your Tailscale
-network. Your career data still lives on a machine you own — this is
-local-first with a longer extension cord, not hosting (RFC-002 holds; the
-hosted tiers remain a separate, parked decision).
+network. Your career data still lives on a machine you own. RFC-081 extends
+this shape to deliberately trusted OAuth invitees; it is still local-first
+with a longer extension cord, not public self-service hosting.
 
 Everything here is Ubuntu 22.04+/Debian-family; adjust package commands
 for other distros.
@@ -745,14 +745,15 @@ file on the box. Assumes each listed user's checkout lives at
 deviates isn't a candidate for automatic upgrade and should be upgraded
 by hand.
 
-## 9. Shared multi-tenant deployment (RFC-048)
+## 9. Shared multi-tenant deployment (RFC-048, OAuth amendment RFC-081)
 
 Everything above is shape B: one Unix account, one workspace, one port,
 per person. RFC-048 adds a second shape for when per-account overhead
 stops paying for itself (a third-plus person, per `docs/RFC.md`'s own
 trigger) — one shared process, share-nothing data (one SQLite DB per
-tenant, unchanged), capability tokens per tenant. dhk and trent are not
-required to move onto this — the two shapes coexist on the same box,
+tenant, unchanged), capability tokens per existing/operator tenant plus an
+optional OAuth bearer route for deliberately trusted identities. dhk and trent
+are not required to move onto this — the two shapes coexist on the same box,
 each on its own port.
 
 **Run the provisioning scripts, don't hand-type this.** The steps below
@@ -818,9 +819,59 @@ identity and must not receive a permanent capability URL. The explicit
 it preserves recoverability for current users without reopening legacy URLs
 for new invitees.
 
-For a deliberately trusted OAuth user, then bind the exact verified WorkOS
-`(iss, sub)` instead of issuing a capability URL. A newly trusted user gets
-an isolated workspace and the binding in one operator action:
+For invite-only onboarding, reserve the person's tenant slug before giving
+them the connector address:
+
+```bash
+sudo -iu wingman-shared wingman tenant oauth-invite taylor \
+  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
+  --registry /etc/wingman/tenants.toml
+```
+
+Their first successful WorkOS sign-in is still refused with 403. It records
+only the verified opaque `(iss, sub)`, first/last-seen times, and sign-in count
+in `oauth-identities-onboarding.json`; no bearer token or email is stored, no
+workspace exists, and no tenant data is reachable. The pending queue is capped
+at 128 identities. Once full it keeps its existing records and refuses to
+persist new ones, while every unapproved request remains forbidden.
+
+List the reserved slugs and verified pending identities, then explicitly pair
+the expected person with their reserved slug:
+
+```bash
+sudo -iu wingman-shared wingman tenant oauth-pending \
+  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml
+
+sudo wingman tenant oauth-approve taylor \
+  --issuer https://your-project.authkit.app \
+  --subject user_01EXAMPLE \
+  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
+  --registry /etc/wingman/tenants.toml \
+  --data-root /home/wingman-shared/tenants
+```
+
+Approval is the only step that creates a workspace. It claims both the invite
+and identity against competing operators, writes an isolated workspace and
+registry entry, binds the exact verified identity, consumes the pending row,
+and signals the shared process to reload. Signal delivery is reported exactly;
+the CLI does not claim that the asynchronous reload has already completed. The
+registry entry deliberately omits both `privileged` and `funded`, so both
+remain false. Each durable step is idempotent: after interruption, rerunning
+the same approval completes the safe partial state instead of assigning it to
+somebody else.
+
+Pending-state rows are fully schema-validated before use, so a damaged queue is
+reported as an onboarding-state error rather than becoming a traceback or a
+partially interpreted approval. After approval, the request path checks the
+current on-disk identity map while holding the identity writer lock before it
+records any unknown identity. That closes the short reload window in which the
+server's older in-memory map could otherwise put an already-approved person
+back into the pending queue; access remains governed by the live map until the
+reload actually takes effect.
+
+The lower-level direct provisioning path remains available for an operator
+who already has a verified WorkOS `(iss, sub)` and deliberately does not need
+the invite queue. It never issues a capability URL:
 
 ```bash
 sudo scripts/wingman-add-tenant.sh taylor --no-telemetry \
@@ -862,7 +913,8 @@ idempotent but still retries the live reload, so rerunning after a prior signal
 permission failure is a recovery operation. Trying to bind the same identity
 to another tenant is refused.
 Unknown authenticated identities remain unprovisioned. Do not use email as
-the key and do not copy a `sub` from an unverified source. If the binding is
+the key and do not copy a `sub` from an unverified source; the invite flow
+above is the normal way to obtain the subject from a validated sign-in. If the binding is
 written but the operator cannot signal the running process, the command exits
 nonzero and says that the on-disk map changed while the live process still has
 the previous map; it does not misreport that state as "no process found."
@@ -898,11 +950,49 @@ OAuth-authenticated browser UI. Shared-path preflight also distinguishes a
 confirmed missing identity-map path from permission denial; it names the path,
 says that nothing changed, and never emits a Python traceback.
 
-OAuth-only tenants do not yet have an authenticated browser path to
-Manage → Keys. Do not promise self-funded browser key entry in this slice.
-Model-free tools work immediately; model-backed tools require the operator to
-configure the declared global provider key, set `funded = true` on that tenant,
-and run `wg reload`, as described under “Operator-funded inference.”
+OAuth-only tenants can use a separate, WorkOS-authenticated browser setup
+surface without receiving a capability URL. Register the exact callback URL in
+the same confidential WorkOS client, put its secret only in the service
+environment, and add all four browser flags to the shared service command:
+
+```bash
+sudo env \
+  ...the four WINGMAN_SHARED_OAUTH_* resource-server values above... \
+  WINGMAN_SHARED_OAUTH_WEB_CLIENT_ID=client_01EXAMPLE \
+  WINGMAN_SHARED_OAUTH_WEB_CLIENT_SECRET='from-your-secret-store' \
+  WINGMAN_SHARED_OAUTH_WEB_AUTHORIZE_URL=https://api.workos.com/user_management/authorize \
+  WINGMAN_SHARED_OAUTH_WEB_TOKEN_URL=https://api.workos.com/user_management/authenticate \
+  WINGMAN_SHARED_OAUTH_WEB_REDIRECT_URI=https://your-host.example/shared/oauth/callback \
+  scripts/wingman-provision-shared.sh
+```
+
+Those endpoint values are examples, not values Wingman derives or discovers:
+copy the exact authorization and token endpoints for the configured WorkOS
+client. All four `--oauth-web-*` values, the complete resource-server OAuth
+configuration, and `WINGMAN_OAUTH_WEB_CLIENT_SECRET` are required together;
+startup fails closed if any is absent, empty, non-HTTPS (apart from loopback),
+or malformed. Never put the client secret on the command line or in the tenant
+registry.
+The provisioner writes the secret and the browser argument bundle to a
+separate `0600`, service-account-owned `/etc/wingman/oauth-web.env`; it does
+not put the secret in `ExecStart`, the non-secret OAuth file, or a tenant file.
+
+Send the invitee to `https://your-host.example/shared/login`. The server uses
+authorization code with PKCE and one-time, ten-minute state. After callback it
+sets a 30-minute `Secure`, `HttpOnly`, `SameSite=Lax` opaque cookie scoped only
+to `/shared/setup`; the access token remains server-side and its signature,
+issuer, audience, expiry, approved `(iss, sub)` binding, and live tenant row are
+rechecked for every setup request. Sessions are memory-only, bounded, and lost
+on restart (the user signs in again). No refresh token is requested or stored.
+
+The setup page accepts API keys only through its CSRF-protected browser form;
+keys never pass through the MCP/model conversation and are never echoed back.
+For an unfunded BYOK tenant, CV upload stays unavailable until an Anthropic key
+has been verified and stored in that tenant's owner-only `keys.env`. A direct
+upload attempt before that point is refused before reading or storing the file,
+and explicitly reports that no model call was made. Existing capability-token
+UI and MCP routes remain available for existing tenants during migration; the
+OAuth setup page never renders either permanent URL.
 
 `--telemetry` / `--no-telemetry` decide RFC-023's local usage journal for
 that tenant. **With neither flag it asks**, and with neither flag and no
@@ -1167,9 +1257,11 @@ top level for the same reason as `privileged` and more sharply: a
 box-wide default would put every tenant added later on your invoice
 without anyone deciding to. Absent means false, so every registry
 written before this keeps meaning what it meant. Bare boolean,
-unquoted; `"true"` is refused rather than guessed at. Restart the shared
-process (`wg redeploy-shared`) after either change — the registry and
-the key files are read at startup.
+unquoted; `"true"` is refused rather than guessed at. After marking a
+tenant funded, run `wg reload`: it re-reads the registry without
+interrupting anyone. A key placed in a declared tier needs nothing; it is
+read on the next request (see
+[What actually needs a restart](#what-actually-needs-a-restart)).
 
 A funded tenant reaches the **declared** tiers only: the host file and
 the global file, in that order, never the ambient process environment.

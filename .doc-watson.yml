@@ -45,8 +45,8 @@ triggers:
     applies: false
     reason: No alerting that pages anyone is documented; docs/SERVER.md covers care, feeding and rollback.
   handover:
-    applies: true
-    reason: A second account holder operates Wingman on lobster and needs to run it without the owner (owner, 2026-09-28; CLAUDE.md names both accounts).
+    applies: false
+    reason: The second account holder uses their own Wingman as a tenant and operates nothing on lobster; no other party runs the box (owner, 2026-10-07, correcting 2026-09-28).
 
 # Concerns deliberately not met. Truthfulness, hygiene and duplication, and
 # maintenance and verification cannot be exempted.

@@ -1,4 +1,4 @@
-"""OAuth bearer validation for the shared multi-tenant process (RFC-081 draft spike).
+"""OAuth bearer validation for the shared multi-tenant process (RFC-081).
 
 The properties that matter, each tested directly rather than assumed:
   * a valid token reaches exactly the tenant its identity names, and two
@@ -141,6 +141,7 @@ class _World:
         settings: OAuthSettings = SETTINGS,
         raise_server_exceptions: bool = True,
         session_bindings: TenantSessionBindings | None = None,
+        record_pending: Any = None,
     ) -> None:
         tmp_path.mkdir(parents=True, exist_ok=True)
         self.inner = inner or _Inner()
@@ -172,6 +173,7 @@ class _World:
             self.identities,
             settings,
             resolve_key or (lambda _token: _KEY.public_key()),
+            record_pending=record_pending,
         )
         self.client = TestClient(self.app, raise_server_exceptions=raise_server_exceptions)
 
@@ -194,6 +196,25 @@ def world(tmp_path: Path) -> _World:
 def test_a_valid_token_reaches_the_tenant_its_identity_names(world: _World) -> None:
     assert world.get(_token("sub-jason")).text == str(world.jason.data_dir)
     assert world.get(_token("sub-bob")).text == str(world.bob.data_dir)
+
+
+def test_verified_unknown_identity_is_recorded_but_still_receives_no_access(
+    tmp_path: Path,
+) -> None:
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingStore,
+        onboarding_path_for,
+    )
+
+    identities = tmp_path / "identities.toml"
+    store = OAuthOnboardingStore(onboarding_path_for(identities))
+    world = _World(tmp_path / "world", record_pending=store.record_pending)
+
+    response = world.get(_token("verified-but-not-approved"))
+
+    assert response.status_code == 403
+    assert world.inner.calls == 0
+    assert [item.subject for item in store.pending()] == ["verified-but-not-approved"]
 
 
 def test_oauth_calls_preserve_truthful_http_origin_guidance(tmp_path: Path) -> None:
@@ -299,6 +320,13 @@ def test_expired_session_bindings_fail_closed_instead_of_crossing_tenants(
 
     assert owner_resume.status_code == 404
     assert crossed_resume.status_code == 404
+
+
+def test_rfc_081_documents_expired_session_refusal_and_client_recovery() -> None:
+    rfc = (Path(__file__).parents[2] / "docs" / "RFC.md").read_text(encoding="utf-8")
+
+    assert "unknown or expired session ids are refused with HTTP 404 before FastMCP" in rfc
+    assert "fresh initialize request without the stale session" in rfc
 
 
 def test_session_binding_table_refuses_new_sessions_at_its_hard_limit(

@@ -26,6 +26,12 @@
 #                WINGMAN_SHARED_OAUTH_AUDIENCE
 #                WINGMAN_SHARED_OAUTH_JWKS_URI
 #                WINGMAN_SHARED_OAUTH_IDENTITIES
+# OAuth browser setup (all five together, or none):
+#                WINGMAN_SHARED_OAUTH_WEB_CLIENT_ID
+#                WINGMAN_SHARED_OAUTH_WEB_CLIENT_SECRET
+#                WINGMAN_SHARED_OAUTH_WEB_AUTHORIZE_URL
+#                WINGMAN_SHARED_OAUTH_WEB_TOKEN_URL
+#                WINGMAN_SHARED_OAUTH_WEB_REDIRECT_URI
 #
 # What this does NOT do: create per-tenant workspaces or tokens — run
 # 'wingman-add-tenant.sh <slug>' once per tenant afterward. Nor does it
@@ -71,6 +77,12 @@ OAUTH_ISSUER="${WINGMAN_SHARED_OAUTH_ISSUER:-}"
 OAUTH_AUDIENCE="${WINGMAN_SHARED_OAUTH_AUDIENCE:-}"
 OAUTH_JWKS_URI="${WINGMAN_SHARED_OAUTH_JWKS_URI:-}"
 OAUTH_IDENTITIES="${WINGMAN_SHARED_OAUTH_IDENTITIES:-}"
+OAUTH_WEB_CONFIG_PATH="${WINGMAN_SHARED_OAUTH_WEB_CONFIG:-/etc/wingman/oauth-web.env}"
+OAUTH_WEB_CLIENT_ID="${WINGMAN_SHARED_OAUTH_WEB_CLIENT_ID:-}"
+OAUTH_WEB_CLIENT_SECRET="${WINGMAN_SHARED_OAUTH_WEB_CLIENT_SECRET:-}"
+OAUTH_WEB_AUTHORIZE_URL="${WINGMAN_SHARED_OAUTH_WEB_AUTHORIZE_URL:-}"
+OAUTH_WEB_TOKEN_URL="${WINGMAN_SHARED_OAUTH_WEB_TOKEN_URL:-}"
+OAUTH_WEB_REDIRECT_URI="${WINGMAN_SHARED_OAUTH_WEB_REDIRECT_URI:-}"
 oauth_fields=0
 [ -n "$OAUTH_ISSUER" ] && oauth_fields=$((oauth_fields + 1))
 [ -n "$OAUTH_AUDIENCE" ] && oauth_fields=$((oauth_fields + 1))
@@ -87,6 +99,27 @@ elif [ -e "$OAUTH_CONFIG_POINTER" ]; then
   echo "saved OAuth config is missing or not a regular file: $OAUTH_CONFIG_PATH" >&2
   echo "The shared service was not changed; restore the config or supply all four OAuth settings." >&2
   exit 1
+fi
+oauth_web_fields=0
+[ -n "$OAUTH_WEB_CLIENT_ID" ] && oauth_web_fields=$((oauth_web_fields + 1))
+[ -n "$OAUTH_WEB_CLIENT_SECRET" ] && oauth_web_fields=$((oauth_web_fields + 1))
+[ -n "$OAUTH_WEB_AUTHORIZE_URL" ] && oauth_web_fields=$((oauth_web_fields + 1))
+[ -n "$OAUTH_WEB_TOKEN_URL" ] && oauth_web_fields=$((oauth_web_fields + 1))
+[ -n "$OAUTH_WEB_REDIRECT_URI" ] && oauth_web_fields=$((oauth_web_fields + 1))
+if [ "$oauth_web_fields" -ne 0 ] && [ "$oauth_web_fields" -ne 5 ]; then
+  echo "OAuth browser setup needs all five WINGMAN_SHARED_OAUTH_WEB_* settings together." >&2
+  exit 2
+fi
+if [ "$oauth_web_fields" -eq 5 ] && [ "$oauth_fields" -ne 4 ]; then
+  echo "OAuth browser setup also requires the complete shared OAuth resource-server settings." >&2
+  exit 2
+fi
+if [ "$oauth_web_fields" -eq 5 ]; then
+  for value in "$OAUTH_WEB_CLIENT_ID" "$OAUTH_WEB_CLIENT_SECRET" "$OAUTH_WEB_AUTHORIZE_URL" "$OAUTH_WEB_TOKEN_URL" "$OAUTH_WEB_REDIRECT_URI"; do
+    case "$value" in
+      *[[:space:]]*) echo "OAuth browser settings must not contain whitespace." >&2; exit 2 ;;
+    esac
+  done
 fi
 if [ "$oauth_fields" -eq 4 ]; then
   for value in "$OAUTH_ISSUER" "$OAUTH_AUDIENCE" "$OAUTH_JWKS_URI" "$OAUTH_IDENTITIES"; do
@@ -127,6 +160,7 @@ say "3/7 registry directory + file (root-owned, group-readable, no secrets in it
 install -d -m 750 -o root -g wingman /etc/wingman
 [ -f "$REGISTRY_PATH" ] || install -m 644 /dev/null "$REGISTRY_PATH"
 OAUTH_CONFIG_CHANGED=0
+OAUTH_WEB_CONFIG_CHANGED=0
 if [ "$oauth_fields" -eq 4 ]; then
   OAUTH_IDENTITIES_PARENT="$(dirname "$OAUTH_IDENTITIES")"
   if [ ! -d "$OAUTH_IDENTITIES_PARENT" ]; then
@@ -174,6 +208,18 @@ if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ]; then
   fi
   rm -f "$OAUTH_POINTER_TEMP"
 fi
+if [ "$oauth_web_fields" -eq 5 ]; then
+  OAUTH_WEB_CONFIG_TEMP="$(mktemp)"
+  cat > "$OAUTH_WEB_CONFIG_TEMP" <<EOF
+WINGMAN_OAUTH_WEB_CLIENT_SECRET=$OAUTH_WEB_CLIENT_SECRET
+WINGMAN_OAUTH_WEB_ARGS=--oauth-web-client-id $OAUTH_WEB_CLIENT_ID --oauth-web-authorize-url $OAUTH_WEB_AUTHORIZE_URL --oauth-web-token-url $OAUTH_WEB_TOKEN_URL --oauth-web-redirect-uri $OAUTH_WEB_REDIRECT_URI
+EOF
+  if [ ! -f "$OAUTH_WEB_CONFIG_PATH" ] || ! cmp -s "$OAUTH_WEB_CONFIG_TEMP" "$OAUTH_WEB_CONFIG_PATH"; then
+    OAUTH_WEB_CONFIG_CHANGED=1
+    install -D -m 600 -o "$SERVICE_USER" -g "$SERVICE_USER" "$OAUTH_WEB_CONFIG_TEMP" "$OAUTH_WEB_CONFIG_PATH"
+  fi
+  rm -f "$OAUTH_WEB_CONFIG_TEMP"
+fi
 
 say "4/7 SSH deploy key — this account has no GitHub identity of its own"
 SSH_DIR="/home/$SERVICE_USER/.ssh"
@@ -212,7 +258,8 @@ After=network.target
 EnvironmentFile=-%h/.config/wingman/wingman.env
 EnvironmentFile=-%h/.config/wingman/secrets.env
 EnvironmentFile=-$OAUTH_CONFIG_PATH
-ExecStart=%h/.local/bin/wingman-mcp --http --port $PORT --tenant-registry $REGISTRY_PATH \$WINGMAN_OAUTH_ARGS
+EnvironmentFile=-$OAUTH_WEB_CONFIG_PATH
+ExecStart=%h/.local/bin/wingman-mcp --http --port $PORT --tenant-registry $REGISTRY_PATH \$WINGMAN_OAUTH_ARGS \$WINGMAN_OAUTH_WEB_ARGS
 Restart=on-failure
 RestartSec=2
 # A slow port release must never become a PERMANENT outage (#415).
@@ -253,7 +300,7 @@ if sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
 fi
 sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
   systemctl --user enable --now wingman-mcp.service
-if [ "$SERVICE_WAS_ACTIVE" -eq 1 ] && { [ "$OAUTH_CONFIG_CHANGED" -eq 1 ] || [ "$UNIT_CHANGED" -eq 1 ]; }; then
+if [ "$SERVICE_WAS_ACTIVE" -eq 1 ] && { [ "$OAUTH_CONFIG_CHANGED" -eq 1 ] || [ "$OAUTH_WEB_CONFIG_CHANGED" -eq 1 ] || [ "$UNIT_CHANGED" -eq 1 ]; }; then
   say "  service configuration changed — restarting the shared service"
   sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
     systemctl --user restart wingman-mcp.service

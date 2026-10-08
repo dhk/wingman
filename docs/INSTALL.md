@@ -79,7 +79,7 @@ export the variables in your shell profile; that is the whole setup.
 
 ## 4. Start the MCP server
 
-The same server, three ways to reach it. All 35 tools run the same
+The same server, three ways to reach it. Every tool runs the same
 deterministic validation as the CLI (RFC-008).
 
 **Claude Code (CLI):**
