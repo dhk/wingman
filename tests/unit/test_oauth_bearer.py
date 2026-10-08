@@ -723,11 +723,30 @@ def test_a_verified_but_unmapped_identity_is_forbidden(world: _World) -> None:
     assert world.inner.calls == 0
 
 
-def test_an_identity_mapped_to_a_tenant_outside_the_registry_is_forbidden(world: _World) -> None:
-    response = world.get(_token("sub-ghost"))
+def test_the_forbidden_answer_tells_the_person_what_to_do_next(world: _World) -> None:
+    # Claude shows its own generic error, but the body is the only place the
+    # server can say "you are signed in; send this reference to your operator".
+    from wingman.infrastructure.oauth_onboarding import pending_reference
+
+    response = world.get(_token("sub-stranger"))
+
     assert response.status_code == 403
+    assert "not approved" in response.text
+    assert f"Send reference {pending_reference(ISSUER, 'sub-stranger')}" in response.text
+    assert "sub-stranger" not in response.text
+
+
+def test_an_identity_mapped_to_a_tenant_outside_the_registry_is_forbidden(world: _World) -> None:
+    from wingman.infrastructure.oauth_onboarding import pending_reference
+
+    ghost = world.get(_token("sub-ghost"))
+    stranger = world.get(_token("sub-stranger"))
+    assert ghost.status_code == 403
     # Indistinguishable from an unmapped identity: no oracle for which tenants exist.
-    assert response.text == world.get(_token("sub-stranger")).text
+    # Only the caller's own reference differs.
+    assert ghost.text.replace(pending_reference(ISSUER, "sub-ghost"), "REF") == (
+        stranger.text.replace(pending_reference(ISSUER, "sub-stranger"), "REF")
+    )
     assert world.inner.calls == 0
 
 

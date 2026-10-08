@@ -58,6 +58,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from wingman.infrastructure.config import tenant_config_scope
 from wingman.infrastructure.logs import get_logger
+from wingman.infrastructure.oauth_onboarding import unapproved_message
 from wingman.infrastructure.tenant_asgi import (
     TenantRoutingASGIApp,
     TenantSessionBindings,
@@ -747,7 +748,10 @@ class BearerRoutingASGIApp:
                             "verified identity was not added to pending queue: it is already "
                             "bound on disk or the queue is full"
                         )
-            await PlainTextResponse("Forbidden", status_code=403)(scope, receive, send)
+            # Same wording for both cases; only the caller's own reference varies.
+            await PlainTextResponse(
+                unapproved_message(identity.issuer, identity.subject), status_code=403
+            )(scope, receive, send)
             return
         # A resolver, not a frozen Config — same reason as the token path (#404).
         with (

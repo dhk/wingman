@@ -4802,6 +4802,7 @@ def tenant_oauth_pending_cmd(
         OAuthOnboardingError,
         OAuthOnboardingStore,
         onboarding_path_for,
+        pending_reference,
     )
 
     store = OAuthOnboardingStore(onboarding_path_for(identities.expanduser()))
@@ -4820,10 +4821,13 @@ def tenant_oauth_pending_cmd(
     typer.echo("Verified identities awaiting approval:")
     if pending:
         for identity in pending:
+            first = datetime.fromtimestamp(identity.first_seen, tz=UTC).isoformat()
             seen = datetime.fromtimestamp(identity.last_seen, tz=UTC).isoformat()
+            ref = pending_reference(identity.issuer, identity.subject)
             typer.echo(
                 f"  issuer={identity.issuer} subject={identity.subject} "
-                f"last_seen={seen} sign_ins={identity.sign_in_count}"
+                f"first_seen={first} last_seen={seen} sign_ins={identity.sign_in_count} "
+                f"ref={ref}"
             )
     else:
         typer.echo("  none")

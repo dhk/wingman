@@ -839,6 +839,16 @@ pending queue is capped at 128 identities, so two token identities can consume
 two slots. Once full it keeps its existing records and refuses to persist new
 ones, while every unapproved request remains forbidden.
 
+The refusal tells the person what to do next, on both surfaces: "Signed in, but
+this account is not approved on this Wingman server yet. Send reference
+XXXX-XXXX to the person who invited you. After they approve it, reconnect."
+The reference is a short hash of their own `(iss, sub)`, so it reveals nothing
+to them and cannot be turned back into the subject; the wording is otherwise
+identical whether the identity is unknown or its tenant has left the registry.
+`oauth-pending` prints the same `ref=` on the matching row, with `first_seen`,
+so a reference someone sends you finds their exact row. Claude's connector UI
+may show its own generic error instead of this body; the browser shows it as is.
+
 List the reserved slugs and verified pending identities, then explicitly pair
 the expected person with their reserved slug:
 

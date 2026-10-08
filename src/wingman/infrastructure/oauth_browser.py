@@ -42,6 +42,7 @@ from wingman.infrastructure.oauth_bearer import (
     OAuthConfigError,
     OAuthSettings,
 )
+from wingman.infrastructure.oauth_onboarding import unapproved_message
 from wingman.infrastructure.tenants import TenantIndex
 
 _COOKIE = "wingman_setup_session"
@@ -192,6 +193,14 @@ def validate_browser_session_token(
     )
 
 
+class UnapprovedIdentity(PermissionError):
+    """Verified, but not bound to a tenant. Carries what that person is told."""
+
+    def __init__(self, issuer: str, subject: str) -> None:
+        self.message = unapproved_message(issuer, subject)
+        super().__init__("authenticated identity is not provisioned")
+
+
 class OAuthBrowserSessions:
     """Bounded in-memory state, intentionally lost on restart.
 
@@ -293,7 +302,7 @@ class OAuthBrowserSessions:
                             "verified browser identity was not added to pending queue: it is "
                             "already bound on disk or the queue is full"
                         )
-            raise PermissionError("authenticated identity is not provisioned")
+            raise UnapprovedIdentity(identity.issuer, identity.subject)
         now = self._monotonic()
         with self._lock:
             self._prune(now)
@@ -403,8 +412,8 @@ def bind_oauth_browser(
             return PlainTextResponse("OAuth callback was invalid or expired", status_code=400)
         try:
             session_id = await anyio.to_thread.run_sync(sessions.finish, code, verifier)
-        except PermissionError:
-            return PlainTextResponse("Signed in, but this account is not approved", status_code=403)
+        except UnapprovedIdentity as exc:
+            return PlainTextResponse(exc.message, status_code=403)
         except (BearerError, OAuthConfigError):
             return PlainTextResponse("OAuth sign-in failed", status_code=401)
         response = RedirectResponse(sessions.public_path("/setup/"), status_code=303)

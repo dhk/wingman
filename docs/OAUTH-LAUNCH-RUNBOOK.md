@@ -98,6 +98,10 @@ so have the invitee attempt both flows before approval. `oauth-pending` may
 show two rows for that person. Confirm both identities out of band; do not
 assume their opaque `sub` values are equal or infer a link from them.
 
+Each refusal shows the person a reference such as `K3QF-7XWD` and asks them to
+send it to you; the same `ref=` appears on their row in `oauth-pending`. Match
+on it, together with `first_seen`, when they get in touch.
+
 Approve one exact verified identity to create the reserved tenant, then bind
 the other exact verified identity to that same tenant:
 

@@ -9,7 +9,9 @@ addresses are never persisted.
 
 from __future__ import annotations
 
+import base64
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -46,6 +48,27 @@ class PendingIdentity:
 class ReservedInvite:
     slug: str
     created_at: float
+
+
+def pending_reference(issuer: str, subject: str) -> str:
+    """A short code a waiting person can quote and an operator can find.
+
+    Derived from the caller's own (iss, sub), so showing it to that caller
+    reveals nothing, and it cannot be turned back into the subject. Shown on
+    the refusal they receive and on the matching `oauth-pending` row.
+    """
+    digest = hashlib.sha256(f"{issuer}\n{subject}".encode()).digest()
+    code = base64.b32encode(digest).decode("ascii")[:8]
+    return f"{code[:4]}-{code[4:]}"
+
+
+def unapproved_message(issuer: str, subject: str) -> str:
+    """What a verified but unapproved person is told, on every surface."""
+    return (
+        "Signed in, but this account is not approved on this Wingman server yet. "
+        f"Send reference {pending_reference(issuer, subject)} to the person who invited you. "
+        "After they approve it, reconnect."
+    )
 
 
 def onboarding_path_for(identity_path: Path) -> Path:

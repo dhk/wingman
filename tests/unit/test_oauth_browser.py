@@ -543,6 +543,10 @@ def test_verified_but_unapproved_identity_is_refused_before_setup(
 
     assert callback.status_code == 403
     assert "not approved" in callback.text
+    from wingman.infrastructure.oauth_onboarding import pending_reference
+
+    assert f"Send reference {pending_reference(BROWSER_ISSUER, 'not-approved')}" in callback.text
+    assert "not-approved" not in callback.text.replace("not approved", "")
     assert "wingman_setup_session" not in callback.headers.get("set-cookie", "")
     assert client.app.state.oauth_pending == [(BROWSER_ISSUER, "not-approved")]
 
