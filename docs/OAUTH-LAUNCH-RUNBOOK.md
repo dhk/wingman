@@ -44,7 +44,15 @@ Before changing the live service:
    `WINGMAN_SHARED_OAUTH_ISSUER`, `WINGMAN_SHARED_OAUTH_AUDIENCE`,
    `WINGMAN_SHARED_OAUTH_JWKS_URI`, and
    `WINGMAN_SHARED_OAUTH_IDENTITIES`.
-5. Confirm the identity-map parent is private, writable by the shared-service
+5. Confirm all five browser OAuth settings are present together before running
+   the `/login` → `/setup/` canary:
+   `WINGMAN_SHARED_OAUTH_WEB_CLIENT_ID`,
+   `WINGMAN_SHARED_OAUTH_WEB_CLIENT_SECRET`,
+   `WINGMAN_SHARED_OAUTH_WEB_AUTHORIZE_URL`,
+   `WINGMAN_SHARED_OAUTH_WEB_TOKEN_URL`, and
+   `WINGMAN_SHARED_OAUTH_WEB_REDIRECT_URI`. The client secret belongs in the
+   approved service credential store, not the change record.
+6. Confirm the identity-map parent is private, writable by the shared-service
    account, and backed up. Permission denial is not a missing path.
 
 Deploy with `scripts/wingman-provision-shared.sh` or the existing shared
@@ -92,7 +100,7 @@ exact verified identity:
 sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-pending \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml
 
-sudo wingman tenant oauth-approve <slug> \
+sudo /home/wingman-shared/.local/bin/wingman tenant oauth-approve <slug> \
   --issuer <exact-verified-iss> \
   --subject <exact-verified-sub> \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \

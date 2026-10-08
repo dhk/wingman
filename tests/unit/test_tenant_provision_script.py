@@ -409,6 +409,20 @@ def test_oauth_runbook_uses_the_installed_service_account_binary() -> None:
     assert "sudo -iu wingman-shared wingman " not in body
     assert "/home/wingman-shared/.local/bin/wingman tenant oauth-invite" in body
     assert "/home/wingman-shared/.local/bin/wingman tenant oauth-pending" in body
+    assert "sudo /home/wingman-shared/.local/bin/wingman tenant oauth-approve" in body
+
+
+def test_oauth_runbook_requires_browser_oauth_inputs_before_the_login_canary() -> None:
+    body = RUNBOOK.read_text(encoding="utf-8")
+
+    for name in (
+        "WINGMAN_SHARED_OAUTH_WEB_CLIENT_ID",
+        "WINGMAN_SHARED_OAUTH_WEB_CLIENT_SECRET",
+        "WINGMAN_SHARED_OAUTH_WEB_AUTHORIZE_URL",
+        "WINGMAN_SHARED_OAUTH_WEB_TOKEN_URL",
+        "WINGMAN_SHARED_OAUTH_WEB_REDIRECT_URI",
+    ):
+        assert name in body
 
 
 def test_interactive_choice_precedes_reservation_and_reservation_is_renewed_before_registry() -> (
