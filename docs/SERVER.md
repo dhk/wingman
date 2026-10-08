@@ -872,7 +872,8 @@ somebody else.
 
 `oauth-approve` consumes the invite after binding one pending identity. Use
 `oauth-bind` for the second verified identity; do not try to approve the same
-invite twice. Both exact `(iss, sub)` pairs may point to the same tenant, but
+invite twice. `oauth-bind` removes the identity it binds from the pending
+queue, as approval does. Both exact `(iss, sub)` pairs may point to the same tenant, but
 neither email nor a coincidentally matching `sub` is proof that they belong to
 the same person.
 

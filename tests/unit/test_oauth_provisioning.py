@@ -17,6 +17,11 @@ from wingman.infrastructure.oauth_bearer import (
     renew_trusted_identity_reservation,
     reserve_trusted_identity,
 )
+from wingman.infrastructure.oauth_onboarding import (
+    OAuthOnboardingError,
+    OAuthOnboardingStore,
+    onboarding_path_for,
+)
 
 cli = CliRunner()
 ISSUER = "https://example.authkit.app"
@@ -115,6 +120,90 @@ def test_operator_cannot_bind_to_an_unknown_tenant(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "No tenant 'nobody'" in result.output
     assert identities.read_text(encoding="utf-8") == ""
+
+
+def _bind_args(slug: str, subject: str, identities: Path, registry: Path) -> list[str]:
+    return [
+        "tenant",
+        "oauth-bind",
+        slug,
+        "--issuer",
+        ISSUER,
+        "--subject",
+        subject,
+        "--identities",
+        str(identities),
+        "--registry",
+        str(registry),
+    ]
+
+
+def test_binding_an_existing_tenant_clears_only_that_pending_row(tmp_path: Path) -> None:
+    # The existing-tenant path (runbook section 3) never goes through
+    # oauth-approve, so before this the bound identity stayed listed as
+    # "awaiting approval" forever, inviting an operator to approve it into
+    # a second, empty workspace.
+    registry = _registry(tmp_path, "jason")
+    identities = tmp_path / "oauth-identities.toml"
+    store = OAuthOnboardingStore(onboarding_path_for(identities))
+    assert store.record_pending(ISSUER, "user_123", now=1.0)
+    assert store.record_pending(ISSUER, "someone_else", now=2.0)
+
+    result = cli.invoke(app, _bind_args("jason", "user_123", identities, registry))
+
+    assert result.exit_code == 0, result.output
+    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "jason"
+    assert [item.subject for item in store.pending()] == ["someone_else"]
+    assert "Removed it from the pending approval queue" in result.output
+
+
+def test_rebinding_an_exact_binding_clears_a_stale_pending_row(tmp_path: Path) -> None:
+    # The state a deployment is left in by a bind that predates this fix:
+    # bound on disk, still listed as pending. Re-running the bind is the fix.
+    registry = _registry(tmp_path, "jason")
+    identities = tmp_path / "oauth-identities.toml"
+    bind_trusted_identity(identities, ISSUER, "user_123", "jason")
+    store = OAuthOnboardingStore(onboarding_path_for(identities))
+    assert store.record_pending(ISSUER, "user_123", now=1.0)
+
+    result = cli.invoke(app, _bind_args("jason", "user_123", identities, registry))
+
+    assert result.exit_code == 0, result.output
+    assert "already existed" in result.output
+    assert store.pending() == []
+
+
+def test_preflight_leaves_the_pending_queue_alone(tmp_path: Path) -> None:
+    registry = _registry(tmp_path, "jason")
+    identities = tmp_path / "oauth-identities.toml"
+    store = OAuthOnboardingStore(onboarding_path_for(identities))
+    assert store.record_pending(ISSUER, "user_123", now=1.0)
+
+    result = cli.invoke(
+        app, [*_bind_args("jason", "user_123", identities, registry), "--preflight"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [item.subject for item in store.pending()] == ["user_123"]
+
+
+def test_a_stuck_pending_queue_does_not_undo_a_written_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registry(tmp_path, "jason")
+    identities = tmp_path / "oauth-identities.toml"
+
+    def unwritable(self: OAuthOnboardingStore, issuer: str, subject: str) -> bool:
+        raise OAuthOnboardingError("onboarding state could not be replaced")
+
+    monkeypatch.setattr(OAuthOnboardingStore, "discard_pending", unwritable)
+
+    result = cli.invoke(app, _bind_args("jason", "user_123", identities, registry))
+
+    assert result.exit_code == 0, result.output
+    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "jason"
+    assert "Bound trusted OAuth identity" in result.output
+    assert "still listed as pending" in result.output
 
 
 def test_malformed_identity_map_is_preserved(tmp_path: Path) -> None:

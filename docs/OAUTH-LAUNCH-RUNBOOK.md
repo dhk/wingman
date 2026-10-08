@@ -67,6 +67,23 @@ available. Bind the verified WorkOS `(iss, sub)` to the tenant's existing slug
 and workspace, reload, then test both authentication paths. Keep the old path
 as rollback for at least one normal operating cycle.
 
+An existing tenant is never invited or approved: `oauth-invite` plus
+`oauth-approve` would create a second, empty workspace. Have the person sign in
+through both surfaces so `oauth-pending` lists their exact identities, then
+bind each one to the existing slug:
+
+```bash
+sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-bind <existing-slug> \
+  --issuer <exact-verified-iss> \
+  --subject <exact-verified-sub> \
+  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
+  --registry /etc/wingman/tenants.toml
+```
+
+`oauth-bind` signals the reload itself and removes the bound identity from the
+pending queue. Rerunning it on an exact existing binding is safe and clears a
+pending row left behind by a build that predates that cleanup.
+
 The legacy escape hatch in `wingman-add-tenant.sh` is accepted only for
 `scripts/wingman-migrate-tenant.sh` after that script has restored an existing
 workspace. On an OAuth-enabled service, an ordinary add-tenant invocation with

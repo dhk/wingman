@@ -4648,6 +4648,7 @@ def tenant_oauth_bind_cmd(
     For a newly trusted person, first create their isolated tenant with
     wingman-add-tenant.sh, then run this command. Login alone never creates
     a workspace, and no email, privilege, or funded access is inferred.
+    A bound identity is removed from the pending approval queue.
     """
     configure_logging()
     from wingman.infrastructure.oauth_bearer import (
@@ -4657,6 +4658,11 @@ def tenant_oauth_bind_cmd(
         release_trusted_identity_reservation,
         renew_trusted_identity_reservation,
         reserve_trusted_identity,
+    )
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        OAuthOnboardingStore,
+        onboarding_path_for,
     )
     from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
 
@@ -4735,17 +4741,31 @@ def tenant_oauth_bind_cmd(
         binding_status = (
             f"Trusted OAuth binding for tenant {slug!r} already existed in {identity_path}."
         )
+    # After the bind, not before: a bound identity is never re-queued (the
+    # server checks the on-disk map first), so this cannot race a sign-in.
+    pending_problem: str | None = None
+    try:
+        if OAuthOnboardingStore(onboarding_path_for(identity_path)).discard_pending(
+            issuer, subject
+        ):
+            binding_status += " Removed it from the pending approval queue."
+    except OAuthOnboardingError as exc:
+        pending_problem = (
+            "The binding was written, but the identity is still listed as pending "
+            f"(re-run this command to clear it): {exc}"
+        )
+    typer.echo(binding_status)
+    if pending_problem is not None:
+        typer.echo(pending_problem, err=True)
     try:
         signaled_pid = signal_reload(registry_path)
     except TenantProcessSignalError as exc:
-        typer.echo(binding_status)
         typer.echo(
             "Binding is on disk, but the running process still uses the previous identity map: "
             f"{exc}",
             err=True,
         )
         raise typer.Exit(code=1) from exc
-    typer.echo(binding_status)
     if signaled_pid is not None:
         typer.echo(f"Signaled the running shared process (pid {signaled_pid}) to reload.")
     else:
