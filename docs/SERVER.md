@@ -940,11 +940,49 @@ OAuth-authenticated browser UI. Shared-path preflight also distinguishes a
 confirmed missing identity-map path from permission denial; it names the path,
 says that nothing changed, and never emits a Python traceback.
 
-OAuth-only tenants do not yet have an authenticated browser path to
-Manage → Keys. Do not promise self-funded browser key entry in this slice.
-Model-free tools work immediately; model-backed tools require the operator to
-configure the declared global provider key, set `funded = true` on that tenant,
-and run `wg reload`, as described under “Operator-funded inference.”
+OAuth-only tenants can use a separate, WorkOS-authenticated browser setup
+surface without receiving a capability URL. Register the exact callback URL in
+the same confidential WorkOS client, put its secret only in the service
+environment, and add all four browser flags to the shared service command:
+
+```bash
+sudo env \
+  ...the four WINGMAN_SHARED_OAUTH_* resource-server values above... \
+  WINGMAN_SHARED_OAUTH_WEB_CLIENT_ID=client_01EXAMPLE \
+  WINGMAN_SHARED_OAUTH_WEB_CLIENT_SECRET='from-your-secret-store' \
+  WINGMAN_SHARED_OAUTH_WEB_AUTHORIZE_URL=https://api.workos.com/user_management/authorize \
+  WINGMAN_SHARED_OAUTH_WEB_TOKEN_URL=https://api.workos.com/user_management/authenticate \
+  WINGMAN_SHARED_OAUTH_WEB_REDIRECT_URI=https://your-host.example/shared/oauth/callback \
+  scripts/wingman-provision-shared.sh
+```
+
+Those endpoint values are examples, not values Wingman derives or discovers:
+copy the exact authorization and token endpoints for the configured WorkOS
+client. All four `--oauth-web-*` values, the complete resource-server OAuth
+configuration, and `WINGMAN_OAUTH_WEB_CLIENT_SECRET` are required together;
+startup fails closed if any is absent, empty, non-HTTPS (apart from loopback),
+or malformed. Never put the client secret on the command line or in the tenant
+registry.
+The provisioner writes the secret and the browser argument bundle to a
+separate `0600`, service-account-owned `/etc/wingman/oauth-web.env`; it does
+not put the secret in `ExecStart`, the non-secret OAuth file, or a tenant file.
+
+Send the invitee to `https://your-host.example/shared/login`. The server uses
+authorization code with PKCE and one-time, ten-minute state. After callback it
+sets a 30-minute `Secure`, `HttpOnly`, `SameSite=Lax` opaque cookie scoped only
+to `/shared/setup`; the access token remains server-side and its signature,
+issuer, audience, expiry, approved `(iss, sub)` binding, and live tenant row are
+rechecked for every setup request. Sessions are memory-only, bounded, and lost
+on restart (the user signs in again). No refresh token is requested or stored.
+
+The setup page accepts API keys only through its CSRF-protected browser form;
+keys never pass through the MCP/model conversation and are never echoed back.
+For an unfunded BYOK tenant, CV upload stays unavailable until an Anthropic key
+has been verified and stored in that tenant's owner-only `keys.env`. A direct
+upload attempt before that point is refused before reading or storing the file,
+and explicitly reports that no model call was made. Existing capability-token
+UI and MCP routes remain available for existing tenants during migration; the
+OAuth setup page never renders either permanent URL.
 
 `--telemetry` / `--no-telemetry` decide RFC-023's local usage journal for
 that tenant. **With neither flag it asks**, and with neither flag and no

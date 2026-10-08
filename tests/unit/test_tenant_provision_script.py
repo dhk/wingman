@@ -248,6 +248,23 @@ def test_shared_provisioner_wires_saved_oauth_settings_into_the_service() -> Non
     assert "WINGMAN_SHARED_OAUTH_IDENTITIES" in body
     assert "EnvironmentFile=-$OAUTH_CONFIG_PATH" in body
     assert "\\$WINGMAN_OAUTH_ARGS" in body
+
+
+def test_shared_provisioner_wires_browser_oauth_without_exposing_secret_on_command_line() -> None:
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+    for name in (
+        "WINGMAN_SHARED_OAUTH_WEB_CLIENT_ID",
+        "WINGMAN_SHARED_OAUTH_WEB_CLIENT_SECRET",
+        "WINGMAN_SHARED_OAUTH_WEB_AUTHORIZE_URL",
+        "WINGMAN_SHARED_OAUTH_WEB_TOKEN_URL",
+        "WINGMAN_SHARED_OAUTH_WEB_REDIRECT_URI",
+    ):
+        assert name in body
+    assert "EnvironmentFile=-$OAUTH_WEB_CONFIG_PATH" in body
+    assert "\\$WINGMAN_OAUTH_WEB_ARGS" in body
+    assert 'install -D -m 600 -o "$SERVICE_USER"' in body
+    exec_start = next(line for line in body.splitlines() if line.startswith("ExecStart="))
+    assert "CLIENT_SECRET" not in exec_start
     assert "systemctl --user restart wingman-mcp.service" in body
 
 
