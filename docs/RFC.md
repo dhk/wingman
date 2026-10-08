@@ -1379,3 +1379,24 @@ trust gate opens. Revisit scope enforcement when two materially different
 OAuth grants exist, account linking before a second sign-in method ships, and
 the legacy route only after observed migration and the launch canary show that
 every existing tenant can reconnect without it.
+
+**Amendment (2026-10-08): a refusal names its next step, and the operator is
+told.** On 2026-10-08 a verified identity sat unnoticed in the pending queue
+while the person saw only "couldn't connect". Two additions, neither of which
+loosens either gate:
+
+- Both refusals (MCP 403 and the browser callback) tell the person they are
+  signed in but not approved, and give a reference: the first eight base32
+  characters of SHA-256(`iss` + newline + `sub`), formatted `XXXX-XXXX`. It is
+  derived from the caller's own identity, so it reveals nothing to them and
+  cannot be reversed to the subject; the wording is otherwise the same for an
+  unknown identity and for one whose tenant left the registry, so the
+  no-tenant-oracle property holds. `oauth-pending` shows the same `ref=`.
+- **Durable decision:** the shared service may create one Todoist task in the
+  *operator's own* account when an identity is first queued. Owner-approved on
+  2026-10-08; off unless `WINGMAN_OPERATOR_TODOIST_TOKEN` is configured. The
+  task carries the issuer host, the reference and the first-seen time — never
+  a subject, email address or token. It is sent off the request path with a
+  five-second timeout; failure is one WARNING and changes neither the queue nor
+  the refusal. Repeat sign-ins and restarts do not re-notify. This is an
+  operator alert, not telemetry: nothing about tenants' use is sent anywhere.

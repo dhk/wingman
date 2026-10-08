@@ -101,6 +101,9 @@ assume their opaque `sub` values are equal or infer a link from them.
 Each refusal shows the person a reference such as `K3QF-7XWD` and asks them to
 send it to you; the same `ref=` appears on their row in `oauth-pending`. Match
 on it, together with `first_seen`, when they get in touch.
+If `WINGMAN_OPERATOR_TODOIST_TOKEN` is configured (see [SERVER.md](SERVER.md)),
+you also get a Todoist task carrying that reference the first time they sign in,
+so you need not wait for them to get in touch.
 
 Approve one exact verified identity to create the reserved tenant, then bind
 the other exact verified identity to that same tenant:
