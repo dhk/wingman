@@ -217,6 +217,34 @@ def test_verified_unknown_identity_is_recorded_but_still_receives_no_access(
     assert [item.subject for item in store.pending()] == ["verified-but-not-approved"]
 
 
+def test_the_forbidden_answer_is_unchanged_when_the_operator_notifier_fails(
+    tmp_path: Path,
+) -> None:
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingStore,
+        onboarding_path_for,
+        pending_recorder,
+    )
+    from wingman.infrastructure.operator_notify import TodoistNotifier
+
+    def down(url: str, headers: dict[str, str], body: bytes, timeout: float) -> int:
+        raise OSError("Todoist unreachable")
+
+    identities = tmp_path / "identities.toml"
+    store = OAuthOnboardingStore(onboarding_path_for(identities))
+    notifier = TodoistNotifier(
+        "secret", identities_path=identities, post=down, run=lambda job: job()
+    )
+    world = _World(tmp_path / "world", record_pending=pending_recorder(identities, store, notifier))
+
+    response = world.get(_token("verified-but-not-approved"))
+
+    assert response.status_code == 403
+    assert "Send reference" in response.text
+    assert world.inner.calls == 0
+    assert [item.subject for item in store.pending()] == ["verified-but-not-approved"]
+
+
 def test_oauth_calls_preserve_truthful_http_origin_guidance(tmp_path: Path) -> None:
     from wingman.infrastructure.storage import Storage
     from wingman.mcp_server import my_urls

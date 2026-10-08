@@ -20,15 +20,35 @@ import re
 import secrets
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from wingman.infrastructure.logs import get_logger
+
+if TYPE_CHECKING:
+    from wingman.infrastructure.operator_notify import TodoistNotifier
+
+_logger = get_logger("oauth_onboarding")
 
 DEFAULT_PENDING_LIMIT = 128
 _APPROVAL_TTL_SECONDS = 3600.0
 _SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+class PendingResult(Enum):
+    """What recording a verified identity did. Truthy when it is in the queue."""
+
+    ADDED = "added"
+    SEEN_AGAIN = "seen-again"
+    QUEUE_FULL = "queue-full"
+    ALREADY_BOUND = "already-bound"
+
+    def __bool__(self) -> bool:
+        return self in (PendingResult.ADDED, PendingResult.SEEN_AGAIN)
 
 
 class OAuthOnboardingError(RuntimeError):
@@ -248,8 +268,10 @@ class OAuthOnboardingStore:
                 raise OAuthOnboardingError(f"invite slug {slug!r} is already reserved")
             state["invites"].append({"slug": slug, "created_at": created_at})
 
-    def record_pending(self, issuer: str, subject: str, *, now: float | None = None) -> bool:
-        """Record a verified unprovisioned identity; False means queue full."""
+    def record_pending(
+        self, issuer: str, subject: str, *, now: float | None = None
+    ) -> PendingResult:
+        """Record a verified unprovisioned identity. ADDED only the first time."""
         if not issuer or not subject:
             raise OAuthOnboardingError("pending identity issuer and subject must be non-empty")
         seen_at = time.time() if now is None else now
@@ -258,9 +280,9 @@ class OAuthOnboardingStore:
                 if item.get("issuer") == issuer and item.get("subject") == subject:
                     item["last_seen"] = seen_at
                     item["sign_in_count"] = int(item.get("sign_in_count", 1)) + 1
-                    return True
+                    return PendingResult.SEEN_AGAIN
             if len(state["pending"]) >= self.pending_limit:
-                return False
+                return PendingResult.QUEUE_FULL
             state["pending"].append(
                 {
                     "issuer": issuer,
@@ -270,7 +292,7 @@ class OAuthOnboardingStore:
                     "sign_in_count": 1,
                 }
             )
-            return True
+            return PendingResult.ADDED
 
     def discard_pending(self, issuer: str, subject: str) -> bool:
         """Drop one exact identity from the queue; False means it was not there.
@@ -382,7 +404,7 @@ def record_verified_pending(
     store: OAuthOnboardingStore,
     issuer: str,
     subject: str,
-) -> bool:
+) -> PendingResult:
     """Queue an identity only if the current on-disk map is still unbound.
 
     The live server map reloads asynchronously after approval.  Holding the
@@ -393,8 +415,39 @@ def record_verified_pending(
 
     with _identity_map_lock(identity_path):
         if _identity_map_or_empty(identity_path).slug_for(issuer, subject) is not None:
-            return False
+            return PendingResult.ALREADY_BOUND
         return store.record_pending(issuer, subject)
+
+
+def pending_recorder(
+    identity_path: Path,
+    store: OAuthOnboardingStore,
+    notifier: TodoistNotifier | None = None,
+) -> Callable[[str, str], PendingResult]:
+    """The recorder the MCP and browser refusals call.
+
+    Tells the operator only when an identity is first queued: repeat sign-ins
+    and restarts find the row already there. Notification is best effort and
+    cannot change what was recorded or what the caller is told.
+    """
+    from wingman.infrastructure.operator_notify import PendingNotice
+
+    def record(issuer: str, subject: str) -> PendingResult:
+        result = record_verified_pending(identity_path, store, issuer, subject)
+        if result is PendingResult.ADDED and notifier is not None:
+            try:
+                notifier.notify(
+                    PendingNotice(
+                        issuer=issuer,
+                        reference=pending_reference(issuer, subject),
+                        first_seen=time.time(),
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 — notification never blocks admission
+                _logger.warning("operator notification could not be started: %s", exc)
+        return result
+
+    return record
 
 
 @contextmanager
