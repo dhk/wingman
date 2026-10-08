@@ -5306,7 +5306,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--oauth-issuer",
         metavar="URL",
-        help="SPIKE (RFC-081 draft): also accept OAuth 2.1 bearer tokens from this "
+        help="RFC-081: also accept OAuth 2.1 bearer tokens from this "
         "authorization server on <prefix>/mcp. Needs --tenant-registry and all four "
         "--oauth-* flags. Off by default; the capability-token route is unchanged.",
     )
@@ -5484,7 +5484,7 @@ def _probe_bind(host: str, port: int) -> None:
 
 def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> tuple[Any, Path]:
     """Add the bearer-authenticated route beside the capability-token one
-    (RFC-081 draft spike). Any misconfiguration refuses to start: a server
+    (RFC-081). Any misconfiguration refuses to start: a server
     that looks OAuth-enabled and is not is worse than one that says so."""
     from wingman.infrastructure.oauth_bearer import (
         IdentityMap,
@@ -5520,7 +5520,7 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         jwks_key_resolver(settings.jwks_uri),
     )
     print(
-        f"OAuth bearer (RFC-081 draft spike): {settings.audience}, "
+        f"OAuth bearer (RFC-081): {settings.audience}, "
         f"{len(identities)} identity mapping(s), issuer {settings.issuer}"
     )
     return identities, identity_path

@@ -1,4 +1,4 @@
-"""OAuth bearer validation for the shared multi-tenant process (RFC-081 draft spike).
+"""OAuth bearer validation for the shared multi-tenant process (RFC-081).
 
 The properties that matter, each tested directly rather than assumed:
   * a valid token reaches exactly the tenant its identity names, and two
@@ -299,6 +299,13 @@ def test_expired_session_bindings_fail_closed_instead_of_crossing_tenants(
 
     assert owner_resume.status_code == 404
     assert crossed_resume.status_code == 404
+
+
+def test_rfc_081_documents_expired_session_refusal_and_client_recovery() -> None:
+    rfc = (Path(__file__).parents[2] / "docs" / "RFC.md").read_text(encoding="utf-8")
+
+    assert "unknown or expired session ids are refused with HTTP 404 before FastMCP" in rfc
+    assert "fresh initialize request without the stale session" in rfc
 
 
 def test_session_binding_table_refuses_new_sessions_at_its_hard_limit(

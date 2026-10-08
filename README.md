@@ -127,7 +127,9 @@ back. Default off; nothing is ever transmitted.
 deterministic validation as the CLI (RFC-008) — stdio for Claude Code and
 Claude Desktop on your machine, and an opt-in loopback HTTP transport with
 a rotatable capability path for claude.ai web/mobile through a tunnel you
-run yourself (RFC-017). Setup for all three:
+run yourself (RFC-017). A shared service can additionally accept externally
+issued OAuth bearer tokens for operator-approved identities (RFC-081);
+public signup is not supported. Setup for the local and capability paths:
 [docs/INSTALL.md](docs/INSTALL.md) §4.
 
 ```bash
@@ -145,7 +147,7 @@ claude mcp add wingman -- wingman-mcp    # Claude Code, one line
 - [`ROADMAP.md`](ROADMAP.md): phased delivery plan and current status
 - [`AGENTS.md`](AGENTS.md): engineering and agent instructions
 - [`docs/DESIGN.md`](docs/DESIGN.md): architecture — what the system is
-- [`docs/RFC.md`](docs/RFC.md): the decision ledger (RFC-001…025) — why it is this way
+- [`docs/RFC.md`](docs/RFC.md): the decision ledger — why it is this way
 - [`docs/EVALUATION.md`](docs/EVALUATION.md): how we measure that it's getting better
 - [`docs/RESEARCH-BRIEFING.md`](docs/RESEARCH-BRIEFING.md): competitive-landscape research brief
 
