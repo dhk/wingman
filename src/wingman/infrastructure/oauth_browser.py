@@ -187,6 +187,7 @@ class OAuthBrowserSessions:
                 "state": state,
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
+                "provider": "authkit",
                 "resource": self._oauth.audience,
             }
         )
