@@ -5494,6 +5494,11 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         build_oauth_settings,
         jwks_key_resolver,
     )
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingStore,
+        onboarding_path_for,
+        record_verified_pending,
+    )
 
     try:
         settings = build_oauth_settings(args.oauth_issuer, args.oauth_audience, args.oauth_jwks_uri)
@@ -5518,6 +5523,12 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         identities,
         settings,
         jwks_key_resolver(settings.jwks_uri),
+        lambda issuer, subject: record_verified_pending(
+            identity_path,
+            OAuthOnboardingStore(onboarding_path_for(identity_path)),
+            issuer,
+            subject,
+        ),
     )
     print(
         f"OAuth bearer (RFC-081): {settings.audience}, "
