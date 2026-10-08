@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # wingman-add-tenant.sh <slug> — provision one tenant's workspace under
 # the shared multi-tenant process (RFC-048) and register them, issuing
-# their first connector URL. Run after wingman-provision-shared.sh.
+# their authentication binding. Capability-only services issue a connector
+# URL; OAuth-enabled services require a verified identity and do not mint a
+# permanent URL token for a new tenant. Run after wingman-provision-shared.sh.
 #
 # Idempotent: skips workspace init if the tenant's data_dir already has
 # a wingman.db (a workspace created by hand, e.g. via 'wingman init',
@@ -10,6 +12,7 @@
 #
 # Usage: sudo ./wingman-add-tenant.sh <slug> [--telemetry|--no-telemetry]
 #        [--oauth-issuer URL --oauth-subject SUBJECT --oauth-identities PATH]
+#        [--existing-capability-migration]
 #
 # The telemetry decision (RFC-023's local usage journal) is taken here
 # rather than inherited. Default-off is right for someone installing on
@@ -28,19 +31,44 @@ SERVICE_USER="${WINGMAN_SHARED_USER:-wingman-shared}"
 PORT="${WINGMAN_SHARED_PORT:-8789}"
 TAILSCALE_PATH="${WINGMAN_SHARED_TAILSCALE_PATH:-/shared}"
 REGISTRY_PATH="${WINGMAN_SHARED_REGISTRY:-/etc/wingman/tenants.toml}"
-OAUTH_SERVICE_CONFIG="${WINGMAN_SHARED_OAUTH_CONFIG:-/etc/wingman/oauth.env}"
+OAUTH_CONFIG_POINTER="${WINGMAN_SHARED_OAUTH_CONFIG_POINTER:-/etc/wingman/oauth-config-path}"
+OAUTH_SERVICE_EXPECTED=0
+if [ -n "${WINGMAN_SHARED_OAUTH_CONFIG:-}" ]; then
+  OAUTH_SERVICE_EXPECTED=1
+  OAUTH_SERVICE_CONFIG="$WINGMAN_SHARED_OAUTH_CONFIG"
+elif [ -e "$OAUTH_CONFIG_POINTER" ]; then
+  OAUTH_SERVICE_EXPECTED=1
+  if [ ! -f "$OAUTH_CONFIG_POINTER" ] || [ ! -r "$OAUTH_CONFIG_POINTER" ]; then
+    echo "saved OAuth config pointer is not a readable regular file: $OAUTH_CONFIG_POINTER. No tenant state was created." >&2
+    exit 1
+  fi
+  oauth_config_pointer_lines="$(awk 'END { print NR }' "$OAUTH_CONFIG_POINTER")"
+  OAUTH_SERVICE_CONFIG="$(sed -n '1p' "$OAUTH_CONFIG_POINTER")"
+  if [ "$oauth_config_pointer_lines" -ne 1 ] || [ -z "$OAUTH_SERVICE_CONFIG" ]; then
+    echo "saved OAuth config pointer must contain exactly one non-empty path: $OAUTH_CONFIG_POINTER. No tenant state was created." >&2
+    exit 1
+  fi
+else
+  OAUTH_SERVICE_CONFIG="/etc/wingman/oauth.env"
+fi
+case "$OAUTH_SERVICE_CONFIG" in
+  /*) ;;
+  *) echo "shared OAuth config path must be absolute: $OAUTH_SERVICE_CONFIG. No tenant state was created." >&2; exit 2 ;;
+esac
 SLUG="${1:?usage: $0 <slug> [--telemetry|--no-telemetry]}"
 shift
 TELEMETRY=""
 OAUTH_ISSUER=""
 OAUTH_SUBJECT=""
 OAUTH_IDENTITIES=""
+EXISTING_CAPABILITY_MIGRATION=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --telemetry|--no-telemetry) TELEMETRY="$1"; shift ;;
     --oauth-issuer) OAUTH_ISSUER="${2:?--oauth-issuer needs a URL}"; shift 2 ;;
     --oauth-subject) OAUTH_SUBJECT="${2:?--oauth-subject needs a subject}"; shift 2 ;;
     --oauth-identities) OAUTH_IDENTITIES="${2:?--oauth-identities needs a path}"; shift 2 ;;
+    --existing-capability-migration) EXISTING_CAPABILITY_MIGRATION=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -50,6 +78,10 @@ oauth_fields=0
 [ -n "$OAUTH_IDENTITIES" ] && oauth_fields=$((oauth_fields + 1))
 if [ "$oauth_fields" -ne 0 ] && [ "$oauth_fields" -ne 3 ]; then
   echo "OAuth provisioning needs --oauth-issuer, --oauth-subject and --oauth-identities together." >&2
+  exit 2
+fi
+if [ "$oauth_fields" -ne 0 ] && [ "$EXISTING_CAPABILITY_MIGRATION" -eq 1 ]; then
+  echo "--existing-capability-migration cannot be combined with OAuth identity flags." >&2
   exit 2
 fi
 
@@ -223,6 +255,19 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+# Once a shared service is OAuth-enabled, an omitted identity must never turn
+# a typo or incomplete invite into a permanent bearer token in a URL. Existing
+# shape-B accounts retain a deliberately narrow escape hatch while they move
+# through the dual-auth migration window; wingman-migrate-tenant.sh supplies
+# it only after restoring an existing workspace.
+if { [ "$OAUTH_SERVICE_EXPECTED" -eq 1 ] || [ -f "$OAUTH_SERVICE_CONFIG" ]; } \
+  && [ "$oauth_fields" -eq 0 ] \
+  && [ "$EXISTING_CAPABILITY_MIGRATION" -eq 0 ]; then
+  echo "OAuth is enabled for this shared service. New tenants require a verified OAuth identity; no tenant state was created." >&2
+  echo "Use the invite/approval flow or pass all three --oauth-* tenant flags. The legacy escape hatch is only for scripts/wingman-migrate-tenant.sh." >&2
+  exit 2
+fi
+
 validate_oauth_identities_path
 validate_oauth_service
 
@@ -237,6 +282,11 @@ if grep -q "slug = \"$SLUG\"" "$REGISTRY_PATH"; then
 fi
 
 DATA_DIR="/home/$SERVICE_USER/tenants/$SLUG"
+
+if [ "$EXISTING_CAPABILITY_MIGRATION" -eq 1 ] && [ ! -f "$DATA_DIR/wingman.db" ]; then
+  echo "--existing-capability-migration requires a restored workspace at $DATA_DIR/wingman.db; no tenant state was created." >&2
+  exit 2
+fi
 
 resolve_telemetry
 
