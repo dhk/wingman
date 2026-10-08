@@ -3,9 +3,9 @@
 The deployment this guide builds: one Linux box that owns the workspace,
 runs `wingman overnight` on a timer, keeps the MCP server up as a service,
 and is reachable from claude.ai (web, desktop, phone) over your Tailscale
-network. Your career data still lives on a machine you own — this is
-local-first with a longer extension cord, not hosting (RFC-002 holds; the
-hosted tiers remain a separate, parked decision).
+network. Your career data still lives on a machine you own. RFC-081 extends
+this shape to deliberately trusted OAuth invitees; it is still local-first
+with a longer extension cord, not public self-service hosting.
 
 Everything here is Ubuntu 22.04+/Debian-family; adjust package commands
 for other distros.
@@ -745,14 +745,15 @@ file on the box. Assumes each listed user's checkout lives at
 deviates isn't a candidate for automatic upgrade and should be upgraded
 by hand.
 
-## 9. Shared multi-tenant deployment (RFC-048)
+## 9. Shared multi-tenant deployment (RFC-048, OAuth amendment RFC-081)
 
 Everything above is shape B: one Unix account, one workspace, one port,
 per person. RFC-048 adds a second shape for when per-account overhead
 stops paying for itself (a third-plus person, per `docs/RFC.md`'s own
 trigger) — one shared process, share-nothing data (one SQLite DB per
-tenant, unchanged), capability tokens per tenant. dhk and trent are not
-required to move onto this — the two shapes coexist on the same box,
+tenant, unchanged), capability tokens per existing/operator tenant plus an
+optional OAuth bearer route for deliberately trusted identities. dhk and trent
+are not required to move onto this — the two shapes coexist on the same box,
 each on its own port.
 
 **Run the provisioning scripts, don't hand-type this.** The steps below
@@ -808,9 +809,59 @@ sudo env \
   scripts/wingman-provision-shared.sh
 ```
 
-For a deliberately trusted OAuth user, then bind the exact verified WorkOS
-`(iss, sub)` instead of issuing a capability URL. A newly trusted user gets
-an isolated workspace and the binding in one operator action:
+For invite-only onboarding, reserve the person's tenant slug before giving
+them the connector address:
+
+```bash
+sudo -iu wingman-shared wingman tenant oauth-invite taylor \
+  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
+  --registry /etc/wingman/tenants.toml
+```
+
+Their first successful WorkOS sign-in is still refused with 403. It records
+only the verified opaque `(iss, sub)`, first/last-seen times, and sign-in count
+in `oauth-identities-onboarding.json`; no bearer token or email is stored, no
+workspace exists, and no tenant data is reachable. The pending queue is capped
+at 128 identities. Once full it keeps its existing records and refuses to
+persist new ones, while every unapproved request remains forbidden.
+
+List the reserved slugs and verified pending identities, then explicitly pair
+the expected person with their reserved slug:
+
+```bash
+sudo -iu wingman-shared wingman tenant oauth-pending \
+  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml
+
+sudo wingman tenant oauth-approve taylor \
+  --issuer https://your-project.authkit.app \
+  --subject user_01EXAMPLE \
+  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
+  --registry /etc/wingman/tenants.toml \
+  --data-root /home/wingman-shared/tenants
+```
+
+Approval is the only step that creates a workspace. It claims both the invite
+and identity against competing operators, writes an isolated workspace and
+registry entry, binds the exact verified identity, consumes the pending row,
+and signals the shared process to reload. Signal delivery is reported exactly;
+the CLI does not claim that the asynchronous reload has already completed. The
+registry entry deliberately omits both `privileged` and `funded`, so both
+remain false. Each durable step is idempotent: after interruption, rerunning
+the same approval completes the safe partial state instead of assigning it to
+somebody else.
+
+Pending-state rows are fully schema-validated before use, so a damaged queue is
+reported as an onboarding-state error rather than becoming a traceback or a
+partially interpreted approval. After approval, the request path checks the
+current on-disk identity map while holding the identity writer lock before it
+records any unknown identity. That closes the short reload window in which the
+server's older in-memory map could otherwise put an already-approved person
+back into the pending queue; access remains governed by the live map until the
+reload actually takes effect.
+
+The lower-level direct provisioning path remains available for an operator
+who already has a verified WorkOS `(iss, sub)` and deliberately does not need
+the invite queue. It never issues a capability URL:
 
 ```bash
 sudo scripts/wingman-add-tenant.sh taylor --no-telemetry \
@@ -852,7 +903,8 @@ idempotent but still retries the live reload, so rerunning after a prior signal
 permission failure is a recovery operation. Trying to bind the same identity
 to another tenant is refused.
 Unknown authenticated identities remain unprovisioned. Do not use email as
-the key and do not copy a `sub` from an unverified source. If the binding is
+the key and do not copy a `sub` from an unverified source; the invite flow
+above is the normal way to obtain the subject from a validated sign-in. If the binding is
 written but the operator cannot signal the running process, the command exits
 nonzero and says that the on-disk map changed while the live process still has
 the previous map; it does not misreport that state as "no process found."
@@ -1195,9 +1247,11 @@ top level for the same reason as `privileged` and more sharply: a
 box-wide default would put every tenant added later on your invoice
 without anyone deciding to. Absent means false, so every registry
 written before this keeps meaning what it meant. Bare boolean,
-unquoted; `"true"` is refused rather than guessed at. Restart the shared
-process (`wg redeploy-shared`) after either change — the registry and
-the key files are read at startup.
+unquoted; `"true"` is refused rather than guessed at. After marking a
+tenant funded, run `wg reload`: it re-reads the registry without
+interrupting anyone. A key placed in a declared tier needs nothing; it is
+read on the next request (see
+[What actually needs a restart](#what-actually-needs-a-restart)).
 
 A funded tenant reaches the **declared** tiers only: the host file and
 the global file, in that order, never the ambient process environment.
