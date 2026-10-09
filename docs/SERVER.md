@@ -842,8 +842,10 @@ ones, while every unapproved request remains forbidden.
 The refusal tells the person what to do next, on both surfaces: "Signed in, but
 this account is not approved on this Wingman server yet. Send reference
 XXXX-XXXX to the person who invited you. After they approve it, reconnect."
-The reference is a short hash of their own `(iss, sub)`, so it reveals nothing
-to them and cannot be turned back into the subject; the wording is otherwise
+The reference is a stable 40-bit fingerprint of their own `(iss, sub)`. It does
+not disclose the subject directly or say anything about other identities or
+tenants. It could only confirm a guessed subject drawn from a small namespace,
+and WorkOS subjects are opaque and high-entropy. The wording is otherwise
 identical whether the identity is unknown or its tenant has left the registry.
 `oauth-pending` prints the same `ref=` on the matching row, with `first_seen`,
 so a reference someone sends you finds their exact row. Claude's connector UI

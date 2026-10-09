@@ -53,9 +53,11 @@ class ReservedInvite:
 def pending_reference(issuer: str, subject: str) -> str:
     """A short code a waiting person can quote and an operator can find.
 
-    Derived from the caller's own (iss, sub), so showing it to that caller
-    reveals nothing, and it cannot be turned back into the subject. Shown on
-    the refusal they receive and on the matching `oauth-pending` row.
+    A stable 40-bit fingerprint of the caller's own (iss, sub). It does not
+    disclose the subject directly and says nothing about other identities or
+    tenants. It could confirm a guess only if subjects came from a small,
+    guessable namespace, which WorkOS's opaque high-entropy subjects do not.
+    Shown on the refusal they receive and on the matching `oauth-pending` row.
     """
     digest = hashlib.sha256(f"{issuer}\n{subject}".encode()).digest()
     code = base64.b32encode(digest).decode("ascii")[:8]
