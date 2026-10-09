@@ -1054,14 +1054,23 @@ shared process writes one line per HTTP request on logger `wingman.access`:
 ts=… level=INFO logger=wingman.access msg=method=POST path=/mcp status=401 ms=4 ua="Claude-User/1.0"
 ```
 
-Method, path, status, duration in milliseconds, and the user-agent cut to 60
-characters. **Never** query strings (OAuth `code`/`state`), headers
-(`Authorization`, cookies) or bodies. The path is allowlisted, not
-redacted: the OAuth `/mcp` route, `/.well-known/…`, `/login`,
-`/oauth/callback`, `/setup…` and `/health` appear as seen; capability routes
-appear as `/mcp/<token>`, `/ui/<token>/…` and `/admin/<token>/…`, with no
-file names; anything else is `<other>`, because a mistyped capability URL
-is still a credential. uvicorn's own access log stays disabled (#70).
+Method, path, status, duration in milliseconds, and only the user-agent's
+leading product token (e.g. `Claude-User/1.0`: at most 40 characters of
+letters, digits and `._+/-`; the header is client-controlled, so it is
+narrowed rather than trusted). **Never** query strings (OAuth
+`code`/`state`), any other header (`Authorization`, cookies) or bodies. The
+path is allowlisted, not redacted. The OAuth `/mcp` route, `/login`,
+`/oauth/callback`, `/setup…`, `/health`, and the discovery documents
+(`oauth-protected-resource`, `oauth-authorization-server`,
+`openid-configuration`, with no suffix or the MCP route as suffix) appear as
+seen. Capability routes appear as `/mcp/<token>`, `/ui/<token>/…` and
+`/admin/<token>/…`, with no file names. Anything else is `<other>`, because a
+mistyped capability URL is still a credential. A leading mount segment is
+shown only when it is the process's own configured `--prefix`. A token is 32
+URL-safe characters and could look like any other segment, so an unrecognised
+one is never echoed. A request the client abandoned (or that was cancelled at
+shutdown) ends in ` aborted=1`, with `status=-` if no response had started.
+uvicorn's own access log stays disabled (#70).
 Read it from any account in the `adm` group, no sudo needed:
 
 ```bash

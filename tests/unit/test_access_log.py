@@ -21,16 +21,28 @@ TOKEN = "cap_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c"
 CODE = "oauthcode_SECRET_abc123"
 
 
+MOUNTS = frozenset({"/shared"})
+# The real capability-token shape: secrets.token_urlsafe(24) -> 32 URL-safe
+# characters. All-lowercase is a legal token, so it must not look like a mount.
+LOWER_TOKEN = "a" * 32
+
+
 @pytest.mark.parametrize(
     ("seen", "logged"),
     [
         ("/mcp", "/mcp"),
         ("/shared/mcp", "/shared/mcp"),
+        ("/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource"),
         ("/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-protected-resource/mcp"),
+        (
+            "/.well-known/oauth-protected-resource/shared/mcp",
+            "/.well-known/oauth-protected-resource/shared/mcp",
+        ),
         (
             "/shared/.well-known/oauth-protected-resource/mcp",
             "/shared/.well-known/oauth-protected-resource/mcp",
         ),
+        ("/.well-known/oauth-authorization-server", "/.well-known/oauth-authorization-server"),
         ("/login", "/login"),
         ("/oauth/callback", "/oauth/callback"),
         ("/shared/setup/", "/shared/setup/"),
@@ -46,18 +58,32 @@ CODE = "oauthcode_SECRET_abc123"
         (f"/{TOKEN}", "<other>"),
         ("/wp-admin/setup-config.php", "<other>"),
         (f"/mcp-{TOKEN}", "<other>"),
+        # Codex review on #571: an unconfigured leading segment and a free-form
+        # well-known suffix were both logged verbatim.
+        (f"/{LOWER_TOKEN}/mcp", "<other>"),
+        (f"/{LOWER_TOKEN}/mcp/{TOKEN}", "<other>"),
+        (f"/.well-known/{LOWER_TOKEN}", "/.well-known/<other>"),
+        (
+            f"/.well-known/oauth-protected-resource/{LOWER_TOKEN}",
+            "/.well-known/oauth-protected-resource/…",
+        ),
+        (f"/shared/.well-known/{LOWER_TOKEN}/x", "/shared/.well-known/<other>"),
     ],
 )
 def test_paths_are_logged_only_in_known_safe_forms(seen: str, logged: str) -> None:
-    assert loggable_path(seen) == logged
+    assert loggable_path(seen, MOUNTS) == logged
 
 
-def test_user_agent_is_truncated_and_stripped_of_quotes_and_controls() -> None:
-    assert sanitize_user_agent(b'Claude-User/1.0 "x"\r\nInjected: yes') == (
-        "Claude-User/1.0 xInjected: yes"
-    )
-    long = sanitize_user_agent(b"A" * 200)
-    assert len(long) == 61 and long.endswith("…")
+def test_without_a_configured_mount_no_leading_segment_is_trusted() -> None:
+    assert loggable_path("/shared/mcp") == "<other>"
+    assert loggable_path(f"/shared/mcp/{TOKEN}") == "<other>"
+
+
+def test_user_agent_keeps_only_the_leading_product_token() -> None:
+    assert sanitize_user_agent(b'Claude-User/1.0 "x"\r\nInjected: yes') == "Claude-User/1.0"
+    assert sanitize_user_agent(b"python-httpx/0.28.1") == "python-httpx/0.28.1"
+    assert len(sanitize_user_agent(b"A" * 200)) == 40
+    assert sanitize_user_agent(b'"quoted"') == "-"
     assert sanitize_user_agent(None) == "-"
 
 
@@ -134,6 +160,33 @@ def test_an_exception_is_logged_as_500_and_still_raised(caplog: pytest.LogCaptur
     assert "path=/health status=500" in record.getMessage()
 
 
+def test_a_cancelled_request_is_aborted_not_500(caplog: pytest.LogCaptureFixture) -> None:
+    import anyio
+
+    async def started_then_cancelled(scope: Any, receive: Any, send: Any) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        raise anyio.get_cancelled_exc_class()()
+
+    async def cancelled_before_start(scope: Any, receive: Any, send: Any) -> None:
+        raise anyio.get_cancelled_exc_class()()
+
+    async def noop_send(message: Any) -> None:
+        return None
+
+    async def run(inner: Any) -> None:
+        scope = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+        with pytest.raises(anyio.get_cancelled_exc_class()):
+            await AccessLogMiddleware(inner)(scope, None, noop_send)
+
+    with caplog.at_level(logging.INFO, logger="wingman.access"):
+        anyio.run(run, cancelled_before_start)
+        anyio.run(run, started_then_cancelled)
+
+    before, after = (record.getMessage() for record in _access_records(caplog))
+    assert "status=- " in before and before.endswith(" aborted=1")
+    assert "status=200 " in after and after.endswith(" aborted=1")
+
+
 def test_non_http_scopes_pass_through_unlogged(caplog: pytest.LogCaptureFixture) -> None:
     seen: list[str] = []
 
@@ -190,3 +243,4 @@ def test_shared_server_serves_its_app_through_the_access_log(
 
     assert len(served) == 1
     assert isinstance(served[0], AccessLogMiddleware)
+    assert served[0].mounts == frozenset()

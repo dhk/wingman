@@ -5708,7 +5708,12 @@ def _run_tenant_server(args: argparse.Namespace, prefix: str) -> None:
 
     write_tenant_pidfile(registry_path)
     atexit.register(clear_tenant_pidfile, registry_path)
-    uvicorn.run(AccessLogMiddleware(app), host=args.host, port=args.port, log_level="warning")
+    uvicorn.run(
+        AccessLogMiddleware(app, mounts=[prefix] if prefix else []),
+        host=args.host,
+        port=args.port,
+        log_level="warning",
+    )
 
 
 if __name__ == "__main__":
