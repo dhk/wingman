@@ -42,7 +42,11 @@ from wingman.infrastructure.oauth_bearer import (
     OAuthConfigError,
     OAuthSettings,
 )
-from wingman.infrastructure.oauth_onboarding import PendingResult, unapproved_message
+from wingman.infrastructure.oauth_onboarding import (
+    PendingResult,
+    pending_reference,
+    unapproved_message,
+)
 from wingman.infrastructure.tenants import TenantIndex
 
 _COOKIE = "wingman_setup_session"
@@ -288,7 +292,11 @@ class OAuthBrowserSessions:
         identity = validate_browser_session_token(access_token, self._settings, self._resolve_key)
         slug = self._identities.slug_for(identity.issuer, identity.subject)
         if not slug or self._index.by_slug(slug) is None:
-            _logger.info("browser identity verified but unprovisioned: sub=%s", identity.subject)
+            # The reference, never the subject (see oauth_bearer).
+            _logger.info(
+                "browser identity verified but unprovisioned: ref=%s",
+                pending_reference(identity.issuer, identity.subject),
+            )
             if self._record_pending is not None and slug is None:
                 try:
                     recorded = self._record_pending(identity.issuer, identity.subject)

@@ -551,6 +551,34 @@ def test_verified_but_unapproved_identity_is_refused_before_setup(
     assert client.app.state.oauth_pending == [(BROWSER_ISSUER, "not-approved")]
 
 
+def test_the_refusal_log_names_the_reference_never_the_subject(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from wingman.infrastructure.oauth_onboarding import pending_reference
+
+    client, _tenant, _validated = _world(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        browser_module,
+        "validate_browser_session_token",
+        lambda _token, _settings, _resolver: BearerIdentity(BROWSER_ISSUER, "user_private", ()),
+    )
+    login = client.get("/login", follow_redirects=False)
+    _issue_code(client, "good", login.headers["location"])
+    state = re.search(r"[?&]state=([^&]+)", login.headers["location"])
+    assert state is not None
+
+    with caplog.at_level("INFO", logger="wingman.oauth_browser"):
+        client.get(
+            f"/oauth/callback?code=good&state={state.group(1)}",
+            headers={"Cookie": f"wingman_oauth_state={client.cookies.get('wingman_oauth_state')}"},
+            follow_redirects=False,
+        )
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert f"ref={pending_reference(BROWSER_ISSUER, 'user_private')}" in logged
+    assert "user_private" not in logged
+
+
 def test_logout_requires_csrf_before_destroying_the_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

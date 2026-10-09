@@ -1119,6 +1119,11 @@ URL-safe characters and could look like any other segment, so an unrecognised
 one is never echoed. A request the client abandoned (or that was cancelled at
 shutdown) ends in ` aborted=1`, with `status=-` if no response had started.
 uvicorn's own access log stays disabled (#70).
+A verified sign-in that is refused because it is not approved adds one more
+line, on `wingman.oauth_bearer` (Claude connector) or `wingman.oauth_browser`
+(browser login): `… verified but unprovisioned: ref=XXXX-XXXX`. That is the
+reference the person is told to send you, and the `ref=` on their
+`oauth-pending` row. The WorkOS subject is never logged.
 Read it from any account in the `adm` group, no sudo needed:
 
 ```bash
