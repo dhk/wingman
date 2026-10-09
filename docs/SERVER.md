@@ -831,6 +831,14 @@ sudo -iu wingman-shared wingman tenant oauth-invite taylor \
   --registry /etc/wingman/tenants.toml
 ```
 
+`--email <addr> --slug <slug>` (or `--from-csv`, header `email,slug`) also
+binds the invite to an address, stored as HMAC-SHA256 under a per-install key
+in `oauth-identities-onboarding.key` (mode 0600, created by the first email
+invite; back it up with the state file, or existing email invites show
+`key-mismatch` and stop matching). `oauth-invites` and `oauth-invite-revoke`
+list and withdraw invites. This is recording only until #585: sign-in does not
+yet claim an email invite (RFC-081, 2026-10-09 amendment).
+
 Their first successful WorkOS sign-in is still refused with 403. It records
 only the verified opaque `(iss, sub)`, first/last-seen times, and sign-in count
 in `oauth-identities-onboarding.json`; no bearer token or email is stored, no
@@ -968,7 +976,8 @@ idempotent but still retries the live reload, so rerunning after a prior signal
 permission failure is a recovery operation. Trying to bind the same identity
 to another tenant is refused.
 Unknown authenticated identities remain unprovisioned. Do not use email as
-the key and do not copy a `sub` from an unverified source; the invite flow
+the key and do not copy a `sub` from an unverified source (email-bound
+invites, below, never key the map either); the invite flow
 above is the normal way to obtain the subject from a validated sign-in. If the binding is
 written but the operator cannot signal the running process, the command exits
 nonzero and says that the on-disk map changed while the live process still has

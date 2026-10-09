@@ -8,12 +8,14 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 import click
 import typer
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from wingman.infrastructure.tenants import Tenant
 
 from wingman.agents.profile_curator import ProposalParseError
@@ -4781,7 +4783,26 @@ def tenant_oauth_bind_cmd(
 
 @tenant_app.command("oauth-invite")
 def tenant_oauth_invite_cmd(
-    slug: str = typer.Argument(..., help="Slug reserved for one trusted invitee."),
+    slug_arg: str | None = typer.Argument(
+        None, metavar="[SLUG]", help="Slug reserved for one trusted invitee."
+    ),
+    slug_opt: str | None = typer.Option(
+        None, "--slug", help="Slug to reserve (same as the positional SLUG; use one)."
+    ),
+    email: str | None = typer.Option(
+        None,
+        "--email",
+        help="Bind the invite to this address. Stored only as a keyed hash; "
+        "it lands in shell history, so prefer --from-csv for more than one.",
+    ),
+    from_csv: Path | None = typer.Option(
+        None,
+        "--from-csv",
+        help="CSV with header 'email,slug'; every row is checked before any is saved.",
+    ),
+    expires_days: int = typer.Option(
+        30, "--expires-days", min=1, help="Days an email invite can be matched."
+    ),
     identities: Path = typer.Option(
         ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
     ),
@@ -4789,7 +4810,12 @@ def tenant_oauth_invite_cmd(
         None, "--registry", help="Tenant registry path (default: host setting)."
     ),
 ) -> None:
-    """Reserve a tenant slug before a trusted invitee signs in."""
+    """Reserve a tenant slug before a trusted invitee signs in.
+
+    With --email (or --from-csv) the invite is also bound to an address. That
+    is recorded only: until #585 lands a sign-in does not claim it, and the
+    person is approved with `oauth-approve` exactly as for a slug-only invite.
+    """
     configure_logging()
     from wingman.infrastructure.oauth_onboarding import (
         OAuthOnboardingError,
@@ -4797,18 +4823,151 @@ def tenant_oauth_invite_cmd(
         onboarding_path_for,
     )
 
+    def fail(message: str) -> NoReturn:
+        typer.echo(message, err=True)
+        raise typer.Exit(code=1)
+
+    if slug_arg is not None and slug_opt is not None:
+        fail("Give the slug either as SLUG or as --slug, not both.")
+    slug = slug_arg if slug_arg is not None else slug_opt
+    if from_csv is not None and (slug is not None or email is not None):
+        fail("--from-csv reads email and slug from the file; do not combine it with them.")
+    if from_csv is None and slug is None:
+        fail("Give a slug to reserve (SLUG or --slug), or --from-csv.")
+    if email is not None and slug is None:
+        fail("--email needs --slug: which workspace name to reserve for that address.")
+
     tenants, registry_path = _load_registry_or_exit(registry)
+    existing = {tenant.slug for tenant in tenants}
     store = OAuthOnboardingStore(onboarding_path_for(identities.expanduser()))
-    try:
-        store.reserve_invite(slug, existing_slugs={tenant.slug for tenant in tenants})
-    except OAuthOnboardingError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
-    typer.echo(
-        f"Reserved invite slug {slug!r}. No workspace or access was created. "
+    pending_hint = (
         f"After sign-in, inspect it with `wingman tenant oauth-pending --identities "
         f"{identities}` (registry: {registry_path})."
     )
+    not_claimed = (
+        "Email invites are recorded but not yet claimed automatically at sign-in "
+        "(#585): approve with `oauth-approve` as usual."
+    )
+
+    if from_csv is not None:
+        rows = _read_invite_csv(from_csv, fail)
+        try:
+            store.reserve_email_invites(
+                rows, existing_slugs=existing, expires_days=expires_days, first_line=2
+            )
+        except OAuthOnboardingError as exc:
+            fail(f"{from_csv}: {exc}. Nothing was reserved.")
+        typer.echo(
+            f"Reserved {len(rows)} email invites: {', '.join(slug for _email, slug in rows)}. "
+            f"Addresses are stored only as keyed hashes; matching expires in "
+            f"{expires_days} days. No workspace or access was created. {not_claimed}"
+        )
+        return
+
+    assert slug is not None
+    try:
+        store.reserve_invite(slug, existing_slugs=existing, email=email, expires_days=expires_days)
+    except OAuthOnboardingError as exc:
+        fail(str(exc))
+    if email is None:
+        typer.echo(
+            f"Reserved invite slug {slug!r}. No workspace or access was created. {pending_hint}"
+        )
+    else:
+        typer.echo(
+            f"Reserved invite slug {slug!r} for one email address (stored only as a keyed "
+            f"hash; matching expires in {expires_days} days). No workspace or access was "
+            f"created. {not_claimed} {pending_hint}"
+        )
+
+
+def _read_invite_csv(path: Path, fail: Callable[[str], NoReturn]) -> list[tuple[str, str]]:
+    """Rows of an 'email,slug' CSV. Errors name lines, never addresses."""
+    import csv
+
+    try:
+        text = path.expanduser().read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        fail(f"{path} could not be read: {exc.strerror or exc}. Nothing was reserved.")
+    reader = csv.reader(text.splitlines())
+    header = [cell.strip().lower() for cell in next(reader, [])]
+    if header != ["email", "slug"]:
+        fail(f"{path}: the first line must be the header 'email,slug'. Nothing was reserved.")
+    rows: list[tuple[str, str]] = []
+    for line, cells in enumerate(reader, start=2):
+        if not cells or all(not cell.strip() for cell in cells):
+            fail(f"{path}: line {line} is blank. Nothing was reserved.")
+        if len(cells) != 2:
+            fail(f"{path}: line {line} needs exactly two fields. Nothing was reserved.")
+        rows.append((cells[0], cells[1].strip()))
+    if not rows:
+        fail(f"{path}: no invites after the header. Nothing was reserved.")
+    return rows
+
+
+@tenant_app.command("oauth-invites")
+def tenant_oauth_invites_cmd(
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+) -> None:
+    """List reserved invites: slug, kind, created, expiry and status — no addresses."""
+    configure_logging()
+    from datetime import UTC, datetime
+
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        OAuthOnboardingStore,
+        onboarding_path_for,
+    )
+
+    try:
+        invites = OAuthOnboardingStore(onboarding_path_for(identities.expanduser())).invites()
+    except OAuthOnboardingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if not invites:
+        typer.echo("No reserved invites.")
+        return
+
+    def day(stamp: float) -> str:
+        return datetime.fromtimestamp(stamp, tz=UTC).strftime("%Y-%m-%d")
+
+    for invite in invites:
+        kind = "email" if invite.email_bound else "slug"
+        expires = day(invite.expires_at) if invite.expires_at is not None else "-"
+        typer.echo(
+            f"  {invite.slug}  kind={kind} created={day(invite.created_at)} "
+            f"expires={expires} status={invite.status()}"
+        )
+
+
+@tenant_app.command("oauth-invite-revoke")
+def tenant_oauth_invite_revoke_cmd(
+    slug: str = typer.Argument(..., help="Reserved invite slug to withdraw."),
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+) -> None:
+    """Withdraw an unclaimed invite, deleting any email hash with it."""
+    configure_logging()
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        OAuthOnboardingStore,
+        onboarding_path_for,
+    )
+
+    try:
+        removed = OAuthOnboardingStore(onboarding_path_for(identities.expanduser())).revoke_invite(
+            slug
+        )
+    except OAuthOnboardingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if not removed:
+        typer.echo(f"No reserved invite {slug!r}; nothing changed.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Revoked invite {slug!r}. No workspace existed for it; any email hash was deleted.")
 
 
 @tenant_app.command("oauth-pending")

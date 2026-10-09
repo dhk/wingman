@@ -130,6 +130,17 @@ sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-inv
   --registry /etc/wingman/tenants.toml
 ```
 
+**Email invites (recorded, not yet claimed).** You may bind the invite to the
+address you sent it to, with `--email <addr> --slug <slug>`, or many at once
+with `--from-csv invites.csv` (header `email,slug`; every row is checked
+before any is saved, and errors name lines, not addresses). The address is
+stored only as a keyed hash and matching expires after `--expires-days`
+(default 30). `oauth-invites` lists them (slug, kind, expiry, status; never an
+address) and `oauth-invite-revoke <slug>` withdraws one. Until #585 ships, a
+sign-in does **not** claim an email invite: the person still gets a pending
+row and a reference, and you approve them exactly as below. `--email` puts the
+address in shell history; prefer the CSV, and delete it afterwards.
+
 The invitee's first verified sign-in remains forbidden and creates no
 workspace. It records the opaque issuer/subject pair in the bounded pending
 queue. Browser setup and MCP use different WorkOS token classes and issuers,
@@ -166,7 +177,9 @@ sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-bin
 ```
 
 Do not obtain `sub` from email, a screenshot, or user input; use the verified
-pending record from the completed OAuth exchange. The lower-level direct
+pending record from the completed OAuth exchange. (The RFC-081 email-invite
+amendment narrows this once #585 ships: the service itself, never an
+operator, may match an issuer-verified address to an invite.) The lower-level direct
 trusted-user command in [SERVER.md](SERVER.md) remains an operator fallback,
 not the normal invite path.
 

@@ -1278,7 +1278,9 @@ Wingman.
 
 Authentication and tenancy are two distinct gates. A verified `(iss, sub)`
 must appear in an operator-controlled identity map and point to a slug already
-in the tenant registry. Email is never an identity key. A verified but unmapped
+in the tenant registry. Email is never an identity key (narrowed by the
+2026-10-09 email-invite amendment below: an email may choose which reserved
+slug a verified identity is approved into, never key the map). A verified but unmapped
 identity gets no workspace, and its refusal does not reveal whether a named
 tenant exists. The map reloads without restarting the shared process and is
 replaced atomically. Provisioning reserves an identity before workspace or
@@ -1400,3 +1402,35 @@ loosens either gate:
   five-second timeout; failure is one WARNING and changes neither the queue nor
   the refusal. Repeat sign-ins and restarts do not re-notify. This is an
   operator alert, not telemetry: nothing about tenants' use is sent anywhere.
+
+**Amendment (2026-10-09): email-bound invites (#570, #583; Durable
+decision).** Owner-approved on 2026-10-08 so that 5–10 new people a week do
+not each need a pending row, a reference and an operator approval. It
+supersedes, narrowly, two rules above and in the runbooks: "email is never an
+identity key" and "do not obtain `sub` from email".
+
+- **What may match.** Only an address the issuer marks *verified*, compared
+  exactly after lowercase and trim. No provider-specific folding (Gmail dots or
+  `+tags`), no domain rules. Only an unexpired invite the operator created.
+- **What it decides.** Which reserved slug a verified `(iss, sub)` is approved
+  into — nothing more. The identity map stays keyed on `(iss, sub)`; an email
+  never becomes a map key, and a later change of address does not move an
+  identity. A new tenant created this way is unprivileged and unfunded, as an
+  `oauth-approve` tenant is.
+- **What is stored.** HMAC-SHA256 of the normalised address under a
+  per-install 32-byte key kept owner-only beside the onboarding state
+  (`oauth-identities-onboarding.key`), plus the key's id, the slug, created and
+  expiry (default 30 days) — never the address. A plain or per-row-salted hash
+  was rejected: the plausible addresses for one invitee are few enough to
+  confirm offline from a copied state file. The invite, hash included, is
+  deleted when it is claimed, approved or revoked. Expiry ends automatic
+  matching; the slug stays reserved until approved or revoked.
+- **What is unchanged.** No match, an unverified address or a failed lookup
+  falls back to today's path: a pending row, the reference, a 403. Manual
+  `oauth-approve` and `oauth-bind` remain. A WorkOS API key on the shared
+  service is acceptable for looking up a verified address, read-only.
+- **Staging.** #584 records invites (`oauth-invite --email/--from-csv`,
+  `oauth-invites`, `oauth-invite-revoke`) and changes no sign-in behaviour.
+  Claiming at sign-in is #585, designed after #582 establishes what each
+  surface's token actually carries. Until #585 ships the superseded rules still
+  describe what the running service does.

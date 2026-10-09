@@ -4,7 +4,11 @@ Authentication is not admission.  A verified identity that is not already
 mapped to a tenant may be recorded here for an operator to inspect, but it
 receives no workspace and no data until an operator consumes a reserved slug.
 The file contains opaque provider subjects only; access tokens and email
-addresses are never persisted.
+addresses are never persisted.  An email-bound invite (RFC-081 amendment,
+2026-10-09) stores a keyed HMAC of the normalised address, never the address
+itself; the key lives beside the state file, owner-only.  Recording such an
+invite changes nothing about sign-in yet: claiming it on a verified sign-in
+is #585.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from __future__ import annotations
 import base64
 import fcntl
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -35,8 +40,14 @@ if TYPE_CHECKING:
 _logger = get_logger("oauth_onboarding")
 
 DEFAULT_PENDING_LIMIT = 128
+DEFAULT_INVITE_LIMIT = 256
+DEFAULT_INVITE_DAYS = 30
 _APPROVAL_TTL_SECONDS = 3600.0
 _SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+_EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+_HEX16 = re.compile(r"[0-9a-f]{16}")
+_KEY_BYTES = 32
 
 
 class PendingResult(Enum):
@@ -68,6 +79,36 @@ class PendingIdentity:
 class ReservedInvite:
     slug: str
     created_at: float
+    email_bound: bool = False
+    expires_at: float | None = None
+    key_matches: bool = True
+    approving: bool = False
+
+    def status(self, *, now: float | None = None) -> str:
+        """active, expired, key-mismatch or approving — never the address."""
+        current = time.time() if now is None else now
+        if self.approving:
+            return "approving"
+        if not self.email_bound:
+            return "active"
+        if not self.key_matches:
+            return "key-mismatch"
+        if self.expires_at is not None and self.expires_at <= current:
+            return "expired"
+        return "active"
+
+
+def normalise_email(raw: str) -> str:
+    """Lowercase and trim; nothing else.
+
+    No provider-specific folding (Gmail dots or +tags): the decision is an
+    exact match on the address WorkOS verified, so 'p.at@gmail.com' and
+    'pat@gmail.com' are different invites. Errors never repeat the input.
+    """
+    email = raw.strip().lower()
+    if len(email) > 254 or _EMAIL.fullmatch(email) is None:
+        raise OAuthOnboardingError("not a valid email address")
+    return email
 
 
 def pending_reference(issuer: str, subject: str) -> str:
@@ -99,13 +140,85 @@ def onboarding_path_for(identity_path: Path) -> Path:
 
 
 class OAuthOnboardingStore:
-    """A bounded, atomically replaced invite and pending-identity queue."""
+    """A bounded, atomically replaced invite and pending-identity queue.
 
-    def __init__(self, path: Path, *, pending_limit: int = DEFAULT_PENDING_LIMIT) -> None:
+    Email-bound invites are keyed by HMAC-SHA256 under a per-install secret in
+    `<state>.key` (mode 0600, created on the first email invite). A plain or
+    per-row-salted hash would not do: the set of plausible addresses for an
+    invitee is small, so anyone holding a copy of the state file could confirm
+    a guess offline. Without the key they cannot. Each invite records an id of
+    the key it was made under, so a replaced key shows up as 'key-mismatch'
+    rather than as an invite that silently never matches.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        pending_limit: int = DEFAULT_PENDING_LIMIT,
+        invite_limit: int = DEFAULT_INVITE_LIMIT,
+    ) -> None:
         if pending_limit < 1:
             raise ValueError("pending_limit must be positive")
+        if invite_limit < 1:
+            raise ValueError("invite_limit must be positive")
         self.path = path
         self.pending_limit = pending_limit
+        self.invite_limit = invite_limit
+
+    @property
+    def key_path(self) -> Path:
+        return self.path.with_suffix(".key")
+
+    def _invite_key(self, *, create: bool) -> bytes | None:
+        """The HMAC key, created owner-only on first use when `create`."""
+        path = self.key_path
+        if create:
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                pass
+            except OSError as exc:
+                raise OAuthOnboardingError(
+                    f"email invite key {path} could not be created: {exc}"
+                ) from exc
+            else:
+                try:
+                    os.fchmod(fd, 0o600)
+                    os.write(fd, secrets.token_bytes(_KEY_BYTES))
+                    os.fsync(fd)
+                except OSError as exc:
+                    os.close(fd)
+                    path.unlink(missing_ok=True)
+                    raise OAuthOnboardingError(
+                        f"email invite key {path} could not be written: {exc}"
+                    ) from exc
+                os.close(fd)
+        try:
+            mode = path.stat().st_mode
+            key = path.read_bytes()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise OAuthOnboardingError(
+                f"email invite key {path} is present but could not be read: {exc}"
+            ) from exc
+        if mode & 0o077:
+            raise OAuthOnboardingError(
+                f"email invite key {path} is readable by other users; "
+                "restrict it to mode 0600 (nothing was changed)"
+            )
+        if len(key) != _KEY_BYTES:
+            raise OAuthOnboardingError(f"email invite key {path} is malformed")
+        return key
+
+    @staticmethod
+    def _key_id(key: bytes) -> str:
+        return hashlib.sha256(b"wingman-email-invite-key\n" + key).hexdigest()[:16]
+
+    @staticmethod
+    def _email_hmac(key: bytes, email: str) -> str:
+        return hmac.new(key, normalise_email(email).encode("utf-8"), hashlib.sha256).hexdigest()
 
     @contextmanager
     def _locked(self) -> Iterator[dict[str, Any]]:
@@ -176,6 +289,19 @@ class OAuthOnboardingStore:
                     f"OAuth onboarding state {self.path} repeats invite slug {slug!r}"
                 )
             invite_slugs.add(slug)
+            email_fields = [item.get(field) for field in ("email_hmac", "key_id", "expires_at")]
+            if any(value is not None for value in email_fields):
+                digest, key_id, expires_at = email_fields
+                if (
+                    not isinstance(digest, str)
+                    or _HEX64.fullmatch(digest) is None
+                    or not isinstance(key_id, str)
+                    or _HEX16.fullmatch(key_id) is None
+                    or not number(expires_at)
+                ):
+                    raise OAuthOnboardingError(
+                        f"OAuth onboarding state {self.path} has malformed invite entry {position}"
+                    )
             claim = item.get("claim")
             if claim is not None and (
                 not isinstance(claim, dict)
@@ -252,9 +378,8 @@ class OAuthOnboardingStore:
         if isinstance(claim, dict) and claim.get("expires_at", 0) <= now:
             invite.pop("claim", None)
 
-    def reserve_invite(
-        self, slug: str, *, existing_slugs: set[str], now: float | None = None
-    ) -> None:
+    @staticmethod
+    def _check_slug(slug: str, existing_slugs: set[str]) -> None:
         if _SLUG.fullmatch(slug) is None:
             raise OAuthOnboardingError(
                 "invite slug must use lowercase letters, numbers and single hyphens "
@@ -262,11 +387,163 @@ class OAuthOnboardingStore:
             )
         if slug in existing_slugs:
             raise OAuthOnboardingError(f"tenant slug {slug!r} already exists")
+
+    def reserve_invite(
+        self,
+        slug: str,
+        *,
+        existing_slugs: set[str],
+        email: str | None = None,
+        expires_days: int = DEFAULT_INVITE_DAYS,
+        now: float | None = None,
+    ) -> None:
+        """Reserve a slug; with `email`, also bind it to that address's HMAC.
+
+        The email expiry bounds automatic matching only (#585). The slug stays
+        reserved until approved or revoked, as a slug-only invite always has.
+        """
+        if email is None:
+            self._check_slug(slug, existing_slugs)
+            created_at = time.time() if now is None else now
+            with self._locked() as state:
+                if any(item.get("slug") == slug for item in state["invites"]):
+                    raise OAuthOnboardingError(f"invite slug {slug!r} is already reserved")
+                if len(state["invites"]) >= self.invite_limit:
+                    raise OAuthOnboardingError(
+                        f"invite list is at its limit of {self.invite_limit}; "
+                        "revoke unused invites first"
+                    )
+                state["invites"].append({"slug": slug, "created_at": created_at})
+            return
+        self.reserve_email_invites(
+            [(email, slug)], existing_slugs=existing_slugs, expires_days=expires_days, now=now
+        )
+
+    def reserve_email_invites(
+        self,
+        rows: list[tuple[str, str]],
+        *,
+        existing_slugs: set[str],
+        expires_days: int = DEFAULT_INVITE_DAYS,
+        first_line: int | None = None,
+        now: float | None = None,
+    ) -> None:
+        """Reserve (email, slug) invites all-or-nothing.
+
+        With `first_line`, errors name the input line ('line 3: ...'), never
+        the address. Nothing is written unless every row is valid.
+        """
+        if expires_days < 1:
+            raise OAuthOnboardingError("invite expiry must be at least one day")
+        if not rows:
+            raise OAuthOnboardingError("no invites to reserve")
+
+        def where(index: int) -> str:
+            return f"line {first_line + index}: " if first_line is not None else ""
+
+        normalised: list[tuple[str, str]] = []
+        for index, (email, slug) in enumerate(rows):
+            try:
+                self._check_slug(slug, existing_slugs)
+                normalised.append((normalise_email(email), slug))
+            except OAuthOnboardingError as exc:
+                raise OAuthOnboardingError(f"{where(index)}{exc}") from exc
         created_at = time.time() if now is None else now
+        expires_at = created_at + expires_days * 86400.0
+        key = self._invite_key(create=True)
+        assert key is not None
+        key_id = self._key_id(key)
         with self._locked() as state:
-            if any(item.get("slug") == slug for item in state["invites"]):
-                raise OAuthOnboardingError(f"invite slug {slug!r} is already reserved")
-            state["invites"].append({"slug": slug, "created_at": created_at})
+            taken_slugs = {str(item.get("slug")) for item in state["invites"]}
+            taken_digests = {
+                str(item["email_hmac"]): str(item["slug"])
+                for item in state["invites"]
+                if "email_hmac" in item
+            }
+            additions: list[dict[str, Any]] = []
+            for index, (email, slug) in enumerate(normalised):
+                digest = self._email_hmac(key, email)
+                if slug in taken_slugs:
+                    raise OAuthOnboardingError(
+                        f"{where(index)}invite slug {slug!r} is already reserved"
+                    )
+                if digest in taken_digests:
+                    raise OAuthOnboardingError(
+                        f"{where(index)}this email address already has an invite "
+                        f"(slug {taken_digests[digest]!r}); revoke that one first"
+                    )
+                taken_slugs.add(slug)
+                taken_digests[digest] = slug
+                additions.append(
+                    {
+                        "slug": slug,
+                        "created_at": created_at,
+                        "email_hmac": digest,
+                        "key_id": key_id,
+                        "expires_at": expires_at,
+                    }
+                )
+            if len(state["invites"]) + len(additions) > self.invite_limit:
+                raise OAuthOnboardingError(
+                    f"invite list would exceed its limit of {self.invite_limit}; "
+                    "revoke unused invites first"
+                )
+            state["invites"].extend(additions)
+
+    def revoke_invite(self, slug: str, *, now: float | None = None) -> bool:
+        """Remove one invite and any email HMAC with it; False if absent."""
+        current = time.time() if now is None else now
+        try:
+            if not self.path.exists():
+                return False
+        except OSError as exc:
+            raise OAuthOnboardingError(
+                f"OAuth onboarding state {self.path} could not be checked: {exc}"
+            ) from exc
+        with self._locked() as state:
+            invite = next((item for item in state["invites"] if item.get("slug") == slug), None)
+            if invite is None:
+                return False
+            self._expire_claim(invite, current)
+            if "claim" in invite:
+                raise OAuthOnboardingError(
+                    f"invite slug {slug!r} is being approved right now; nothing was revoked"
+                )
+            state["invites"] = [item for item in state["invites"] if item is not invite]
+            return True
+
+    def match_email(self, verified_email: str, *, now: float | None = None) -> str | None:
+        """The slug of the unexpired invite for this address, or None.
+
+        For #585, which must pass only an address the issuer marked verified.
+        Read-only: on a host with no state or no key it creates nothing.
+        """
+        current = time.time() if now is None else now
+        try:
+            email = normalise_email(verified_email)
+        except OAuthOnboardingError:
+            return None
+        try:
+            if not self.path.exists():
+                return None
+        except OSError as exc:
+            raise OAuthOnboardingError(
+                f"OAuth onboarding state {self.path} could not be checked: {exc}"
+            ) from exc
+        key = self._invite_key(create=False)
+        if key is None:
+            return None
+        key_id = self._key_id(key)
+        digest = self._email_hmac(key, email)
+        with self._locked() as state:
+            for item in state["invites"]:
+                if (
+                    item.get("key_id") == key_id
+                    and hmac.compare_digest(str(item.get("email_hmac", "")), digest)
+                    and float(item["expires_at"]) > current
+                ):
+                    return str(item["slug"])
+        return None
 
     def record_pending(
         self, issuer: str, subject: str, *, now: float | None = None
@@ -331,12 +608,29 @@ class OAuthOnboardingStore:
                 for item in state["pending"]
             ]
 
-    def invites(self) -> list[ReservedInvite]:
+    def invites(self, *, now: float | None = None) -> list[ReservedInvite]:
+        current = time.time() if now is None else now
+        key = None
         with self._locked() as state:
-            return [
-                ReservedInvite(slug=str(item["slug"]), created_at=float(item["created_at"]))
-                for item in state["invites"]
-            ]
+            if any("email_hmac" in item for item in state["invites"]):
+                key = self._invite_key(create=False)
+            key_id = self._key_id(key) if key is not None else None
+            result: list[ReservedInvite] = []
+            for item in state["invites"]:
+                claim = item.get("claim")
+                approving = isinstance(claim, dict) and float(claim["expires_at"]) > current
+                email_bound = "email_hmac" in item
+                result.append(
+                    ReservedInvite(
+                        slug=str(item["slug"]),
+                        created_at=float(item["created_at"]),
+                        email_bound=email_bound,
+                        expires_at=float(item["expires_at"]) if email_bound else None,
+                        key_matches=not email_bound or item.get("key_id") == key_id,
+                        approving=approving,
+                    )
+                )
+            return result
 
     def begin_approval(
         self, slug: str, issuer: str, subject: str, *, now: float | None = None
