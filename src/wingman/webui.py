@@ -821,6 +821,83 @@ def oauth_upload_ready(config: Config) -> bool:
     return _has_extraction_key(config)
 
 
+def _oauth_workspace_summary(config: Config, csrf_token: str) -> Response | None:
+    """Where an existing tenant is at, or None when first-run setup applies (#579).
+
+    "Existing" means the workspace holds ingested data, not that the database
+    file exists: 'oauth-approve' creates an empty database, and a migrated
+    tenant ('oauth-bind') arrives with data but was being shown first-run
+    setup. Counts and dates only — never file names, locators, or key material.
+    """
+    from wingman.infrastructure.storage import Storage
+
+    if not config.db_path.exists():
+        return None
+    with Storage(config.db_path) as storage:
+        documents = storage.count_source_records()
+        profile_items = storage.count_profile_items()
+        last_ingest = storage.latest_ingested_at()
+    if documents == 0:
+        return None
+
+    anthropic = next(
+        (
+            source
+            for short, _env, source in key_status_rows(config.data_dir, config)
+            if short == "anthropic"
+        ),
+        "not set",
+    )
+    key_line = {
+        "workspace file": "verified · your own key",
+        "global file (funded)": "using the shared key this workspace is funded with",
+    }.get(anthropic, "not set")
+    plural = "" if documents == 1 else "s"
+    data_line = f"{documents} document{plural} ingested · {profile_items} profile items"
+    if last_ingest is not None:
+        data_line += f" · last on {last_ingest.strftime('%d %b %Y')}"
+    latest = config.reports_dir / "digests" / "latest.html"
+    if latest.exists():
+        stamp = datetime.fromtimestamp(latest.stat().st_mtime, tz=UTC)
+        digest_line = stamp.strftime("%d %b %Y · %H:%M UTC")
+    else:
+        digest_line = "No digest yet — the first overnight run writes one"
+    rows = "".join(
+        f'<div class="field"><label>{_e(label)}</label><span>{_e(value)}</span></div>'
+        for label, value in (
+            ("Anthropic key", key_line),
+            ("Your data", data_line),
+            ("Latest digest", digest_line),
+        )
+    )
+    body = [
+        _header(config),
+        "<h1>Your workspace</h1>",
+        '<p class="dim">You are already set up. Here is where things stand.</p>',
+        f'<div class="panel"><span class="stepno">Summary</span>{rows}</div>',
+    ]
+    if _has_extraction_key(config):
+        body.append(
+            '<div class="panel"><span class="stepno">Continue in your client</span>'
+            "<p>Ask your connected client: <b>what’s my status?</b> Wingman will use "
+            "only evidence from your workspace.</p></div>"
+        )
+        body.append(_keys_panel(config, step="Update key", csrf_token=csrf_token))
+        body.append(_upload_panel(step="Add or replace data", csrf_token=csrf_token))
+    else:
+        body.append(
+            '<div class="panel"><span class="stepno">One thing to do: add your Anthropic '
+            "key</span><p>Your data is here, but nothing model-backed can run until a key "
+            "is verified. Uploads are accepted again once it is.</p></div>"
+        )
+        body.append(_keys_panel(config, step="Add an API key", csrf_token=csrf_token))
+    body.append(
+        f'<form method="post" action="logout"><input type="hidden" name="_csrf" '
+        f'value="{_e(csrf_token)}"><button class="btn">Sign out</button></form>'
+    )
+    return _page("Wingman — your workspace", "\n".join(body), shell="ui ui-setup")
+
+
 async def ui_oauth_setup(request: Request) -> Response:
     """Small OAuth-only setup surface: no capability URLs and no model chat."""
     config = _authorized(request)
@@ -828,6 +905,9 @@ async def ui_oauth_setup(request: Request) -> Response:
     if config is None or browser is None:
         return _not_found()
     csrf_token = browser[1]
+    summary = _oauth_workspace_summary(config, csrf_token)
+    if summary is not None:
+        return summary
     body = [
         _header(config),
         "<h1>Set up your workspace</h1>",

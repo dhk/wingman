@@ -580,3 +580,90 @@ def test_browser_configuration_fails_closed_without_secret(
             "https://api.workos.com/user_management/authenticate",
             "https://wingman.example.com/shared/oauth/callback",
         )
+
+
+def _seed_existing_workspace(tenant: Tenant, *, digest: bool = True) -> None:
+    """A tenant who already has data: what a migrated (oauth-bind) tenant looks like."""
+    from datetime import UTC, datetime
+
+    from wingman.domain.source_record import SourceRecord
+    from wingman.infrastructure.config import Config
+    from wingman.infrastructure.storage import Storage
+
+    config = Config(data_dir=tenant.data_dir, data_dir_source="test")
+    config.reports_dir.mkdir(parents=True, exist_ok=True)
+    with Storage(config.db_path) as storage:
+        storage.add_source_record(
+            SourceRecord(
+                source_type="resume",
+                source_locator="/private/path/taylor-cv.pdf",
+                content_hash="hash-cv",
+                ingested_at=datetime(2026, 9, 14, 8, 30, tzinfo=UTC),
+            )
+        )
+    if digest:
+        (config.reports_dir / "digests").mkdir(parents=True, exist_ok=True)
+        (config.reports_dir / "digests" / "latest.html").write_text("<html></html>")
+
+
+def test_existing_workspace_sees_a_summary_not_first_run_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, tenant, _validated = _world(tmp_path, monkeypatch)
+    monkeypatch.setitem(webui_module.VALIDATORS, "anthropic", lambda _value: None)
+    _seed_existing_workspace(tenant)
+    _sign_in(client)
+    client.post(
+        "/setup/keys",
+        data={"_csrf": _csrf(client.get("/setup/").text), "anthropic": "sk-ant-test"},
+    )
+
+    page = client.get("/setup/").text
+
+    assert "Set up your workspace" not in page
+    assert "Your workspace" in page
+    assert "Anthropic key" in page and "verified" in page
+    assert "1 document" in page and "14 Sep 2026" in page
+    assert "Latest digest" in page
+    assert "what’s my status?" in page
+    # Changing things stays possible, behind the summary, and CSRF-protected.
+    assert "Update key" in page and "Add or replace data" in page
+    assert page.count('name="_csrf"') >= 3
+    # Nothing private or capability-bearing reaches the page.
+    assert "sk-ant-test" not in page
+    assert "/private/path" not in page and "taylor-cv" not in page
+    assert "/ui/" not in page and "/mcp/" not in page
+
+
+def test_existing_workspace_without_a_key_is_told_the_one_thing_to_do(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, tenant, _validated = _world(tmp_path, monkeypatch)
+    _seed_existing_workspace(tenant, digest=False)
+    _sign_in(client)
+
+    page = client.get("/setup/").text
+
+    assert "Set up your workspace" not in page
+    assert "Your workspace" in page
+    assert "One thing to do: add your Anthropic key" in page
+    assert "No digest yet" in page
+    # The upload form stays withheld until the extraction key exists.
+    assert 'action="upload"' not in page
+
+
+def test_approved_but_empty_workspace_still_gets_first_run_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure.config import Config
+    from wingman.infrastructure.storage import Storage
+
+    client, tenant, _validated = _world(tmp_path, monkeypatch)
+    # oauth-approve creates an empty database, so its existence is not "set up".
+    Storage(Config(data_dir=tenant.data_dir, data_dir_source="test").db_path).close()
+    _sign_in(client)
+
+    page = client.get("/setup/").text
+
+    assert "Set up your workspace" in page
+    assert "Your workspace" not in page
