@@ -4774,6 +4774,9 @@ def tenant_oauth_bind_cmd(
             "or is reloaded.",
             err=True,
         )
+    if pending_problem is not None:
+        # The binding and reload stand; the stale row is the unfinished part.
+        raise typer.Exit(code=1)
 
 
 @tenant_app.command("oauth-invite")

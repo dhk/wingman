@@ -200,7 +200,8 @@ def test_a_stuck_pending_queue_does_not_undo_a_written_binding(
 
     result = cli.invoke(app, _bind_args("jason", "user_123", identities, registry))
 
-    assert result.exit_code == 0, result.output
+    # Non-zero so automation notices the stale row, but the binding stands.
+    assert result.exit_code == 1, result.output
     assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "jason"
     assert "Bound trusted OAuth identity" in result.output
     assert "still listed as pending" in result.output
