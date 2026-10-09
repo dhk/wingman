@@ -73,6 +73,8 @@ def test_first_sign_in_creates_one_task_and_repeats_do_not(tmp_path: Path) -> No
     ref = pending_reference(ISSUER, "user_taylor")
     assert body["content"] == f"Wingman: sign-in awaiting approval (ref {ref})"
     assert body["project_id"] == "p1"
+    # Someone is locked out until approved: the task is due the day they wait.
+    assert body["due_string"] == "today"
     description = str(body["description"])
     assert "example.authkit.app" in description
     assert "wingman tenant oauth-pending --identities /srv/oauth-identities.toml" in description
