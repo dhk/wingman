@@ -249,7 +249,10 @@ before the next, more expensive step.
    ```
 
    A verified identity here receives a 403 that Claude reports as "couldn't
-   connect". Approve or bind it (§3/§4). No WorkOS sign-in window opening is
+   connect". Approve or bind it (§3/§4). Each row carries `ref=XXXX-XXXX`,
+   the same reference that person was shown on the browser page and in the
+   403 body. Match a quoted reference to its row. An `ofid_…` code is
+   Claude's own support reference and does not identify a row. No WorkOS sign-in window opening is
    **not** evidence that OAuth never ran: WorkOS silently reuses an existing
    session, so a person who signed in through the browser earlier can
    complete the connector's OAuth flow without seeing anything.
