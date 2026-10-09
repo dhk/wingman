@@ -279,7 +279,9 @@ class IdentityMap:
     """Which verified identity is which tenant.
 
     Keyed on (issuer, subject) — never on an email address, which a provider
-    may hide or let a person change. Several identities may name one slug;
+    may hide or let a person change. An email-bound invite (RFC-081
+    amendment, #585) may choose which slug a verified identity is approved
+    into; the binding it writes is still this (issuer, subject) key. Several identities may name one slug;
     that is how one person with two sign-in methods is linked, by an explicit
     line an operator (or a provisioning service) wrote, never by guessing.
     """
