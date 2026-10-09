@@ -142,6 +142,36 @@ def test_invite_pending_and_approval_create_an_unprivileged_unfunded_tenant(
     assert str(data_root / "taylor") not in second_identity.text
 
 
+def test_pending_reference_is_short_stable_and_reveals_nothing() -> None:
+    import re
+
+    from wingman.infrastructure.oauth_onboarding import pending_reference
+
+    ref = pending_reference(ISSUER, "user_taylor")
+    assert re.fullmatch(r"[A-Z2-7]{4}-[A-Z2-7]{4}", ref)
+    assert ref == pending_reference(ISSUER, "user_taylor")
+    assert ref != pending_reference("https://other.example", "user_taylor")
+    assert ref != pending_reference(ISSUER, "user_taylo")
+    assert "taylor" not in ref.lower()
+
+
+def test_oauth_pending_lists_the_reference_and_first_sign_in(tmp_path: Path) -> None:
+    from wingman.infrastructure.oauth_onboarding import pending_reference
+
+    identities = tmp_path / "oauth-identities.toml"
+    store = OAuthOnboardingStore(onboarding_path_for(identities))
+    assert store.record_pending(ISSUER, "user_taylor", now=100.0)
+    assert store.record_pending(ISSUER, "user_taylor", now=200.0)
+
+    result = cli.invoke(app, ["tenant", "oauth-pending", "--identities", str(identities)])
+
+    assert result.exit_code == 0, result.output
+    assert f"ref={pending_reference(ISSUER, 'user_taylor')}" in result.output
+    assert "first_seen=1970-01-01T00:01:40+00:00" in result.output
+    assert "last_seen=1970-01-01T00:03:20+00:00" in result.output
+    assert "sign_ins=2" in result.output
+
+
 def test_pending_queue_is_bounded_and_keeps_existing_entries(tmp_path: Path) -> None:
     store = OAuthOnboardingStore(tmp_path / "onboarding.json", pending_limit=2)
 
