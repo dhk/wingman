@@ -5701,11 +5701,19 @@ def _run_tenant_server(args: argparse.Namespace, prefix: str) -> None:
     print("Reload after editing the registry by hand: kill -HUP " + str(os.getpid()))
     print(f"Reach it from elsewhere via your own tunnel, e.g.: tailscale serve {args.port}")
     sys.stdout.flush()
+    # uvicorn's access log stays off (capability tokens are in the path);
+    # wingman.access logs the same requests with the path allowlisted.
     logging.getLogger("uvicorn.access").disabled = True
+    from wingman.infrastructure.access_log import AccessLogMiddleware
 
     write_tenant_pidfile(registry_path)
     atexit.register(clear_tenant_pidfile, registry_path)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    uvicorn.run(
+        AccessLogMiddleware(app, mounts=[prefix] if prefix else []),
+        host=args.host,
+        port=args.port,
+        log_level="warning",
+    )
 
 
 if __name__ == "__main__":
