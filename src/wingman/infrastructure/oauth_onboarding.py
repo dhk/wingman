@@ -247,6 +247,30 @@ class OAuthOnboardingStore:
             )
             return True
 
+    def discard_pending(self, issuer: str, subject: str) -> bool:
+        """Drop one exact identity from the queue; False means it was not there.
+
+        For identities bound by 'tenant oauth-bind' rather than consumed by an
+        approval: once bound they are no longer awaiting anything. A host that
+        never queued anyone has no state file, and this does not create one.
+        """
+        try:
+            if not self.path.exists():
+                return False
+        except OSError as exc:
+            raise OAuthOnboardingError(
+                f"OAuth onboarding state {self.path} could not be checked: {exc}"
+            ) from exc
+        with self._locked() as state:
+            kept = [
+                item
+                for item in state["pending"]
+                if not (item.get("issuer") == issuer and item.get("subject") == subject)
+            ]
+            removed = len(kept) != len(state["pending"])
+            state["pending"] = kept
+            return removed
+
     def pending(self) -> list[PendingIdentity]:
         with self._locked() as state:
             return [

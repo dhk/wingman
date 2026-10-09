@@ -151,6 +151,18 @@ def test_pending_queue_is_bounded_and_keeps_existing_entries(tmp_path: Path) -> 
     assert [item.subject for item in store.pending()] == ["first", "second"]
 
 
+def test_discard_pending_removes_only_the_exact_identity(tmp_path: Path) -> None:
+    store = OAuthOnboardingStore(tmp_path / "onboarding.json")
+    assert store.record_pending(ISSUER, "first", now=1.0)
+    assert store.record_pending("https://other.example", "first", now=2.0)
+
+    assert store.discard_pending(ISSUER, "first")
+    assert not store.discard_pending(ISSUER, "first")
+    assert [(item.issuer, item.subject) for item in store.pending()] == [
+        ("https://other.example", "first")
+    ]
+
+
 def test_disk_binding_wins_over_a_stale_live_map_when_recording_pending(tmp_path: Path) -> None:
     from wingman.infrastructure.oauth_bearer import bind_trusted_identity
     from wingman.infrastructure.oauth_onboarding import record_verified_pending
