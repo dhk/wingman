@@ -75,7 +75,7 @@ except ValueError:
 target = sys.argv[1]
 
 # Only routes whose proxy is exactly this port. The registry records ONE
-# target per service and `service-registry check` requires every declared
+# target per service and service-registry check requires every declared
 # route to proxy to it exactly, so a route that proxies to a path on the port
 # (the RFC 9728 root metadata route, /.well-known/... -> :PORT/.well-known/...)
 # cannot be declared without marking the whole service stale. Those are
