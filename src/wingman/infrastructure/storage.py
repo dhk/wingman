@@ -439,6 +439,11 @@ class Storage:
         count: int = cursor.fetchone()[0]
         return count
 
+    def latest_ingested_at(self) -> datetime | None:
+        cursor = self._conn.execute("SELECT MAX(ingested_at) FROM source_records")
+        value: str | None = cursor.fetchone()[0]
+        return datetime.fromisoformat(value) if value else None
+
     def add_profile_item(self, item: ProfileItem) -> None:
         try:
             self._conn.execute(

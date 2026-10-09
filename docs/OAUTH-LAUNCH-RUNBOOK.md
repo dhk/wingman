@@ -84,6 +84,14 @@ sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-bin
 pending queue. Rerunning it on an exact existing binding is safe and clears a
 pending row left behind by a build that predates that cleanup.
 
+After binding, the browser sign-in (`/shared/login`) shows a migrated tenant
+**Your workspace**: a summary of their key status, how many documents are
+ingested and when, and the latest digest time, with "Update key" and "Add or
+replace data" below it. First-run "Set up your workspace" is shown only while
+the workspace holds no ingested data, as for a freshly approved invitee. If an
+existing workspace has no verified Anthropic key, the summary says that is the
+one thing to do and withholds uploads until it is done (#579).
+
 The legacy escape hatch in `wingman-add-tenant.sh` is accepted only for
 `scripts/wingman-migrate-tenant.sh` after that script has restored an existing
 workspace. On an OAuth-enabled service, an ordinary add-tenant invocation with
