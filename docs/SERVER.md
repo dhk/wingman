@@ -1195,10 +1195,15 @@ carries the full path because `--set-path` strips the matched prefix; the
 shared process serves that path itself. It is skipped when `/` is mounted,
 since the root mount already forwards it. On lobster this route was first
 added by hand (2026-10-08); a rebuild from the script now keeps it.
-`wingman-register-service.sh` claims it in the service registry along with
-`/shared`: it discovers every funnel path whose proxy is this port or a path
-on it. The registry records the route's target as the port
-(`http://127.0.0.1:8789`), since the helper takes one target per service.
+It is **not** declared in the host service registry. The registry records
+one target per service, and `service-registry check` requires every declared
+route to proxy to it exactly. This route proxies to a *path* on the port, so
+declaring it marks the whole wingman entry `stale`, as happened on lobster on
+2026-10-09. `wingman-register-service.sh` declares only routes that proxy to
+the bare port and prints each path route it leaves out ("not declared
+(registry holds one target per service)"). Declaring it properly needs
+per-route targets in `service-registry`, which is owned by
+`dhk/minority-report`.
 
 There is no `/` mount on the funnel (the `/` that exists is on `:8443`,
 tailnet-only, pointing at a different port entirely). So every tenant URL
@@ -1251,7 +1256,18 @@ is **not** a wingman dependency: without it, the step says so and exits
 last written that morning, still listed `/shared` alone. Re-running
 `wingman-register-service.sh` (every redeploy does) re-reads the funnel, but
 an undeclared route belonging to nothing is only found by reading
-`tailscale serve status` yourself. The same check marks `alexandria-web`
+`tailscale serve status` yourself.
+
+The helper also refuses to change an existing entry's route set ("already has
+different routes; migrate it explicitly") and has no migrate command. When
+the funnel paths change, the register script prints the two commands that
+re-declare the entry (`service-registry release wingman --yes`, then the
+script again). The registry is a ledger and nothing routes through it, so
+releasing is safe. In a redeploy, any registry failure after the health check
+passed exits **3**, "healthy, serving, registry not updated", and
+`wg upgrade-all` reports it as such, never as a possible outage.
+
+The same check marks `alexandria-web`
 stale (declared as `/alexandria-web` on 443, actually served on `:8443`,
 tailnet-only); that entry belongs to `dhk/minority-report`'s pack, not here.
 

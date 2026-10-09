@@ -149,7 +149,18 @@ say "5/5 re-declaring to the host service registry"
 # where a funnel change gets noticed. It reads the live funnel rather than
 # assuming paths, so a route added or moved since provisioning is picked up
 # here instead of drifting silently (#288). Skips cleanly without the helper.
-"$(dirname "$0")/wingman-register-service.sh"
+#
+# By this point the process is up and healthy, so a registry failure is a
+# bookkeeping problem, never an outage, and must not be reported as one
+# (2026-10-09: a route-set change here made wingman-ctl announce that NO
+# TENANT MIGHT BE SERVED while every tenant was being served). Exit 3 is that
+# distinct outcome: healthy, ledger not updated.
+if ! "$(dirname "$0")/wingman-register-service.sh"; then
+  say "Healthy. $AFTER_STARTED_AT"
+  say "Serving every tenant. The host service registry was NOT updated — see the"
+  say "registry output above for why and the exact commands to fix it. Nothing is down."
+  exit 3
+fi
 
 say "Healthy. $AFTER_STARTED_AT"
 say "Every tenant on this process was briefly interrupted by the restart — expected, not a bug."
