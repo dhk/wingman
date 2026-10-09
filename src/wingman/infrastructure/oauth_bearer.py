@@ -58,7 +58,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from wingman.infrastructure.config import tenant_config_scope
 from wingman.infrastructure.logs import get_logger
-from wingman.infrastructure.oauth_onboarding import unapproved_message
+from wingman.infrastructure.oauth_onboarding import PendingResult, unapproved_message
 from wingman.infrastructure.tenant_asgi import (
     TenantRoutingASGIApp,
     TenantSessionBindings,
@@ -690,7 +690,7 @@ class BearerRoutingASGIApp:
         resolve_key: KeyResolver,
         local_mcp_path: str = "/mcp",
         session_bindings: TenantSessionBindings | None = None,
-        record_pending: Callable[[str, str], bool] | None = None,
+        record_pending: Callable[[str, str], PendingResult] | None = None,
     ) -> None:
         self._inner = inner
         self._index = index
@@ -790,7 +790,7 @@ def bind_oauth_routing(
     identities: IdentityMap,
     settings: OAuthSettings,
     resolve_key: KeyResolver,
-    record_pending: Callable[[str, str], bool] | None = None,
+    record_pending: Callable[[str, str], PendingResult] | None = None,
 ) -> None:
     """Add a bearer-authenticated MCP route and the metadata routes.
 

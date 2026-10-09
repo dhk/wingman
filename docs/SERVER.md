@@ -851,6 +851,29 @@ identical whether the identity is unknown or its tenant has left the registry.
 so a reference someone sends you finds their exact row. Claude's connector UI
 may show its own generic error instead of this body; the browser shows it as is.
 
+To be told when someone is waiting, give the shared service a Todoist API token
+(Todoist → Settings → Integrations → Developer) in an environment file its unit
+already reads, such as `/home/wingman-shared/.config/wingman/secrets.env`
+(mode 600). The project id is optional; without it tasks land in the Inbox.
+
+```bash
+WINGMAN_OPERATOR_TODOIST_TOKEN=...
+WINGMAN_OPERATOR_TODOIST_PROJECT_ID=...   # optional
+```
+
+Restart the shared service; its startup output then includes "Operator
+notification: a Todoist task for each newly queued sign-in". The first time an
+identity is queued it creates one task, "Wingman: sign-in awaiting approval
+(ref XXXX-XXXX)", whose description has the issuer host, first-seen time and
+the `oauth-pending` command. No subject, email or token is sent. Repeat
+sign-ins and restarts do not create more tasks. A failed call is logged once
+as a WARNING and never changes the refusal. Delivery is **best effort**, not
+guaranteed. The call runs on a background thread after the row is written, so
+if Todoist is down, or the process exits in the few seconds before the call
+completes, that one task is lost and is not retried. The pending row itself is
+durable: `oauth-pending` stays the source of truth. Unset the token to turn it
+off.
+
 List the reserved slugs and verified pending identities, then explicitly pair
 the expected person with their reserved slug:
 

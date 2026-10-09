@@ -5533,8 +5533,9 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
     from wingman.infrastructure.oauth_onboarding import (
         OAuthOnboardingStore,
         onboarding_path_for,
-        record_verified_pending,
+        pending_recorder,
     )
+    from wingman.infrastructure.operator_notify import notifier_from_env
 
     try:
         settings = build_oauth_settings(args.oauth_issuer, args.oauth_audience, args.oauth_jwks_uri)
@@ -5553,12 +5554,8 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         sys.exit(1)
     resolve_key = jwks_key_resolver(settings.jwks_uri)
     onboarding_store = OAuthOnboardingStore(onboarding_path_for(identity_path))
-    record_pending = lambda issuer, subject: record_verified_pending(
-        identity_path,
-        onboarding_store,
-        issuer,
-        subject,
-    )
+    notifier = notifier_from_env(os.environ, identity_path)
+    record_pending = pending_recorder(identity_path, onboarding_store, notifier)
     bind_oauth_routing(
         app,
         f"{prefix}/mcp/{{token}}",
@@ -5599,6 +5596,8 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
                 record_pending=record_pending,
             ),
         )
+    if notifier is not None:
+        print("Operator notification: a Todoist task for each newly queued sign-in")
     print(
         f"OAuth bearer (RFC-081): {settings.audience}, "
         f"{len(identities)} identity mapping(s), issuer {settings.issuer}"

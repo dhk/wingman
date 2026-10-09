@@ -42,7 +42,7 @@ from wingman.infrastructure.oauth_bearer import (
     OAuthConfigError,
     OAuthSettings,
 )
-from wingman.infrastructure.oauth_onboarding import unapproved_message
+from wingman.infrastructure.oauth_onboarding import PendingResult, unapproved_message
 from wingman.infrastructure.tenants import TenantIndex
 
 _COOKIE = "wingman_setup_session"
@@ -140,7 +140,7 @@ class _Session:
 
 
 TokenExchange = Callable[[str, str], str]
-PendingRecorder = Callable[[str, str], bool]
+PendingRecorder = Callable[[str, str], PendingResult]
 
 
 def validate_browser_session_token(
