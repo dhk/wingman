@@ -517,3 +517,14 @@ def test_shared_provisioner_publishes_the_root_metadata_route_with_oauth() -> No
     )
     # A redeploy reads the audience back from the saved config.
     assert "s/^WINGMAN_OAUTH_AUDIENCE=//p" in body
+
+
+def test_shared_provisioner_never_tells_the_operator_to_add_it_to_the_upgrade_sweep() -> None:
+    """#577: following that advice put the shared account in the per-account
+    sweep, which restarted it a second time during every 'wg upgrade-all'."""
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+    server_doc = (ROOT / "docs" / "SERVER.md").read_text(encoding="utf-8")
+
+    assert "by hand: add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS" not in body
+    assert "Do NOT add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS" in body
+    assert "WINGMAN_UPGRADE_USERS=dhk,trent,wingman-shared" not in server_doc

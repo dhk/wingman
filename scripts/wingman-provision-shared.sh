@@ -395,6 +395,8 @@ else
   say "                        exists in an interactive shell that's sourced its own"
   say "                        .bashrc, which $SERVICE_USER was never given)"
 fi
-say "One more step, by hand: add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS in"
-say "root's wingman-upgrade-all.service (docs/SERVER.md §7/§9), so this account's"
-say "checkout gets swept into the same nightly automated upgrade as everyone else."
+# Not WINGMAN_UPGRADE_USERS (#577): that sweep bare-restarts each account's
+# service, which races wingman-redeploy-shared.sh's stop/wait/start (#415).
+say "Upgrade this process with 'wg redeploy-shared' (or 'wg upgrade-all')."
+say "Do NOT add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS — that sweep would restart"
+say "it a second time, racing the redeploy (docs/SERVER.md §7, #577)."

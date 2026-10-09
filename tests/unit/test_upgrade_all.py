@@ -322,6 +322,60 @@ def test_main_reads_per_user_source_override_from_env(monkeypatch, capsys) -> No
     assert "reinstalled" in out
 
 
+def _record_runs(monkeypatch, module) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def run(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        if "is-active" in argv:
+            return 0, "active\n"
+        return 0, ""
+
+    homes = {"dhk": "/home/dhk", "wingman-shared": "/home/wingman-shared", "svc": "/home/svc"}
+    monkeypatch.setattr(module, "_default_home", homes.get)
+    monkeypatch.setattr(module, "_default_uid", lambda u: 1000 if u in homes else None)
+    monkeypatch.setattr(module, "_default_runner", run)
+    return calls
+
+
+def test_the_shared_service_account_is_skipped_not_restarted(monkeypatch, capsys) -> None:
+    """#577: the shared multi-tenant process belongs to wingman-redeploy-shared.sh,
+    which stops it, waits for the port, then starts it (#415). Listing its account
+    here as well reinstalled it and bare-restarted it a second time in the same
+    'wg upgrade-all', racing that redeploy into ImportErrors and an address-in-use
+    restart loop that took every tenant down for ~52s."""
+    import wingman.infrastructure.upgrade_all as module
+
+    monkeypatch.delenv("WINGMAN_SHARED_USER", raising=False)
+    calls = _record_runs(monkeypatch, module)
+
+    main(["--users", "dhk,wingman-shared"])  # no SystemExit: a skip is not a failure
+
+    assert not [argv for argv in calls if "wingman-shared" in argv]
+    assert [argv for argv in calls if argv[:3] == ["sudo", "-u", "dhk"]]
+    printed = capsys.readouterr()
+    assert "[skipped] wingman-shared:" in printed.err
+    assert "redeploy-shared" in printed.err
+    assert "[ok] dhk:" in printed.out
+
+
+def test_the_shared_service_account_follows_the_redeploy_scripts_override(
+    monkeypatch, capsys
+) -> None:
+    """Same variable, same default as wingman-redeploy-shared.sh, so the two can
+    never disagree about which account is the shared one."""
+    import wingman.infrastructure.upgrade_all as module
+
+    monkeypatch.setenv("WINGMAN_SHARED_USER", "svc")
+    calls = _record_runs(monkeypatch, module)
+
+    main(["--users", "svc,wingman-shared"])
+
+    assert not [argv for argv in calls if "svc" in argv]
+    assert [argv for argv in calls if argv[:3] == ["sudo", "-u", "wingman-shared"]]
+    assert "[skipped] svc:" in capsys.readouterr().err
+
+
 # --- diagnosis (#301) -------------------------------------------------
 #
 # Both cases below are failures that actually happened on lobster, where
