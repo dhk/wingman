@@ -1137,15 +1137,45 @@ a per-hostname toggle, not a per-path one. Hit live; see
 takes a space- or comma-separated list, so a shared instance fronting more
 than one path is reproducible from the script.
 
-Lobster today serves the shared process at **`/shared` only** — verify
-before believing any of this, because it has already drifted once:
+Lobster serves the shared process at **`/shared` only** — verify before
+believing any of this, because it has drifted more than once. As read on
+2026-10-08:
 
 ```console
 $ tailscale serve status
 https://lobster.tail08dfce.ts.net (Funnel on)
-|-- /shared     proxy http://127.0.0.1:8789
-|-- /alexandria proxy http://127.0.0.1:8797
+|-- /shared                                          proxy http://127.0.0.1:8789
+|-- /alexandria                                      proxy http://127.0.0.1:8797
+|-- /.well-known/oauth-protected-resource/shared/mcp proxy http://127.0.0.1:8789/.well-known/oauth-protected-resource/shared/mcp
+
+https://lobster.tail08dfce.ts.net:8443 (tailnet only)
+|-- / proxy http://127.0.0.1:8798
 ```
+
+A `/oauth-spike` route (proxy to `127.0.0.1:8799`) was also live that day
+with nothing listening behind it — a leftover from the OAuth spike, answering
+502 publicly. It is removed by the post-debug cleanup, not by provisioning.
+
+With OAuth enabled, provisioning also publishes one exact-path route for the
+RFC 9728 protected-resource metadata at the **host root**, derived from the
+OAuth audience (`https://<host>/shared/mcp` →
+`/.well-known/oauth-protected-resource/shared/mcp`):
+
+```console
+|-- /.well-known/oauth-protected-resource/shared/mcp proxy http://127.0.0.1:8789/.well-known/oauth-protected-resource/shared/mcp
+```
+
+The 401 challenge already names `/shared/.well-known/…` explicitly, but a
+client that computes the metadata location from the resource URL (RFC 9728
+§3) looks at the host root, which no `/shared` mount reaches. The target
+carries the full path because `--set-path` strips the matched prefix; the
+shared process serves that path itself. It is skipped when `/` is mounted,
+since the root mount already forwards it. On lobster this route was first
+added by hand (2026-10-08); a rebuild from the script now keeps it.
+`wingman-register-service.sh` claims it in the service registry along with
+`/shared`: it discovers every funnel path whose proxy is this port or a path
+on it. The registry records the route's target as the port
+(`http://127.0.0.1:8789`), since the helper takes one target per service.
 
 There is no `/` mount on the funnel (the `/` that exists is on `:8443`,
 tailnet-only, pointing at a different port entirely). So every tenant URL
@@ -1189,9 +1219,41 @@ declaration against the registry the same pack had written.
 
 The registry helper is installed by another tool's deployment pack and
 is **not** a wingman dependency: without it, the step says so and exits
-0. No health check is declared, because the registry verifies health by
-matching a `service` field that `/health` does not currently emit —
-declaring one would mark the entry permanently stale.
+0. A health check is declared (`/health`, matched on its `service` field).
+
+`service-registry check` compares declared entries against reality; it does
+**not** report funnel routes that are live but declared by nobody. On
+2026-10-08 it passed while two such routes were public (the dead
+`/oauth-spike` and the hand-added metadata route), and the wingman entry,
+last written that morning, still listed `/shared` alone. Re-running
+`wingman-register-service.sh` (every redeploy does) re-reads the funnel, but
+an undeclared route belonging to nothing is only found by reading
+`tailscale serve status` yourself. The same check marks `alexandria-web`
+stale (declared as `/alexandria-web` on 443, actually served on `:8443`,
+tailnet-only); that entry belongs to `dhk/minority-report`'s pack, not here.
+
+**Tailscale Funnel operational notes.** Learned the hard way, 2026-10-08:
+
+- **Testing from a tailnet machine skips Funnel.** MagicDNS resolves
+  `*.ts.net` to the node's 100.x tailnet address, so a plain `curl` from the
+  Mac proves nothing about the public path. Force a public address:
+  `curl --resolve <host>:443:<ip> …`, with the IPs from
+  `dig +short <host> @1.1.1.1`.
+- **Funnel depends on the node's own upstream.** With the ISP down (LAN to
+  the router still up), `tailscaled` logs `PollNetMap … deadline exceeded`,
+  DERP `connect … context deadline exceeded`, `no route to host` and
+  `UDP is blocked`, and Funnel delivers nothing. `tailscale netcheck` is the
+  five-second check.
+- **Funnel terminates TLS on the node,** so internet scanners appear in the
+  `tailscaled` journal as bursts of `TLS handshake error from
+  [fd7a:115c:a1e0:…]` (SSLv3/TLS 1.0 probes, ALPN fuzzing, odd cipher lists).
+  They are not client failures.
+- **No sudo needed to read the service log.** A member of the `adm` group can
+  read the shared service's journal directly:
+  `journalctl _UID=$(id -u wingman-shared)`.
+
+The full connector triage order is in
+[OAUTH-LAUNCH-RUNBOOK.md](OAUTH-LAUNCH-RUNBOOK.md) §7.
 
 Rotation invalidates the old token and issues a new one in the same
 step — no restart of the shared process, no effect on any other

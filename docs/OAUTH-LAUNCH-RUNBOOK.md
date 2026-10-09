@@ -100,6 +100,20 @@ Retire an existing capability token only after all of these are true:
 
 ## 4. New invitee policy
 
+First decide which path the person is on:
+
+| Person | Path |
+|---|---|
+| Already has a tenant (a capability URL today) | §3: `oauth-bind` each verified identity to their **existing** slug. Never `oauth-invite` or `oauth-approve` them: that creates a second, empty workspace. |
+| New to this server | This section: `oauth-invite` a slug, they sign in on **both** surfaces (browser `/login` and the Claude connector), `oauth-approve` one verified identity, `oauth-bind` the other to the same slug. |
+
+Either way, `oauth-bind` removes the identity it binds from the pending queue
+(#569), so `oauth-pending` afterwards lists only people still waiting.
+
+Send the invitee the [invitee message](OAUTH-INVITEE-MESSAGE.md) with the
+connector address. It tells them that "couldn't connect" before approval is
+expected and what to send you, which the Claude error itself does not.
+
 Reserve the slug before sending the connector address:
 
 ```bash
@@ -209,3 +223,87 @@ content appeared in logs. Record pass/fail and the exact deployment commit.
 
 Public signup, automatic funding, and autonomous external actions remain out
 of scope after this canary passes.
+
+## 7. Triage: Claude says "Couldn't reach" or "Couldn't connect"
+
+Claude shows the same generic message for an unreachable host, a failed
+discovery, and a successful sign-in that Wingman then refuses with 403
+because the identity is not approved yet. The message does not say which.
+Work through these in order: each is cheap, and each rules out a whole layer
+before the next, more expensive step.
+
+0. **Is the host online upstream?** On the server:
+
+   ```bash
+   tailscale netcheck
+   tailscale status
+   ```
+
+   Expect `UDP: true`, a public IPv4, and a nearest DERP region with a
+   latency. An ISP outage looks like the LAN still working (the router
+   answers) while DERP, the coordination server and DNS all time out; Funnel
+   cannot deliver anything then. Nothing below is meaningful until this is
+   healthy.
+
+1. **What does the app's own record say, for the whole day?** Read the shared
+   service's journal across the day, not a five-minute window around one
+   attempt. A member of `adm` can do this without sudo:
+
+   ```bash
+   journalctl _UID=$(id -u wingman-shared) --since today --no-pager -o short-iso --utc \
+     | grep -E 'bearer (verified|refused)'
+   ```
+
+   `bearer verified but unprovisioned` means OAuth **succeeded**: Claude
+   obtained a token and Wingman refused it only because the identity is not
+   bound (go to step 2). `bearer refused` means a token arrived but failed
+   validation. No bearer lines at all means no Claude token ever reached the
+   server. Once request logging is deployed, the `wingman.access` lines show
+   every request to the OAuth surface (method, path, status, duration), so
+   unauthenticated discovery requests become visible too.
+
+2. **Is the person waiting for approval?**
+
+   ```bash
+   sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-pending \
+     --identities /home/wingman-shared/.config/wingman/oauth-identities.toml
+   ```
+
+   A verified identity here receives a 403 that Claude reports as "couldn't
+   connect". Approve or bind it (§3/§4). Each row carries `ref=XXXX-XXXX`,
+   the same reference that person was shown on the browser page and in the
+   403 body. Match a quoted reference to its row. An `ofid_…` code is
+   Claude's own support reference and does not identify a row. No WorkOS sign-in window opening is
+   **not** evidence that OAuth never ran: WorkOS silently reuses an existing
+   session, so a person who signed in through the browser earlier can
+   complete the connector's OAuth flow without seeing anything.
+
+3. **Does the public path work from outside the tailnet?** On a machine that
+   is on the tailnet, MagicDNS resolves `*.ts.net` to the server's 100.x
+   address, so a plain `curl` skips Funnel entirely and proves nothing about
+   the public path. Force the public address:
+
+   ```bash
+   host=<server>.<tailnet>.ts.net
+   for ip in $(dig +short "$host" @1.1.1.1); do
+     curl -sS -o /dev/null -D - --resolve "$host:443:$ip" -X POST \
+       -H 'Content-Type: application/json' -d '{}' "https://$host/shared/mcp" \
+       | grep -iE '^(HTTP|www-authenticate)'
+   done
+   ```
+
+   Expect `401` and a `WWW-Authenticate: Bearer resource_metadata="…"`
+   header, quickly. Fetch that metadata URL the same way and check that its
+   `resource` exactly equals the connector URL.
+
+4. **Only then reproduce it live.** Start a follower, note the UTC time, and
+   reconnect once:
+
+   ```bash
+   journalctl _UID=$(id -u wingman-shared) -f -o short-iso --utc
+   ```
+
+Red herring: bursts of `TLS handshake error` lines in the `tailscaled`
+journal (SSLv3/TLS 1.0 version probes, ALPN lists like `"http/0.9" "spdy/1"
+"h2c" "hq"`, odd cipher lists) are internet TLS scanners reaching the Funnel
+address, not Claude or an invitee.

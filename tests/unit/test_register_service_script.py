@@ -151,6 +151,32 @@ def test_declares_every_funnel_path_that_points_at_wingmans_port(
     assert "/alexandria" not in declared
 
 
+def test_claims_the_oauth_metadata_route_that_proxies_to_a_path_on_wingmans_port(
+    bin_dir: Path, tmp_path: Path
+) -> None:
+    # The RFC 9728 root metadata route proxies to a PATH on wingman's port,
+    # so an exact-target match left it live on the funnel and claimed by
+    # nobody in the registry.
+    well_known = "/.well-known/oauth-protected-resource/shared/mcp"
+    funnel = json.loads(json.dumps(FUNNEL))
+    handlers = funnel["Web"]["lobster.example.ts.net:443"]["Handlers"]
+    handlers[well_known] = {"Proxy": f"http://127.0.0.1:8789{well_known}"}
+    # A different port that merely starts with the same digits is not ours.
+    handlers["/other"] = {"Proxy": "http://127.0.0.1:87890"}
+    registry = tmp_path / "registry.json"
+    log = _helper(bin_dir, registry)
+    _tailscale(bin_dir, funnel)
+
+    result = _run(bin_dir, registry)
+
+    assert result.returncode == 0, result.stderr
+    route_call = next(
+        json.loads(line) for line in log.read_text().splitlines() if "reserve-route" in line
+    )
+    declared = [route_call[i + 1] for i, item in enumerate(route_call) if item == "--path"]
+    assert declared == ["/", well_known, "/shared"]
+
+
 def test_the_endpoint_is_reserved_before_its_route(bin_dir: Path, tmp_path: Path) -> None:
     registry = tmp_path / "registry.json"
     log = _helper(bin_dir, registry)
