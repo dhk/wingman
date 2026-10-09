@@ -380,6 +380,8 @@ def record_verified_pending(
     store: OAuthOnboardingStore,
     issuer: str,
     subject: str,
+    *,
+    now: float | None = None,
 ) -> PendingResult:
     """Queue an identity only if the current on-disk map is still unbound.
 
@@ -392,7 +394,7 @@ def record_verified_pending(
     with _identity_map_lock(identity_path):
         if _identity_map_or_empty(identity_path).slug_for(issuer, subject) is not None:
             return PendingResult.ALREADY_BOUND
-        return store.record_pending(issuer, subject)
+        return store.record_pending(issuer, subject, now=now)
 
 
 def pending_recorder(
@@ -409,14 +411,17 @@ def pending_recorder(
     from wingman.infrastructure.operator_notify import PendingNotice
 
     def record(issuer: str, subject: str) -> PendingResult:
-        result = record_verified_pending(identity_path, store, issuer, subject)
+        # One timestamp for the row and the notice, so the task's "first seen"
+        # is exactly what oauth-pending shows.
+        seen_at = time.time()
+        result = record_verified_pending(identity_path, store, issuer, subject, now=seen_at)
         if result is PendingResult.ADDED and notifier is not None:
             try:
                 notifier.notify(
                     PendingNotice(
                         issuer=issuer,
                         reference=pending_reference(issuer, subject),
-                        first_seen=time.time(),
+                        first_seen=seen_at,
                     )
                 )
             except Exception as exc:  # noqa: BLE001 — notification never blocks admission
