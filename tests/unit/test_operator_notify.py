@@ -141,6 +141,25 @@ def test_a_failed_notification_warns_once_without_the_token_and_still_records(
     assert "user_taylor" not in caplog.text
 
 
+def test_the_notice_carries_the_first_seen_time_stored_in_the_row(tmp_path: Path) -> None:
+    # Codex review on #574: the notice used a second time.time(), so the task
+    # and the oauth-pending row could disagree.
+    notices: list[PendingNotice] = []
+
+    class Capturing(TodoistNotifier):
+        def notify(self, notice: PendingNotice) -> None:
+            notices.append(notice)
+
+    identities = tmp_path / "oauth-identities.toml"
+    store = OAuthOnboardingStore(onboarding_path_for(identities))
+    record = pending_recorder(identities, store, Capturing(TOKEN, identities_path=identities))
+
+    assert record(ISSUER, "user_taylor") is PendingResult.ADDED
+    (row,) = store.pending()
+    (notice,) = notices
+    assert notice.first_seen == row.first_seen
+
+
 def test_a_notifier_that_raises_cannot_break_recording(tmp_path: Path) -> None:
     class Exploding(TodoistNotifier):
         def notify(self, notice: PendingNotice) -> None:
