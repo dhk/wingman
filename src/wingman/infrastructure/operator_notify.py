@@ -21,7 +21,8 @@ from urllib.parse import urlparse
 from wingman.infrastructure.logs import get_logger
 
 # Todoist unified API v1 (REST v2 is superseded): POST /api/v1/tasks, Bearer
-# auth, JSON body with content / description / project_id. Endpoint and field
+# auth, JSON body with content / description / due_string / project_id.
+# due_string "today" is parsed in the token owner's own Todoist timezone. Endpoint and field
 # names as used by Doist's own SDK:
 # https://github.com/Doist/todoist-api-python (todoist_api_python/_core/endpoints.py,
 # API_VERSION = "v1", TASKS_PATH = "tasks"); reference: https://developer.todoist.com/api/v1/
@@ -88,6 +89,8 @@ class TodoistNotifier:
                 "Find the row by its ref:\n"
                 f"wingman tenant oauth-pending --identities {self.identities_path}"
             ),
+            # Someone is locked out until this is done; it belongs on today's list.
+            "due_string": "today",
         }
         if self.project_id:
             body["project_id"] = self.project_id

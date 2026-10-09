@@ -874,8 +874,8 @@ WINGMAN_OPERATOR_TODOIST_PROJECT_ID=...   # optional
 
 Restart the shared service; its startup output then includes "Operator
 notification: a Todoist task for each newly queued sign-in". The first time an
-identity is queued it creates one task, "Wingman: sign-in awaiting approval
-(ref XXXX-XXXX)", whose description has the issuer host, first-seen time and
+identity is queued it creates one task, due today, "Wingman: sign-in awaiting
+approval (ref XXXX-XXXX)", whose description has the issuer host, first-seen time and
 the `oauth-pending` command. No subject, email or token is sent. Repeat
 sign-ins and restarts do not create more tasks. A failed call is logged once
 as a WARNING and never changes the refusal. Delivery is **best effort**, not
