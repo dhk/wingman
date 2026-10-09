@@ -695,7 +695,7 @@ Description=Upgrade every wingman shape-B user (#125)
 
 [Service]
 Type=oneshot
-Environment=WINGMAN_UPGRADE_USERS=dhk,trent,wingman-shared
+Environment=WINGMAN_UPGRADE_USERS=dhk,trent
 Environment=WINGMAN_UPGRADE_SOURCE_trent=/home/dhk/src/wingman
 ExecStart=/root/.local/bin/wingman-upgrade-all
 ```
@@ -707,15 +707,18 @@ outright since that checkout was never meant to exist. Any local-path-shape
 user needs their own `WINGMAN_UPGRADE_SOURCE_<username>` line, pointed at
 whichever checkout-shape user's already-pulled checkout they install from.
 
-`wingman-shared` (§9's shared multi-tenant account) needs no override —
-it's checkout-shape just like dhk (its own real deploy-key-backed
-checkout at `~/src/wingman`, §9), so it sweeps into the same rotation
-with nothing beyond adding its name to the list. `systemctl --user
-restart wingman-mcp.service` after its `git pull` restarts the ONE
-shared process — briefly interrupting every tenant on it (Jason, Bob,
-...) at once, the same accepted code-upgrade trade-off shape-B accounts
-already take for themselves; only config/token changes (`wingman tenant
-rotate-token`) avoid a restart, per RFC-048.
+**Never list `wingman-shared`** (§9's shared multi-tenant account) here
+(#577). This sweep reinstalls each account and bare-restarts its
+`wingman-mcp.service`; for the shared process that is
+`wingman-redeploy-shared.sh`'s job, which stops it, waits for the port to
+free, then starts it (#415). Listed in both, one `wg upgrade-all`
+reinstalled under the running process and restarted it twice at once:
+`ImportError`s and an address-in-use restart loop that took every tenant
+down for about a minute. `wingman-upgrade-all` now skips that account with
+a `[skipped]` line even when it is listed (`WINGMAN_SHARED_USER` names it,
+same as the redeploy script). So the nightly timer does not upgrade the
+shared process — deliberately, since that restart interrupts every tenant;
+upgrade it with `wg redeploy-shared` or `wg upgrade-all`.
 
 `/etc/systemd/system/wingman-upgrade-all.timer`:
 
