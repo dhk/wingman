@@ -74,25 +74,26 @@ except ValueError:
     raise SystemExit(1)
 target = sys.argv[1]
 
-
-def ours(proxy):
-    # The port itself, or a path on it: the RFC 9728 root metadata route
-    # proxies to /.well-known/... on this port, and an exact-target match
-    # left it live on the funnel and claimed by nobody.
-    return proxy == target or str(proxy or "").startswith(target + "/")
-
-
-paths = sorted(
-    {
-        path
-        for host in (payload.get("Web") or {}).values()
-        for path, handler in ((host or {}).get("Handlers") or {}).items()
-        if ours((handler or {}).get("Proxy"))
-    }
-)
+# Only routes whose proxy is exactly this port. The registry records ONE
+# target per service and service-registry check requires every declared
+# route to proxy to it exactly, so a route that proxies to a path on the port
+# (the RFC 9728 root metadata route, /.well-known/... -> :PORT/.well-known/...)
+# cannot be declared without marking the whole service stale. Those are
+# reported on stderr instead, so the gap stays visible (2026-10-09 deploy).
+paths = set()
+unrecorded = set()
+for host in (payload.get("Web") or {}).values():
+    for path, handler in ((host or {}).get("Handlers") or {}).items():
+        proxy = str((handler or {}).get("Proxy") or "")
+        if proxy == target:
+            paths.add(path)
+        elif proxy.startswith(target + "/"):
+            unrecorded.add(path)
+for path in sorted(unrecorded):
+    print(f"not declared (registry holds one target per service): {path}", file=sys.stderr)
 if not paths:
     raise SystemExit(1)
-print("\n".join(paths))
+print("\n".join(sorted(paths)))
 ' "http://127.0.0.1:$PORT"
 }
 
@@ -141,14 +142,30 @@ ROUTE_ARGS=()
 for path in "${PATHS[@]}"; do
   ROUTE_ARGS+=(--path "$path")
 done
-"$HELPER" --registry "$REGISTRY" \
+# The helper refuses to change an existing service's route set ("already has
+# different routes; migrate it explicitly") and has no migrate command:
+# changing routes means releasing the entry and declaring it again. Say so
+# with the exact commands instead of a bare failure (2026-10-09 deploy).
+if ! route_output="$("$HELPER" --registry "$REGISTRY" \
   --static-range "$STATIC_RANGE" --dynamic-range "$DYNAMIC_RANGE" \
   reserve-route "$SERVICE_ID" \
   --host tailscale-self \
   --https-port 443 \
   "${ROUTE_ARGS[@]}" \
   --mode funnel \
-  --target "http://127.0.0.1:$PORT"
+  --target "http://127.0.0.1:$PORT" 2>&1)"; then
+  printf '%s\n' "$route_output" >&2
+  case "$route_output" in
+    *"different routes"*)
+      echo "The funnel paths changed since $SERVICE_ID was declared. The registry is a" >&2
+      echo "ledger only (nothing routes through it); re-declare with:" >&2
+      echo "  sudo $HELPER --registry $REGISTRY release $SERVICE_ID --yes" >&2
+      echo "  sudo $0" >&2
+      ;;
+  esac
+  exit 1
+fi
+printf '%s\n' "$route_output"
 
 say "3/3 verifying the ledger records what was declared"
 # Not ceremony. A helper predating multi-path support (dhk/minority-report#21)

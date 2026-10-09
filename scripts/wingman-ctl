@@ -345,15 +345,29 @@ cmd_upgrade_all() {
   # and refusing to update the process that serves every tenant because
   # somebody's personal CLI could not be reinstalled is the wrong trade.
   say "→ [2/2] redeploying the shared multi-tenant process…"
-  cmd_redeploy_shared || shared_ok=0
+  local registry_stale=0 shared_rc=0
+  cmd_redeploy_shared || shared_rc=$?
+  # 3 = the redeploy script's "healthy, serving, registry ledger not updated":
+  # a bookkeeping gap, not an outage, so it must not get the outage wording.
+  if [ "$shared_rc" = 3 ]; then
+    registry_stale=1
+  elif [ "$shared_rc" != 0 ]; then
+    shared_ok=0
+  fi
 
   # Never silent about a partial run: say which half did not happen, and
   # exit non-zero so a caller can tell. The redeploy script's own failures
   # leave the running process alone ("nothing was killed"), so a partial
   # result here means stale, not broken.
-  if [ "$accounts_ok" = 1 ] && [ "$shared_ok" = 1 ]; then
+  if [ "$accounts_ok" = 1 ] && [ "$shared_ok" = 1 ] && [ "$registry_stale" = 0 ]; then
     say "Done — per-account CLIs and the shared process are both current."
     return 0
+  fi
+  if [ "$accounts_ok" = 1 ] && [ "$shared_ok" = 1 ]; then
+    say "Done, except the host service registry: the shared process is current,"
+    say "  healthy and serving every tenant, but its registry entry was not updated."
+    say "  Nothing is down. The redeploy output above has the commands to fix it."
+    return 3
   fi
   say ""
   # Two failures, two different truths — and saying the wrong one is worse
@@ -365,6 +379,10 @@ cmd_upgrade_all() {
   if [ "$accounts_ok" != 1 ]; then
     say "INCOMPLETE: the per-account CLI upgrade did not run."
     say "  Those accounts keep the build they already had — stale, not broken."
+  fi
+  if [ "$registry_stale" = 1 ]; then
+    say "NOTE: the shared process is healthy and serving, but its host service"
+    say "  registry entry was not updated (commands in the redeploy output above)."
   fi
   if [ "$shared_ok" != 1 ]; then
     say "INCOMPLETE: the shared multi-tenant process did not come up cleanly."

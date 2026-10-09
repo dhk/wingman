@@ -151,12 +151,13 @@ def test_declares_every_funnel_path_that_points_at_wingmans_port(
     assert "/alexandria" not in declared
 
 
-def test_claims_the_oauth_metadata_route_that_proxies_to_a_path_on_wingmans_port(
+def test_a_route_that_proxies_to_a_path_is_reported_not_declared(
     bin_dir: Path, tmp_path: Path
 ) -> None:
-    # The RFC 9728 root metadata route proxies to a PATH on wingman's port,
-    # so an exact-target match left it live on the funnel and claimed by
-    # nobody in the registry.
+    # The registry holds ONE target per service and `check` requires every
+    # declared route to proxy to it exactly. Declaring the RFC 9728 root
+    # metadata route (which proxies to a PATH on the port) marked the whole
+    # service stale on lobster (2026-10-09), so it is reported instead.
     well_known = "/.well-known/oauth-protected-resource/shared/mcp"
     funnel = json.loads(json.dumps(FUNNEL))
     handlers = funnel["Web"]["lobster.example.ts.net:443"]["Handlers"]
@@ -174,7 +175,36 @@ def test_claims_the_oauth_metadata_route_that_proxies_to_a_path_on_wingmans_port
         json.loads(line) for line in log.read_text().splitlines() if "reserve-route" in line
     )
     declared = [route_call[i + 1] for i, item in enumerate(route_call) if item == "--path"]
-    assert declared == ["/", well_known, "/shared"]
+    assert declared == ["/", "/shared"]
+    assert f"not declared (registry holds one target per service): {well_known}" in (result.stderr)
+    assert "/other" not in result.stderr
+
+
+def test_a_changed_route_set_explains_how_to_redeclare(bin_dir: Path, tmp_path: Path) -> None:
+    # The real helper refuses to change an existing route set and has no
+    # migrate command; the script must say how to re-declare, not just fail.
+    registry = tmp_path / "registry.json"
+    helper = bin_dir / "service-registry"
+    helper.write_text(
+        "#!/usr/bin/env bash\n"
+        'for arg in "$@"; do\n'
+        '  if [ "$arg" = reserve-route ]; then\n'
+        '    echo "service-registry: wingman already has different routes;'
+        ' migrate it explicitly" >&2\n'
+        "    exit 1\n"
+        "  fi\n"
+        "done\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    _tailscale(bin_dir, FUNNEL)
+
+    result = _run(bin_dir, registry)
+
+    assert result.returncode == 1
+    assert "already has different routes" in result.stderr
+    assert "release wingman --yes" in result.stderr
 
 
 def test_the_endpoint_is_reserved_before_its_route(bin_dir: Path, tmp_path: Path) -> None:
