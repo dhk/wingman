@@ -27,6 +27,7 @@ class CompanySource(BaseModel):
     company_name: str
     url: str
     label: str | None = None
+    paused: bool = False
     retain: bool = False
     added_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

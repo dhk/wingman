@@ -1329,6 +1329,20 @@ class Storage:
         self._conn.commit()
         return True
 
+    def set_company_source_paused(self, company_key: str, url: str, paused: bool) -> None:
+        row = self._conn.execute(
+            "SELECT payload FROM company_sources WHERE company_key = ? AND url = ?",
+            (company_key, url),
+        ).fetchone()
+        if row is None:
+            raise ValueError("unknown approved source")
+        source = CompanySource.model_validate_json(row[0]).model_copy(update={"paused": paused})
+        self._conn.execute(
+            "UPDATE company_sources SET payload = ? WHERE company_key = ? AND url = ?",
+            (source.model_dump_json(), company_key, url),
+        )
+        self._conn.commit()
+
     def set_company_source_retention(self, company_key: str, url: str, retain: bool) -> bool:
         """Flip the retain flag on an already-approved source; False if unknown.
 
