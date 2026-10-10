@@ -3,12 +3,9 @@
 Entirely deterministic — no model calls. Three operations:
 
 - add_person: manual watchlist entry, optionally with a Substack URL.
-- seed_from_connections: create Person records from a LinkedIn export's
-  Connections.csv. Deliberate PII minimization: names, profile URLs, company,
-  position, and connection date are kept; email addresses are never read into
-  a Person, and the CSV itself is not copied into the workspace — the
-  SourceRecord's locator points at the export zip on the user's disk, and its
-  content hash proves which bytes were consumed.
+- seed_from_connections: upsert the owner's address book from an explicit
+  LinkedIn export, including emails and extra identifying columns. Private
+  fields and source provenance stay local; reports never render addresses.
 - fetch_person_feed: read a person's public sources — Substack, any RSS 2.0
   or Atom feed (Medium, WordPress, Ghost), or a configured blog index page
   on a feed-less site (RFC-009/RFC-011) — storing each post as an immutable
@@ -39,6 +36,7 @@ from wingman.application.corpus import extract_document
 from wingman.application.ingest import IngestError
 from wingman.domain import SourceRecord
 from wingman.domain.person import (
+    ConnectionImport,
     ExternalDocument,
     ExternalEvidenceHit,
     FeedAttribution,
@@ -62,6 +60,7 @@ _ATOM_NS = "{http://www.w3.org/2005/Atom}"
 class ConnectionsSeedReport(BaseModel):
     created: int
     skipped_existing: int
+    updated: int = 0
     skipped_incomplete: int
 
 
@@ -123,8 +122,7 @@ def add_person(
     """Add a person to the watchlist; updates the existing record if the name is known.
 
     Returns (person, created) — created is False when an existing person was
-    updated. email is a manual-entry field only: imports never read email
-    addresses. A passed substack_url's derived feed (<url>/feed) is verified
+    updated. email is private address-book data, also populated by explicit imports. A passed substack_url's derived feed (<url>/feed) is verified
     real and parseable before it's stored — nothing is written if it isn't
     (#483); fetcher exists only as the test seam, matching every other feed
     function in this module (fetch_person_feed, discover_feed, ...). strict
@@ -273,7 +271,7 @@ def _connections_rows(raw: str) -> list[dict[str, str]]:
 
 
 def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSeedReport:
-    """Create Person records from a LinkedIn export's Connections.csv."""
+    """Upsert private address-book fields from a LinkedIn export's Connections.csv."""
     try:
         with zipfile.ZipFile(export_path) as archive:
             entry_name = next(
@@ -303,8 +301,9 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
     content_hash = hashlib.sha256(raw_bytes).hexdigest()
     record = storage.get_source_record_by_hash(content_hash)
     if record is None:
-        # The CSV holds contact emails, so the bytes stay in the user's export
-        # zip — only the locator and hash are recorded (PII minimization).
+        # The owner authorized importing their address book, including emails.
+        # Rows stay in the local database; the original zip remains the source
+        # artifact. Record its locator/hash without copying or transmitting it.
         record = SourceRecord(
             source_type="linkedin_connections",
             source_locator=f"{export_path}!{entry_name}",
@@ -313,6 +312,7 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
         storage.add_source_record(record)
 
     created = 0
+    updated_count = 0
     skipped_existing = 0
     skipped_incomplete = 0
     for row in rows:
@@ -322,17 +322,64 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
         if not name:
             skipped_incomplete += 1
             continue
+        fields = {
+            key: value.strip()
+            for key, value in row.items()
+            if isinstance(key, str) and isinstance(value, str) and value.strip()
+        }
+        imported = ConnectionImport(source_record_id=record.record_id, fields=fields)
         person = Person(
             name=name,
             origin=PersonOrigin.LINKEDIN_CONNECTIONS,
-            linkedin_url=(row.get("URL") or "").strip() or None,
+            email=fields.get("Email Address"),
+            connection_fields=fields,
+            connection_imports=[imported],
+            linkedin_url=fields.get("URL")
+            or fields.get("LinkedIn URL")
+            or fields.get("Profile URL"),
             company=(row.get("Company") or "").strip() or None,
             position=(row.get("Position") or "").strip() or None,
             connected_on=(row.get("Connected On") or "").strip() or None,
             source_record_id=record.record_id,
         )
-        if storage.find_person_by_name_key(person.name_key) is not None:
-            skipped_existing += 1
+        existing = storage.find_person_by_name_key(person.name_key)
+        if existing is not None:
+            history = list(existing.connection_imports)
+            if existing.source_record_id and not history:
+                history.append(
+                    ConnectionImport(
+                        source_record_id=existing.source_record_id,
+                        fields={
+                            key: str(value)
+                            for key, value in {
+                                "Company": existing.company,
+                                "Position": existing.position,
+                                "Connected On": existing.connected_on,
+                                "URL": existing.linkedin_url,
+                                "Email Address": existing.email,
+                            }.items()
+                            if value
+                        },
+                    )
+                )
+            if imported not in history:
+                history.append(imported)
+            merged = existing.model_copy(
+                update={
+                    **{
+                        key: getattr(person, key) or getattr(existing, key)
+                        for key in ("linkedin_url", "email", "company", "position", "connected_on")
+                    },
+                    "source_record_id": existing.source_record_id or record.record_id,
+                    "connection_fields": {**existing.connection_fields, **fields},
+                    "connection_imports": history,
+                }
+            )
+            if merged == existing:
+                skipped_existing += 1
+            else:
+                storage.update_person(merged)
+                updated_count += 1
             continue
         storage.add_person(person)
         created += 1
@@ -345,6 +392,7 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
     )
     return ConnectionsSeedReport(
         created=created,
+        updated=updated_count,
         skipped_existing=skipped_existing,
         skipped_incomplete=skipped_incomplete,
     )

@@ -3050,7 +3050,7 @@ def people_add(
     email: str = "",
 ) -> str:
     """Add a person to the watchlist (or update them), optionally with their Substack URL,
-    LinkedIn URL, and email (manual entry only — imports never read emails).
+    LinkedIn URL, and email (private address-book field; also imported from Connections.csv).
 
     substack_url is for a Substack blog specifically — its feed is verified at
     <url>/feed before being stored, and the call fails loudly (nothing is written) if
@@ -4631,7 +4631,7 @@ def feed_attach(person_name: str, url: str, kind: str = "rss", organization: str
 
 @server.tool()
 def people_import_connections(export_path: str) -> str:
-    """Seed the watchlist from a LinkedIn export zip's Connections.csv (names/roles only, never emails)."""
+    """Seed the watchlist from a LinkedIn export zip's Connections.csv (private contact identifiers, including emails)."""
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
@@ -4641,7 +4641,7 @@ def people_import_connections(export_path: str) -> str:
     except IngestError as exc:
         return f"import failed: {exc}"
     return (
-        f"Created: {report.created}  Already known: {report.skipped_existing}  "
+        f"Created: {report.created}  Updated: {report.updated}  Unchanged: {report.skipped_existing}  "
         f"Incomplete rows skipped: {report.skipped_incomplete}"
     )
 

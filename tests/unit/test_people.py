@@ -146,7 +146,7 @@ def test_add_person_strict_false_stores_despite_unverifiable_feed(
         assert person.substack_url == "https://someone.example.com"
 
 
-def test_seed_from_connections_keeps_names_never_emails(workspace: Path, tmp_path: Path) -> None:
+def test_seed_from_connections_keeps_private_identifiers(workspace: Path, tmp_path: Path) -> None:
     config = load_config()
     export = connections_zip(
         tmp_path,
@@ -163,8 +163,8 @@ def test_seed_from_connections_keeps_names_never_emails(workspace: Path, tmp_pat
         assert mario.origin == PersonOrigin.LINKEDIN_CONNECTIONS
         assert mario.company == "GoSimple"
         assert mario.source_record_id is not None
-        # PII minimization: the email never lands anywhere in the workspace
-        assert "mario@example.com" not in mario.model_dump_json()
+        assert mario.email == "mario@example.com"
+        assert mario.connection_imports[0].source_record_id == mario.source_record_id
         record = storage.get_source_record(mario.source_record_id)
         assert record is not None and record.source_type == "linkedin_connections"
         # the locator names the actual (nested) entry that was consumed, and
@@ -362,3 +362,52 @@ def test_delete_person_not_found_raises(workspace: Path) -> None:
     with Storage(config.db_path) as storage:
         with pytest.raises(IngestError, match="no person matching"):
             delete_person("Nobody Here", storage)
+
+
+def test_connections_upsert_backfills_and_keeps_blank_fields(
+    workspace: Path, tmp_path: Path
+) -> None:
+    config = load_config()
+    export = connections_zip(
+        tmp_path,
+        "Jane,Author,https://linkedin.com/in/jane,jane@example.com,New Co,CEO,01 Jan 2026\n",
+    )
+    with Storage(config.db_path) as storage:
+        original, _ = add_person("Jane Author", storage, company="Old Co", position="Engineer")
+        add_person("Absent Person", storage)
+        report = seed_from_connections(export, storage)
+        updated = storage.get_person(original.person_id)
+        assert updated.email == "jane@example.com"
+        assert updated.company == "New Co" and updated.position == "CEO"
+        assert report.updated == 1
+        blanker = connections_zip(tmp_path, "Jane,Author,,,,,\nNew,Person,,,,,\n")
+        report = seed_from_connections(blanker, storage)
+        kept = storage.get_person(original.person_id)
+        assert kept.email == updated.email and kept.company == updated.company
+        assert kept.linkedin_url == updated.linkedin_url
+        assert storage.count_people() == 3 and report.created == 1
+
+
+def test_connections_preserve_extra_identifiers_and_prior_imports(
+    workspace: Path, tmp_path: Path
+) -> None:
+    config = load_config()
+    export = tmp_path / "contacts.zip"
+    with zipfile.ZipFile(export, "w") as archive:
+        archive.writestr(
+            "Connections.csv",
+            "First Name,Last Name,Profile URL,Email Address,Phone,Title History\nJane,Author,https://linkedin.com/in/jane,jane@example.com,555-0100,Engineer\n",
+        )
+    with Storage(config.db_path) as storage:
+        seed_from_connections(export, storage)
+        before = storage.find_person_by_name_key("jane author")
+        assert before.linkedin_url == "https://linkedin.com/in/jane"
+        assert before.connection_fields["Phone"] == "555-0100"
+        assert before.connection_fields["Title History"] == "Engineer"
+        changed = connections_zip(tmp_path, "Jane,Author,,new@example.com,New Co,CEO,\n")
+        seed_from_connections(changed, storage)
+        after = storage.get_person(before.person_id)
+        assert after.email == "new@example.com"
+        assert after.connection_fields["Phone"] == "555-0100"
+        assert len(after.connection_imports) == 2
+        assert after.connection_imports[0].fields["Email Address"] == "jane@example.com"
