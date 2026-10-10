@@ -1688,3 +1688,74 @@ EOF
 the placeholder default compiled into `gdrive_auth.py`). These aren't
 per-account secrets — the same client id identifies the app for every
 account on the box, so they live in `wingman.env`, not `secrets.env`.
+
+### Temporary OAuth identity investigation (#582)
+
+`WINGMAN_OAUTH_IDENTITY_DIAGNOSTICS=1` enables an operator-only local log
+probe; any other value (including unset) disables it. Enable only for an
+announced, short diagnostic window on the shared process. It observes every
+valid identity using that process during the window, not just the tester.
+There is no new endpoint, tool, credential, or admission behavior.
+
+After normal signature/issuer/expiry/audience or browser-client validation,
+`wingman.oauth_diagnostics` emits JSON tagged `oauth_identity_diagnostic`:
+known claim names, a count of unfamiliar names, strict boolean email
+verification flags (missing/malformed is null), and whether the complete
+subject was seen on the other configured surface. Browser code exchange
+also reports known user-field names, verification, and whether response
+`user.id` equals the verified session-token subject. No token, code, secret,
+email value, issuer value, subject value, digest, scope value, or user profile
+value is emitted by this probe. Existing application logging is unchanged.
+
+The cross-surface observation uses process-random HMAC digests held only in
+memory, expires after ten minutes, and is capped at 64 observations. A false
+result means **not observed matching**, not proof of different identities:
+restart, expiry, the cap, or different worker processes can cause it. Each
+surface/subject emits once per window. Use a fresh browser login and a read-only
+Claude connector request in the same process/window; whichever is second
+can report a match. The exchange observation requires a fresh browser login;
+a previously authenticated setup page does not repeat the code exchange.
+This compares subject values across the two operator-configured trusted
+surfaces solely for research, and never changes tenant bindings.
+
+Known custom names include `urn:wingman:email`,
+`urn:wingman:email_verified`, and `urn:myapp:email`. Other names are counted
+rather than printed because even a claim name could contain sensitive text.
+The custom verification flag is reported separately from `email_verified`.
+The probe does not establish which sign-in provider was used; correlate the
+controlled Google sign-in separately.
+
+**Userinfo (MCP surface).** The first time a subject is seen on the MCP
+surface in a window, a background daemon thread (never the request path, never
+admission) sends that same already-validated access token to the configured
+issuer's own `…/oauth2/userinfo` (GET; one POST retry on 405; 5 s timeout).
+The token is sent only when the issuer is https and the endpoint is on the
+issuer's own host; otherwise the line says `"status": "refused-issuer"`. It
+logs `surface: "mcp_userinfo"`, the HTTP status (or the exception class name),
+which known fields came back (`sub`, `email`, `email_verified`, `name`,
+`given_name`, `family_name`, `picture`, `updated_at`; others counted), the
+strict boolean `email_verified`, and `sub_matches_verified_sub`. Never the
+token, the body, the email, the subject or any header. This answers whether
+Claude's resource-bound token can read a verified email without a management
+API key or a WorkOS JWT template.
+
+**Procedure** (on lobster; one short window, announced):
+
+1. Add `WINGMAN_OAUTH_IDENTITY_DIAGNOSTICS=1` as a line in
+   `/home/wingman-shared/.config/wingman/wingman.env`.
+2. `wg redeploy-shared`.
+3. Within ten minutes: a fresh browser login at
+   https://lobster.tail08dfce.ts.net/shared/login (sign out first, or use a
+   private window, so the code exchange actually happens), **and** one
+   read-only tool call through the Claude connector
+   (https://lobster.tail08dfce.ts.net/shared/mcp), e.g. ask "what's my status?".
+4. Read the lines:
+   `journalctl _UID=$(id -u wingman-shared) --since "15 min ago" | grep oauth_identity_diagnostic`
+5. Remove the line from `wingman.env`, then `wg redeploy-shared` again.
+
+This code is temporary: it is removed in a follow-up PR once #582 closes.
+
+Review and authorize deployment/restart separately. After collecting the
+sanitized lines, unset the environment variable and restart to remove the
+in-memory observations; retain or remove sanitized logs under the host's
+normal policy. Do not paste complete authentication responses into an issue.
