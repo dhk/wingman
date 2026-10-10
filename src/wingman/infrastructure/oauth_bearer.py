@@ -276,6 +276,9 @@ def validate_access_token(
         scopes = tuple(raw_scope)
     else:
         raise BearerError("malformed-scope")
+    from wingman.infrastructure.oauth_diagnostics import observe_verified
+
+    observe_verified("mcp", claims, token=token, issuer=settings.issuer)
     return BearerIdentity(issuer=settings.issuer, subject=subject, scopes=scopes)
 
 
