@@ -3918,7 +3918,7 @@ def company_add_source(
     retain: bool | None = typer.Option(
         None,
         "--retain/--no-retain",
-        help="Also keep the page's text as a citable document for this company (RFC-060).",
+        help="Keep citable prose; defaults on for new about-labelled sources (RFC-060).",
     ),
 ) -> None:
     """Approve one research URL for a company — adding it IS the approval (RFC-015).
@@ -3928,8 +3928,9 @@ def company_add_source(
 
     --retain additionally KEEPS the fetched page's prose as a document
     attributed to the company, so 'company pov' and 'evidence' can quote it.
-    Off by default: it suits a values or about page that changes twice a
-    year, not a careers page that would re-store on every run. It changes
+    On by default for new sources labelled about; off for other labels.
+    Use --no-retain to opt out. Retention suits durable prose rather than
+    careers indexes that change on every run. It changes
     nothing about the fetch — same page, same one GET. Re-run with
     --retain/--no-retain on an already-approved source to change your mind.
     """

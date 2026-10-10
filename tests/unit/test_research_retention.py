@@ -2,12 +2,13 @@
 
 RFC-015 keeps a hash of the page and throws the words away, which answers
 "did this change" and makes a values page permanently unquotable. These
-tests pin the opt-in that keeps the prose too — and, just as importantly,
+tests pin per-source retention that keeps the prose too — and, just as importantly,
 pin WHICH extraction is stored, because the snapshot pipeline's
 hash-oriented text does not survive the verbatim-quote gate.
 """
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -155,7 +156,7 @@ def test_retained_body_survives_the_verbatim_quote_gate(config: Config, storage:
 
 def test_company_pov_can_quote_a_retained_research_page(config: Config, storage: Storage) -> None:
     """The user-visible payoff: a company with no feed gets a real stance."""
-    _approve(storage, retain=True)
+    add_company_source("Northwind Labs", VALUES_URL, storage, label="about")
     research_company("Northwind Labs", config, storage, fetcher=lambda url: VALUES_PAGE)
     doc_id = storage.list_external_documents()[0].doc_id
     provider = ScriptedProvider(
@@ -192,7 +193,7 @@ def test_company_pov_can_quote_a_retained_research_page(config: Config, storage:
 
 
 def test_a_non_retained_source_keeps_nothing(config: Config, storage: Storage) -> None:
-    """Default OFF: today's behaviour, byte for byte."""
+    """An explicit opt-out keeps only the snapshot."""
     _approve(storage, retain=False)
     report = research_company("Northwind Labs", config, storage, fetcher=lambda url: VALUES_PAGE)
 
@@ -303,3 +304,80 @@ def test_rename_keeps_lineage_so_a_refetch_still_supersedes(
 
     assert report.results[0].retained == "replaced"
     assert len(storage.list_external_documents()) == 1
+
+
+def test_missing_company_prose_points_to_retention(storage: Storage) -> None:
+    from wingman.application.ingest import IngestError
+
+    _approve(storage, retain=False)
+    with pytest.raises(IngestError, match="--retain"):
+        build_company_pov("Northwind Labs", storage, ScriptedProvider({}))
+
+
+@pytest.mark.parametrize("label", ["about", " About ", "ABOUT"])
+def test_about_retains_by_default(storage: Storage, label: str) -> None:
+    source, _ = add_company_source("Northwind Labs", VALUES_URL, storage, label=label)
+    assert source.retain is True
+
+
+def test_explicit_about_opt_out_survives_repeat_add(storage: Storage) -> None:
+    add_company_source("Northwind Labs", VALUES_URL, storage, label="about", retain=False)
+    source, created = add_company_source("Northwind Labs", VALUES_URL, storage, label="about")
+    assert created is False
+    assert source.retain is False
+
+
+def test_legacy_about_migrates_once_and_next_fetch_keeps_prose(config: Config) -> None:
+    with Storage(config.db_path) as storage:
+        add_company_source("Northwind Labs", VALUES_URL, storage, label=" About ", retain=False)
+        add_company_source("Northwind Labs", "https://northwind.example/careers", storage)
+        research_company("Northwind Labs", config, storage, fetcher=lambda url: VALUES_PAGE)
+        snapshot = storage.get_research_snapshot("northwind labs", VALUES_URL)
+    # Simulate a pre-#463 workspace, including a field from a newer release.
+    with sqlite3.connect(config.db_path) as db:
+        db.execute("DROP TABLE IF EXISTS schema_migrations")
+        payload = json.loads(
+            db.execute(
+                "SELECT payload FROM company_sources WHERE url = ?", (VALUES_URL,)
+            ).fetchone()[0]
+        )
+        payload["future_field"] = "preserve me"
+        db.execute(
+            "UPDATE company_sources SET payload = ? WHERE url = ?",
+            (json.dumps(payload), VALUES_URL),
+        )
+    with Storage(config.db_path) as storage:
+        sources = {source.url: source for source in storage.list_company_sources("northwind labs")}
+        assert sources[VALUES_URL].retain is True
+        assert sources["https://northwind.example/careers"].retain is False
+        assert storage.get_research_snapshot("northwind labs", VALUES_URL) == snapshot
+        calls = []
+
+        def fetch(url: str) -> bytes:
+            calls.append(url)
+            return VALUES_PAGE
+
+        report = research_company("Northwind Labs", config, storage, fetcher=fetch)
+        assert (
+            next(result for result in report.results if result.url == VALUES_URL).retained
+            == "stored"
+        )
+        assert calls.count(VALUES_URL) == 1
+        assert len(storage.list_external_documents()) == 1
+        with sqlite3.connect(config.db_path) as db:
+            payload = json.loads(
+                db.execute(
+                    "SELECT payload FROM company_sources WHERE url = ?", (VALUES_URL,)
+                ).fetchone()[0]
+            )
+            assert payload["future_field"] == "preserve me"
+        storage.set_company_source_retention("northwind labs", VALUES_URL, False)
+    with Storage(config.db_path) as storage:
+        assert (
+            next(
+                source
+                for source in storage.list_company_sources("northwind labs")
+                if source.url == VALUES_URL
+            ).retain
+            is False
+        )
