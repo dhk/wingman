@@ -227,7 +227,8 @@ def test_person_export_is_landscape_three_columns_with_links(workspace: Path) ->
     assert 'href="https://jane.substack.com"' in text
     # related column: LinkedIn, mailto, and the company URL via the org feed
     assert 'href="https://linkedin.com/in/janeauthor"' in text
-    assert 'href="mailto:jane@explainco.com"' in text
+    assert "jane@explainco.com" not in text
+    assert "mailto:" not in text
     assert 'href="https://explainco.com/blog">ExplainCo (company)</a>' in text
     # deduped: the same URL appears once even though Jane also carries the feed
     assert text.count('href="https://explainco.com/blog"') == 1

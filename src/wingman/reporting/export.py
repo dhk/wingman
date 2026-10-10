@@ -559,8 +559,6 @@ def export_person(
     links: list[str] = []
     if person.linkedin_url:
         links.append(f"<li>{_link(person.linkedin_url, 'LinkedIn')}</li>")
-    if person.email:
-        links.append(f"<li>{_link(f'mailto:{person.email}', person.email)}</li>")
     if person.substack_url:
         links.append(f"<li>{_link(person.substack_url, 'Substack')}</li>")
     # The company link: any watched person's org-attributed feed for this

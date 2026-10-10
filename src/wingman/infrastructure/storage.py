@@ -824,6 +824,10 @@ class Storage:
             filled["origin"] = absorb.origin
         if not keep.connected_on and absorb.connected_on:
             filled["connected_on"] = absorb.connected_on
+        filled["connection_fields"] = {**absorb.connection_fields, **keep.connection_fields}
+        filled["connection_imports"] = keep.connection_imports + [
+            item for item in absorb.connection_imports if item not in keep.connection_imports
+        ]
         merged = keep.model_copy(update=filled) if filled else keep
         if filled:
             self.update_person(merged)

@@ -1434,3 +1434,10 @@ identity key" and "do not obtain `sub` from email".
   Claiming at sign-in is #585, designed after #582 establishes what each
   surface's token actually carries. Until #585 ships the superseded rules still
   describe what the running service does.
+
+
+### RFC-009 addendum (#422, #478) — Durable decision
+
+Explicit Connections.csv import now keeps the owner's address book, including Email Address and other non-empty identifying columns. This reverses the earlier email minimization decision at the owner's request: these addresses already exist in their export and enable local identity matching. They increase the private workspace's exposure if compromised; this import does not transmit them. Published person reports omit email addresses and private import metadata. Private workspace backups retain the database as before.
+
+Re-import upserts by the existing normalized-name identity: non-empty new values win, blank values preserve existing data, absent people are never deleted, and IDs, writing sources and user-authored records remain intact. Source locator and exact CSV-byte hash identify each import; private per-person import history retains the rows behind changed values. Extra columns are preserved rather than guessed into canonical fields. Reports distinguish created, updated and unchanged records, enabling email backfill by re-running the original export.
