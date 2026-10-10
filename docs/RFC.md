@@ -1434,3 +1434,8 @@ identity key" and "do not obtain `sub` from email".
   Claiming at sign-in is #585, designed after #582 establishes what each
   surface's token actually carries. Until #585 ships the superseded rules still
   describe what the running service does.
+
+
+### RFC-011 addendum (#474) — Durable decision
+
+The legacy `substack_url` field and `--substack` option now accept a writing URL without assuming a `/feed` endpoint. Add and fetch use bounded discovery: direct RSS/Atom, declared feeds, feed-shaped links, then conventional candidates. A verified endpoint is stored separately as `writing_feed_url`; old records are resolved when fetched. Errors identify the entered writing URL and distinguish no discoverable feed from an unreachable configured URL, suggesting explicit index-page attachment when appropriate. The existing field name remains for compatibility.

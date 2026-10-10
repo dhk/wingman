@@ -122,7 +122,7 @@ def test_add_person_rejects_a_substack_url_whose_feed_is_not_xml(
     monkeypatch.setattr(people_module, "fetch_url", lambda url: b"<html>not a feed</html>")
     config = load_config()
     with Storage(config.db_path) as storage:
-        with pytest.raises(IngestError, match="doesn't look like RSS/Atom"):
+        with pytest.raises(IngestError, match="no feed was discoverable"):
             add_person("Someone", storage, substack_url="https://someone.example.com")
         assert storage.find_person_by_name_key("someone") is None
 
@@ -202,7 +202,7 @@ def test_fetch_person_feed_indexes_new_posts(workspace: Path) -> None:
             return RSS_FEED
 
         report = fetch_person_feed(person, config, storage, fetcher=fake_fetch)
-        assert fetched == ["https://example.substack.com/feed"]
+        assert fetched == ["https://example.substack.com"]
         assert report.items == 3
         assert report.added == 2  # the empty post is skipped, not stored
         assert report.skipped_empty == 1
@@ -362,3 +362,58 @@ def test_delete_person_not_found_raises(workspace: Path) -> None:
     with Storage(config.db_path) as storage:
         with pytest.raises(IngestError, match="no person matching"):
             delete_person("Nobody Here", storage)
+
+
+def test_legacy_writing_url_discovers_declared_feed(workspace: Path) -> None:
+    from wingman.domain.person import Person
+
+    config = load_config()
+    url = "https://author.example.com/blog"
+    feed = "https://author.example.com/updates.xml"
+    person = Person(name="Author", origin=PersonOrigin.MANUAL, substack_url=url)
+    seen: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        seen.append(url)
+        return (
+            f'<link rel="alternate" type="application/rss+xml" href="{feed}">'.encode()
+            if url.endswith("/blog")
+            else RSS_FEED
+        )
+
+    with Storage(config.db_path) as storage:
+        storage.add_person(person)
+        report = fetch_person_feed(person, config, storage, fetcher=fetch)
+    assert report.added == 2
+    assert feed in seen and url + "/feed" not in seen
+
+
+def test_missing_writing_feed_names_entered_url(workspace: Path) -> None:
+    from wingman.domain.person import Person
+
+    config = load_config()
+    url = "https://author.example.com/blog"
+    person = Person(name="Author", origin=PersonOrigin.MANUAL, substack_url=url)
+    with Storage(config.db_path) as storage:
+        with pytest.raises(IngestError, match="no feed was discoverable") as error:
+            fetch_person_feed(person, config, storage, fetcher=lambda _: b"<html>Writing</html>")
+    assert url in str(error.value)
+    assert url + "/feed" not in str(error.value)
+
+
+def test_add_writing_url_stores_discovered_endpoint(workspace: Path) -> None:
+    url = "https://author.example.com/blog"
+    feed = "https://author.example.com/updates.xml"
+
+    def fetch(candidate: str) -> bytes:
+        if candidate == url:
+            return f'<link rel="alternate" type="application/rss+xml" href="{feed}">'.encode()
+        assert candidate == feed
+        return RSS_FEED
+
+    with Storage(load_config().db_path) as storage:
+        person, created = add_person("Author", storage, substack_url=url, fetcher=fetch)
+        assert created
+        assert person.substack_url == url
+        assert person.sources[0].url == feed
+        assert storage.get_person(person.person_id).writing_feed_url == feed

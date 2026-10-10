@@ -2,7 +2,7 @@
 
 Entirely deterministic — no model calls. Three operations:
 
-- add_person: manual watchlist entry, optionally with a Substack URL.
+- add_person: manual watchlist entry, optionally with a public writing URL.
 - seed_from_connections: create Person records from a LinkedIn export's
   Connections.csv. Deliberate PII minimization: names, profile URLs, company,
   position, and connection date are kept; email addresses are never read into
@@ -76,37 +76,22 @@ class FeedFetchReport(BaseModel):
     failed_sources: list[str] = Field(default_factory=list)
 
 
-def _verify_substack_feed(url: str, fetcher: Callable[[str], bytes]) -> None:
-    """Confirm <url>/feed is a real, fetchable, parseable RSS/Atom feed
-    before storing it as someone's substack_url (#483). Wrongly guessing
-    a non-Substack blog has its feed at /feed used to be discovered only
-    hours later, at overnight-fetch time, as a 404 — this fails loud at
-    write time instead, and points at the right tool for anything that
-    isn't actually a Substack blog."""
-    feed_url = url.rstrip("/") + "/feed"
-    hint = (
-        f"If {url!r} isn't a Substack blog, its feed probably isn't at /feed — use "
-        "'wingman people add-feed \"<name>\" <url>' (or feed_discover) instead, which "
-        "finds and validates the real feed URL."
-    )
+def _resolve_writing_feed(url: str, fetcher: Callable[[str], bytes]) -> str:
+    """Resolve an entered writing URL using bounded RSS/Atom discovery."""
     try:
-        feed_bytes = fetcher(feed_url)
-    except FetchError as exc:
-        raise IngestError(f"the feed at {feed_url} could not be fetched ({exc}). {hint}") from exc
-    try:
-        root = ET.fromstring(feed_bytes)
-    except ET.ParseError as exc:
+        discovery = discover_feed(url, fetcher=fetcher)
+    except IngestError as exc:
         raise IngestError(
-            f"the feed at {feed_url} is not parseable RSS/Atom ({exc}). {hint}"
+            f"writing URL {url!r} could not be fetched. Use add-feed or feed_discover "
+            f"to check the configured URL. {exc}"
         ) from exc
-    # A root tag check, not an item-count check: zero items is a real,
-    # legitimate feed (a brand-new blog with nothing posted yet) and must
-    # not be rejected; well-formed XML that isn't RSS/Atom at all (e.g. an
-    # HTML page that happens to parse) must be.
-    if root.tag != "rss" and root.tag != f"{_ATOM_NS}feed":
+    if discovery.feed_url is None:
         raise IngestError(
-            f"the feed at {feed_url} doesn't look like RSS/Atom (root element {root.tag!r}). {hint}"
+            f"no feed was discoverable at writing URL {url!r}; "
+            "use add-feed with --index (MCP: feed_attach(kind='index_page')) "
+            "for a blog index, or supply a verified RSS/Atom URL."
         )
+    return discovery.feed_url
 
 
 def add_person(
@@ -124,7 +109,7 @@ def add_person(
 
     Returns (person, created) — created is False when an existing person was
     updated. email is a manual-entry field only: imports never read email
-    addresses. A passed substack_url's derived feed (<url>/feed) is verified
+    addresses. A passed writing URL uses bounded feed discovery and is verified
     real and parseable before it's stored — nothing is written if it isn't
     (#483); fetcher exists only as the test seam, matching every other feed
     function in this module (fetch_person_feed, discover_feed, ...). strict
@@ -133,14 +118,17 @@ def add_person(
     discovers and reports an unreachable feed gracefully rather than
     rejecting the person outright — never for a live person typing a URL.
     """
+    writing_feed_url = None
     if substack_url is not None:
         substack_url = substack_url.rstrip("/")
         if not substack_url.startswith("https://"):
             raise IngestError(
-                f"Substack URL must start with https:// (RFC-009); got {substack_url!r}"
+                f"Writing URL must start with https:// (RFC-009); got {substack_url!r}"
             )
         try:
-            _verify_substack_feed(substack_url, fetcher if fetcher is not None else fetch_url)
+            writing_feed_url = _resolve_writing_feed(
+                substack_url, fetcher if fetcher is not None else fetch_url
+            )
         except IngestError:
             if strict:
                 raise
@@ -156,6 +144,7 @@ def add_person(
         name=name,
         origin=PersonOrigin.MANUAL,
         substack_url=substack_url,
+        writing_feed_url=writing_feed_url,
         company=company,
         position=position,
         linkedin_url=linkedin_url,
@@ -168,6 +157,9 @@ def add_person(
     updated = existing.model_copy(
         update={
             "substack_url": substack_url or existing.substack_url,
+            "writing_feed_url": writing_feed_url
+            if substack_url is not None
+            else existing.writing_feed_url,
             "company": company or existing.company,
             "position": position or existing.position,
             "linkedin_url": linkedin_url or existing.linkedin_url,
@@ -569,18 +561,29 @@ def fetch_person_feed(
     tally = _Tally()
     failed_sources: list[str] = []
     for source in sources:
+        entered_url = (
+            person.substack_url
+            if source.url in {person.substack_url, person.writing_feed_url}
+            else source.url
+        )
         try:
             if source.kind == FeedKind.INDEX_PAGE:
                 _fetch_index_source(person, source, config, storage, fetch, tally)
                 continue
+            if (
+                person.substack_url
+                and source.url == person.substack_url
+                and not person.writing_feed_url
+            ):
+                try:
+                    resolved = _resolve_writing_feed(person.substack_url, fetch)
+                except IngestError as exc:
+                    raise FetchError(str(exc)) from exc
+                source = source.model_copy(update={"url": resolved})
             feed_bytes = fetch(source.url)
             items = _parse_feed_items(feed_bytes, source.url)
             tally.items += len(items)
-            # The Substack-derived source is the one synthesized from
-            # substack_url — reliable even for custom-domain publications.
-            substack_feed = (
-                person.substack_url.rstrip("/") + "/feed" if person.substack_url else None
-            )
+            substack_feed = person.writing_feed_url or person.substack_url
             source_type = "substack_feed" if source.url == substack_feed else "rss_feed"
             for item in items:
                 _ingest_post(
@@ -596,7 +599,7 @@ def fetch_person_feed(
                     tally,
                 )
         except FetchError as exc:
-            failed_sources.append(f"{source.url}: {exc}")
+            failed_sources.append(f"{entered_url}: {exc}")
     if len(failed_sources) == len(sources):
         raise IngestError(
             f"every source failed for {person.name}: "
