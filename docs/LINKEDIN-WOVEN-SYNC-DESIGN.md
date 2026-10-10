@@ -16,6 +16,8 @@ already anticipated and deliberately deferred the adjacent "a persona's own
 LinkedIn graph" question to this document (see that doc's "Deferred:
 a persona's own LinkedIn graph (Woven)" section).
 
+**Operational procedure:** [Manual LinkedIn/Woven refresh](LINKEDIN-WOVEN-MANUAL-SYNC.md) records verified commands and stop conditions. The thinness preview (#420) and Woven headless importer (woven#92) remain prerequisites; this design is not evidence that either exists. Contact upsert and identifier backfill are proposed in [PR #606](https://github.com/dhk/wingman/pull/606).
+
 ## Motivation
 
 Two systems both care about the same raw material — a person's LinkedIn
