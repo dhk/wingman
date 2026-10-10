@@ -649,6 +649,8 @@ def test_existing_workspace_sees_a_summary_not_first_run_setup(
     page = client.get("/setup/").text
 
     assert "Set up your workspace" not in page
+    assert str(tenant.config().data_dir) not in page
+    assert tenant.slug in page
     assert "Your workspace" in page
     assert "Anthropic key" in page and "verified" in page
     assert "1 document" in page and "14 Sep 2026" in page
@@ -693,5 +695,7 @@ def test_approved_but_empty_workspace_still_gets_first_run_setup(
 
     page = client.get("/setup/").text
 
+    assert str(tenant.config().data_dir) not in page
+    assert tenant.slug in page
     assert "Set up your workspace" in page
     assert "Your workspace" not in page
