@@ -1439,3 +1439,8 @@ identity key" and "do not obtain `sub` from email".
 ### RFC-011 addendum (#474) — Durable decision
 
 The legacy `substack_url` field and `--substack` option now accept a writing URL without assuming a `/feed` endpoint. Add and fetch use bounded discovery: direct RSS/Atom, declared feeds, feed-shaped links, then conventional candidates. A verified endpoint is stored separately as `writing_feed_url`; old records are resolved when fetched. Errors identify the entered writing URL and distinguish no discoverable feed from an unreachable configured URL, suggesting explicit index-page attachment when appropriate. The existing field name remains for compatibility.
+
+
+### RFC-011 addendum (#546) — Durable decision
+
+On an HTTP 404 or a response that is not RSS/Atom, source fetch performs bounded discovery at the configured page (or the parent of a conventional feed path such as `/blog/feed`). A verified replacement feed is used; otherwise readable HTML is treated as an index page. Successful correction is persisted, preserving attribution and the original writing URL. Later runs use the corrected format. Other HTTP failures do not trigger fallback. Index fetching remains same-site, beneath the approved index, and bounded to ten new posts. This format correction is automatic; it does not change the publication being watched.
