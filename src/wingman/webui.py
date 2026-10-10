@@ -871,7 +871,7 @@ def _oauth_workspace_summary(config: Config, csrf_token: str) -> Response | None
         )
     )
     body = [
-        _header(config),
+        _header(config, show_path=False) + f'<div class="meta">{_e(config.data_dir.name)}</div>',
         "<h1>Your workspace</h1>",
         '<p class="dim">You are already set up. Here is where things stand.</p>',
         f'<div class="panel"><span class="stepno">Summary</span>{rows}</div>',
@@ -909,7 +909,7 @@ async def ui_oauth_setup(request: Request) -> Response:
     if summary is not None:
         return summary
     body = [
-        _header(config),
+        _header(config, show_path=False) + f'<div class="meta">{_e(config.data_dir.name)}</div>',
         "<h1>Set up your workspace</h1>",
         (
             '<p class="dim">Your sign-in opens only this workspace. Add a provider key '
