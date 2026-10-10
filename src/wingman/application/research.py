@@ -241,6 +241,22 @@ def list_company_sources(name: str, storage: Storage) -> list[CompanySource]:
     return storage.list_company_sources(_resolve_company(name))
 
 
+def source_duplicates(sources: list[CompanySource], storage: Storage) -> dict[str, str]:
+    """Identify identical latest snapshots within one company's approved sources."""
+    seen: dict[tuple[str, str, tuple[str, ...]], str] = {}
+    duplicates: dict[str, str] = {}
+    for source in sources:
+        snapshot = storage.get_research_snapshot(source.company_key, source.url)
+        if snapshot is None:
+            continue
+        identity = (source.company_key, snapshot.text_hash, tuple(sorted(snapshot.links)))
+        if identity in seen:
+            duplicates[source.url] = seen[identity]
+        else:
+            seen[identity] = source.url
+    return duplicates
+
+
 def rename_company(old_name: str, new_name: str, storage: Storage) -> tuple[int, int]:
     """Re-key a company's sources, research snapshots, POV card, watchlist
     memberships, AND every person attributed to it (#63 — Person.company is the
@@ -399,6 +415,7 @@ class SourceResult(BaseModel):
     detail: str
     new_links: list[str] = Field(default_factory=list)
     total_links: int = 0
+    duplicate_of: str | None = None
     # '' when the source is not retained; else stored | replaced | unchanged | no text.
     retained: str = ""
 
@@ -436,6 +453,7 @@ def research_company(
     results: list[SourceResult] = []
     failed = 0
     kept = 0
+    seen_content: dict[tuple[str, tuple[str, ...]], str] = {}
     for source in sources:
         try:
             data = fetch(source.url)
@@ -489,6 +507,19 @@ def research_company(
                 fetched_at=fetched_at,
             )
         )
+        identity = (text_hash, tuple(sorted(links)))
+        duplicate_of = seen_content.get(identity)
+        if duplicate_of is not None:
+            owner = next(result for result in results if result.url == duplicate_of)
+            additional = [link for link in new_links if link not in owner.new_links]
+            if additional:
+                owner.new_links.extend(additional)
+                owner.detail = f"{len(owner.new_links)} new links across matching source histories"
+                storage.record_new_links(key, owner.url, additional, fetched_at)
+            detail = f"duplicate of {duplicate_of}; diff reported there"
+            new_links = []
+        else:
+            seen_content[identity] = source.url
         storage.record_new_links(key, source.url, new_links, fetched_at)
         retained = ""
         if source.retain:
@@ -509,6 +540,7 @@ def research_company(
                 detail=detail,
                 new_links=new_links,
                 total_links=len(links),
+                duplicate_of=duplicate_of,
                 retained=retained,
             )
         )
