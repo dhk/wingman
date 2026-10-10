@@ -2629,7 +2629,8 @@ def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = 
     action is 'list', 'remember' (store `kind` + `url`, replacing any
     earlier record for that kind), 'show' (`kind`), 'forget' (`kind`), or
     'stale'. kind is one of: values_radar, values_radar_work, completeness,
-    profile.
+    profile, or custom:<slug> (lowercase letters/digits, underscores and hyphens).
+    Custom views round-trip but freshness is unknown; their recording timestamp is shown.
 
     Protocol: after you publish or update one of these views, call
     action='remember' with the url the client gave you. Before publishing

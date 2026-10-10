@@ -196,3 +196,23 @@ def test_every_mcp_artifacts_action_has_a_cli_command() -> None:
 
     commands = {command.name for command in artifacts_app.registered_commands}
     assert {"list", "remember", "show", "forget", "stale"} <= commands
+
+
+def test_custom_artifacts_roundtrip_and_report_unknown_freshness(storage: Storage) -> None:
+    from wingman.application.freshness import render_staleness, stale_artefacts
+
+    artifact = remember_artifact("custom:decision_board", URL, storage, title="Decision board")
+    assert published_artifact(artifact.kind, storage) == artifact
+    assert "Decision board" in render_artifacts(storage.list_published_artifacts())
+    report = render_staleness(stale_artefacts(load_config(), storage))
+    assert "custom:decision_board" in report
+    assert "not a Wingman-rendered view" in report
+    assert artifact.published_at.isoformat() in report
+    assert forget_artifact(artifact.kind, storage)
+    assert published_artifact(artifact.kind, storage) is None
+
+
+@pytest.mark.parametrize("kind", ["custom:", "custom:../secret", "custom:has space", "custom:x\ny"])
+def test_custom_artifact_slug_is_validated(storage: Storage, kind: str) -> None:
+    with pytest.raises(IngestError):
+        remember_artifact(kind, URL, storage)

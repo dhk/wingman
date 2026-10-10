@@ -314,10 +314,23 @@ def stale_artefacts(config: Config, storage: Storage) -> list[ArtefactStaleness]
     are reported, including one that has never been built — an omission
     reads as a clean bill of health.
     """
-    return [
+    reports = [
         _values_radar_staleness(config, storage, kind, view)
         for kind, view in RADAR_KIND_VIEWS.items()
     ]
+    reports.extend(
+        ArtefactStaleness(
+            kind=artifact.kind,
+            subject=artifact.title or artifact.kind,
+            checked=False,
+            reasons=[
+                "not a Wingman-rendered view; last recorded " + artifact.published_at.isoformat()
+            ],
+        )
+        for artifact in storage.list_published_artifacts()
+        if artifact.kind.startswith("custom:")
+    )
+    return reports
 
 
 def render_staleness(reports: list[ArtefactStaleness]) -> str:
