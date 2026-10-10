@@ -12,7 +12,11 @@ from __future__ import annotations
 import html
 
 from wingman.application.completeness import CompletenessReport, PersonCompleteness
-from wingman.reporting.completeness import BLOCKED_SECTIONS
+from wingman.reporting.completeness import (
+    BLOCKED_SECTIONS,
+    MAX_PEOPLE_LISTED,
+    imported_people_line,
+)
 from wingman.reporting.export import WINGMAN_PDF_CSS
 
 _COMPLETENESS_CSS = """
@@ -142,10 +146,14 @@ def render_completeness_html(report: CompletenessReport) -> str:
     if report.people:
         ordered = sorted(report.people, key=lambda p: (p.log_entries, p.linked))
         body.append('<ul class="sub-list">')
-        body.extend(_person_line(person) for person in ordered)
+        body.extend(_person_line(person) for person in ordered[:MAX_PEOPLE_LISTED])
+        if len(ordered) > MAX_PEOPLE_LISTED:
+            body.append(f"<li>…and {len(ordered) - MAX_PEOPLE_LISTED} more</li>")
         body.append("</ul>")
     else:
         body.append('<p class="dim">None yet.</p>')
+    if report.imported_people:
+        body.append(f'<p class="dim">{_e(imported_people_line(report.imported_people))}</p>')
     body.append(
         f'<div class="section-divider"><span>Companies '
         f"({len(report.companies)} attributable)</span></div>"

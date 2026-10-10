@@ -28,6 +28,21 @@ from wingman.infrastructure.storage import Storage
 # an entry here is a claim with an expiry date.
 BLOCKED_SECTIONS: tuple[tuple[str, str], ...] = ()
 
+# How many curated people the report names inline. A tool response has to stay
+# readable however large the workspace gets (#465 saw a 312k-character report),
+# so beyond this the rest are a count. The neediest come first.
+MAX_PEOPLE_LISTED = 50
+
+
+def imported_people_line(count: int) -> str:
+    """The one line that makes an imported address book visible without making
+    it a gap. Shared by the Markdown and HTML renderers so they cannot drift."""
+    noun = "contact" if count == 1 else "contacts"
+    return (
+        f"{count} imported {noun} not listed or counted as gaps — nobody has given them "
+        "a feed or logged an interaction yet. Either one brings a person into this list."
+    )
+
 
 def _todo_markdown(report: CompletenessReport) -> list[str]:
     from wingman.application.completeness import next_actions
@@ -81,13 +96,18 @@ def render_completeness_markdown(report: CompletenessReport) -> str:
         "",
     ]
     if report.people:
-        for person in sorted(report.people, key=lambda p: (p.log_entries, p.linked), reverse=False):
+        ordered = sorted(report.people, key=lambda p: (p.log_entries, p.linked), reverse=False)
+        for person in ordered[:MAX_PEOPLE_LISTED]:
             where = f" ({person.company})" if person.company else ""
             link = "linked" if person.linked else "no LinkedIn/feed"
             logged = f"{person.log_entries} log entr{'y' if person.log_entries == 1 else 'ies'}"
             lines.append(f"- {person.name}{where} — {link}, {logged}")
+        if len(ordered) > MAX_PEOPLE_LISTED:
+            lines.append(f"- …and {len(ordered) - MAX_PEOPLE_LISTED} more")
     else:
         lines.append("_None yet._")
+    if report.imported_people:
+        lines.extend(["", f"_{imported_people_line(report.imported_people)}_"])
     lines.extend(["", "## Interview", ""])
     current = ""
     for row in report.interview:

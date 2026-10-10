@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from wingman.application.company_feeds import is_company_anchor
 from wingman.application.job_scoring import load_criteria
 from wingman.application.similarity import company_key
+from wingman.domain.person import Person, PersonOrigin
 from wingman.domain.profile import ItemStatus, ProfileItemKind
 from wingman.infrastructure.broadcast import (
     OperatorMessage,
@@ -177,7 +178,15 @@ class CompletenessReport(BaseModel):
     generated_at: datetime
     career: CareerProfileCompleteness
     job_criteria: JobCriteriaCompleteness
+    # Curated people only (#424/#465/#545): added by hand, given a feed, or
+    # logged with. A LinkedIn-connections import puts thousands of contacts in
+    # the same store, and measuring every one of them against "has a POV card"
+    # or "has a log entry" turns completeness into a wall nobody can act on.
     people: list[PersonCompleteness]
+    # Imported contacts nobody has attended to yet. A count, not a list and not
+    # a debt: the size of the address book is worth seeing, but an entry the
+    # owner has never touched is not a gap in their workspace.
+    imported_people: int = 0
     companies: list[CompanyCompleteness]
     values: ValuesCompleteness
     interview: list[InterviewCompleteness]
@@ -460,23 +469,52 @@ def _job_criteria_completeness(config: Config) -> JobCriteriaCompleteness:
     return JobCriteriaCompleteness(exists=load_criteria(config) is not None)
 
 
-def _people_completeness(storage: Storage) -> list[PersonCompleteness]:
-    people = [person for person in storage.list_people() if not is_company_anchor(person)]
+def _split_people(storage: Storage) -> tuple[list[Person], int, Counter[str]]:
+    """Curated people, the count of untouched imports, and log counts by person.
+
+    Curated means somebody deliberately engaged with the person: added them by
+    hand, attached a feed, or logged an interaction. That is deterministic and
+    needs no new stored field — `origin` and the feed and log stores already say
+    it. An import that has none of the three is just an address-book row, and
+    counting it against "build a POV card" or "log what happened" measures a
+    population the metric does not mean (#465).
+    """
     log_counts = Counter(entry.person_id for entry in storage.list_log_entries())
-    return [
-        PersonCompleteness(
-            name=person.name,
-            company=person.company,
-            linked=bool(person.linkedin_url) or bool(person.sources),
-            log_entries=log_counts[person.person_id],
-        )
-        for person in people
-    ]
+    curated: list[Person] = []
+    imported = 0
+    for person in storage.list_people():
+        if is_company_anchor(person):
+            continue
+        if (
+            person.origin is not PersonOrigin.LINKEDIN_CONNECTIONS
+            or person.sources
+            or log_counts[person.person_id]
+        ):
+            curated.append(person)
+        else:
+            imported += 1
+    return curated, imported, log_counts
+
+
+def _people_completeness(storage: Storage) -> tuple[list[PersonCompleteness], int]:
+    people, imported, log_counts = _split_people(storage)
+    return (
+        [
+            PersonCompleteness(
+                name=person.name,
+                company=person.company,
+                linked=bool(person.linkedin_url) or bool(person.sources),
+                log_entries=log_counts[person.person_id],
+            )
+            for person in people
+        ],
+        imported,
+    )
 
 
 def _companies_completeness(storage: Storage) -> list[CompanyCompleteness]:
     all_people = storage.list_people()
-    watched = [person for person in all_people if not is_company_anchor(person)]
+    watched, _imported, _logs = _split_people(storage)
 
     # Keyed by company_key(), not the raw string: two people whose company
     # fields are spelled or cased differently ("Acme" vs "ACME") share a key
@@ -534,11 +572,13 @@ def compute_completeness(storage: Storage, config: Config) -> CompletenessReport
     from wingman.application.qotd import pending_question
 
     refused = model_rejection(config)
+    people, imported_people = _people_completeness(storage)
     return CompletenessReport(
         generated_at=datetime.now(UTC),
         career=_career_completeness(storage),
         job_criteria=_job_criteria_completeness(config),
-        people=_people_completeness(storage),
+        people=people,
+        imported_people=imported_people,
         companies=_companies_completeness(storage),
         values=_values_completeness(storage),
         interview=_interview_completeness(storage),
