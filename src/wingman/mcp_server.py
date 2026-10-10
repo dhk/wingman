@@ -80,6 +80,7 @@ from wingman.application.feature_request import (
 )
 from wingman.application.focus import (
     follow_company,
+    json_digest,
     latest_digest,
     overnight_run,
     render_follow_report,
@@ -4170,10 +4171,14 @@ def feature_request(title: str = "", body: str = "", confirmed: bool = False) ->
 
 
 @server.tool()
-def digest(as_html: bool = False) -> str:
+def digest(as_html: bool = False, as_json: bool = False) -> str:
     """The newest overnight digest — what changed, what failed, and the action
     list (what/why/who/evidence). The morning starting point after a scheduled
     'wingman overnight' run; pair with 'search' to dig into anything it raises.
+
+    as_json=True returns action records, target step results and the exact budget
+    drop list (company, URL, fetch/judge stage and budget). Older runs without
+    a JSON sidecar cannot recover missing drop URLs; re-run overnight.
 
     Every overnight run already writes a styled HTML twin alongside the
     Markdown (same design tokens as every other wingman export, action list
@@ -4185,6 +4190,14 @@ def digest(as_html: bool = False) -> str:
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
+    if as_json:
+        if as_html:
+            return "Choose as_json or as_html, not both."
+        try:
+            with Storage(config.db_path) as storage:
+                return json_digest(config, storage)
+        except IngestError as exc:
+            return str(exc)
     newest = latest_digest(config)
     if newest is None:
         return (

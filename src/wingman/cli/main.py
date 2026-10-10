@@ -61,6 +61,7 @@ from wingman.application.feature_request import (
 from wingman.application.focus import (
     OvernightReport,
     follow_company,
+    json_digest,
     latest_digest,
     overnight_run,
     render_follow_report,
@@ -3797,12 +3798,23 @@ def overnight(
 
 @app.command()
 def digest(
+    as_json: bool = typer.Option(
+        False, "--json", help="Structured actions, steps and budget drops."
+    ),
     path_only: bool = typer.Option(False, "--path", help="Print only the path."),
     open_it: bool = typer.Option(False, "--open", help="Open it with the system viewer."),
 ) -> None:
     """Show the newest overnight digest — the morning read, one word away."""
     configure_logging()
     config = load_config()
+    if as_json:
+        try:
+            with Storage(config.db_path) as storage:
+                typer.echo(json_digest(config, storage))
+        except IngestError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        return
     newest = latest_digest(config)
     if newest is None:
         typer.echo(

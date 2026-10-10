@@ -25,12 +25,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from wingman.application.ingest import IngestError
 from wingman.application.job_scoring import JOBISH_KEYWORDS as _JOBISH
+from wingman.application.job_scoring import BudgetDrop
 from wingman.application.people import match_people
-from wingman.application.pipeline import MisoReport, make_it_so
+from wingman.application.pipeline import MisoReport, MisoStep, make_it_so
 from wingman.application.research import add_company_source, research_company
 from wingman.application.similarity import company_key, similar_companies
 from wingman.domain.person import Person
@@ -178,6 +179,8 @@ class OvernightTarget(BaseModel):
     #: asked for that company deliberately.
     status: str = "ok"
     lines: list[str] = Field(default_factory=list)
+    steps: list[MisoStep] = Field(default_factory=list)
+    drops: list[BudgetDrop] = Field(default_factory=list)
 
 
 #: One mark per target state, shared by every surface that renders a digest
@@ -208,6 +211,9 @@ class ActionItem(BaseModel):
 
 
 class OvernightReport(BaseModel):
+    schema_version: int = 1
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    drop_list: list[BudgetDrop] = Field(default_factory=list)
     digest_path: str
     processed: int
     failed: int
@@ -321,6 +327,9 @@ def _scored_opening_actions(
     from wingman.providers.router import get_provider
 
     if load_criteria(config) is None:
+        target.steps.append(
+            MisoStep(name="scoring", status="skipped", detail="job-criteria.md is absent")
+        )
         target.lines.append(
             f"{len(jobish)} new job link(s) unscored — write {CRITERIA_FILENAME} "
             "(the job_criteria tool interviews you) to get scored openings"
@@ -330,8 +339,17 @@ def _scored_opening_actions(
         provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
         outcome = score_company_openings(name, jobish, config, storage, provider)
     except Exception as exc:  # noqa: BLE001 — overnight reports failures, never dies on them
+        target.steps.append(MisoStep(name="scoring", status="failed", detail=str(exc)))
         target.lines.append(f"opening scoring failed: {exc}")
         return False
+    target.drops.extend(outcome.drops)
+    target.steps.append(
+        MisoStep(
+            name="scoring",
+            status="ok",
+            detail=f"{len(outcome.scored)} scored, {len(outcome.filtered)} filtered, {len(outcome.drops)} budget drops",
+        )
+    )
     handled = [link for link in jobish if link not in outcome.pending]
     storage.resolve_pending_job_links(company_key(name), handled)
     for opening in outcome.scored:
@@ -453,6 +471,9 @@ def _company_deep(
         research = research_company(name, config, storage)
         key = company_key(name)
         for result in research.results:
+            target.steps.append(
+                MisoStep(name=f"research:{result.url}", status=result.status, detail=result.detail)
+            )
             target.lines.append(f"research {result.url}: {result.detail}")
             target.lines.extend(f"  new: [link]({link})" for link in result.new_links)
             if result.status == "failed":
@@ -508,6 +529,7 @@ def _company_deep(
                     )
                 )
     except IngestError as exc:
+        target.steps.append(MisoStep(name="research", status="skipped", detail=str(exc)))
         target.lines.append(f"research skipped: {exc}")
     # Company-attached feeds (RFC-029): fetched like a person's, before the
     # themes pass so fresh posts are part of what gets synthesized.
@@ -520,6 +542,7 @@ def _company_deep(
             line = f"company feeds: {feeds.added} new post(s) from {len(anchor.sources)} feed(s)"
             if feeds.failed_sources:
                 line += f"; {len(feeds.failed_sources)} failed: " + "; ".join(feeds.failed_sources)
+            target.steps.append(MisoStep(name="company_feeds", status="ok", detail=line))
             target.lines.append(line)
             if feeds.added:
                 actions.append(
@@ -532,12 +555,17 @@ def _company_deep(
                     )
                 )
         except IngestError as exc:
+            target.steps.append(MisoStep(name="company_feeds", status="failed", detail=str(exc)))
             target.lines.append(f"company feeds failed: {exc}")
     try:
         provider = get_provider(CapabilityClass.SYNTHESIZE_BALANCED, config)
         themes = build_company_pov(name, storage, provider)
+        target.steps.append(
+            MisoStep(name="themes", status="ok", detail=f"{len(themes.card.stances)} stances")
+        )
         target.lines.append(f"themes refreshed: {len(themes.card.stances)} stances")
     except ModelConfigError as exc:
+        target.steps.append(MisoStep(name="themes", status="skipped", detail=str(exc)))
         target.lines.append(f"themes skipped: {exc}")
     except IngestError as exc:
         # "nothing in the workspace is attributable to X" — the company was
@@ -546,15 +574,19 @@ def _company_deep(
         # a target that has already failed for a real reason.
         if target.status == "ok":
             target.status = "attention"
+        target.steps.append(MisoStep(name="themes", status="attention", detail=str(exc)))
         target.lines.append(f"themes needs attention: {exc}")
     except Exception as exc:  # noqa: BLE001 — every failure is reported, none is fatal
         target.status = "failed"
+        target.steps.append(MisoStep(name="themes", status="failed", detail=str(exc)))
         target.lines.append(f"themes failed: {exc}")
     try:
         miso = make_it_so(name, config, storage, kind="company")
+        target.steps.append(MisoStep(name="dossier", status="ok", detail=str(miso.export_path)))
         target.lines.append(f"dossier: {miso.export_path}")
     except IngestError as exc:
         target.status = "failed"
+        target.steps.append(MisoStep(name="dossier", status="failed", detail=str(exc)))
         target.lines.append(f"dossier failed: {exc}")
     return target
 
@@ -588,6 +620,7 @@ def _person_deep(
     target = OvernightTarget(name=name, kind="person", status="ok")
     try:
         miso: MisoReport = make_it_so(name, config, storage, kind="person")
+        target.steps.extend(miso.steps)
         target.lines.extend(f"{step.name}: {step.status} — {step.detail}" for step in miso.steps)
         if any(step.status == "failed" for step in miso.steps):
             target.status = "failed"
@@ -787,7 +820,9 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
         attention,
         digest_path,
     )
-    return OvernightReport(
+    report = OvernightReport(
+        generated_at=now,
+        drop_list=[drop for target in targets for drop in target.drops],
         digest_path=str(digest_path),
         processed=len(targets),
         failed=failed,
@@ -795,6 +830,10 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
         targets=targets,
         actions=actions,
     )
+    structured = report.model_dump_json(indent=2)
+    digest_path.with_suffix(".json").write_text(structured, encoding="utf-8")
+    (digest_dir / "latest.json").write_text(structured, encoding="utf-8")
+    return report
 
 
 def latest_digest(config: Config) -> Path | None:
@@ -804,3 +843,28 @@ def latest_digest(config: Config) -> Path | None:
         return None
     candidates = sorted(digest_dir.glob("overnight-*.md"))
     return candidates[-1] if candidates else None
+
+
+def json_digest(config: Config, storage: Storage) -> str:
+    """Read this run's structured artifact; never reconstruct missing historical drops."""
+    from wingman.application.triage import filter_actions
+
+    newest = latest_digest(config)
+    unavailable = (
+        "No structured digest for this run. Re-run overnight to generate one; "
+        "historical budget-drop URLs cannot be reconstructed from Markdown."
+    )
+    if newest is None:
+        raise IngestError(unavailable)
+    try:
+        report = OvernightReport.model_validate_json(
+            newest.with_suffix(".json").read_text(encoding="utf-8")
+        )
+    except FileNotFoundError as exc:
+        raise IngestError(unavailable) from exc
+    except (OSError, ValidationError) as exc:
+        raise IngestError(
+            "Could not read the structured digest; the saved files were preserved. Check access or re-run overnight."
+        ) from exc
+    report.actions, _ = filter_actions(report.actions, storage)
+    return report.model_dump_json(indent=2)
