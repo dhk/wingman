@@ -518,6 +518,8 @@ def _company_deep(
         try:
             feeds = fetch_company_feeds(name, config, storage)
             line = f"company feeds: {feeds.added} new post(s) from {len(anchor.sources)} feed(s)"
+            if feeds.corrected_sources:
+                line += "; corrected source: " + "; ".join(feeds.corrected_sources)
             if feeds.failed_sources:
                 line += f"; {len(feeds.failed_sources)} failed: " + "; ".join(feeds.failed_sources)
             target.lines.append(line)

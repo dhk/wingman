@@ -91,6 +91,8 @@ def _person_pipeline(
         try:
             fetched = fetch_person_feed(person, config, storage)
             detail = f"{fetched.items} items seen, {fetched.added} added"
+            if fetched.corrected_sources:
+                detail += "; corrected source: " + "; ".join(fetched.corrected_sources)
             if fetched.failed_sources:
                 detail += f"; {len(fetched.failed_sources)} source(s) failed: " + "; ".join(
                     fetched.failed_sources

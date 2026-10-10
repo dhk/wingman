@@ -53,6 +53,7 @@ class Person(BaseModel):
     origin: PersonOrigin
     substack_url: str | None = None
     writing_feed_url: str | None = None
+    writing_feed_kind: FeedKind = FeedKind.RSS
     feeds: list[FeedSource] = Field(default_factory=list)
     linkedin_url: str | None = None
     # Only ever set manually ('wingman people add --email'): imports never
@@ -73,7 +74,11 @@ class Person(BaseModel):
         """The discovered writing feed (or unresolved entered URL), plus added feeds."""
         configured: list[FeedSource] = []
         if self.substack_url:
-            configured.append(FeedSource(url=self.writing_feed_url or self.substack_url))
+            configured.append(
+                FeedSource(
+                    url=self.writing_feed_url or self.substack_url, kind=self.writing_feed_kind
+                )
+            )
         configured.extend(self.feeds)
         return configured
 

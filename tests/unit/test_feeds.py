@@ -328,3 +328,52 @@ def test_discovery_probe_count_stays_bounded() -> None:
     assert discovery.feed_url is None
     # 1 page GET + at most 16 candidate GETs, despite 20 anchors and 12 paths
     assert len(discovery.probed) <= 17
+
+
+def test_404_feed_recovers_index_and_persists_format(workspace: Path) -> None:
+    from urllib.error import HTTPError
+
+    config = load_config()
+    root = "https://blog.example.com/blog"
+    broken = root + "/feed"
+    calls: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        calls.append(url)
+        if url == root:
+            return b'<html><a href="/blog/post">Post</a></html>'
+        if url == root + "/post":
+            return b"<html><title>Post</title><body>Useful writing about systems.</body></html>"
+        raise FetchError("not found") from HTTPError(url, 404, "Not Found", None, None)
+
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Author", storage)
+        person = attach_feed(person, FeedSource(url=broken), storage)
+        report = fetch_person_feed(person, config, storage, fetcher=fetch)
+        assert report.added == 1
+        corrected = storage.get_person(person.person_id)
+        assert corrected.feeds[0].kind == FeedKind.INDEX_PAGE
+        assert corrected.feeds[0].url == root
+        calls.clear()
+        fetch_person_feed(corrected, config, storage, fetcher=fetch)
+        assert broken not in calls
+
+
+def test_403_feed_does_not_change_format_or_probe(workspace: Path) -> None:
+    from urllib.error import HTTPError
+
+    config = load_config()
+    url = "https://blog.example.com/feed"
+    calls: list[str] = []
+
+    def forbidden(candidate: str) -> bytes:
+        calls.append(candidate)
+        raise FetchError("forbidden") from HTTPError(candidate, 403, "Forbidden", None, None)
+
+    with Storage(config.db_path) as storage:
+        person, _ = add_person("Author", storage)
+        person = attach_feed(person, FeedSource(url=url), storage)
+        with pytest.raises(IngestError, match="forbidden"):
+            fetch_person_feed(person, config, storage, fetcher=forbidden)
+        assert calls == [url]
+        assert storage.get_person(person.person_id).feeds == person.feeds

@@ -2089,6 +2089,8 @@ def people_fetch(
             )
             for title in report.titles:
                 typer.echo(f"  + {title}")
+            for correction in report.corrected_sources:
+                typer.echo(f"  corrected source: {correction}")
             for failure in report.failed_sources:
                 typer.echo(f"  ! {failure}", err=True)
     if failures:
@@ -4093,6 +4095,8 @@ def company_fetch(
     )
     for title in report.titles:
         typer.echo(f"  + {title}")
+    for correction in report.corrected_sources:
+        typer.echo(f"  corrected source: {correction}")
     for failure in report.failed_sources:
         typer.echo(f"  ! {failure}", err=True)
 
