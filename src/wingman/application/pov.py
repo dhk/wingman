@@ -375,6 +375,17 @@ def build_company_pov(name: str, storage: Storage, provider: ModelProvider) -> P
         else:
             authors[document.doc_id] = document.organization or "organization feed"
     if not documents:
+        sources = storage.list_company_sources(key)
+        if sources:
+            remedy = (
+                "No approved source retains its prose. Re-add a prose source with "
+                "--retain (MCP: company_source(action='add', retain=True)), then run "
+                "company research before retrying themes."
+                if not any(source.retain for source in sources)
+                else "A source has --retain enabled, but no attributable text is stored yet. "
+                "Run company research and check its retained-text result before retrying themes."
+            )
+            raise IngestError(f"nothing in the workspace is attributable to {name!r}. {remedy}")
         raise IngestError(
             f"nothing in the workspace is attributable to {name!r}. Companies come from "
             "watched people's company field and org-attributed feeds; fetch some writing first."

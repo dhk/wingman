@@ -1434,3 +1434,7 @@ identity key" and "do not obtain `sub` from email".
   Claiming at sign-in is #585, designed after #582 establishes what each
   surface's token actually carries. Until #585 ships the superseded rules still
   describe what the running service does.
+
+### RFC-060 addendum (#463) — Durable decision
+
+Text retention remains opt-in, including sources labelled `about`: a label alone does not approve storing prose. Theme synthesis with approved sources but no documents now explains `--retain` (or MCP `retain=True`) and the required research refresh. If retention is already enabled it points at fetching/checking extraction instead of claiming retention is absent. Existing retained-source tests demonstrate company themes without watched people.

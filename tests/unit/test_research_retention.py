@@ -303,3 +303,11 @@ def test_rename_keeps_lineage_so_a_refetch_still_supersedes(
 
     assert report.results[0].retained == "replaced"
     assert len(storage.list_external_documents()) == 1
+
+
+def test_missing_company_prose_points_to_retention(storage: Storage) -> None:
+    from wingman.application.ingest import IngestError
+
+    _approve(storage, retain=False)
+    with pytest.raises(IngestError, match="--retain"):
+        build_company_pov("Northwind Labs", storage, ScriptedProvider({}))
