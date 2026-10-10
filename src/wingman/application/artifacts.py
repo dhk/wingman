@@ -7,6 +7,8 @@ of minting a second one.
 
 from __future__ import annotations
 
+import re
+
 from wingman.application.ingest import IngestError
 from wingman.domain.artifacts import ARTIFACT_KINDS, PublishedArtifact
 from wingman.infrastructure.storage import Storage
@@ -14,9 +16,13 @@ from wingman.infrastructure.storage import Storage
 
 def _valid_kind(kind: str) -> str:
     cleaned = kind.strip().lower()
-    if cleaned not in ARTIFACT_KINDS:
+    if cleaned not in ARTIFACT_KINDS and not re.fullmatch(
+        r"custom:[a-z0-9][a-z0-9_-]{0,63}", cleaned
+    ):
         known = ", ".join(ARTIFACT_KINDS)
-        raise IngestError(f"unknown artifact kind {kind!r} — expected one of: {known}")
+        raise IngestError(
+            f"unknown artifact kind {kind!r} — expected one of: {known}, or custom:<slug>"
+        )
     return cleaned
 
 

@@ -22,9 +22,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
-#: The rendered views a workspace can publish. A closed set, because each
-#: one has to be regenerable on demand for an update to mean anything —
-#: an artifact nothing can rebuild is a dead end, not a record.
+#: Built-in views; client-owned views use the validated custom:<slug> namespace.
 #:
 #: `values_radar` and `values_radar_work` are the two READINGS of the same
 #: captures (`domain.values.ValueView`, issue #356), and they are separate
