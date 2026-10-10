@@ -169,10 +169,10 @@ def test_attach_rejects_duplicate_source(workspace: Path) -> None:
     with Storage(config.db_path) as storage:
         person, _ = add_person("Jane", storage, substack_url="https://jane.substack.com")
         with pytest.raises(IngestError, match="already has"):
-            attach_feed(person, FeedSource(url="https://jane.substack.com/feed"), storage)
+            attach_feed(person, FeedSource(url=person.sources[0].url), storage)
         # duplicates are caught up to trailing-slash normalization too
         with pytest.raises(IngestError, match="already has"):
-            attach_feed(person, FeedSource(url="https://jane.substack.com/feed/"), storage)
+            attach_feed(person, FeedSource(url=person.sources[0].url + "/"), storage)
 
 
 def test_attach_enforces_invariants(workspace: Path) -> None:

@@ -1830,8 +1830,8 @@ def people_add(
     substack: str | None = typer.Option(
         None,
         "--substack",
-        help="Their Substack URL, e.g. https://example.substack.com — verified against "
-        "<url>/feed before it's stored. For any other blog, use 'people add-feed' instead.",
+        help="Public writing URL; bounded discovery verifies its RSS/Atom feed before storing. "
+        "For a blog without a feed, use people add-feed --index.",
     ),
     company: str | None = typer.Option(None, "--company", help="Where they work."),
     position: str | None = typer.Option(None, "--position", help="What they do."),
