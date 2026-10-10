@@ -764,6 +764,21 @@ def test_the_forbidden_answer_tells_the_person_what_to_do_next(world: _World) ->
     assert "sub-stranger" not in response.text
 
 
+def test_the_refusal_log_names_the_reference_never_the_subject(
+    world: _World, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The subject is a private user identifier; the operator matches on the
+    # reference the person was told to send.
+    from wingman.infrastructure.oauth_onboarding import pending_reference
+
+    with caplog.at_level("INFO", logger="wingman.oauth_bearer"):
+        world.get(_token("sub-stranger"))
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert f"ref={pending_reference(ISSUER, 'sub-stranger')}" in logged
+    assert "sub-stranger" not in logged
+
+
 def test_an_identity_mapped_to_a_tenant_outside_the_registry_is_forbidden(world: _World) -> None:
     from wingman.infrastructure.oauth_onboarding import pending_reference
 

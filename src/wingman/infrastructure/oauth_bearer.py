@@ -58,7 +58,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from wingman.infrastructure.config import tenant_config_scope
 from wingman.infrastructure.logs import get_logger
-from wingman.infrastructure.oauth_onboarding import PendingResult, unapproved_message
+from wingman.infrastructure.oauth_onboarding import (
+    PendingResult,
+    pending_reference,
+    unapproved_message,
+)
 from wingman.infrastructure.tenant_asgi import (
     TenantRoutingASGIApp,
     TenantSessionBindings,
@@ -736,7 +740,12 @@ class BearerRoutingASGIApp:
             # Verified, but not provisioned (or provisioned to a tenant that
             # has left the registry). Same answer for both, so it cannot be
             # used to learn which tenants exist.
-            _logger.info("bearer verified but unprovisioned: sub=%s", identity.subject)
+            # The reference, never the subject: the subject is a private user
+            # identifier, and the reference is what the person sends the operator.
+            _logger.info(
+                "bearer verified but unprovisioned: ref=%s",
+                pending_reference(identity.issuer, identity.subject),
+            )
             if self._record_pending is not None and slug is None:
                 try:
                     recorded = await anyio.to_thread.run_sync(
