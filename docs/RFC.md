@@ -1434,3 +1434,8 @@ identity key" and "do not obtain `sub` from email".
   Claiming at sign-in is #585, designed after #582 establishes what each
   surface's token actually carries. Until #585 ships the superseded rules still
   describe what the running service does.
+
+
+### RFC-031 addendum (#501) — Durable decision
+
+`actions done <key>` and `action_triage(action="done", key=...)` complete the recorded action content and evidence, without standing suppression. Matching evidence remains completed; new evidence or changed action content can recur. Done verdicts appear separately in the verdict list and can be cleared with unmute. Overnight records generated actions before filtering, preserving the evidence available when completed. MCP and CLI mute/snooze/done reject unknown keys; legacy digests need one overnight refresh before triage. Digest files remain immutable historical snapshots.
