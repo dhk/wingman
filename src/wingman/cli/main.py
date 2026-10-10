@@ -111,6 +111,7 @@ from wingman.application.research import (
     add_company_source,
     delete_company,
     list_company_sources,
+    pause_company_source,
     remove_company_source,
     rename_company,
     render_research_report,
@@ -3952,6 +3953,31 @@ def company_add_source(
         typer.echo(f"Already approved for {source.company_name}: {source.url}{kept}")
 
 
+def _pause_source(name: str, url: str, paused: bool) -> None:
+    config = load_config()
+    _require_workspace(config, "updated")
+    try:
+        with Storage(config.db_path) as storage:
+            source = pause_company_source(name, url, storage, paused=paused)
+    except IngestError as exc:
+        typer.echo(f"source pause failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    state = "Paused" if source.paused else "Resumed"
+    typer.echo(f"{state}: {source.url}. Existing research preserved.")
+
+
+@company_app.command("pause-source")
+def company_pause_source(name: str, url: str) -> None:
+    """Pause one approved URL without deleting its research history."""
+    _pause_source(name, url, True)
+
+
+@company_app.command("unpause-source")
+def company_unpause_source(name: str, url: str) -> None:
+    """Resume fetching a paused approved research URL."""
+    _pause_source(name, url, False)
+
+
 @company_app.command("remove-source")
 def company_remove_source(
     name: str = typer.Argument(..., help="Company the source belongs to."),
@@ -4006,6 +4032,7 @@ def company_sources_cmd(
             if snapshot
             else "no snapshot yet"
         )
+        state += ", paused" if source.paused else ""
         kept = ", text retained" if source.retain else ""
         typer.echo(f"- {source.url}{label} — {state}{kept}")
 

@@ -216,6 +216,15 @@ def add_company_source(
     return source, storage.add_company_source(source)
 
 
+def pause_company_source(name: str, url: str, storage: Storage, *, paused: bool) -> CompanySource:
+    """Stop/resume one source without withdrawing approval or its history."""
+    source = _existing_source(_resolve_company(name), url, storage)
+    if source is None:
+        raise IngestError(f"{url!r} is not an approved source for {name!r}.")
+    storage.set_company_source_paused(source.company_key, source.url, paused)
+    return source.model_copy(update={"paused": paused})
+
+
 def remove_company_source(name: str, url: str, storage: Storage) -> bool:
     """Withdraw an approved source: its snapshot AND any retained text go with it.
 
@@ -395,7 +404,7 @@ def _retain_page(
 class SourceResult(BaseModel):
     url: str
     label: str | None = None
-    status: str  # ok | failed
+    status: str  # ok | failed | paused
     detail: str
     new_links: list[str] = Field(default_factory=list)
     total_links: int = 0
@@ -437,6 +446,16 @@ def research_company(
     failed = 0
     kept = 0
     for source in sources:
+        if source.paused:
+            results.append(
+                SourceResult(
+                    url=source.url,
+                    label=source.label,
+                    status="paused",
+                    detail="paused; previous research preserved",
+                )
+            )
+            continue
         try:
             data = fetch(source.url)
         except FetchError as exc:
@@ -516,7 +535,10 @@ def research_company(
         "research company=%s sources=%d failed=%d retained=%d", name, len(sources), failed, kept
     )
     return ResearchReport(
-        company=name.strip(), results=results, fetched=len(sources) - failed, failed=failed
+        company=name.strip(),
+        results=results,
+        fetched=sum(result.status == "ok" for result in results),
+        failed=failed,
     )
 
 
@@ -532,7 +554,7 @@ def render_research_report(report: ResearchReport) -> str:
     lines = [f"Research: {report.company} — {report.fetched} fetched, {report.failed} failed"]
     for result in report.results:
         label = f" ({result.label})" if result.label else ""
-        marker = "✓" if result.status == "ok" else "✗"
+        marker = {"ok": "✓", "paused": "⏸"}.get(result.status, "✗")
         lines.append(f"{marker} {result.url}{label}")
         lines.append(f"  {result.detail}")
         shown = result.new_links[:MAX_NEW_LINKS_SHOWN]

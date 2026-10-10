@@ -487,3 +487,47 @@ def test_different_pages_on_one_host_stay_separate(storage: Storage) -> None:
 
     assert created
     assert len(list_company_sources("Acme", storage)) == 2
+
+
+def test_pause_preserves_snapshot_and_skips_only_one_source(
+    config: Config, storage: Storage
+) -> None:
+    from wingman.application.research import pause_company_source
+
+    url = "https://acme.example.com/careers"
+    other = "https://acme.example.com/about"
+    add_company_source("Acme", url, storage)
+    add_company_source("Acme", other, storage)
+    research_company("Acme", config, storage, fetcher=lambda _: PAGE_V1)
+    previous = storage.get_research_snapshot("acme", url)
+    pause_company_source("Acme", url, storage, paused=True)
+    fetched: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        fetched.append(url)
+        return PAGE_V2
+
+    report = research_company("Acme", config, storage, fetcher=fetch)
+    assert fetched == [other]
+    assert report.fetched == 1 and report.failed == 0
+    assert report.results[0].status == "paused"
+    assert storage.get_research_snapshot("acme", url) == previous
+    pause_company_source("Acme", url, storage, paused=False)
+    research_company("Acme", config, storage, fetcher=fetch)
+    assert url in fetched
+
+
+def test_pause_cli_and_mcp(config: Config, storage: Storage) -> None:
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+    from wingman.mcp_server import company_source
+
+    url = "https://acme.example.com/about"
+    add_company_source("Acme", url, storage)
+    result = CliRunner().invoke(app, ["company", "pause-source", "Acme", url])
+    assert result.exit_code == 0, result.output
+    assert "paused" in company_source("list", "Acme")
+    assert "Resumed" in company_source("unpause", "Acme", url)
+    assert "paused" not in company_source("list", "Acme")
+    assert "not an approved source" in company_source("pause", "Acme", url + "/unknown")
