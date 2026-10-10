@@ -516,3 +516,24 @@ def test_equal_text_with_different_links_is_not_duplicate(config: Config, storag
         "Acme", config, storage, fetcher=lambda url: f'<a href="{url}/job">Apply</a>'.encode()
     )
     assert source_duplicates(list_company_sources("Acme", storage), storage) == {}
+
+
+def test_duplicate_with_older_history_keeps_its_new_links(config: Config, storage: Storage) -> None:
+    owner = "https://acme.example.com/careers"
+    duplicate = "https://acme.example.com/jobs"
+    add_company_source("Acme", owner, storage)
+    add_company_source("Acme", duplicate, storage)
+    text, links = extract_page(PAGE_V1, duplicate)
+    import hashlib
+
+    storage.save_research_snapshot(
+        ResearchSnapshot(
+            company_key="acme",
+            url=duplicate,
+            text_hash=hashlib.sha256(text.encode()).hexdigest(),
+            links=links,
+        )
+    )
+    report = research_company("Acme", config, storage, fetcher=lambda _: PAGE_V2)
+    assert report.results[0].new_links == ["https://acme.example.com/jobs/staff-mle"]
+    assert report.results[1].new_links == []

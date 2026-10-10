@@ -510,6 +510,12 @@ def research_company(
         identity = (text_hash, tuple(sorted(links)))
         duplicate_of = seen_content.get(identity)
         if duplicate_of is not None:
+            owner = next(result for result in results if result.url == duplicate_of)
+            additional = [link for link in new_links if link not in owner.new_links]
+            if additional:
+                owner.new_links.extend(additional)
+                owner.detail = f"{len(owner.new_links)} new links across matching source histories"
+                storage.record_new_links(key, owner.url, additional, fetched_at)
             detail = f"duplicate of {duplicate_of}; diff reported there"
             new_links = []
         else:
