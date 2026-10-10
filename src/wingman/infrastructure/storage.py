@@ -113,6 +113,10 @@ CREATE TABLE IF NOT EXISTS answers (
     created_at TEXT NOT NULL
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS answers_fts USING fts5(answer_id UNINDEXED, question, answer);
+CREATE TABLE IF NOT EXISTS digest_actions (
+    action_key TEXT PRIMARY KEY,
+    payload TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS action_verdicts (
     action_key TEXT PRIMARY KEY,
     verdict TEXT NOT NULL,
@@ -717,6 +721,19 @@ class Storage:
         self._conn.commit()
         self.watchlist_delete_member("person", person.name)
         return True
+
+    def save_digest_action(self, key: str, payload: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO digest_actions (action_key, payload) VALUES (?, ?)",
+            (key, payload),
+        )
+        self._conn.commit()
+
+    def get_digest_action(self, key: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT payload FROM digest_actions WHERE action_key = ?", (key,)
+        ).fetchone()
+        return str(row[0]) if row else None
 
     def set_action_verdict(self, action_key: str, verdict: str, until: str | None = None) -> None:
         """Record a triage verdict for a digest action key (RFC-031)."""

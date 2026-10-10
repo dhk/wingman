@@ -135,8 +135,11 @@ from wingman.application.telemetry_summary import (
     summarize as summarize_telemetry,
 )
 from wingman.application.triage import (
+    current_digest,
+    done_action,
     mute_action,
     render_verdicts,
+    require_action,
     snooze_action,
     unmute_action,
 )
@@ -3819,7 +3822,8 @@ def digest(
         typer.launch(str(target))
         typer.echo(f"Opened {target}")
         return
-    typer.echo(newest.read_text(encoding="utf-8"))
+    with Storage(config.db_path) as storage:
+        typer.echo(current_digest(newest.read_text(encoding="utf-8"), storage))
 
 
 @app.command()
@@ -6619,6 +6623,20 @@ def commentary_remove(
     typer.echo(f"Removed commentary [{removed.entry_id[:8]}].")
 
 
+@actions_app.command("done")
+def actions_done(key: str = typer.Argument(..., help="Action key from a digest.")) -> None:
+    """Complete this action's evidence; future changes can recur."""
+    config = load_config()
+    _require_workspace(config, "completed")
+    try:
+        with Storage(config.db_path) as storage:
+            done_action(key, storage)
+    except IngestError as exc:
+        typer.echo(f"done failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Done {key} — new evidence can appear again.")
+
+
 @actions_app.command("mute")
 def actions_mute(
     key: str = typer.Argument(..., help="Action key (shown under each digest action)."),
@@ -6629,6 +6647,7 @@ def actions_mute(
     _require_workspace(config, "muted")
     try:
         with Storage(config.db_path) as storage:
+            require_action(key, storage)
             mute_action(key, storage)
     except IngestError as exc:
         typer.echo(f"mute failed: {exc}", err=True)
@@ -6647,6 +6666,7 @@ def actions_snooze(
     _require_workspace(config, "snoozed")
     try:
         with Storage(config.db_path) as storage:
+            require_action(key, storage)
             until = snooze_action(key, storage, days=days)
     except IngestError as exc:
         typer.echo(f"snooze failed: {exc}", err=True)

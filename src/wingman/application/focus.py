@@ -714,9 +714,10 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     # Standing triage verdicts (RFC-031): what the user muted or snoozed
     # never reaches the digest — applied before the cap so a suppressed
     # item can't crowd out a live one.
-    from wingman.application.triage import filter_actions
+    from wingman.application.triage import filter_actions, record_actions
 
     actions = _dedupe_actions_by_evidence(actions)
+    record_actions(actions, storage)
     actions, suppressed = filter_actions(actions, storage)
     actions = actions[:_MAX_ACTIONS]
 
