@@ -487,3 +487,32 @@ def test_different_pages_on_one_host_stay_separate(storage: Storage) -> None:
 
     assert created
     assert len(list_company_sources("Acme", storage)) == 2
+
+
+def test_identical_sources_diff_once_and_list_duplicate(config: Config, storage: Storage) -> None:
+    from wingman.application.research import source_duplicates
+
+    urls = ["https://acme.example.com/careers", "https://acme.example.com/jobs"]
+    for url in urls:
+        add_company_source("Acme", url, storage)
+    research_company("Acme", config, storage, fetcher=lambda _: PAGE_V1)
+    report = research_company("Acme", config, storage, fetcher=lambda _: PAGE_V2)
+    assert len([result for result in report.results if result.new_links]) == 1
+    assert report.results[1].duplicate_of == urls[0]
+    assert source_duplicates(list_company_sources("Acme", storage), storage) == {urls[1]: urls[0]}
+    assert storage.get_research_snapshot("acme", urls[1]) is not None
+    from wingman.mcp_server import company_source
+
+    assert f"duplicate of {urls[0]}" in company_source("list", "Acme")
+
+
+def test_equal_text_with_different_links_is_not_duplicate(config: Config, storage: Storage) -> None:
+    from wingman.application.research import source_duplicates
+
+    urls = ["https://acme.example.com/one", "https://acme.example.com/two"]
+    for url in urls:
+        add_company_source("Acme", url, storage)
+    research_company(
+        "Acme", config, storage, fetcher=lambda url: f'<a href="{url}/job">Apply</a>'.encode()
+    )
+    assert source_duplicates(list_company_sources("Acme", storage), storage) == {}

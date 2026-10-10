@@ -134,6 +134,7 @@ from wingman.application.research import (
     rename_company,
     render_research_report,
     research_company,
+    source_duplicates,
 )
 from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import (
@@ -4293,6 +4294,7 @@ def company_source(
                         f"No approved research sources for {name!r}. "
                         "Approve one with company_source(action='add', ...)."
                     )
+                duplicates = source_duplicates(sources, storage)
                 lines = []
                 for entry in sources:
                     snapshot = storage.get_research_snapshot(entry.company_key, entry.url)
@@ -4302,6 +4304,8 @@ def company_source(
                         if snapshot
                         else "no snapshot yet"
                     )
+                    if entry.url in duplicates:
+                        state += f", duplicate of {duplicates[entry.url]}"
                     tag = f" ({entry.label})" if entry.label else ""
                     kept = ", text retained" if entry.retain else ""
                     lines.append(f"- {entry.url}{tag} — {state}{kept}")

@@ -455,6 +455,8 @@ def _company_deep(
         for result in research.results:
             target.lines.append(f"research {result.url}: {result.detail}")
             target.lines.extend(f"  new: [link]({link})" for link in result.new_links)
+            if result.duplicate_of is not None:
+                continue
             if result.status == "failed":
                 actions.append(
                     ActionItem(
@@ -474,7 +476,16 @@ def _company_deep(
             # absorbed it — so it has to be carried forward out-of-band
             # (#481). Carried links go first: they've waited longest, so
             # they get first claim on this run's budget.
-            carried = storage.list_pending_job_links(key, result.url)
+            queue_sources = [result.url] + [
+                item.url for item in research.results if item.duplicate_of == result.url
+            ]
+            carried = list(
+                dict.fromkeys(
+                    link
+                    for source_url in queue_sources
+                    for link in storage.list_pending_job_links(key, source_url)
+                )
+            )
             jobish = carried + [link for link in fresh_jobish if link not in carried]
             if jobish:
                 storage.add_pending_job_links(key, result.url, jobish, datetime.now(UTC))
