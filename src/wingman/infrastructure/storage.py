@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from array import array
 from collections.abc import Iterable
@@ -295,7 +296,39 @@ class Storage:
         self._conn.executescript(_SCHEMA)
         self._migrate_document_key()
         self._migrate_value_profile_view()
+        self._migrate_about_retention()
         self._conn.commit()
+
+    def _migrate_about_retention(self) -> None:
+        """Enable existing about sources once (#463), preserving future opt-outs.
+
+        Legacy False cannot distinguish a default from a deliberate opt-out;
+        this one-time change is the approved product migration. Update raw
+        payloads to preserve fields from other releases and leave snapshots
+        untouched. The marker and updates commit together; the marker insert
+        serializes concurrent openers before either reads source payloads.
+        """
+        self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)")
+        inserted = self._conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (name) VALUES (?)",
+            ("463_about_retention",),
+        )
+        if not inserted.rowcount:
+            return
+        rows = self._conn.execute(
+            "SELECT company_key, url, payload FROM company_sources"
+        ).fetchall()
+        for key, url, raw in rows:
+            payload = json.loads(raw)
+            if (payload.get("label") or "").strip().casefold() != "about":
+                continue
+            if payload.get("retain") is True:
+                continue
+            payload["retain"] = True
+            self._conn.execute(
+                "UPDATE company_sources SET payload = ? WHERE company_key = ? AND url = ?",
+                (json.dumps(payload), key, url),
+            )
 
     def _migrate_document_key(self) -> None:
         """Pre-RFC-028 databases lack source_records.document_key: add and backfill.

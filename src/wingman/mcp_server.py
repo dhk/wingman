@@ -4261,8 +4261,8 @@ def company_source(
     retain=True (RFC-060) additionally keeps that page's prose as a document
     attributed to the company, so 'company_pov', 'search' and 'evidence' can
     quote it — a values or about page becomes citable instead of only a hash
-    that says it changed. The fetch is identical either way. Off by default;
-    suits pages that change rarely, not a careers page. Pass it on an
+    that says it changed. The fetch is identical either way. On by default for
+    new sources labelled about; off for other labels. False opts out. Pass it on an
     already-approved source to change your mind (None leaves it alone).
     """
     config = _ready_config()

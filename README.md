@@ -72,8 +72,11 @@ people and blogs: similarity, deterministic dossiers with
 `[fact]`/`[inference]` labels, model-synthesized themes validated
 quote-by-quote (RFC-016), and approved-source research — you name the
 careers page or newsroom, `wingman company research` diffs it, and new
-links are the hiring signal (RFC-015). Add `--retain` to a source and that
-page's prose is kept as citable evidence too, so a values page can be
+links are the hiring signal (RFC-015). New sources labelled `about` retain
+prose by default; existing `about` sources are enabled once on upgrade,
+and their next research fetch keeps the text. `--no-retain` opts out
+afterward. Other labels need `--retain` to
+keep prose as citable evidence too, so a values page can be
 quoted rather than only hashed (RFC-060) — same page, same one GET. New
 job links get judged against `job-criteria.md` automatically (RFC-035);
 `wingman company score-board "Acme"` scores EVERY link a watched page
