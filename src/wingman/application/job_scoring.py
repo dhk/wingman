@@ -252,6 +252,14 @@ class ScoredOpening(BaseModel):
         return bool(self.hard_filter_failed)
 
 
+class BudgetDrop(BaseModel):
+    company: str
+    url: str
+    stage: str  # fetch | judge
+    budget: int
+    reason: str = "budget"
+
+
 class OpeningScores(BaseModel):
     """Everything one company's jobish links produced this run."""
 
@@ -264,6 +272,7 @@ class OpeningScores(BaseModel):
     # and are reported in notes instead): a budget skip is the one case the
     # caller must keep pending rather than treat as resolved (#481).
     pending: list[str] = Field(default_factory=list)
+    drops: list[BudgetDrop] = Field(default_factory=list)
 
 
 JUDGE_SYSTEM_PROMPT = (
@@ -473,6 +482,10 @@ def score_company_openings(
     max_fetched = MAX_FETCHED_PER_COMPANY if apply_budget else None
     max_judged = MAX_JUDGED_PER_COMPANY if apply_budget else None
     if max_fetched is not None and len(links) > max_fetched:
+        result.drops.extend(
+            BudgetDrop(company=company, url=url, stage="fetch", budget=max_fetched)
+            for url in links[max_fetched:]
+        )
         result.notes.append(
             f"{len(links) - max_fetched} of {len(links)} job link(s) "
             f"not fetched (budget {max_fetched}/run) — carried forward to the next run"
@@ -499,6 +512,10 @@ def score_company_openings(
         result.notes.append(
             f"{len(postings) - max_judged} opening(s) beyond the judge budget "
             f"({max_judged}/run) left unscored — carried forward to the next run"
+        )
+        result.drops.extend(
+            BudgetDrop(company=company, url=url, stage="judge", budget=max_judged)
+            for url, _ in postings[max_judged:]
         )
         postings = postings[:max_judged]
     for url, text in postings:

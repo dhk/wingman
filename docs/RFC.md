@@ -1439,3 +1439,8 @@ identity key" and "do not obtain `sub` from email".
 ### RFC-031 addendum (#501) — Durable decision
 
 `actions done <key>` and `action_triage(action="done", key=...)` complete the recorded action content and evidence, without standing suppression. Matching evidence remains completed; new evidence or changed action content can recur. Done verdicts appear separately in the verdict list and can be cleared with unmute. Overnight records generated actions before filtering, preserving the evidence available when completed. MCP and CLI mute/snooze/done reject unknown keys; legacy digests need one overnight refresh before triage. Digest files remain immutable historical snapshots.
+
+
+### RFC-018 addendum (#502) — Durable decision
+
+Each overnight run writes a versioned JSON sidecar and latest.json alongside canonical Markdown and HTML. `digest(as_json=True)` or `wingman digest --json` returns structured actions with their triage keys, per-target step statuses/details, and a first-class drop_list. Each budget drop names company, exact URL, stage (fetch or judge), budget and reason; records are captured where the budget is applied, never parsed from prose. Budget-skipped links remain queued for later runs (#481). Current JSON action reads honor triage; archived artifacts remain unchanged. Runs predating sidecars have no recoverable exact drop list and report that limitation instead of inventing history.

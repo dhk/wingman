@@ -458,3 +458,88 @@ def test_mcp_job_criteria_roundtrip(workspace: Config) -> None:
     # the docstring carries the interview protocol (RFC-025/030/031 convention)
     assert "AskUserQuestion" in (job_criteria.__doc__ or "")
     assert "confirms the wording" in (job_criteria.__doc__ or "")
+
+
+def test_budget_drop_records_name_urls_and_cutting_budget(
+    workspace: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import wingman.application.job_scoring as scoring
+
+    monkeypatch.setattr(scoring, "MAX_FETCHED_PER_COMPANY", 8)
+    monkeypatch.setattr(scoring, "MAX_JUDGED_PER_COMPANY", 4)
+    save_criteria(workspace, CRITERIA)
+    links = [f"https://acme.example/jobs/{i}" for i in range(10)]
+    with Storage(workspace.db_path) as storage:
+        outcome = score_company_openings(
+            "Acme",
+            links,
+            workspace,
+            storage,
+            RecordedProvider(_judgment()),
+            fetcher=lambda _: POSTING.encode(),
+            embedder=HashedEmbeddingProvider(),
+        )
+    assert {drop.url for drop in outcome.drops if drop.stage == "fetch"} == set(links[8:])
+    assert {drop.url for drop in outcome.drops if drop.stage == "judge"} == set(links[4:8])
+    assert {drop.budget for drop in outcome.drops} == {4, 8}
+    assert all(drop.company == "Acme" for drop in outcome.drops)
+
+
+def test_json_digest_persists_budget_drops_and_triage_keys(
+    workspace: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import wingman.application.job_scoring as scoring
+    from wingman.application import focus
+    from wingman.mcp_server import action_triage, digest
+    from wingman.providers import router
+
+    save_criteria(workspace, CRITERIA)
+    links = [f"https://acme.example/jobs/{i}" for i in range(10)]
+    monkeypatch.setattr(scoring, "MAX_FETCHED_PER_COMPANY", 8)
+    monkeypatch.setattr(scoring, "MAX_JUDGED_PER_COMPANY", 4)
+    monkeypatch.setattr(router, "get_provider", lambda *args: RecordedProvider(_judgment()))
+    monkeypatch.setattr(router, "get_embedding_provider", lambda *args: HashedEmbeddingProvider())
+    monkeypatch.setattr(scoring, "_posting_text", lambda *args: POSTING)
+
+    def deep(
+        name: str,
+        config: Config,
+        storage: Storage,
+        actions: list[focus.ActionItem],
+        **kwargs: object,
+    ) -> focus.OvernightTarget:
+        target = focus.OvernightTarget(name=name, kind="company")
+        focus._scored_opening_actions(name, links, config, storage, target, actions)
+        return target
+
+    monkeypatch.setattr(focus, "_company_deep", deep)
+    with Storage(workspace.db_path) as storage:
+        storage.watchlist_add("overnight", "company", "Acme")
+        report = focus.overnight_run(workspace, storage)
+    archived = json.loads(Path(report.digest_path).with_suffix(".json").read_text())
+    current = json.loads(digest(as_json=True))
+    assert len(current["drop_list"]) == 6
+    assert {item["url"] for item in current["drop_list"]} == set(links[4:])
+    assert current["targets"][0]["steps"][0]["name"] == "scoring"
+    key = current["actions"][0]["key"]
+    assert "Done" in action_triage("done", key=key)
+    assert key not in {item["key"] for item in json.loads(digest(as_json=True))["actions"]}
+    assert archived["actions"]  # historical snapshot survives completion
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+
+    result = CliRunner().invoke(app, ["digest", "--json"])
+    assert result.exit_code == 0
+    assert json.loads(result.output)["drop_list"] == current["drop_list"]
+
+
+def test_json_digest_refuses_to_invent_historical_drops(workspace: Config) -> None:
+    from wingman.application.focus import json_digest
+
+    folder = workspace.reports_dir / "digests"
+    folder.mkdir(parents=True)
+    (folder / "overnight-20260829T000000Z.md").write_text("# Old digest\n2 links not fetched")
+    with Storage(workspace.db_path) as storage:
+        with pytest.raises(IngestError, match="cannot be reconstructed"):
+            json_digest(workspace, storage)
