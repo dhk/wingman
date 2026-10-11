@@ -221,6 +221,12 @@ Two deferrals, on the demonstrated-need rule:
 
 **Revisit if.** Users want research inside `sync`/`make-it-so` (the fetch consent and cost move with it — an explicit flag, not a default), or want change history rather than a latest-snapshot diff (snapshot generations become a real archive), or want alerting (that is RFC-006 territory: Wingman still never sends anything).
 
+### RFC-015 addendum (#434, #548) — Durable decision
+
+`wingman company pause-source "Company" <url>` suspends one approved URL; `unpause-source` resumes it. MCP uses `company_source(action="pause"|"unpause", name=..., url=...)`. Source listings show paused status. Pausing preserves snapshots, retained prose, queued links, company records, POV and watchlist membership. Explicit research and overnight skip the paused URL and its queued scoring work, producing no fetch-failure action. Unpause resumes against the preserved baseline. Removing a source remains withdrawal of its evidence.
+
+Paused sources also exclude saved snapshot links from explicit full-board scoring. Pending overnight links remain queued until resumed, and dossier/pack source lists mark paused pages.
+
 ## RFC-016: Model-synthesized company themes (resolves an RFC-012 deferral)
 
 **Decision.** `wingman company pov "X" [--refresh]` synthesizes company-level themes from the company's document pool — the same pool the dossier reads: writing by watched people at the company plus org-attributed documents. It is the existing POV-card machinery pointed at a company: one synthesize_balanced call, every proposed theme kept **only if its quote appears verbatim in a stored document** (the fabrication guard is unchanged — a company theme is still only as real as the sentence it quotes). Author attribution rides each document's title into the prompt and onto each surviving stance's `doc_title`, so a theme always names who actually said it. The card is stored in `pov_cards` under the reserved id `__company__{company_key}` (the `__corpus__` pattern, extended); a stored card renders without any model call, `--refresh` rebuilds. The dossier renders the stored card deterministically in a "Company themes (synthesized …)" section — dossier generation itself still makes no model call — and names the command in Gaps when documents exist but no card does. MCP parity: `company_pov`.

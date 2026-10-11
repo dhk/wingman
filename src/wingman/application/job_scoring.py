@@ -563,6 +563,8 @@ def score_full_board(
     links: list[str] = []
     seen: set[str] = set()
     for source in storage.list_company_sources(key):
+        if source.paused:
+            continue
         snapshot = storage.get_research_snapshot(key, source.url)
         if snapshot is None:
             continue
