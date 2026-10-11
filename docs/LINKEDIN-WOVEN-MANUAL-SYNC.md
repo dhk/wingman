@@ -2,20 +2,23 @@
 
 A session coordinates two separate systems: one authenticated tenant on
 Wingman's shared server, and the operator's authorized Woven graph on their
-Mac. Neither server calls the other. This is the procedure for #479;
+Mac. Wingman can call Woven read-only via `woven_warm_path` (RFC-043);
+that lookup does not import or synchronize either database. This is the procedure for #479;
 [#467](https://github.com/dhk/wingman/issues/467) remains open and does not
 replace it with a working bridge.
 
 ## Availability and stop conditions
 
-Verified on 2026-10-09 against Wingman main and Woven main
+Baseline checked on 2026-10-09 against Wingman main and Woven main
 [`a04f6e8`](https://github.com/dhk/woven/tree/a04f6e8fcbe68f01f36e749427fd0b0df9d90a5f):
 
 - Wingman has profile import (`ingest-linkedin`), contact import
   (`people_import_connections` / `people import-connections`) and tenant-scoped
-  MCP requests. [PR #606](https://github.com/dhk/wingman/pull/606) adds contact
-  upsert and email backfill; verify that version is deployed before relying
-  on a repeated contact import to update existing people.
+  MCP requests. Contact upsert and email backfill are tracked by
+  [#478](https://github.com/dhk/wingman/issues/478) and
+  [#422](https://github.com/dhk/wingman/issues/422); verify those changes are
+  deployed before relying on repeated imports or updated/unchanged counts.
+  The baseline reports Created / Already known instead.
 - The profile before/after and thinness dry-run required by the sync design
   is not implemented. [#420](https://github.com/dhk/wingman/issues/420) is open;
   `wingman ingest-linkedin --help` has no dry-run option, and uploading a zip
@@ -63,6 +66,12 @@ Do not guess a `--dry-run` flag or a Woven script filename.
    Call `get_graph_stats` and verify the graph and contributor coverage before
    any refresh. Follow that guide's logging controls for private queries.
 
+Wingman's optional read-only lookup uses `WINGMAN_WOVEN_URL` pointing at a
+reachable, authorized Woven streamable-HTTP MCP endpoint. A peer stdio entry
+alone does not configure that endpoint. Set it in the environment of the
+Wingman process that should make the lookup, then reload that process using
+its deployment procedure. Do not restart unrelated tenants or services.
+
 ## Write sequence, once both prerequisites ship
 
 1. Run the deployed Wingman **read-only** import preview against the exact
@@ -70,7 +79,21 @@ Do not guess a `--dry-run` flag or a Woven script filename.
    to the owner. If it is unexpectedly thin, rejected or ambiguous, stop:
    neither Wingman nor Woven should change. The eventual #420 interface must
    supply the real preview command; none exists in the checked version.
-2. After approval of the preview, import the profile into that same Wingman
+2. Before any import, create and verify a private Wingman backup for the
+   selected tenant, with no cloud upload unless separately approved:
+
+   ```bash
+   WINGMAN_DATA_DIR=/absolute/tenant-workspace wingman backup /absolute/private/backups --no-drive
+   ```
+
+   Preserve the printed archive path and a copy of the authorized Woven
+   snapshot. Recovery uses `wingman restore <archive>` in the same tenant
+   environment; restoring over a live database requires `--force` and the
+   owner's explicit approval because it replaces current workspace state.
+   Stop the affected workspace's writers before restoring. Verify with
+   `status()` and `career_profile()` afterward.
+
+   After approval of the preview, import the profile into that same Wingman
    tenant. The existing server-side command is shown below for an authorized
    operator running as the workspace owner. Both paths are on the server,
    not the Mac; resolve the tenant directory from the operator's registry.
@@ -84,7 +107,11 @@ Do not guess a `--dry-run` flag or a Woven script filename.
    Do not move on merely because a file uploaded successfully.
 3. Import contacts separately; profile upload does not seed the address book.
    In the same tenant's MCP session, with the exact zip already staged on the
-   server at an operator-confirmed private path:
+   server at an operator-confirmed private path. An authorized operator must
+   copy the exact zip into that tenant's private inbox with workspace-owner
+   permissions; confirm its SHA-256 matches the original. The upload UI also
+   stores a zip in the inbox but immediately imports the profile, so it is
+   not a staging-only or preview route:
 
    ```text
    people_import_connections(export_path="/absolute/private/export.zip")
