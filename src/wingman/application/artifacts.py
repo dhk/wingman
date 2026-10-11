@@ -7,6 +7,8 @@ of minting a second one.
 
 from __future__ import annotations
 
+import re
+
 from wingman.application.ingest import IngestError
 from wingman.domain.artifacts import ARTIFACT_KINDS, PublishedArtifact
 from wingman.infrastructure.storage import Storage
@@ -14,9 +16,13 @@ from wingman.infrastructure.storage import Storage
 
 def _valid_kind(kind: str) -> str:
     cleaned = kind.strip().lower()
-    if cleaned not in ARTIFACT_KINDS:
+    if cleaned not in ARTIFACT_KINDS and not re.fullmatch(
+        r"custom:[a-z0-9][a-z0-9_-]{0,63}", cleaned
+    ):
         known = ", ".join(ARTIFACT_KINDS)
-        raise IngestError(f"unknown artifact kind {kind!r} — expected one of: {known}")
+        raise IngestError(
+            f"unknown artifact kind {kind!r} — expected one of: {known}, or custom:<slug>"
+        )
     return cleaned
 
 
@@ -34,7 +40,7 @@ def remember_artifact(
     artifact = PublishedArtifact(
         kind=_valid_kind(kind),
         url=_valid_url(url),
-        title=title.strip(),
+        title=" ".join(title.split()),
         built_from=built_from.strip(),
     )
     storage.record_published_artifact(artifact)
@@ -65,7 +71,8 @@ def render_artifacts(artifacts: list[PublishedArtifact]) -> str:
         )
     lines = ["Published artifacts (wingman records the url; it never publishes anything):"]
     for artifact in artifacts:
-        title = f" — {artifact.title}" if artifact.title else ""
+        label = " ".join(artifact.title.split())
+        title = f" — {label}" if label else ""
         lines.append(
             f"- {artifact.kind}{title}\n"
             f"    {artifact.url}\n"
