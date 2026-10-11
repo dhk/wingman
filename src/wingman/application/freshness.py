@@ -321,10 +321,11 @@ def stale_artefacts(config: Config, storage: Storage) -> list[ArtefactStaleness]
     reports.extend(
         ArtefactStaleness(
             kind=artifact.kind,
-            subject=artifact.title or artifact.kind,
+            subject=" ".join((artifact.title or artifact.kind).split()),
             checked=False,
             reasons=[
-                "not a Wingman-rendered view; last recorded " + artifact.published_at.isoformat()
+                "freshness unknown (unchecked): not a Wingman-rendered view; last recorded "
+                + artifact.published_at.isoformat()
             ],
         )
         for artifact in storage.list_published_artifacts()

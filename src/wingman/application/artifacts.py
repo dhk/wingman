@@ -40,7 +40,7 @@ def remember_artifact(
     artifact = PublishedArtifact(
         kind=_valid_kind(kind),
         url=_valid_url(url),
-        title=title.strip(),
+        title=" ".join(title.split()),
         built_from=built_from.strip(),
     )
     storage.record_published_artifact(artifact)
@@ -71,7 +71,8 @@ def render_artifacts(artifacts: list[PublishedArtifact]) -> str:
         )
     lines = ["Published artifacts (wingman records the url; it never publishes anything):"]
     for artifact in artifacts:
-        title = f" — {artifact.title}" if artifact.title else ""
+        label = " ".join(artifact.title.split())
+        title = f" — {label}" if label else ""
         lines.append(
             f"- {artifact.kind}{title}\n"
             f"    {artifact.url}\n"

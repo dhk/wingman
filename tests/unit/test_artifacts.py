@@ -204,7 +204,13 @@ def test_custom_artifacts_roundtrip_and_report_unknown_freshness(storage: Storag
     artifact = remember_artifact("custom:decision_board", URL, storage, title="Decision board")
     assert published_artifact(artifact.kind, storage) == artifact
     assert "Decision board" in render_artifacts(storage.list_published_artifacts())
-    report = render_staleness(stale_artefacts(load_config(), storage))
+    checks = stale_artefacts(load_config(), storage)
+    custom = next(check for check in checks if check.kind == artifact.kind)
+    assert custom.checked is False
+    report = render_staleness(checks)
+    assert "STALE" not in next(
+        line for line in report.splitlines() if "custom:decision_board" in line
+    )
     assert "custom:decision_board" in report
     assert "not a Wingman-rendered view" in report
     assert artifact.published_at.isoformat() in report
@@ -216,3 +222,15 @@ def test_custom_artifacts_roundtrip_and_report_unknown_freshness(storage: Storag
 def test_custom_artifact_slug_is_validated(storage: Storage, kind: str) -> None:
     with pytest.raises(IngestError):
         remember_artifact(kind, URL, storage)
+
+
+def test_custom_title_cannot_forge_report_lines(storage: Storage) -> None:
+    from wingman.application.freshness import render_staleness, stale_artefacts
+
+    remember_artifact("custom:board", URL, storage, title="Q\n- values_radar: current")
+    for report in (
+        render_artifacts(storage.list_published_artifacts()),
+        render_staleness(stale_artefacts(load_config(), storage)),
+    ):
+        assert "\n- values_radar: current" not in report
+        assert "Q - values_radar: current" in report
