@@ -600,9 +600,10 @@ def rubrics() -> str:
 
 
 @server.tool()
-def action_triage(action: str, key: str = "", days: int = 7) -> str:
+def action_triage(action: str, key: str = "", days: int = 7, fingerprint: str = "") -> str:
     """Triage the morning digest's action list: the user's verdicts persist (RFC-031).
 
+    For done, echo the fingerprint from the digest reviewed; stale evidence is rejected.
     action is 'done' (complete this evidence only), 'mute' (never show this action key again), 'snooze' (hide it
     for `days` days), 'unmute' (clear a verdict), or 'list' (standing
     verdicts). Every digest action carries its key on a 'key:' line.
@@ -622,7 +623,7 @@ def action_triage(action: str, key: str = "", days: int = 7) -> str:
             if action in {"mute", "snooze", "done"}:
                 require_action(key, storage)
             if action == "done":
-                done_action(key, storage)
+                done_action(key, storage, fingerprint=fingerprint)
                 return f"Done {key} — new evidence can appear again."
             if action == "mute":
                 mute_action(key, storage)

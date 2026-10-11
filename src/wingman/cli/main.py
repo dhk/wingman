@@ -3807,6 +3807,8 @@ def digest(
     """Show the newest overnight digest — the morning read, one word away."""
     configure_logging()
     config = load_config()
+    if as_json and (path_only or open_it):
+        raise typer.BadParameter("--json cannot be combined with --path or --open")
     if as_json:
         try:
             with Storage(config.db_path) as storage:
@@ -6636,13 +6638,18 @@ def commentary_remove(
 
 
 @actions_app.command("done")
-def actions_done(key: str = typer.Argument(..., help="Action key from a digest.")) -> None:
+def actions_done(
+    key: str = typer.Argument(..., help="Action key from a digest."),
+    fingerprint: str = typer.Option(
+        ..., "--fingerprint", help="Evidence fingerprint from the digest reviewed."
+    ),
+) -> None:
     """Complete this action's evidence; future changes can recur."""
     config = load_config()
     _require_workspace(config, "completed")
     try:
         with Storage(config.db_path) as storage:
-            done_action(key, storage)
+            done_action(key, storage, fingerprint=fingerprint)
     except IngestError as exc:
         typer.echo(f"done failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc

@@ -522,7 +522,9 @@ def test_json_digest_persists_budget_drops_and_triage_keys(
     assert {item["url"] for item in current["drop_list"]} == set(links[4:])
     assert current["targets"][0]["steps"][0]["name"] == "scoring"
     key = current["actions"][0]["key"]
-    assert "Done" in action_triage("done", key=key)
+    assert "Done" in action_triage(
+        "done", key=key, fingerprint=current["actions"][0]["fingerprint"]
+    )
     assert key not in {item["key"] for item in json.loads(digest(as_json=True))["actions"]}
     assert archived["actions"]  # historical snapshot survives completion
     from typer.testing import CliRunner
