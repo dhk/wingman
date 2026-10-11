@@ -357,7 +357,7 @@ def test_cli_values_chart_without_a_profile_fails_cleanly(
     assert "no value profile built" in result.output
 
 
-def test_mcp_values_chart_writes_and_reports_path(
+def test_mcp_values_chart_returns_inline_svg_without_server_path(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from wingman import mcp_server
@@ -369,8 +369,13 @@ def test_mcp_values_chart_writes_and_reports_path(
 
     result = mcp_server.values_chart()
     assert "Acting as: yourself." in result
-    assert "Wrote" in result
-    assert str(config.reports_dir / "charts") in result
+    assert "```svg\n" in result
+    assert str(config.data_dir) not in result
+    assert "Open it in a browser" not in result
+    svg = result.split("```svg\n", 1)[1].rsplit("```", 1)[0].strip()
+    assert _parse(svg).tag == SVG_NS + "svg"
+    assert len(svg.encode("utf-8")) <= 100_000
+    assert list((config.reports_dir / "charts").glob("*.svg"))
 
 
 def test_mcp_values_chart_without_a_profile_returns_a_message_not_a_traceback(
@@ -402,7 +407,9 @@ def test_mcp_values_chart_reads_active_persona(
     coach_persona("set", "Mike Chen")
     result = values_chart()
     assert "Acting as: coach for Mike Chen." in result
-    assert "mike-chen" in result
+    assert "Mike Chen" in result
+    assert "```svg\n" in result
+    assert str(config.data_dir) not in result
 
     coach_persona("clear")
 
@@ -994,3 +1001,47 @@ def test_the_export_stamp_records_which_view_it_drew(workspace: Path) -> None:
 
     _subject, view, _fingerprint = stamp_in(export.path.read_text(encoding="utf-8"))
     assert view is ValueView.WORK
+
+
+def test_mcp_values_chart_delivers_svg_through_registered_tool(workspace: Path) -> None:
+    import asyncio
+
+    from wingman.mcp_server import server
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_profile([_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]))
+    result = asyncio.run(server.call_tool("values_chart", {}))
+    content = result[0] if isinstance(result, tuple) else result
+    text = "\n".join(block.text for block in content if block.type == "text")
+    assert str(config.data_dir) not in text
+    svg = text.split("```svg\n", 1)[1].rsplit("```", 1)[0].strip()
+    assert _parse(svg).tag == SVG_NS + "svg"
+
+
+def test_mcp_values_chart_stops_oversized_inline_payload(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from io import BytesIO
+    from types import SimpleNamespace
+
+    from wingman.mcp_server import values_chart
+
+    config = load_config()
+    Storage(config.db_path).close()
+
+    class OversizedChart:
+        def open(self, mode: str) -> BytesIO:
+            assert mode == "rb"
+            return BytesIO(b"x" * 100_001)
+
+    monkeypatch.setattr(
+        "wingman.reporting.radar.export_value_radar",
+        lambda *args, **kwargs: SimpleNamespace(
+            path=OversizedChart(), scoring_superseded=False, stale_new_captures=0
+        ),
+    )
+    result = values_chart()
+    assert "100 KB" in result and "Inline delivery stopped" in result
+    assert "```svg" not in result
+    assert str(config.data_dir) not in result

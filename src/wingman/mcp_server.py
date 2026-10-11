@@ -3845,8 +3845,11 @@ def values_chart(out_dir: str = "", view: str = "character") -> str:
     radar/spider chart (v3 of issue #240 — presentation only: no model call,
     nothing recomputed, just a picture of the already-computed ValueProfile).
 
-    Writes under reports/charts/ (or out_dir, if given) and returns the
-    written path. Requires a stored profile — call my_values(refresh=True)
+    Writes under reports/charts/ (or out_dir, if given) and returns the SVG
+    inline, without a server filesystem path. Clients can render the SVG
+    payload directly. Inline delivery stops above 100,000 UTF-8 bytes and
+    asks for a delivery-design review; it never silently truncates the chart.
+    Requires a stored profile — call my_values(refresh=True)
     first if none exists yet; this tool never builds or rebuilds one itself.
     A stale stored profile (new captures since it was built) still renders,
     with the same "N new captures" note my_values already shows, printed on
@@ -3898,10 +3901,21 @@ def values_chart(out_dir: str = "", view: str = "character") -> str:
             f"\n{export.stale_new_captures} new {noun} since this profile was built — "
             f"{refresh_tool(value_view)} to include them."
         )
-    return (
-        f"{acting_as}\nWrote {export.path}{warnings}\n"
-        "Open it in a browser, or embed it (it's self-contained SVG)."
-    )
+    try:
+        with export.path.open("rb") as chart_file:
+            payload = chart_file.read(100_001)
+    except OSError:
+        return (
+            f"{acting_as}{warnings}\nThe chart was written, but could not be read for inline "
+            "delivery. Check report-file permissions on the host and retry."
+        )
+    if len(payload) > 100_000:
+        return (
+            f"{acting_as}{warnings}\nThe chart was written, but exceeds the 100 KB inline "
+            "limit. Inline delivery stopped; review the delivery design before continuing."
+        )
+    svg = payload.decode("utf-8")
+    return f"{acting_as}{warnings}\n\n```svg\n{svg}\n```"
 
 
 def _miso_lines(report: MisoReport) -> str:
