@@ -10,8 +10,10 @@ fetch/sync/discover tools do the same explicit, read-only public-feed reads
 as their CLI counterparts (RFC-009/011), and embedding tools carry the same
 RFC-010 egress semantics.
 
-Parity rule (RFC-008): the MCP surface tracks the CLI — every user-facing
-capability ships on both. The one adaptation: the CLI's interactive
+Parity decisions (RFC-008) are recorded in docs/SURFACE-PARITY.md.
+The surfaces share application code but retain documented gaps and local-only
+controls; a live inventory contract test requires a decision for each entry.
+One adaptation: the CLI's interactive
 confirm-before-attach for feeds becomes a two-tool pair here
 (feed_discover, then feed_attach only after the user says yes in
 conversation).

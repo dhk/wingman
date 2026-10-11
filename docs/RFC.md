@@ -112,6 +112,10 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 
 **Revisit if.** A non-MCP consumer appears (REST/web UI), or remote access from claude.ai web/mobile is wanted (remote MCP with auth — a separate durable decision).
 
+### Parity decision ledger (#598) — Durable decision
+
+The exhaustive [CLI/MCP ledger](SURFACE-PARITY.md) records existing counterparts, deliberate exceptions, and deferred gaps. A contract test enumerates registered tools and all CLI leaf commands (including aliases), checks exact inventory coverage and reciprocal mappings, and rejects unmatched entries without a reason. Adding a row does not implement a gap. New tools, especially hosted ingestion, require a separate design; this change adds none.
+
 ## RFC-009: Read-only public-feed fetching, explicitly invoked
 
 **Decision.** Wingman's first network access: `wingman people fetch` reads the public, unauthenticated RSS feed of a person the user has explicitly put on their watchlist. The rules, enforced in one place (`infrastructure/fetch.py`):
