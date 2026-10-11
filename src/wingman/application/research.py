@@ -241,6 +241,13 @@ def list_company_sources(name: str, storage: Storage) -> list[CompanySource]:
     return storage.list_company_sources(_resolve_company(name))
 
 
+def _content_identity(
+    company: str, text_hash: str, links: list[str]
+) -> tuple[str, str, tuple[str, ...]]:
+    """Equal prose is only a duplicate when its absolute link evidence also matches."""
+    return company, text_hash, tuple(sorted(links))
+
+
 def source_duplicates(sources: list[CompanySource], storage: Storage) -> dict[str, str]:
     """Identify identical latest snapshots within one company's approved sources."""
     seen: dict[tuple[str, str, tuple[str, ...]], str] = {}
@@ -249,7 +256,7 @@ def source_duplicates(sources: list[CompanySource], storage: Storage) -> dict[st
         snapshot = storage.get_research_snapshot(source.company_key, source.url)
         if snapshot is None:
             continue
-        identity = (source.company_key, snapshot.text_hash, tuple(sorted(snapshot.links)))
+        identity = _content_identity(source.company_key, snapshot.text_hash, snapshot.links)
         if identity in seen:
             duplicates[source.url] = seen[identity]
         else:
@@ -453,7 +460,7 @@ def research_company(
     results: list[SourceResult] = []
     failed = 0
     kept = 0
-    seen_content: dict[tuple[str, tuple[str, ...]], str] = {}
+    seen_content: dict[tuple[str, str, tuple[str, ...]], str] = {}
     for source in sources:
         try:
             data = fetch(source.url)
@@ -507,7 +514,7 @@ def research_company(
                 fetched_at=fetched_at,
             )
         )
-        identity = (text_hash, tuple(sorted(links)))
+        identity = _content_identity(key, text_hash, links)
         duplicate_of = seen_content.get(identity)
         if duplicate_of is not None:
             owner = next(result for result in results if result.url == duplicate_of)

@@ -1439,3 +1439,5 @@ identity key" and "do not obtain `sub` from email".
 ### RFC-015 addendum (#464) — Durable decision
 
 Research keeps each approved URL's baseline, but identical visible-text hashes and absolute link sets within one company's current fetch are diffed once. The later source is reported as `duplicate of <url>` in research and source listings. Comparing links as well as text prevents unrelated link-only pages from collapsing. Duplicate pages do not repeat scoring or consume action slots. Existing action-level deduplication additionally coalesces overlapping evidence for the same action kind and company before the ten-action cap. Distinct kinds of action remain distinct.
+
+Listing and run-time duplicate detection share the same company/text/link identity. Overnight coverage verifies that matching sources score their combined pending evidence once.

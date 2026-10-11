@@ -512,9 +512,10 @@ def test_equal_text_with_different_links_is_not_duplicate(config: Config, storag
     urls = ["https://acme.example.com/one", "https://acme.example.com/two"]
     for url in urls:
         add_company_source("Acme", url, storage)
-    research_company(
+    report = research_company(
         "Acme", config, storage, fetcher=lambda url: f'<a href="{url}/job">Apply</a>'.encode()
     )
+    assert all(result.duplicate_of is None for result in report.results)
     assert source_duplicates(list_company_sources("Acme", storage), storage) == {}
 
 

@@ -771,3 +771,36 @@ def test_budget_skipped_job_link_is_scored_on_a_later_run(
         _company_deep("Acme", config, storage, actions2)
         assert _scored_urls(actions2) == {"https://acme.example.com/jobs/two"}
         assert storage.list_pending_job_links("acme", "https://acme.example.com/careers") == []
+
+
+def test_duplicate_sources_score_combined_pending_links_once(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from wingman.application.focus import _company_deep
+    from wingman.application.research import add_company_source
+
+    config = load_config()
+    owner = "https://acme.example/careers"
+    duplicate = "https://acme.example/jobs"
+    page = b"<html><body>no current openings</body></html>"
+    monkeypatch.setattr("wingman.application.research.fetch_url", lambda url: page)
+    calls = []
+
+    def score(name, links, *args):
+        calls.append(links)
+        return True
+
+    monkeypatch.setattr("wingman.application.focus._scored_opening_actions", score)
+    with Storage(config.db_path) as storage:
+        add_company_source("Acme", owner, storage)
+        add_company_source("Acme", duplicate, storage)
+        storage.add_pending_job_links(
+            "acme", owner, ["https://acme.example/jobs/one"], datetime.now(UTC)
+        )
+        storage.add_pending_job_links(
+            "acme", duplicate, ["https://acme.example/jobs/two"], datetime.now(UTC)
+        )
+        _company_deep("Acme", config, storage, [])
+    assert calls == [["https://acme.example/jobs/one", "https://acme.example/jobs/two"]]
