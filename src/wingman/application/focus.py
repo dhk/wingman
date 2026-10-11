@@ -20,6 +20,7 @@ the user's act, on their machine (RFC-006 untouched: nothing is ever sent).
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -205,6 +206,7 @@ class ActionItem(BaseModel):
     who: str
     evidence: list[str] = Field(default_factory=list)
     key: str = ""
+    fingerprint: str = ""
 
 
 class OvernightReport(BaseModel):
@@ -363,7 +365,7 @@ def _criteria_review_action(config: Config) -> ActionItem | None:
     stale, the digest says so — once per run, as an ordinary triageable
     action. Snoozing 'criteria-review' sets the user's own cadence; muting
     turns the loop off. Preferences drift; the doc should not."""
-    from wingman.application.job_scoring import criteria_review_due
+    from wingman.application.job_scoring import criteria_path, criteria_review_due
 
     age = criteria_review_due(config)
     if age is None:
@@ -376,6 +378,7 @@ def _criteria_review_action(config: Config) -> ActionItem | None:
         evidence=[
             "say: review my job criteria (the job_criteria tool walks the five areas)",
             "or: wingman criteria review",
+            "criteria version: " + hashlib.sha256(criteria_path(config).read_bytes()).hexdigest(),
         ],
         key="criteria-review",
     )
@@ -411,6 +414,7 @@ def _relationship_review_actions(storage: Storage) -> list[ActionItem]:
                         "(the relationship_objective tool walks it)"
                     ),
                     f'or: wingman objective review "{person.name}"',
+                    f"objective version: {objective.updated_at.isoformat()}",
                 ],
                 key=f"relationship-review:{person.name_key}",
             )
@@ -577,7 +581,7 @@ def _relationship_tickler(
         what=f"{person.name}: {objective.next_move}",
         why=why,
         who=person.name,
-        evidence=evidence,
+        evidence=evidence + [f"objective version: {objective.updated_at.isoformat()}"],
         key=f"relationship:{person.name_key}",
     )
 
@@ -753,6 +757,7 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
             lines.extend(f"   - evidence: {item}" for item in action.evidence)
             if action.key:
                 lines.append(f"   - key: {action.key}")
+                lines.append(f"   - fingerprint: {action.fingerprint}")
     else:
         lines.append("Nothing changed enough to act on — no new links, posts, or news.")
     if suppressed:

@@ -35,10 +35,13 @@ def _fingerprint(action: ActionItem) -> str:
     return hashlib.sha256(
         json.dumps(
             {
-                "what": action.what,
-                "why": action.why,
-                "who": action.who,
-                "evidence": sorted(set(action.evidence)),
+                "key": action.key,
+                "evidence": sorted(
+                    {
+                        re.sub(r"\[[^\]]*\]\((https?://[^\s)]+)\)", r"\1", item)
+                        for item in action.evidence
+                    }
+                ),
             },
             sort_keys=True,
         ).encode()
@@ -48,6 +51,7 @@ def _fingerprint(action: ActionItem) -> str:
 def record_actions(actions: list[ActionItem], storage: Storage) -> None:
     for action in actions:
         if action.key:
+            action.fingerprint = _fingerprint(action)
             storage.save_digest_action(action.key, action.model_dump_json())
 
 
@@ -60,11 +64,21 @@ def require_action(key: str, storage: Storage) -> str:
     return payload
 
 
-def done_action(key: str, storage: Storage) -> None:
+def done_action(key: str, storage: Storage, fingerprint: str = "") -> None:
     from wingman.application.focus import ActionItem
 
     action = ActionItem.model_validate_json(require_action(key, storage))
-    storage.set_action_verdict(key.strip(), "done", until=_fingerprint(action))
+    if not fingerprint:
+        raise IngestError(
+            "done needs the fingerprint from the digest you reviewed; read a fresh digest."
+        )
+    if fingerprint != _fingerprint(action):
+        raise IngestError(
+            "action evidence changed since that digest; review the current digest first."
+        )
+    if active_suppressions(storage).get(key.strip()) == "muted":
+        raise IngestError("action is muted; unmute it before marking it done.")
+    storage.set_action_verdict(key.strip(), "done", until=fingerprint)
 
 
 def mute_action(key: str, storage: Storage) -> None:
