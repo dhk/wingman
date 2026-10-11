@@ -437,12 +437,13 @@ def _group_name(section: str) -> str:
     return _GROUP_NAMES.get(section, section.replace("-", " ").replace("_", " ").title())
 
 
-def _header(config: Config, show_path: bool = True) -> str:
+def _header(config: Config, show_path: bool = True, label: str = "") -> str:
     # show_path=False for anything that leaves the server. The workspace
     # path names the host account ('/home/trent/.local/share/wingman'),
     # which is a disclosure in a file that gets saved to a laptop and
     # sometimes forwarded — the same argument the token check already makes.
-    meta = f'<div class="meta">{_e(str(config.data_dir))}</div>' if show_path else ""
+    text = str(config.data_dir) if show_path else label
+    meta = f'<div class="meta">{_e(text)}</div>' if text else ""
     return (
         '<div class="hdr"><span class="dot"></span>'
         f'<span class="wordmark">Wingman</span>{meta}</div>'
@@ -871,7 +872,7 @@ def _oauth_workspace_summary(config: Config, csrf_token: str) -> Response | None
         )
     )
     body = [
-        _header(config, show_path=False) + f'<div class="meta">{_e(config.data_dir.name)}</div>',
+        _header(config, show_path=False, label=config.operator_name or "Your workspace"),
         "<h1>Your workspace</h1>",
         '<p class="dim">You are already set up. Here is where things stand.</p>',
         f'<div class="panel"><span class="stepno">Summary</span>{rows}</div>',
@@ -909,7 +910,7 @@ async def ui_oauth_setup(request: Request) -> Response:
     if summary is not None:
         return summary
     body = [
-        _header(config, show_path=False) + f'<div class="meta">{_e(config.data_dir.name)}</div>',
+        _header(config, show_path=False, label=config.operator_name or "Your workspace"),
         "<h1>Set up your workspace</h1>",
         (
             '<p class="dim">Your sign-in opens only this workspace. Add a provider key '
@@ -1160,8 +1161,15 @@ async def ui_upload(request: Request) -> Response:
                     f"Rejected: {len(ingested.rejected)}{rejected}"
                 )
     except (IngestError, ModelConfigError, ProviderError) as exc:
+        detail = (
+            "The upload could not be ingested. The upload was stored; partial successful "
+            "work was preserved. Check the document and ask the operator to check model "
+            "configuration and provider availability before retrying."
+            if _browser_setup.get() is not None
+            else str(exc)
+        )
         return _page(
-            "Upload", f'{back}<div class="report-box err">Ingestion failed: {_e(str(exc))}</div>'
+            "Upload", f'{back}<div class="report-box err">Ingestion failed: {_e(detail)}</div>'
         )
     return _page("Upload", f'{back}<div class="report-box">{_e(summary)}</div>')
 
@@ -1264,7 +1272,12 @@ async def ui_keys(request: Request) -> Response:
         try:
             live = store_workspace_key(config.data_dir, short, value)
         except KeyStoreError as exc:
-            failures.append(f"{short}: {exc}")
+            detail = (
+                "could not store the key. Ask the operator to check workspace permissions."
+                if _browser_setup.get() is not None
+                else str(exc)
+            )
+            failures.append(f"{short}: {detail}")
             continue
         state = (
             "verified and live now"

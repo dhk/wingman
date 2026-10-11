@@ -149,7 +149,7 @@ def test_browser_session_token_rejects_symmetric_algorithm(
 def _world(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, public_mount: str = ""
 ) -> tuple[TestClient, Tenant, list[str]]:
-    tenant = Tenant(slug="taylor", data_dir=tmp_path / "taylor")
+    tenant = Tenant(slug="taylor", data_dir=tmp_path / "private-workspace")
     tenant.data_dir.mkdir(parents=True)
     index = TenantIndex([tenant])
     identities = IdentityMap({(BROWSER_ISSUER, "user_taylor"): "taylor"})
@@ -699,3 +699,52 @@ def test_approved_but_empty_workspace_still_gets_first_run_setup(
     assert tenant.slug in page
     assert "Set up your workspace" in page
     assert "Your workspace" not in page
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_oauth_upload_errors_hide_server_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, empty: bool
+) -> None:
+    client, tenant, _ = _world(tmp_path, monkeypatch)
+    monkeypatch.setitem(webui_module.VALIDATORS, "anthropic", lambda _value: None)
+    _sign_in(client)
+    client.post(
+        "/setup/keys", data={"_csrf": _csrf(client.get("/setup/").text), "anthropic": "sk-ant-test"}
+    )
+    if empty:
+        from wingman.application.ingest import IngestError
+
+        monkeypatch.setattr("wingman.providers.router.get_provider", lambda *a: object())
+
+        def fail(*args):
+            raise IngestError(f"{tenant.data_dir}/inbox/resume.md is empty")
+
+        monkeypatch.setattr("wingman.application.ingest.ingest_resume", fail)
+    page = client.post(
+        "/setup/upload",
+        data={"_csrf": _csrf(client.get("/setup/").text)},
+        files={"file": ("resume.md", b" " if empty else b"CV", "text/markdown")},
+    )
+    assert "Ingestion failed" in page.text
+    assert str(tenant.data_dir) not in page.text
+    assert "upload was stored" in page.text
+
+
+def test_oauth_key_store_error_hides_server_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure.keys import KeyStoreError
+
+    client, tenant, _ = _world(tmp_path, monkeypatch)
+    monkeypatch.setitem(webui_module.VALIDATORS, "anthropic", lambda _value: None)
+
+    def fail(*args):
+        raise KeyStoreError(f"cannot write {tenant.data_dir}/secrets.env")
+
+    monkeypatch.setattr("wingman.infrastructure.keys.store_workspace_key", fail)
+    _sign_in(client)
+    page = client.post(
+        "/setup/keys", data={"_csrf": _csrf(client.get("/setup/").text), "anthropic": "sk-ant-test"}
+    )
+    assert str(tenant.data_dir) not in page.text
+    assert "could not store" in page.text

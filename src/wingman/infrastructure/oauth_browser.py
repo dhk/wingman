@@ -190,6 +190,9 @@ def validate_browser_session_token(
         scopes = tuple(raw_scope)
     else:
         raise BearerError("malformed-scope")
+    from wingman.infrastructure.oauth_diagnostics import observe_verified
+
+    observe_verified("browser", claims)
     return BearerIdentity(
         issuer=settings.session_issuer,
         subject=subject,
@@ -377,6 +380,11 @@ class OAuthBrowserSessions:
         token = payload.get("access_token") if isinstance(payload, dict) else None
         if not isinstance(token, str) or not token:
             raise OAuthConfigError("OAuth token exchange returned no access token")
+        from wingman.infrastructure.oauth_diagnostics import enabled, observe_exchange_user
+
+        if enabled():
+            identity = validate_browser_session_token(token, self._settings, self._resolve_key)
+            observe_exchange_user(payload, identity.subject)
         return token
 
 
