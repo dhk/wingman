@@ -381,3 +381,14 @@ def test_legacy_about_migrates_once_and_next_fetch_keeps_prose(config: Config) -
             ).retain
             is False
         )
+
+
+def test_retention_enabled_but_not_fetched_points_to_research(storage: Storage) -> None:
+    from wingman.application.ingest import IngestError
+
+    _approve(storage, retain=True)
+    with pytest.raises(IngestError) as caught:
+        build_company_pov("Northwind Labs", storage, ScriptedProvider({}))
+    assert "Run company research" in str(caught.value)
+    assert "Re-add" not in str(caught.value)
+    assert "No approved source retains" not in str(caught.value)
