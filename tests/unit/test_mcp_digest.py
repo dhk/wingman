@@ -67,3 +67,14 @@ def test_digest_as_html_with_no_digests_yet_matches_the_plain_message(workspace:
 
     assert digest(as_html=True) == digest()
     assert "No digests yet" in digest()
+
+
+@pytest.mark.parametrize("other", ["--path", "--open"])
+def test_digest_json_rejects_conflicting_modes(workspace: Config, other: str) -> None:
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+
+    result = CliRunner().invoke(app, ["digest", "--json", other])
+    assert result.exit_code == 2
+    assert "cannot be combined" in result.output
