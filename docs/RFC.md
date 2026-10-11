@@ -162,6 +162,14 @@ Everything else RFC-009 established holds unchanged: explicit invocation only, r
 
 **Revisit if.** Index-page extraction proves too brittle against redesigns (then sitemap.xml `lastmod`-driven fetching becomes the refinement, still within these invariants), or per-author attribution on company blogs is wanted (post-page metadata reading — a further widening that gets its own look).
 
+### RFC-011 addendum (#474) — Durable decision
+
+The legacy `substack_url` field and `--substack` option now accept a writing URL without assuming a `/feed` endpoint. Add and fetch use bounded discovery: direct RSS/Atom, declared feeds, feed-shaped links, then conventional candidates. A verified endpoint is stored separately as `writing_feed_url`; old records are resolved when fetched. Errors identify the entered writing URL and distinguish no discoverable feed from an unreachable configured URL, suggesting explicit index-page attachment when appropriate. The existing field name remains for compatibility.
+
+Legacy Substack-hosted sources keep their known /feed endpoint (including duplicate checks and source attribution) without fetching the homepage. Generic legacy URLs are discovered once and the successful endpoint is saved. Discovery shares a per-run response cache with ingestion. Entered URLs are quoted in failures; whitespace/control characters are rejected before fetching. A non-strict unsuccessful update preserves a previously resolved endpoint.
+
+Unattended legacy discovery permits at most four GET attempts; broader discovery remains an explicit operation. The runtime cache keeps only the latest response, bounding retained response memory while reusing a successfully discovered feed body.
+
 ## RFC-012: Company dossiers as deterministic composition (Phase 3, slice ii)
 
 **Decision.** `wingman company dossier <name>` produces the roadmap's dated company snapshot by composing artifacts the workspace has already validated: watched people at the company (via the Person `company` field), org-attributed sources (RFC-011), POV-card stances rendered with explicit labels (`[inference]` statement backed by a verbatim `[fact]` quote — RFC-005's fact/inference/hypothesis discipline made visible), embedding-based signals when available (alignment with the user's corpus, nearest companies), a staleness warning when the newest attributable document is older than 90 days, and an explicit Gaps section naming what is missing and the command that fills it. The dossier is deterministic — no model call, no network — and is written as dated Markdown under `reports/companies/`, the artifact convention from DESIGN.md.
@@ -1436,13 +1444,6 @@ identity key" and "do not obtain `sub` from email".
   describe what the running service does.
 
 
-### RFC-011 addendum (#474) — Durable decision
-
-The legacy `substack_url` field and `--substack` option now accept a writing URL without assuming a `/feed` endpoint. Add and fetch use bounded discovery: direct RSS/Atom, declared feeds, feed-shaped links, then conventional candidates. A verified endpoint is stored separately as `writing_feed_url`; old records are resolved when fetched. Errors identify the entered writing URL and distinguish no discoverable feed from an unreachable configured URL, suggesting explicit index-page attachment when appropriate. The existing field name remains for compatibility.
-
-Legacy Substack-hosted sources keep their known /feed endpoint (including duplicate checks and source attribution) without fetching the homepage. Generic legacy URLs are discovered once and the successful endpoint is saved. Discovery shares a per-run response cache with ingestion. Entered URLs are quoted in failures; whitespace/control characters are rejected before fetching. A non-strict unsuccessful update preserves a previously resolved endpoint.
-
-Unattended legacy discovery permits at most four GET attempts; broader discovery remains an explicit operation. The runtime cache keeps only the latest response, bounding retained response memory while reusing a successfully discovered feed body.
 ### RFC-031 addendum (#501) — Durable decision
 
 `actions done <key>` and `action_triage(action="done", key=...)` complete the recorded action content and evidence, without standing suppression. Matching evidence remains completed; new evidence or changed action content can recur. Done verdicts appear separately in the verdict list and can be cleared with unmute. Overnight records generated actions before filtering, preserving the evidence available when completed. MCP and CLI mute/snooze/done reject unknown keys; legacy digests need one overnight refresh before triage. Digest files remain immutable historical snapshots.
