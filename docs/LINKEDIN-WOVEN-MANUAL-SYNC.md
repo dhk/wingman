@@ -114,7 +114,7 @@ its deployment procedure. Do not restart unrelated tenants or services.
    not a staging-only or preview route:
 
    ```text
-   people_import_connections(export_path="/absolute/private/export.zip")
+   people_import_connections(export_path="/absolute/tenant-workspace/inbox/export.zip")
    ```
 
    The equivalent server-side command is:
@@ -124,8 +124,10 @@ its deployment procedure. Do not restart unrelated tenants or services.
    ```
 
    Inspect created/updated/unchanged counts and a few owner-selected records
-   through `people_list()`. Confirm non-empty new fields landed, blank fields
-   did not erase known values, and a thinner export did not delete people.
+   through `people_list()`. Check the conflict count: ambiguous same-name rows
+   and contradictory canonical values require explicit review. Confirm only
+   corroborated identities were backfilled, blank fields did not erase known
+   values, and a thinner export did not delete people.
    Contact values remain private and must not be published in verification notes.
 4. **Only after both Wingman imports are confirmed** invoke the reviewed
    Woven #92 headless importer locally, using its documented contributor name,
