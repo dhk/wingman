@@ -1439,3 +1439,5 @@ identity key" and "do not obtain `sub` from email".
 ### RFC-015 addendum (#434, #548) — Durable decision
 
 `wingman company pause-source "Company" <url>` suspends one approved URL; `unpause-source` resumes it. MCP uses `company_source(action="pause"|"unpause", name=..., url=...)`. Source listings show paused status. Pausing preserves snapshots, retained prose, queued links, company records, POV and watchlist membership. Explicit research and overnight skip the paused URL and its queued scoring work, producing no fetch-failure action. Unpause resumes against the preserved baseline. Removing a source remains withdrawal of its evidence.
+
+Paused sources also exclude saved snapshot links from explicit full-board scoring. Pending overnight links remain queued until resumed, and dossier/pack source lists mark paused pages.
