@@ -237,9 +237,9 @@ def test_person_export_is_landscape_three_columns_with_links(workspace: Path) ->
     # in common: the user's LinkedIn connection at the same company
     assert "in common — your connections at ExplainCo" in text
     assert "Carol Colleague" in text and "Scott Watcher" not in text.split("in common")[1]
-    # warmth: email (+1) and one shared-company connection (+1) → warm, transparent signals
-    assert 'class="warmth warmth-warm">●●○○ warm</div>' in text
-    assert "email on file; 1 shared-company connection" in text
+    # warmth comes from the shared-company connection, never an email address
+    assert 'class="warmth warmth-cool">●○○○ cool</div>' in text
+    assert "1 shared-company connection" in text
     # two-voice talking point and the never-sends panel
     assert "they argue" in text and "you wrote" in text
     assert "wingman never sends (RFC-006)" in text

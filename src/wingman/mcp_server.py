@@ -4636,12 +4636,21 @@ def people_import_connections(export_path: str) -> str:
     if config is None:
         return _NOT_INITIALIZED
     try:
+        path = Path(export_path).expanduser()
+        if not config.privileged:
+            try:
+                path = path.resolve()
+                if not path.is_relative_to(config.inbox_dir.resolve()):
+                    raise IngestError("shared imports require a zip in this tenant's private inbox")
+            except OSError as exc:
+                raise IngestError("could not resolve the tenant inbox import path") from exc
         with Storage(config.db_path) as storage:
-            report = seed_from_connections(Path(export_path).expanduser(), storage)
+            report = seed_from_connections(path, storage)
     except IngestError as exc:
         return f"import failed: {exc}"
     return (
         f"Created: {report.created}  Updated: {report.updated}  Unchanged: {report.skipped_existing}  "
+        f"Conflicts (preserved; review identity/values): {report.conflicts}  "
         f"Incomplete rows skipped: {report.skipped_incomplete}"
     )
 

@@ -2036,6 +2036,7 @@ def people_import_connections(
         raise typer.Exit(code=1) from exc
     typer.echo(
         f"Created: {report.created}  Updated: {report.updated}  Unchanged: {report.skipped_existing}  "
+        f"Conflicts (preserved; review identity/values): {report.conflicts}  "
         f"Incomplete rows skipped: {report.skipped_incomplete}"
     )
 

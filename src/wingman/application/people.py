@@ -61,6 +61,7 @@ class ConnectionsSeedReport(BaseModel):
     created: int
     skipped_existing: int
     updated: int = 0
+    conflicts: int = 0
     skipped_incomplete: int
 
 
@@ -313,6 +314,7 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
 
     created = 0
     updated_count = 0
+    conflicts = 0
     skipped_existing = 0
     skipped_incomplete = 0
     for row in rows:
@@ -344,6 +346,47 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
         )
         existing = storage.find_person_by_name_key(person.name_key)
         if existing is not None:
+            identifiers = ("email", "linkedin_url")
+
+            def normalized(value: str | None) -> str:
+                return (value or "").strip().rstrip("/").casefold()
+
+            contradictory_identity = any(
+                getattr(existing, field)
+                and getattr(person, field)
+                and normalized(getattr(existing, field)) != normalized(getattr(person, field))
+                for field in identifiers
+            )
+            matched_identity = any(
+                getattr(existing, field)
+                and getattr(person, field)
+                and normalized(getattr(existing, field)) == normalized(getattr(person, field))
+                for field in identifiers
+            )
+            # Legacy LinkedIn rows can be backfilled from the same original
+            # export only when their already-known role corroborates identity.
+            legacy_match = (
+                existing.origin == PersonOrigin.LINKEDIN_CONNECTIONS
+                and existing.source_record_id == record.record_id
+                and bool(existing.company or existing.position)
+                and existing.company == person.company
+                and existing.position == person.position
+            )
+            meaningful = any(key not in {"First Name", "Last Name"} for key in fields)
+            if not meaningful:
+                skipped_existing += 1
+                continue
+            if contradictory_identity or not (matched_identity or legacy_match):
+                conflicts += 1
+                continue
+            canonical = ("linkedin_url", "email", "company", "position", "connected_on")
+            if any(
+                getattr(existing, key)
+                and getattr(person, key)
+                and normalized(getattr(existing, key)) != normalized(getattr(person, key))
+                for key in canonical
+            ):
+                conflicts += 1
             history = list(existing.connection_imports)
             if existing.source_record_id and not history:
                 history.append(
@@ -362,16 +405,16 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
                         },
                     )
                 )
-            if imported not in history:
+            if not any(item.fields == imported.fields for item in history):
                 history.append(imported)
             merged = existing.model_copy(
                 update={
                     **{
-                        key: getattr(person, key) or getattr(existing, key)
+                        key: getattr(existing, key) or getattr(person, key)
                         for key in ("linkedin_url", "email", "company", "position", "connected_on")
                     },
                     "source_record_id": existing.source_record_id or record.record_id,
-                    "connection_fields": {**existing.connection_fields, **fields},
+                    "connection_fields": {**fields, **existing.connection_fields},
                     "connection_imports": history,
                 }
             )
@@ -393,6 +436,7 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
     return ConnectionsSeedReport(
         created=created,
         updated=updated_count,
+        conflicts=conflicts,
         skipped_existing=skipped_existing,
         skipped_incomplete=skipped_incomplete,
     )

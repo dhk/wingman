@@ -373,12 +373,19 @@ def test_connections_upsert_backfills_and_keeps_blank_fields(
         "Jane,Author,https://linkedin.com/in/jane,jane@example.com,New Co,CEO,01 Jan 2026\n",
     )
     with Storage(config.db_path) as storage:
-        original, _ = add_person("Jane Author", storage, company="Old Co", position="Engineer")
+        original, _ = add_person(
+            "Jane Author",
+            storage,
+            company="Old Co",
+            position="Engineer",
+            linkedin_url="https://linkedin.com/in/jane",
+        )
         add_person("Absent Person", storage)
         report = seed_from_connections(export, storage)
         updated = storage.get_person(original.person_id)
         assert updated.email == "jane@example.com"
-        assert updated.company == "New Co" and updated.position == "CEO"
+        assert updated.company == "Old Co" and updated.position == "Engineer"
+        assert report.conflicts == 1
         assert report.updated == 1
         blanker = connections_zip(tmp_path, "Jane,Author,,,,,\nNew,Person,,,,,\n")
         report = seed_from_connections(blanker, storage)
@@ -404,10 +411,111 @@ def test_connections_preserve_extra_identifiers_and_prior_imports(
         assert before.linkedin_url == "https://linkedin.com/in/jane"
         assert before.connection_fields["Phone"] == "555-0100"
         assert before.connection_fields["Title History"] == "Engineer"
-        changed = connections_zip(tmp_path, "Jane,Author,,new@example.com,New Co,CEO,\n")
+        changed = connections_zip(
+            tmp_path, "Jane,Author,https://linkedin.com/in/jane,jane@example.com,New Co,CEO,\n"
+        )
         seed_from_connections(changed, storage)
         after = storage.get_person(before.person_id)
-        assert after.email == "new@example.com"
+        assert after.email == "jane@example.com"
         assert after.connection_fields["Phone"] == "555-0100"
         assert len(after.connection_imports) == 2
         assert after.connection_imports[0].fields["Email Address"] == "jane@example.com"
+
+
+def test_same_name_conflicting_identifiers_do_not_merge(workspace: Path, tmp_path: Path) -> None:
+    config = load_config()
+    export = connections_zip(
+        tmp_path,
+        "John,Smith,https://linkedin.com/in/john-a,a@acme.example,Acme,CEO,\nJohn,Smith,https://linkedin.com/in/john-b,b@other.example,Other,Nurse,\n",
+    )
+    with Storage(config.db_path) as storage:
+        report = seed_from_connections(export, storage)
+        person = storage.find_person_by_name_key("john smith")
+        assert person.email == "a@acme.example"
+        assert person.linkedin_url == "https://linkedin.com/in/john-a"
+        assert person.company == "Acme"
+        assert len(person.connection_imports) == 1
+        assert report.conflicts == 1
+
+
+def test_import_does_not_replace_manual_identity(workspace: Path, tmp_path: Path) -> None:
+    config = load_config()
+    export = connections_zip(
+        tmp_path, "Jane,Author,https://linkedin.com/in/other,other@x.example,Elsewhere,Dentist,\n"
+    )
+    with Storage(config.db_path) as storage:
+        original, _ = add_person(
+            "Jane Author",
+            storage,
+            company="MyCo",
+            position="Founder",
+            linkedin_url="https://linkedin.com/in/real",
+            email="real@myco.example",
+        )
+        seed_from_connections(export, storage)
+        assert storage.get_person(original.person_id) == original
+
+
+def test_same_contact_values_in_new_export_do_not_duplicate_history(
+    workspace: Path, tmp_path: Path
+) -> None:
+    config = load_config()
+    row = "Jane,Author,https://linkedin.com/in/jane,jane@example.com,Acme,Engineer,\n"
+    export = connections_zip(tmp_path, row)
+    with Storage(config.db_path) as storage:
+        seed_from_connections(export, storage)
+        before = storage.find_person_by_name_key("jane author")
+        # Extra blank CSV line changes the exact artifact hash, not the contact.
+        changed = connections_zip(tmp_path, row + "\n")
+        report = seed_from_connections(changed, storage)
+        assert report.updated == 0
+        assert storage.get_person(before.person_id) == before
+
+
+def test_same_export_backfills_legacy_connection_identifiers(
+    workspace: Path, tmp_path: Path
+) -> None:
+    config = load_config()
+    export = connections_zip(
+        tmp_path, "Jane,Author,https://linkedin.com/in/jane,jane@example.com,Acme,Engineer,\n"
+    )
+    with Storage(config.db_path) as storage:
+        seed_from_connections(export, storage)
+        person = storage.find_person_by_name_key("jane author")
+        storage.update_person(
+            person.model_copy(
+                update={
+                    "linkedin_url": None,
+                    "email": None,
+                    "connection_fields": {},
+                    "connection_imports": [],
+                }
+            )
+        )
+        report = seed_from_connections(export, storage)
+        assert report.updated == 1
+        assert storage.get_person(person.person_id).email == "jane@example.com"
+
+
+def test_shared_connection_import_rejects_other_tenant_path(
+    workspace: Path, tmp_path: Path
+) -> None:
+    from wingman.infrastructure.config import tenant_config_scope
+    from wingman.mcp_server import people_import_connections
+
+    config = load_config().model_copy(update={"privileged": False})
+    export = connections_zip(
+        tmp_path, "Jane,Author,https://linkedin.com/in/jane,jane@example.com,Acme,Engineer,\n"
+    )
+    Storage(config.db_path).close()
+    with tenant_config_scope(config):
+        assert "private inbox" in people_import_connections(str(export))
+        config.inbox_dir.mkdir(parents=True, exist_ok=True)
+        link = config.inbox_dir / "escape.zip"
+        link.symlink_to(export)
+        assert "private inbox" in people_import_connections(str(link))
+        inside = config.inbox_dir / "contacts.zip"
+        inside.write_bytes(export.read_bytes())
+        response = people_import_connections(str(inside))
+        assert "Created: 1" in response
+        assert "jane@example.com" not in response
