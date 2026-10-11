@@ -205,6 +205,12 @@ Two deferrals, on the demonstrated-need rule:
 
 **Amended by RFC-060** (issue #349): "reduces each page deterministically to a snapshot" is no longer *all* a fetch keeps. A source may be marked `retain`, in which case the page's prose is ALSO kept as a company-attributed document, so a values page becomes something a stance can quote instead of only a hash saying it changed. Default OFF, per source; the fetch, the snapshot, the diff and the egress below are unchanged — only what survives the fetch differs. Everything else here stands.
 
+### RFC-015 addendum (#464) — Durable decision
+
+Research keeps each approved URL's baseline, but identical visible-text hashes and absolute link sets within one company's current fetch are diffed once. The later source is reported as `duplicate of <url>` in research and source listings. Comparing links as well as text prevents unrelated link-only pages from collapsing. Duplicate pages do not repeat scoring or consume action slots. Existing action-level deduplication additionally coalesces overlapping evidence for the same action kind and company before the ten-action cap. Distinct kinds of action remain distinct.
+
+Listing and run-time duplicate detection share the same company/text/link identity. Overnight coverage verifies that matching sources score their combined pending evidence once.
+
 **Decision.** Per-company research sources, added explicitly by the user and fetched only on explicit command — the network-scope decision RFC-012 deferred, now resolved. `wingman company add-source "X" <url> [--label]` records an approved HTTPS source for a company; **the act of adding is the approval** — no confirmation theater at fetch time. `wingman company sources "X"` lists them (`remove-source` withdraws one, snapshot included); `wingman company research "X"` makes one read-only GET per approved source (RFC-009 shape: explicit invocation, https-only, visible failures, one page per URL — no crawling), reduces each page deterministically to a snapshot (SHA-256 of visible text + the page's set of https links), stores it replace-on-refresh keyed `(company_key, url)`, and reports the diff against the previous snapshot: **new links are the hiring/announcement signal**, a changed text hash the weaker "page changed" signal, and "unchanged since \<date\>" an honest answer. A failed source keeps its previous snapshot and is reported, never fatal. The dossier gains a "Research (approved sources)" section rendering stored snapshots with a 30-day staleness flag — no fetch at dossier time, preserving RFC-012's determinism. MCP parity (RFC-008): `company_source(action=add|remove|list, ...)` following the watchlist single-tool convention, plus `company_research`.
 
 **Alternatives.** Fetching at dossier time (couples an artifact to the network and breaks dossier determinism); crawling beyond the approved page (scope creep — the user approved one URL, one GET honors exactly that); a model summarizing the fetched page (unauditable claims where a link-set diff is deterministic and explainable); a first-class Organization entity (still deferred — a `(company_key, url)` table is the metadata that actually arrived; aliases/notes remain the demonstrated-need trigger).
@@ -1436,11 +1442,6 @@ identity key" and "do not obtain `sub` from email".
   describe what the running service does.
 
 
-### RFC-015 addendum (#464) — Durable decision
-
-Research keeps each approved URL's baseline, but identical visible-text hashes and absolute link sets within one company's current fetch are diffed once. The later source is reported as `duplicate of <url>` in research and source listings. Comparing links as well as text prevents unrelated link-only pages from collapsing. Duplicate pages do not repeat scoring or consume action slots. Existing action-level deduplication additionally coalesces overlapping evidence for the same action kind and company before the ten-action cap. Distinct kinds of action remain distinct.
-
-Listing and run-time duplicate detection share the same company/text/link identity. Overnight coverage verifies that matching sources score their combined pending evidence once.
 ### RFC-031 addendum (#501) — Durable decision
 
 `actions done <key>` and `action_triage(action="done", key=...)` complete the recorded action content and evidence, without standing suppression. Matching evidence remains completed; new evidence or changed action content can recur. Done verdicts appear separately in the verdict list and can be cleared with unmute. Overnight records generated actions before filtering, preserving the evidence available when completed. MCP and CLI mute/snooze/done reject unknown keys; legacy digests need one overnight refresh before triage. Digest files remain immutable historical snapshots.
