@@ -10,7 +10,7 @@ links are the hiring/announcement signal, a changed hash the weaker "page
 changed" signal. No model reads the page; nothing is claimed that a diff
 cannot show.
 
-RFC-060 adds one opt-in per source: `retain` also KEEPS the page's prose as
+RFC-060 adds per-source retention (default on for new about-labelled sources): `retain` also KEEPS the page's prose as
 an org-attributed document, the same shape a company feed post gets, so a
 values page becomes something a stance can quote verbatim instead of only
 a hash that says it changed. Egress is untouched — same approved pages,
@@ -211,7 +211,7 @@ def add_company_source(
         company_name=name.strip(),
         url=url,
         label=(label or "").strip() or None,
-        retain=bool(retain),
+        retain=retain if retain is not None else (label or "").strip().casefold() == "about",
     )
     return source, storage.add_company_source(source)
 

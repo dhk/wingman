@@ -872,6 +872,14 @@ One thing HAS changed since this entry was first drafted, and it changes the rea
 
 **Revisit if.** `company follow`'s conventional-path probe should default `/about` to retained (it is the one probed path whose content is durable — deliberately left OFF here so following a company never silently starts storing pages). Retained pages need selection within the POV budget rather than pure recency (per-source quotas — the same pressure RFC-016 already flagged). Users want the older versions of a retained page readable rather than only superseded (that is a real archive, and RFC-015's revisit trigger, not this one).
 
+### RFC-060 addendum (#463) — Durable decision
+
+New sources labelled `about` retain prose by default (case-insensitive, ignoring surrounding whitespace); all other labels remain opt-in. This supersedes RFC-060's default-off policy for about pages. `company follow` already labels its approved `/about` page this way. Explicit `--retain/--no-retain` (MCP `retain=True/False`) still overrides the default; repeat adds without a flag preserve the current setting.
+
+Existing approved about-labelled sources are enabled once when the upgraded application opens their workspace. Repository owner dhk explicitly approved this one-time migration in the implementation conversation on 2026-10-10 ("enable"): old records cannot distinguish default False from deliberate False, so both are enabled. A transactional migration marker prevents subsequent opens from overriding later opt-outs. Other labels, source timestamps, snapshots, and unknown payload fields are preserved. The next normal research fetch keeps prose even when the existing snapshot's hash is unchanged; there is no extra GET, new approved URL, crawl, or model call. Companies without an approved prose source still need one approved; the migration does not invent sources or guarantee usable prose on every about page.
+
+Theme synthesis with approved sources but no documents explains `--retain` (or MCP `retain=True`) and the required research refresh. If retention is already enabled it points at fetching/checking extraction instead of claiming retention is absent. Tests cover default-retained company themes without watched people, existing-source migration, unchanged snapshots, and durable explicit opt-outs.
+
 ## RFC-061: Wingman records where an artifact was published; it never publishes one
 
 **Decision.** A `published_artifacts` table, one row per `ARTIFACT_KINDS` member (`values_radar`, `completeness`, `profile`), holding the url a Claude client published that view at, plus an optional title and an opaque `built_from` fingerprint. Surfaced as the `artifacts` MCP tool (`list`/`remember`/`show`/`forget`) and `wingman artifacts list|remember|forget` (RFC-008 parity). Wingman does not publish, update or fetch the page; it stores the url and says so in every surface.
