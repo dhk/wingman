@@ -1689,6 +1689,7 @@ the placeholder default compiled into `gdrive_auth.py`). These aren't
 per-account secrets — the same client id identifies the app for every
 account on the box, so they live in `wingman.env`, not `secrets.env`.
 
+OAuth setup and workspace-summary headers display the workspace slug, never the server filesystem path (#581). The shared OAuth routes serve only setup, key entry, upload and logout; exported profile pages already hide paths. OAuth upload and key-store failures use safe recovery messages rather than raw exceptions containing server paths. Workspace headers use the registered tenant slug even when the directory basename differs.
 ### Temporary OAuth identity investigation (#582)
 
 `WINGMAN_OAUTH_IDENTITY_DIAGNOSTICS=1` enables an operator-only local log
