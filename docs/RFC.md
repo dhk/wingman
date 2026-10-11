@@ -176,6 +176,11 @@ Legacy Substack-hosted sources keep their known /feed endpoint (including duplic
 
 Unattended legacy discovery permits at most four GET attempts; broader discovery remains an explicit operation. The runtime cache keeps only the latest response, bounding retained response memory while reusing a successfully discovered feed body.
 
+### RFC-011 addendum (#546) — Durable decision
+
+On an HTTP 404 or a response that is not RSS/Atom, source fetch performs bounded discovery at the configured page (or the parent of a conventional feed path such as `/blog/feed`). A verified replacement feed is used; otherwise a specific HTML index with at least one same-site post link beneath its path can be used. An origin root is never inferred as an index, and HTML challenge/maintenance pages with no post links fail without changing the stored source. Recovery is capped at four GET attempts and caches at most the latest candidate plus the index body. Successful correction is persisted, preserving attribution and the original writing URL. Later runs use the corrected format. Other HTTP failures do not trigger fallback. Index fetching remains same-site, beneath the approved index, and bounded to ten new posts. This format correction is automatic; it does not change the publication being watched.
+
+
 ## RFC-012: Company dossiers as deterministic composition (Phase 3, slice ii)
 
 **Decision.** `wingman company dossier <name>` produces the roadmap's dated company snapshot by composing artifacts the workspace has already validated: watched people at the company (via the Person `company` field), org-attributed sources (RFC-011), POV-card stances rendered with explicit labels (`[inference]` statement backed by a verbatim `[fact]` quote — RFC-005's fact/inference/hypothesis discipline made visible), embedding-based signals when available (alignment with the user's corpus, nearest companies), a staleness warning when the newest attributable document is older than 90 days, and an explicit Gaps section naming what is missing and the command that fills it. The dossier is deterministic — no model call, no network — and is written as dated Markdown under `reports/companies/`, the artifact convention from DESIGN.md.

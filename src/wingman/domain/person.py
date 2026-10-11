@@ -61,6 +61,7 @@ class Person(BaseModel):
     origin: PersonOrigin
     substack_url: str | None = None
     writing_feed_url: str | None = None
+    writing_feed_kind: FeedKind = FeedKind.RSS
     feeds: list[FeedSource] = Field(default_factory=list)
     linkedin_url: str | None = None
     # Local address-book data, imported or entered manually; excluded from publication.
@@ -86,7 +87,9 @@ class Person(BaseModel):
             host = (urlsplit(legacy).hostname or "").lower()
             if not self.writing_feed_url and host.endswith(".substack.com"):
                 legacy = legacy.rstrip("/") + "/feed"
-            configured.append(FeedSource(url=self.writing_feed_url or legacy))
+            configured.append(
+                FeedSource(url=self.writing_feed_url or legacy, kind=self.writing_feed_kind)
+            )
         configured.extend(self.feeds)
         return configured
 

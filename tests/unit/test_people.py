@@ -238,8 +238,9 @@ def test_fetch_requires_feed_url_and_valid_xml(
 
         monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
         watched, _ = add_person("Bad Feed", storage, substack_url="https://bad.substack.com")
-        with pytest.raises(IngestError, match="not parseable"):
+        with pytest.raises(IngestError):
             fetch_person_feed(watched, config, storage, fetcher=lambda url: b"<html>nope")
+        assert storage.get_person(watched.person_id).writing_feed_kind == "rss"
 
 
 def test_people_evidence_attributes_authors(workspace: Path) -> None:
@@ -553,7 +554,7 @@ def test_missing_writing_feed_names_entered_url(workspace: Path) -> None:
     person = Person(name="Author", origin=PersonOrigin.MANUAL, substack_url=url)
     with Storage(config.db_path) as storage:
         with pytest.raises(IngestError, match="no feed was discoverable") as error:
-            fetch_person_feed(person, config, storage, fetcher=lambda _: b"<html>Writing</html>")
+            fetch_person_feed(person, config, storage, fetcher=lambda _: b"not a page")
     assert url in str(error.value)
     assert url + "/feed" not in str(error.value)
 

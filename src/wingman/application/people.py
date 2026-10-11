@@ -28,6 +28,7 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import ClassVar
+from urllib.error import HTTPError
 from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel, Field
@@ -74,6 +75,7 @@ class FeedFetchReport(BaseModel):
     skipped_empty: int
     titles: list[str] = Field(default_factory=list)
     failed_sources: list[str] = Field(default_factory=list)
+    corrected_sources: list[str] = Field(default_factory=list)
 
 
 def _resolve_writing_feed(
@@ -169,6 +171,9 @@ def add_person(
     updated = existing.model_copy(
         update={
             "substack_url": substack_url or existing.substack_url,
+            "writing_feed_kind": FeedKind.RSS
+            if substack_url is not None
+            else existing.writing_feed_kind,
             "writing_feed_url": writing_feed_url
             if substack_url is not None and writing_feed_url is not None
             else existing.writing_feed_url,
@@ -642,6 +647,67 @@ def _fetch_index_source(
         _ingest_post(person, source, "", link, "", raw_html, "web_page", config, storage, tally)
 
 
+def _recover_feed_source(
+    source: FeedSource, fetch: Callable[[str], bytes], *, missing: bool
+) -> FeedSource:
+    """Correct source format using the existing bounded discovery policy."""
+    parts = urlsplit(source.url)
+    path = parts.path.rstrip("/")
+    if missing and "/" + path.rsplit("/", 1)[-1] in CONVENTIONAL_FEED_PATHS:
+        path = path.rsplit("/", 1)[0]
+    index_url = parts._replace(path=path, query="", fragment="").geturl().rstrip("/")
+    if not urlsplit(index_url).path.strip("/"):
+        raise FetchError(
+            "origin root is not an approved publication index; attach a specific index page"
+        )
+    cache: dict[str, bytes] = {}
+    index_data = b""
+    attempts = 0
+
+    def cached(url: str) -> bytes:
+        nonlocal index_data, attempts
+        if url not in cache:
+            if attempts >= 4:
+                raise FetchError("feed recovery GET budget exhausted; run feed_discover explicitly")
+            attempts += 1
+            cache.clear()
+            cache[url] = fetch(url)
+            if url == index_url:
+                index_data = cache[url]
+        return cache[url]
+
+    try:
+        discovered = discover_feed(index_url, fetcher=cached)
+    except IngestError as exc:
+        raise FetchError(
+            f"no feed was discoverable at {source.url!r}; index recovery failed: {exc}"
+        ) from exc
+    if discovered.feed_url:
+        return source.model_copy(update={"url": discovered.feed_url})
+    if not _index_post_links(index_data, index_url):
+        raise FetchError(
+            f"no feed was discoverable at {source.url!r}; no post links in a readable HTML index"
+        )
+    return source.model_copy(update={"url": index_url, "kind": FeedKind.INDEX_PAGE})
+
+
+def _save_source_correction(
+    person: Person, old: FeedSource, corrected: FeedSource, storage: Storage
+) -> None:
+    current = storage.get_person(person.person_id)
+    if current is None:
+        return
+    if person.substack_url and old == person.sources[0]:
+        updated = current.model_copy(
+            update={"writing_feed_url": corrected.url, "writing_feed_kind": corrected.kind}
+        )
+    else:
+        updated = current.model_copy(
+            update={"feeds": [corrected if item == old else item for item in current.feeds]}
+        )
+    storage.update_person(updated)
+
+
 def fetch_person_feed(
     person: Person,
     config: Config,
@@ -673,6 +739,7 @@ def fetch_person_feed(
 
     tally = _Tally()
     failed_sources: list[str] = []
+    corrected_sources: list[str] = []
     for index, source in enumerate(sources):
         primary = index == 0 and bool(person.substack_url)
         legacy = primary and not person.writing_feed_url
@@ -681,17 +748,27 @@ def fetch_person_feed(
             if source.kind == FeedKind.INDEX_PAGE:
                 _fetch_index_source(person, source, config, storage, fetch, tally)
                 continue
-            if (
-                person.substack_url
-                and source.url == person.substack_url
-                and not person.writing_feed_url
-            ):
-                try:
-                    resolved = _resolve_writing_feed(person.substack_url, fetch, max_fetches=4)
-                except IngestError as exc:
-                    raise FetchError(str(exc)) from exc
-                source = source.model_copy(update={"url": resolved})
-            feed_bytes = fetch(source.url)
+            original = source
+            try:
+                feed_bytes = fetch(source.url)
+            except FetchError as exc:
+                if not isinstance(exc.__cause__, HTTPError) or exc.__cause__.code != 404:
+                    raise
+                source = _recover_feed_source(source, fetch, missing=True)
+                feed_bytes = b""
+            if source == original and _feed_title(feed_bytes) is None:
+                source = _recover_feed_source(source, fetch, missing=False)
+                feed_bytes = b""
+            if source.kind == FeedKind.INDEX_PAGE:
+                _fetch_index_source(person, source, config, storage, fetch, tally)
+                _save_source_correction(person, original, source, storage)
+                corrected_sources.append(f"{original.url} → {source.url} ({source.kind.value})")
+                continue
+            if not feed_bytes:
+                feed_bytes = fetch(source.url)
+            if source != original:
+                _save_source_correction(person, original, source, storage)
+                corrected_sources.append(f"{original.url} → {source.url} ({source.kind.value})")
             items = _parse_feed_items(feed_bytes, source.url)
             tally.items += len(items)
             if legacy:
@@ -744,6 +821,7 @@ def fetch_person_feed(
         skipped_empty=tally.skipped_empty,
         titles=tally.titles,
         failed_sources=failed_sources,
+        corrected_sources=corrected_sources,
     )
 
 
