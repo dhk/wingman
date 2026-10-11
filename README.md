@@ -47,7 +47,12 @@ wingman demo        # guided tour on real public data, isolated workspace, no ke
 Docs URLs) become a cited canonical profile; every accepted claim carries a
 verbatim quote, every unsupported one is rejected visibly. LinkedIn exports
 add positions, skills, recommendations — and seed the watchlist from your
-connections (names and roles only, never emails). Your own writing becomes
+connections (including private contact identifiers and emails; excluded from
+published person reports). Imports preserve existing canonical values and
+report ambiguous identities or contradictory values for review. Private
+backups include these identifiers; authorized Drive backup uploads transmit
+them too (`backup --no-drive` / MCP `drive=False` keeps a backup local).
+Your own writing becomes
 a searchable evidence corpus (`wingman evidence "kafka migration"`).
 
 **Opportunity assessment.** `wingman assess job.md` — or `wingman assess
@@ -74,8 +79,11 @@ people and blogs: similarity, deterministic dossiers with
 `[fact]`/`[inference]` labels, model-synthesized themes validated
 quote-by-quote (RFC-016), and approved-source research — you name the
 careers page or newsroom, `wingman company research` diffs it, and new
-links are the hiring signal (RFC-015). Add `--retain` to a source and that
-page's prose is kept as citable evidence too, so a values page can be
+links are the hiring signal (RFC-015). New sources labelled `about` retain
+prose by default; existing `about` sources are enabled once on upgrade,
+and their next research fetch keeps the text. `--no-retain` opts out
+afterward. Other labels need `--retain` to
+keep prose as citable evidence too, so a values page can be
 quoted rather than only hashed (RFC-060) — same page, same one GET. New
 job links get judged against `job-criteria.md` automatically (RFC-035);
 `wingman company score-board "Acme"` scores EVERY link a watched page

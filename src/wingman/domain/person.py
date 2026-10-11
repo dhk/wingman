@@ -46,6 +46,13 @@ class FeedSource(BaseModel):
     org_name: str | None = None
 
 
+class ConnectionImport(BaseModel):
+    """Private address-book row and the exact import source supporting it."""
+
+    source_record_id: str
+    fields: dict[str, str]
+
+
 class Person(BaseModel):
     """One watched or known person; identified by a normalized name key."""
 
@@ -57,9 +64,10 @@ class Person(BaseModel):
     writing_feed_kind: FeedKind = FeedKind.RSS
     feeds: list[FeedSource] = Field(default_factory=list)
     linkedin_url: str | None = None
-    # Only ever set manually ('wingman people add --email'): imports never
-    # read email addresses (the Connections.csv privacy decision stands).
+    # Local address-book data, imported or entered manually; excluded from publication.
     email: str | None = None
+    connection_fields: dict[str, str] = Field(default_factory=dict)
+    connection_imports: list[ConnectionImport] = Field(default_factory=list)
     company: str | None = None
     position: str | None = None
     connected_on: str | None = None

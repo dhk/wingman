@@ -111,10 +111,12 @@ from wingman.application.research import (
     add_company_source,
     delete_company,
     list_company_sources,
+    pause_company_source,
     remove_company_source,
     rename_company,
     render_research_report,
     research_company,
+    source_duplicates,
 )
 from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import (
@@ -1840,7 +1842,9 @@ def people_add(
     position: str | None = typer.Option(None, "--position", help="What they do."),
     linkedin: str | None = typer.Option(None, "--linkedin", help="Their LinkedIn profile URL."),
     email: str | None = typer.Option(
-        None, "--email", help="Their email (manual entry only — imports never read emails)."
+        None,
+        "--email",
+        help="Their email (private address-book field; also imported from Connections.csv).",
     ),
 ) -> None:
     """Add a person to the watchlist (or update them if already known)."""
@@ -2025,7 +2029,7 @@ def people_add_feed(
 def people_import_connections(
     export: Path = typer.Argument(..., help="Path to a LinkedIn data-export zip."),
 ) -> None:
-    """Seed Person records from Connections.csv (names and roles only — never emails)."""
+    """Seed Person records from Connections.csv (private address-book fields, including emails)."""
     configure_logging()
     config = load_config()
     _require_workspace(config, "seeded")
@@ -2036,7 +2040,8 @@ def people_import_connections(
         typer.echo(f"import-connections failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(
-        f"Created: {report.created}  Already known: {report.skipped_existing}  "
+        f"Created: {report.created}  Updated: {report.updated}  Unchanged: {report.skipped_existing}  "
+        f"Conflicts (preserved; review identity/values): {report.conflicts}  "
         f"Incomplete rows skipped: {report.skipped_incomplete}"
     )
 
@@ -3924,7 +3929,7 @@ def company_add_source(
     retain: bool | None = typer.Option(
         None,
         "--retain/--no-retain",
-        help="Also keep the page's text as a citable document for this company (RFC-060).",
+        help="Keep citable prose; defaults on for new about-labelled sources (RFC-060).",
     ),
 ) -> None:
     """Approve one research URL for a company — adding it IS the approval (RFC-015).
@@ -3934,8 +3939,9 @@ def company_add_source(
 
     --retain additionally KEEPS the fetched page's prose as a document
     attributed to the company, so 'company pov' and 'evidence' can quote it.
-    Off by default: it suits a values or about page that changes twice a
-    year, not a careers page that would re-store on every run. It changes
+    On by default for new sources labelled about; off for other labels.
+    Use --no-retain to opt out. Retention suits durable prose rather than
+    careers indexes that change on every run. It changes
     nothing about the fetch — same page, same one GET. Re-run with
     --retain/--no-retain on an already-approved source to change your mind.
     """
@@ -3956,6 +3962,31 @@ def company_add_source(
         typer.echo(f'Fetch it with: wingman company research "{source.company_name}"')
     else:
         typer.echo(f"Already approved for {source.company_name}: {source.url}{kept}")
+
+
+def _pause_source(name: str, url: str, paused: bool) -> None:
+    config = load_config()
+    _require_workspace(config, "updated")
+    try:
+        with Storage(config.db_path) as storage:
+            source = pause_company_source(name, url, storage, paused=paused)
+    except IngestError as exc:
+        typer.echo(f"source pause failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    state = "Paused" if source.paused else "Resumed"
+    typer.echo(f"{state}: {source.url}. Existing research preserved.")
+
+
+@company_app.command("pause-source")
+def company_pause_source(name: str, url: str) -> None:
+    """Pause one approved URL without deleting its research history."""
+    _pause_source(name, url, True)
+
+
+@company_app.command("unpause-source")
+def company_unpause_source(name: str, url: str) -> None:
+    """Resume fetching a paused approved research URL."""
+    _pause_source(name, url, False)
 
 
 @company_app.command("remove-source")
@@ -3990,6 +4021,7 @@ def company_sources_cmd(
     try:
         with Storage(config.db_path) as storage:
             sources = list_company_sources(name, storage)
+            duplicates = source_duplicates(sources, storage)
             snapshots = {
                 source.url: storage.get_research_snapshot(source.company_key, source.url)
                 for source in sources
@@ -4012,6 +4044,9 @@ def company_sources_cmd(
             if snapshot
             else "no snapshot yet"
         )
+        if source.url in duplicates:
+            state += f", duplicate of {duplicates[source.url]}"
+        state += ", paused" if source.paused else ""
         kept = ", text retained" if source.retain else ""
         typer.echo(f"- {source.url}{label} — {state}{kept}")
 

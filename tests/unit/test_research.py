@@ -487,3 +487,98 @@ def test_different_pages_on_one_host_stay_separate(storage: Storage) -> None:
 
     assert created
     assert len(list_company_sources("Acme", storage)) == 2
+
+
+def test_identical_sources_diff_once_and_list_duplicate(config: Config, storage: Storage) -> None:
+    from wingman.application.research import source_duplicates
+
+    urls = ["https://acme.example.com/careers", "https://acme.example.com/jobs"]
+    for url in urls:
+        add_company_source("Acme", url, storage)
+    research_company("Acme", config, storage, fetcher=lambda _: PAGE_V1)
+    report = research_company("Acme", config, storage, fetcher=lambda _: PAGE_V2)
+    assert len([result for result in report.results if result.new_links]) == 1
+    assert report.results[1].duplicate_of == urls[0]
+    assert source_duplicates(list_company_sources("Acme", storage), storage) == {urls[1]: urls[0]}
+    assert storage.get_research_snapshot("acme", urls[1]) is not None
+    from wingman.mcp_server import company_source
+
+    assert f"duplicate of {urls[0]}" in company_source("list", "Acme")
+
+
+def test_equal_text_with_different_links_is_not_duplicate(config: Config, storage: Storage) -> None:
+    from wingman.application.research import source_duplicates
+
+    urls = ["https://acme.example.com/one", "https://acme.example.com/two"]
+    for url in urls:
+        add_company_source("Acme", url, storage)
+    report = research_company(
+        "Acme", config, storage, fetcher=lambda url: f'<a href="{url}/job">Apply</a>'.encode()
+    )
+    assert all(result.duplicate_of is None for result in report.results)
+    assert source_duplicates(list_company_sources("Acme", storage), storage) == {}
+
+
+def test_duplicate_with_older_history_keeps_its_new_links(config: Config, storage: Storage) -> None:
+    owner = "https://acme.example.com/careers"
+    duplicate = "https://acme.example.com/jobs"
+    add_company_source("Acme", owner, storage)
+    add_company_source("Acme", duplicate, storage)
+    text, links = extract_page(PAGE_V1, duplicate)
+    import hashlib
+
+    storage.save_research_snapshot(
+        ResearchSnapshot(
+            company_key="acme",
+            url=duplicate,
+            text_hash=hashlib.sha256(text.encode()).hexdigest(),
+            links=links,
+        )
+    )
+    report = research_company("Acme", config, storage, fetcher=lambda _: PAGE_V2)
+    assert report.results[0].new_links == ["https://acme.example.com/jobs/staff-mle"]
+    assert report.results[1].new_links == []
+
+
+def test_pause_preserves_snapshot_and_skips_only_one_source(
+    config: Config, storage: Storage
+) -> None:
+    from wingman.application.research import pause_company_source
+
+    url = "https://acme.example.com/careers"
+    other = "https://acme.example.com/about"
+    add_company_source("Acme", url, storage)
+    add_company_source("Acme", other, storage)
+    research_company("Acme", config, storage, fetcher=lambda _: PAGE_V1)
+    previous = storage.get_research_snapshot("acme", url)
+    pause_company_source("Acme", url, storage, paused=True)
+    fetched: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        fetched.append(url)
+        return PAGE_V2
+
+    report = research_company("Acme", config, storage, fetcher=fetch)
+    assert fetched == [other]
+    assert report.fetched == 1 and report.failed == 0
+    assert report.results[0].status == "paused"
+    assert storage.get_research_snapshot("acme", url) == previous
+    pause_company_source("Acme", url, storage, paused=False)
+    research_company("Acme", config, storage, fetcher=fetch)
+    assert url in fetched
+
+
+def test_pause_cli_and_mcp(config: Config, storage: Storage) -> None:
+    from typer.testing import CliRunner
+
+    from wingman.cli.main import app
+    from wingman.mcp_server import company_source
+
+    url = "https://acme.example.com/about"
+    add_company_source("Acme", url, storage)
+    result = CliRunner().invoke(app, ["company", "pause-source", "Acme", url])
+    assert result.exit_code == 0, result.output
+    assert "paused" in company_source("list", "Acme")
+    assert "Resumed" in company_source("unpause", "Acme", url)
+    assert "paused" not in company_source("list", "Acme")
+    assert "not an approved source" in company_source("pause", "Acme", url + "/unknown")

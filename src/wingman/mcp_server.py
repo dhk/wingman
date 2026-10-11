@@ -130,10 +130,12 @@ from wingman.application.research import (
     add_company_source,
     delete_company,
     list_company_sources,
+    pause_company_source,
     remove_company_source,
     rename_company,
     render_research_report,
     research_company,
+    source_duplicates,
 )
 from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import (
@@ -3060,7 +3062,7 @@ def people_add(
     email: str = "",
 ) -> str:
     """Add a person to the watchlist (or update them), optionally with their public writing URL,
-    LinkedIn URL, and email (manual entry only — imports never read emails).
+    LinkedIn URL, and email (private address-book field; also imported from Connections.csv).
 
     substack_url is a legacy name for a public writing URL. Bounded discovery
     finds and verifies its RSS/Atom endpoint before storing. If no feed exists,
@@ -4263,7 +4265,7 @@ def company_feed(action: str, name: str, url: str = "", index_page: bool = False
 def company_source(
     action: str, name: str, url: str = "", label: str = "", retain: bool | None = None
 ) -> str:
-    """Manage approved research URLs for a company: action is add, remove, or list.
+    """Manage approved research URLs for a company: action is add, remove, pause, unpause, or list.
 
     Adding a source IS the approval (RFC-015): 'company_research' will fetch
     exactly the pages approved here, nothing else. https:// only.
@@ -4271,8 +4273,8 @@ def company_source(
     retain=True (RFC-060) additionally keeps that page's prose as a document
     attributed to the company, so 'company_pov', 'search' and 'evidence' can
     quote it — a values or about page becomes citable instead of only a hash
-    that says it changed. The fetch is identical either way. Off by default;
-    suits pages that change rarely, not a careers page. Pass it on an
+    that says it changed. The fetch is identical either way. On by default for
+    new sources labelled about; off for other labels. False opts out. Pass it on an
     already-approved source to change your mind (None leaves it alone).
     """
     config = _ready_config()
@@ -4289,6 +4291,10 @@ def company_source(
                 state = "Approved" if created else "Already approved"
                 kept = " (text retained as a document)" if source.retain else ""
                 return f"{state} for {source.company_name}: {source.url}{kept}"
+            if action in {"pause", "unpause"}:
+                source = pause_company_source(name, url, storage, paused=action == "pause")
+                state = "Paused" if source.paused else "Resumed"
+                return f"{state}: {source.url}. Existing research preserved."
             if action == "remove":
                 removed = remove_company_source(name, url, storage)
                 return (
@@ -4303,6 +4309,7 @@ def company_source(
                         f"No approved research sources for {name!r}. "
                         "Approve one with company_source(action='add', ...)."
                     )
+                duplicates = source_duplicates(sources, storage)
                 lines = []
                 for entry in sources:
                     snapshot = storage.get_research_snapshot(entry.company_key, entry.url)
@@ -4312,13 +4319,16 @@ def company_source(
                         if snapshot
                         else "no snapshot yet"
                     )
+                    if entry.url in duplicates:
+                        state += f", duplicate of {duplicates[entry.url]}"
                     tag = f" ({entry.label})" if entry.label else ""
+                    state += ", paused" if entry.paused else ""
                     kept = ", text retained" if entry.retain else ""
                     lines.append(f"- {entry.url}{tag} — {state}{kept}")
                 return "\n".join(lines)
     except IngestError as exc:
         return f"company_source failed: {exc}"
-    return f"unknown action {action!r}; use add, remove, or list."
+    return f"unknown action {action!r}; use add, remove, pause, unpause, or list."
 
 
 @server.tool()
@@ -4641,17 +4651,26 @@ def feed_attach(person_name: str, url: str, kind: str = "rss", organization: str
 
 @server.tool()
 def people_import_connections(export_path: str) -> str:
-    """Seed the watchlist from a LinkedIn export zip's Connections.csv (names/roles only, never emails)."""
+    """Seed the watchlist from a LinkedIn export zip's Connections.csv (private contact identifiers, including emails)."""
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
     try:
+        path = Path(export_path).expanduser()
+        if not config.privileged:
+            try:
+                path = path.resolve()
+                if not path.is_relative_to(config.inbox_dir.resolve()):
+                    raise IngestError("shared imports require a zip in this tenant's private inbox")
+            except OSError as exc:
+                raise IngestError("could not resolve the tenant inbox import path") from exc
         with Storage(config.db_path) as storage:
-            report = seed_from_connections(Path(export_path).expanduser(), storage)
+            report = seed_from_connections(path, storage)
     except IngestError as exc:
         return f"import failed: {exc}"
     return (
-        f"Created: {report.created}  Already known: {report.skipped_existing}  "
+        f"Created: {report.created}  Updated: {report.updated}  Unchanged: {report.skipped_existing}  "
+        f"Conflicts (preserved; review identity/values): {report.conflicts}  "
         f"Incomplete rows skipped: {report.skipped_incomplete}"
     )
 

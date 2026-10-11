@@ -130,6 +130,12 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 
 **Revisit if.** Feed refresh becomes tedious enough that the user wants scheduled sync — that is Phase 8's connector architecture decision, not a quiet relaxation of this entry.
 
+### RFC-009 addendum (#422, #478) — Durable decision
+
+Explicit Connections.csv import keeps the owner's address book, including Email Address and other non-empty identifying columns. Repository owner dhk explicitly requested email import/backfill in #422 plus #478 in the 2026-10-09 implementation request; this supersedes the earlier email minimization decision. These addresses stay local during import and are omitted, together with private import metadata, from published person reports. Whole-workspace backups contain them. An already-authorized Drive backup upload transmits the archive, including contact identifiers; use CLI `backup --no-drive` or MCP `backup(drive=False)` for a local-only backup. Email possession contributes no relationship warmth.
+
+Names locate candidates but do not authorize identity merges. Matching email or LinkedIn URL corroborates a merge; contradictory identifiers or uncorroborated same-name rows are reported as conflicts without modifying the existing person. A legacy imported contact can be backfilled from the same original export only when its known company/role also matches. Ambiguous names without that evidence need explicit identity resolution. Existing non-empty canonical values and extra fields win; contradictory role values are reported and kept in private import history for a corroborated identity. Blank values do not erase, absent people are never deleted, and IDs and writing sources remain intact. Source locator and exact CSV-byte hash identify each import; identical per-person field snapshots are not duplicated merely because export-file hashes differ. Reports name counts only, not private identifiers. Shared MCP imports require a path resolving inside that tenant's private inbox, including symlink checks; privileged local CLI imports retain operator-selected paths.
+
 ## RFC-010: Semantic similarity via embeddings, stored in SQLite
 
 **Decision.** People similarity ("who thinks about what I think about", "if you like A and B, talk to C") is computed from text embeddings: a new `embed_semantic` capability class in `models.toml` maps to an embeddings provider (default `voyage`/`voyage-4`; `hashed` is a local, network-free fallback). Vectors are unit-length, stored as float32 blobs in `wingman.db`, and compared with a dot product (equal to cosine similarity for unit vectors) in plain Python. A person's vector is the normalized mean of their documents' vectors; the user's vector is the normalized mean of their corpus.
@@ -218,6 +224,12 @@ Two deferrals, on the demonstrated-need rule:
 
 **Amended by RFC-060** (issue #349): "reduces each page deterministically to a snapshot" is no longer *all* a fetch keeps. A source may be marked `retain`, in which case the page's prose is ALSO kept as a company-attributed document, so a values page becomes something a stance can quote instead of only a hash saying it changed. Default OFF, per source; the fetch, the snapshot, the diff and the egress below are unchanged — only what survives the fetch differs. Everything else here stands.
 
+### RFC-015 addendum (#464) — Durable decision
+
+Research keeps each approved URL's baseline, but identical visible-text hashes and absolute link sets within one company's current fetch are diffed once. The later source is reported as `duplicate of <url>` in research and source listings. Comparing links as well as text prevents unrelated link-only pages from collapsing. Duplicate pages do not repeat scoring or consume action slots. Existing action-level deduplication additionally coalesces overlapping evidence for the same action kind and company before the ten-action cap. Distinct kinds of action remain distinct.
+
+Listing and run-time duplicate detection share the same company/text/link identity. Overnight coverage verifies that matching sources score their combined pending evidence once.
+
 **Decision.** Per-company research sources, added explicitly by the user and fetched only on explicit command — the network-scope decision RFC-012 deferred, now resolved. `wingman company add-source "X" <url> [--label]` records an approved HTTPS source for a company; **the act of adding is the approval** — no confirmation theater at fetch time. `wingman company sources "X"` lists them (`remove-source` withdraws one, snapshot included); `wingman company research "X"` makes one read-only GET per approved source (RFC-009 shape: explicit invocation, https-only, visible failures, one page per URL — no crawling), reduces each page deterministically to a snapshot (SHA-256 of visible text + the page's set of https links), stores it replace-on-refresh keyed `(company_key, url)`, and reports the diff against the previous snapshot: **new links are the hiring/announcement signal**, a changed text hash the weaker "page changed" signal, and "unchanged since \<date\>" an honest answer. A failed source keeps its previous snapshot and is reported, never fatal. The dossier gains a "Research (approved sources)" section rendering stored snapshots with a 30-day staleness flag — no fetch at dossier time, preserving RFC-012's determinism. MCP parity (RFC-008): `company_source(action=add|remove|list, ...)` following the watchlist single-tool convention, plus `company_research`.
 
 **Alternatives.** Fetching at dossier time (couples an artifact to the network and breaks dossier determinism); crawling beyond the approved page (scope creep — the user approved one URL, one GET honors exactly that); a model summarizing the fetched page (unauditable claims where a link-set diff is deterministic and explainable); a first-class Organization entity (still deferred — a `(company_key, url)` table is the metadata that actually arrived; aliases/notes remain the demonstrated-need trigger).
@@ -225,6 +237,12 @@ Two deferrals, on the demonstrated-need rule:
 **Rationale.** Careers pages and newsrooms are where hiring signals appear first, and which pages to trust is a judgment only the user can make. Naming the exact URLs turns "did anything change at X" into a deterministic diff of user-chosen pages instead of a crawl, keeping the egress surface enumerable: every URL Wingman will ever fetch for a company is visible in `company sources`.
 
 **Revisit if.** Users want research inside `sync`/`make-it-so` (the fetch consent and cost move with it — an explicit flag, not a default), or want change history rather than a latest-snapshot diff (snapshot generations become a real archive), or want alerting (that is RFC-006 territory: Wingman still never sends anything).
+
+### RFC-015 addendum (#434, #548) — Durable decision
+
+`wingman company pause-source "Company" <url>` suspends one approved URL; `unpause-source` resumes it. MCP uses `company_source(action="pause"|"unpause", name=..., url=...)`. Source listings show paused status. Pausing preserves snapshots, retained prose, queued links, company records, POV and watchlist membership. Explicit research and overnight skip the paused URL and its queued scoring work, producing no fetch-failure action. Unpause resumes against the preserved baseline. Removing a source remains withdrawal of its evidence.
+
+Paused sources also exclude saved snapshot links from explicit full-board scoring. Pending overnight links remain queued until resumed, and dossier/pack source lists mark paused pages.
 
 ## RFC-016: Model-synthesized company themes (resolves an RFC-012 deferral)
 
@@ -876,6 +894,14 @@ One thing HAS changed since this entry was first drafted, and it changes the rea
 **Trade-offs.** Undated documents sort last in the 20-document POV budget, so at a company with twenty-plus recent feed posts a retained values page may not reach the prompt — the companies this feature exists for are precisely the ones with no feed, and inventing a date to fix ordering is not a trade worth making. Retained pages also enter `search` and `evidence`, so a marketing page's language becomes quotable material; the quote is always attributed to the company's own page, which is what it is.
 
 **Revisit if.** `company follow`'s conventional-path probe should default `/about` to retained (it is the one probed path whose content is durable — deliberately left OFF here so following a company never silently starts storing pages). Retained pages need selection within the POV budget rather than pure recency (per-source quotas — the same pressure RFC-016 already flagged). Users want the older versions of a retained page readable rather than only superseded (that is a real archive, and RFC-015's revisit trigger, not this one).
+
+### RFC-060 addendum (#463) — Durable decision
+
+New sources labelled `about` retain prose by default (case-insensitive, ignoring surrounding whitespace); all other labels remain opt-in. This supersedes RFC-060's default-off policy for about pages. `company follow` already labels its approved `/about` page this way. Explicit `--retain/--no-retain` (MCP `retain=True/False`) still overrides the default; repeat adds without a flag preserve the current setting.
+
+Existing approved about-labelled sources are enabled once when the upgraded application opens their workspace. Repository owner dhk explicitly approved this one-time migration in the implementation conversation on 2026-10-10 ("enable"): old records cannot distinguish default False from deliberate False, so both are enabled. A transactional migration marker prevents subsequent opens from overriding later opt-outs. Other labels, source timestamps, snapshots, and unknown payload fields are preserved. The next normal research fetch keeps prose even when the existing snapshot's hash is unchanged; there is no extra GET, new approved URL, crawl, or model call. Companies without an approved prose source still need one approved; the migration does not invent sources or guarantee usable prose on every about page.
+
+Theme synthesis with approved sources but no documents explains `--retain` (or MCP `retain=True`) and the required research refresh. If retention is already enabled it points at fetching/checking extraction instead of claiming retention is absent. Tests cover default-retained company themes without watched people, existing-source migration, unchanged snapshots, and durable explicit opt-outs.
 
 ## RFC-061: Wingman records where an artifact was published; it never publishes one
 
