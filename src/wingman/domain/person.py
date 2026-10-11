@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -59,6 +60,7 @@ class Person(BaseModel):
     name: str = Field(min_length=1)
     origin: PersonOrigin
     substack_url: str | None = None
+    writing_feed_url: str | None = None
     feeds: list[FeedSource] = Field(default_factory=list)
     linkedin_url: str | None = None
     # Local address-book data, imported or entered manually; excluded from publication.
@@ -77,10 +79,14 @@ class Person(BaseModel):
 
     @property
     def sources(self) -> list[FeedSource]:
-        """Every configured source: the Substack URL (as a feed) plus added feeds."""
+        """The discovered writing feed (or unresolved entered URL), plus added feeds."""
         configured: list[FeedSource] = []
         if self.substack_url:
-            configured.append(FeedSource(url=self.substack_url.rstrip("/") + "/feed"))
+            legacy = self.substack_url
+            host = (urlsplit(legacy).hostname or "").lower()
+            if not self.writing_feed_url and host.endswith(".substack.com"):
+                legacy = legacy.rstrip("/") + "/feed"
+            configured.append(FeedSource(url=self.writing_feed_url or legacy))
         configured.extend(self.feeds)
         return configured
 

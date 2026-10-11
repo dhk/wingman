@@ -169,10 +169,10 @@ def test_attach_rejects_duplicate_source(workspace: Path) -> None:
     with Storage(config.db_path) as storage:
         person, _ = add_person("Jane", storage, substack_url="https://jane.substack.com")
         with pytest.raises(IngestError, match="already has"):
-            attach_feed(person, FeedSource(url="https://jane.substack.com/feed"), storage)
+            attach_feed(person, FeedSource(url=person.sources[0].url), storage)
         # duplicates are caught up to trailing-slash normalization too
         with pytest.raises(IngestError, match="already has"):
-            attach_feed(person, FeedSource(url="https://jane.substack.com/feed/"), storage)
+            attach_feed(person, FeedSource(url=person.sources[0].url + "/"), storage)
 
 
 def test_attach_enforces_invariants(workspace: Path) -> None:
@@ -193,7 +193,7 @@ def test_attach_enforces_invariants(workspace: Path) -> None:
             )
 
 
-def test_custom_domain_substack_is_labeled_substack(
+def test_generic_custom_domain_feed_is_not_assumed_substack(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     substack = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -209,7 +209,7 @@ def test_custom_domain_substack_is_labeled_substack(
         report = fetch_person_feed(person, config, storage, fetcher=lambda url: substack)
         assert report.added == 1
         document = storage.list_external_documents(person.person_id)[0]
-        assert document.source_type == "substack_feed"
+        assert document.source_type == "rss_feed"
 
 
 def test_index_page_source_with_org_attribution(workspace: Path) -> None:

@@ -458,3 +458,23 @@ def test_mcp_job_criteria_roundtrip(workspace: Config) -> None:
     # the docstring carries the interview protocol (RFC-025/030/031 convention)
     assert "AskUserQuestion" in (job_criteria.__doc__ or "")
     assert "confirms the wording" in (job_criteria.__doc__ or "")
+
+
+def test_full_board_does_not_fetch_paused_snapshot_links(workspace: Config) -> None:
+    from wingman.application.research import pause_company_source
+
+    save_criteria(workspace, CRITERIA)
+    careers = "https://acme.example/careers"
+    page = b'<html><a href="/jobs/ml">ML</a></html>'
+    with Storage(workspace.db_path) as storage:
+        add_company_source("Acme", careers, storage)
+        research_company("Acme", workspace, storage, fetcher=lambda url: page)
+        pause_company_source("Acme", careers, storage, paused=True)
+        calls = []
+
+        def fetch(url: str) -> bytes:
+            calls.append(url)
+            return _page(POSTING)
+
+        score_full_board("Acme", workspace, storage, RecordedProvider(_judgment()), fetcher=fetch)
+        assert calls == []
