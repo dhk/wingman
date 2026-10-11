@@ -116,6 +116,7 @@ from wingman.application.research import (
     rename_company,
     render_research_report,
     research_company,
+    source_duplicates,
 )
 from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import (
@@ -4015,6 +4016,7 @@ def company_sources_cmd(
     try:
         with Storage(config.db_path) as storage:
             sources = list_company_sources(name, storage)
+            duplicates = source_duplicates(sources, storage)
             snapshots = {
                 source.url: storage.get_research_snapshot(source.company_key, source.url)
                 for source in sources
@@ -4037,6 +4039,8 @@ def company_sources_cmd(
             if snapshot
             else "no snapshot yet"
         )
+        if source.url in duplicates:
+            state += f", duplicate of {duplicates[source.url]}"
         state += ", paused" if source.paused else ""
         kept = ", text retained" if source.retain else ""
         typer.echo(f"- {source.url}{label} — {state}{kept}")
