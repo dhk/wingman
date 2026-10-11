@@ -448,6 +448,13 @@ def completeness(as_html: bool = False) -> str:
     POV cards built vs. missing) — recomputed fresh on every call, no
     caching, no model call.
 
+    People and Companies cover CURATED people only: added by hand, given a
+    feed, or logged with. Contacts that arrived from a LinkedIn import and
+    have none of those are reported as one count ("N imported contacts") and
+    never counted as gaps, so a large import cannot bury 'Things to do'. Do
+    not tell the user to build POV cards for, or log interactions with,
+    those contacts in bulk.
+
     Interview Bootstrap and Applications are NOT included: there is no
     tool yet that reads back interview_react captures (#311) or lists
     Opportunity records by name (#312) as of this writing, so this tool
