@@ -78,10 +78,21 @@ class FeedFetchReport(BaseModel):
     corrected_sources: list[str] = Field(default_factory=list)
 
 
-def _resolve_writing_feed(url: str, fetcher: Callable[[str], bytes]) -> str:
+def _resolve_writing_feed(
+    url: str, fetcher: Callable[[str], bytes], max_fetches: int | None = None
+) -> str:
     """Resolve an entered writing URL using bounded RSS/Atom discovery."""
+    attempts = 0
+
+    def bounded_fetch(candidate: str) -> bytes:
+        nonlocal attempts
+        if max_fetches is not None and attempts >= max_fetches:
+            raise FetchError("legacy discovery budget exhausted; run feed_discover explicitly")
+        attempts += 1
+        return fetcher(candidate)
+
     try:
-        discovery = discover_feed(url, fetcher=fetcher)
+        discovery = discover_feed(url, fetcher=bounded_fetch)
     except IngestError as exc:
         raise IngestError(
             f"writing URL {url!r} could not be fetched. Use add-feed or feed_discover "
@@ -123,7 +134,9 @@ def add_person(
     writing_feed_url = None
     if substack_url is not None:
         substack_url = substack_url.rstrip("/")
-        if not substack_url.startswith("https://"):
+        if not substack_url.startswith("https://") or any(
+            ord(c) <= 32 or ord(c) == 127 for c in substack_url
+        ):
             raise IngestError(
                 f"Writing URL must start with https:// (RFC-009); got {substack_url!r}"
             )
@@ -163,7 +176,7 @@ def add_person(
             if substack_url is not None
             else existing.writing_feed_kind,
             "writing_feed_url": writing_feed_url
-            if substack_url is not None
+            if substack_url is not None and writing_feed_url is not None
             else existing.writing_feed_url,
             "company": company or existing.company,
             "position": position or existing.position,
@@ -551,11 +564,24 @@ def _recover_feed_source(
     if missing and "/" + path.rsplit("/", 1)[-1] in CONVENTIONAL_FEED_PATHS:
         path = path.rsplit("/", 1)[0]
     index_url = parts._replace(path=path, query="", fragment="").geturl().rstrip("/")
+    if not urlsplit(index_url).path.strip("/"):
+        raise FetchError(
+            "origin root is not an approved publication index; attach a specific index page"
+        )
     cache: dict[str, bytes] = {}
+    index_data = b""
+    attempts = 0
 
     def cached(url: str) -> bytes:
+        nonlocal index_data, attempts
         if url not in cache:
+            if attempts >= 4:
+                raise FetchError("feed recovery GET budget exhausted; run feed_discover explicitly")
+            attempts += 1
+            cache.clear()
             cache[url] = fetch(url)
+            if url == index_url:
+                index_data = cache[url]
         return cache[url]
 
     try:
@@ -566,10 +592,9 @@ def _recover_feed_source(
         ) from exc
     if discovered.feed_url:
         return source.model_copy(update={"url": discovered.feed_url})
-    data = cache[index_url].lower()
-    if not any(tag in data for tag in (b"<html", b"<body", b"<a ", b"<div")):
+    if not _index_post_links(index_data, index_url):
         raise FetchError(
-            f"no feed was discoverable at {source.url!r}; no readable HTML index found"
+            f"no feed was discoverable at {source.url!r}; no post links in a readable HTML index"
         )
     return source.model_copy(update={"url": index_url, "kind": FeedKind.INDEX_PAGE})
 
@@ -580,7 +605,7 @@ def _save_source_correction(
     current = storage.get_person(person.person_id)
     if current is None:
         return
-    if old.url in {person.substack_url, person.writing_feed_url}:
+    if person.substack_url and old == person.sources[0]:
         updated = current.model_copy(
             update={"writing_feed_url": corrected.url, "writing_feed_kind": corrected.kind}
         )
@@ -611,16 +636,22 @@ def fetch_person_feed(
             f"'wingman people add \"{person.name}\" --substack <url>' or "
             f"'wingman people add-feed \"{person.name}\" <url>'."
         )
-    fetch = fetcher if fetcher is not None else fetch_url
+    raw_fetch = fetcher if fetcher is not None else fetch_url
+    cached: dict[str, bytes] = {}
+
+    def fetch(url: str) -> bytes:
+        if url not in cached:
+            cached.clear()
+            cached[url] = raw_fetch(url)
+        return cached[url]
+
     tally = _Tally()
     failed_sources: list[str] = []
     corrected_sources: list[str] = []
-    for source in sources:
-        entered_url = (
-            person.substack_url
-            if source.url in {person.substack_url, person.writing_feed_url}
-            else source.url
-        )
+    for index, source in enumerate(sources):
+        primary = index == 0 and bool(person.substack_url)
+        legacy = primary and not person.writing_feed_url
+        entered_url = person.substack_url if primary else source.url
         try:
             if source.kind == FeedKind.INDEX_PAGE:
                 _fetch_index_source(person, source, config, storage, fetch, tally)
@@ -648,8 +679,15 @@ def fetch_person_feed(
                 corrected_sources.append(f"{original.url} → {source.url} ({source.kind.value})")
             items = _parse_feed_items(feed_bytes, source.url)
             tally.items += len(items)
-            substack_feed = person.writing_feed_url or person.substack_url
-            source_type = "substack_feed" if source.url == substack_feed else "rss_feed"
+            if legacy:
+                person = person.model_copy(update={"writing_feed_url": source.url})
+                storage.update_person(person)
+            host = (urlsplit(person.substack_url or "").hostname or "").lower()
+            source_type = (
+                "substack_feed"
+                if primary and (legacy or host.endswith(".substack.com"))
+                else "rss_feed"
+            )
             for item in items:
                 _ingest_post(
                     person,
@@ -664,7 +702,7 @@ def fetch_person_feed(
                     tally,
                 )
         except FetchError as exc:
-            failed_sources.append(f"{entered_url}: {exc}")
+            failed_sources.append(f"{entered_url!r}: {exc}")
     if len(failed_sources) == len(sources):
         raise IngestError(
             f"every source failed for {person.name}: "

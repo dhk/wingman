@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -74,10 +75,12 @@ class Person(BaseModel):
         """The discovered writing feed (or unresolved entered URL), plus added feeds."""
         configured: list[FeedSource] = []
         if self.substack_url:
+            legacy = self.substack_url
+            host = (urlsplit(legacy).hostname or "").lower()
+            if not self.writing_feed_url and host.endswith(".substack.com"):
+                legacy = legacy.rstrip("/") + "/feed"
             configured.append(
-                FeedSource(
-                    url=self.writing_feed_url or self.substack_url, kind=self.writing_feed_kind
-                )
+                FeedSource(url=self.writing_feed_url or legacy, kind=self.writing_feed_kind)
             )
         configured.extend(self.feeds)
         return configured

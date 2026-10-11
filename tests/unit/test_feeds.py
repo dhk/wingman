@@ -193,7 +193,7 @@ def test_attach_enforces_invariants(workspace: Path) -> None:
             )
 
 
-def test_custom_domain_substack_is_labeled_substack(
+def test_generic_custom_domain_feed_is_not_assumed_substack(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     substack = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -209,7 +209,7 @@ def test_custom_domain_substack_is_labeled_substack(
         report = fetch_person_feed(person, config, storage, fetcher=lambda url: substack)
         assert report.added == 1
         document = storage.list_external_documents(person.person_id)[0]
-        assert document.source_type == "substack_feed"
+        assert document.source_type == "rss_feed"
 
 
 def test_index_page_source_with_org_attribution(workspace: Path) -> None:
@@ -377,3 +377,47 @@ def test_403_feed_does_not_change_format_or_probe(workspace: Path) -> None:
             fetch_person_feed(person, config, storage, fetcher=forbidden)
         assert calls == [url]
         assert storage.get_person(person.person_id).feeds == person.feeds
+
+
+def test_challenge_does_not_permanently_downgrade_feed(workspace: Path) -> None:
+    from wingman.domain.person import FeedKind, FeedSource, Person, PersonOrigin
+
+    config = load_config()
+    url = "https://blog.example.com/feed"
+    with Storage(config.db_path) as storage:
+        person = Person(name="Writer", origin=PersonOrigin.MANUAL, feeds=[FeedSource(url=url)])
+        storage.add_person(person)
+        with pytest.raises(IngestError):
+            fetch_person_feed(
+                person,
+                config,
+                storage,
+                fetcher=lambda _: b"<html><div>Just a moment...</div></html>",
+            )
+        saved = storage.get_person(person.person_id)
+        assert saved.feeds[0].kind == FeedKind.RSS
+
+
+def test_root_feed_404_does_not_ingest_navigation(workspace: Path) -> None:
+    from urllib.error import HTTPError
+
+    from wingman.domain.person import FeedKind, FeedSource, Person, PersonOrigin
+
+    config = load_config()
+    root = "https://blog.example.com"
+
+    def fetch(url: str) -> bytes:
+        if url == root + "/feed":
+            error = HTTPError(url, 404, "missing", {}, None)
+            raise FetchError("missing feed") from error
+        return b'<html><a href="/about">About</a><a href="/privacy">Privacy</a><a href="/real-post">Post</a></html>'
+
+    with Storage(config.db_path) as storage:
+        person = Person(
+            name="Writer", origin=PersonOrigin.MANUAL, feeds=[FeedSource(url=root + "/feed")]
+        )
+        storage.add_person(person)
+        with pytest.raises(IngestError):
+            fetch_person_feed(person, config, storage, fetcher=fetch)
+        assert storage.list_external_documents() == []
+        assert storage.get_person(person.person_id).feeds[0].kind == FeedKind.RSS
