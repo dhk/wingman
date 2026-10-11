@@ -1842,7 +1842,9 @@ def people_add(
     position: str | None = typer.Option(None, "--position", help="What they do."),
     linkedin: str | None = typer.Option(None, "--linkedin", help="Their LinkedIn profile URL."),
     email: str | None = typer.Option(
-        None, "--email", help="Their email (manual entry only — imports never read emails)."
+        None,
+        "--email",
+        help="Their email (private address-book field; also imported from Connections.csv).",
     ),
 ) -> None:
     """Add a person to the watchlist (or update them if already known)."""
@@ -2027,7 +2029,7 @@ def people_add_feed(
 def people_import_connections(
     export: Path = typer.Argument(..., help="Path to a LinkedIn data-export zip."),
 ) -> None:
-    """Seed Person records from Connections.csv (names and roles only — never emails)."""
+    """Seed Person records from Connections.csv (private address-book fields, including emails)."""
     configure_logging()
     config = load_config()
     _require_workspace(config, "seeded")
@@ -2038,7 +2040,8 @@ def people_import_connections(
         typer.echo(f"import-connections failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(
-        f"Created: {report.created}  Already known: {report.skipped_existing}  "
+        f"Created: {report.created}  Updated: {report.updated}  Unchanged: {report.skipped_existing}  "
+        f"Conflicts (preserved; review identity/values): {report.conflicts}  "
         f"Incomplete rows skipped: {report.skipped_incomplete}"
     )
 

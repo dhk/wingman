@@ -47,7 +47,12 @@ wingman demo        # guided tour on real public data, isolated workspace, no ke
 Docs URLs) become a cited canonical profile; every accepted claim carries a
 verbatim quote, every unsupported one is rejected visibly. LinkedIn exports
 add positions, skills, recommendations — and seed the watchlist from your
-connections (names and roles only, never emails). Your own writing becomes
+connections (including private contact identifiers and emails; excluded from
+published person reports). Imports preserve existing canonical values and
+report ambiguous identities or contradictory values for review. Private
+backups include these identifiers; authorized Drive backup uploads transmit
+them too (`backup --no-drive` / MCP `drive=False` keeps a backup local).
+Your own writing becomes
 a searchable evidence corpus (`wingman evidence "kafka migration"`).
 
 **Opportunity assessment.** `wingman assess job.md` — or `wingman assess
