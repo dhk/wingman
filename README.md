@@ -31,6 +31,8 @@ file plus an inbox and reports folder on your disk.
   requirements, Keychain-backed keys, MCP from Claude Code / Desktop /
   claude.ai, scheduling overnight runs, backups, troubleshooting.
 
+- **[Manual LinkedIn/Woven refresh](docs/LINKEDIN-WOVEN-MANUAL-SYNC.md)** — tenant scope, import order, verification, and current prerequisites.
+
 Impatient version:
 
 ```bash

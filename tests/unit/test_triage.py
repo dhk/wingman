@@ -100,7 +100,11 @@ def test_overnight_digest_honors_verdicts(
         first = overnight_run(workspace, storage)
         digest = Path(first.digest_path).read_text(encoding="utf-8")
         assert "key: company-posts:acme" in digest  # keys are visible for triage
-        mute_action("company-posts:acme", storage)
+        assert storage.get_digest_action("company-posts:acme") is not None
+        from wingman.mcp_server import action_triage
+
+        assert "unknown action key" in action_triage("mute", key="not-recorded")
+        assert "Muted" in action_triage("mute", key="company-posts:acme")
         second = overnight_run(workspace, storage)
         digest = Path(second.digest_path).read_text(encoding="utf-8")
         assert "Read Acme's new posts" not in digest
@@ -112,9 +116,17 @@ def test_overnight_digest_honors_verdicts(
 
 
 def test_mcp_action_triage_roundtrip(workspace: Config) -> None:
+    from wingman.application.triage import record_actions
     from wingman.mcp_server import action_triage
 
-    Storage(workspace.db_path).close()
+    with Storage(workspace.db_path) as storage:
+        record_actions(
+            [
+                ActionItem(what="Review", why="new", who="Acme", key=key)
+                for key in ["company-posts:acme", "person-posts:jo"]
+            ],
+            storage,
+        )
     assert "Muted company-posts:acme" in action_triage("mute", key="company-posts:acme")
     assert "Snoozed person-posts:jo until" in action_triage("snooze", key="person-posts:jo", days=2)
     listing = action_triage("list")
@@ -123,3 +135,72 @@ def test_mcp_action_triage_roundtrip(workspace: Config) -> None:
     assert "No verdict recorded" in action_triage("unmute", key="company-posts:acme")
     assert "failed" in action_triage("mute", key="")
     assert "unknown action" in action_triage("nope")
+
+
+def test_done_is_scoped_to_evidence_and_rejects_unknown_key(workspace: Config) -> None:
+    from wingman.application.triage import done_action, record_actions
+
+    first = ActionItem(
+        what="Review", why="new", who="Acme", key="research:acme", evidence=["https://x/one"]
+    )
+    with Storage(workspace.db_path) as storage:
+        record_actions([first], storage)
+        with pytest.raises(IngestError, match="unknown action key"):
+            done_action("made-up", storage)
+        done_action(first.key, storage, fingerprint=first.fingerprint)
+        assert filter_actions([first], storage) == ([], 1)
+        assert "done" in render_verdicts(storage)
+        changed = first.model_copy(update={"evidence": ["https://x/two"]})
+        assert filter_actions([changed], storage) == ([changed], 0)
+        assert "done" not in active_suppressions(storage).values()
+
+
+def test_current_digest_hides_done_action(workspace: Config) -> None:
+    from wingman.application.triage import current_digest, done_action, record_actions
+
+    action = ActionItem(what="Review", why="new", who="Acme", key="research:acme")
+    content = "# Digest\n\n## Action list\n\n1. **Review**\n   - key: research:acme\n"
+    with Storage(workspace.db_path) as storage:
+        record_actions([action], storage)
+        done_action(action.key, storage, fingerprint=action.fingerprint)
+        assert "**Review**" not in current_digest(content, storage)
+        assert "## Action list" in current_digest(content, storage)
+
+
+def test_done_ignores_age_and_link_titles_but_rejects_stale_completion(workspace: Config) -> None:
+    from wingman.application.triage import done_action, record_actions
+
+    first = ActionItem(
+        what="Review",
+        why="30 days old",
+        who="Acme",
+        key="research:acme",
+        evidence=["[Senior Eng](https://x/one)"],
+    )
+    with Storage(workspace.db_path) as storage:
+        record_actions([first], storage)
+        done_action(first.key, storage, fingerprint=first.fingerprint)
+        same = first.model_copy(
+            update={"why": "31 days old", "evidence": ["[link](https://x/one)"]}
+        )
+        assert filter_actions([same], storage) == ([], 1)
+
+
+def test_done_requires_reviewed_fingerprint_and_preserves_mute(workspace: Config) -> None:
+    from wingman.application.triage import done_action, record_actions
+
+    first = ActionItem(
+        what="Review", why="new", who="Acme", key="research:acme", evidence=["https://x/one"]
+    )
+    with Storage(workspace.db_path) as storage:
+        record_actions([first], storage)
+        changed = first.model_copy(update={"evidence": ["https://x/one", "https://x/two"]})
+        record_actions([changed], storage)
+        with pytest.raises(IngestError, match="evidence changed"):
+            done_action(first.key, storage, fingerprint=first.fingerprint)
+        with pytest.raises(IngestError, match="needs the fingerprint"):
+            done_action(first.key, storage)
+        mute_action(changed.key, storage)
+        with pytest.raises(IngestError, match="muted"):
+            done_action(changed.key, storage, fingerprint=changed.fingerprint)
+        assert active_suppressions(storage)[changed.key] == "muted"
