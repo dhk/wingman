@@ -459,7 +459,7 @@ def _company_deep(
         for result in research.results:
             target.lines.append(f"research {result.url}: {result.detail}")
             target.lines.extend(f"  new: [link]({link})" for link in result.new_links)
-            if result.duplicate_of is not None:
+            if result.status == "paused" or result.duplicate_of is not None:
                 continue
             if result.status == "failed":
                 actions.append(

@@ -804,3 +804,30 @@ def test_duplicate_sources_score_combined_pending_links_once(
         )
         _company_deep("Acme", config, storage, [])
     assert calls == [["https://acme.example/jobs/one", "https://acme.example/jobs/two"]]
+
+
+def test_paused_source_does_not_score_carried_links(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from wingman.application.focus import _company_deep
+    from wingman.application.research import add_company_source, pause_company_source
+
+    config = load_config()
+    url = "https://acme.example/careers"
+    with Storage(config.db_path) as storage:
+        add_company_source("Acme", url, storage)
+        storage.add_pending_job_links(
+            "acme", url, ["https://acme.example/jobs/one"], datetime.now(UTC)
+        )
+        pause_company_source("Acme", url, storage, paused=True)
+
+        def score(*args, **kwargs):
+            pytest.fail("paused source reached scoring")
+
+        monkeypatch.setattr("wingman.application.focus._scored_opening_actions", score)
+        actions = []
+        _company_deep("Acme", config, storage, actions)
+        assert not any(action.key.startswith("opening:") for action in actions)
+        assert storage.list_pending_job_links("acme", url) == ["https://acme.example/jobs/one"]

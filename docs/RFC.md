@@ -162,6 +162,14 @@ Everything else RFC-009 established holds unchanged: explicit invocation only, r
 
 **Revisit if.** Index-page extraction proves too brittle against redesigns (then sitemap.xml `lastmod`-driven fetching becomes the refinement, still within these invariants), or per-author attribution on company blogs is wanted (post-page metadata reading — a further widening that gets its own look).
 
+### RFC-011 addendum (#474) — Durable decision
+
+The legacy `substack_url` field and `--substack` option now accept a writing URL without assuming a `/feed` endpoint. Add and fetch use bounded discovery: direct RSS/Atom, declared feeds, feed-shaped links, then conventional candidates. A verified endpoint is stored separately as `writing_feed_url`; old records are resolved when fetched. Errors identify the entered writing URL and distinguish no discoverable feed from an unreachable configured URL, suggesting explicit index-page attachment when appropriate. The existing field name remains for compatibility.
+
+Legacy Substack-hosted sources keep their known /feed endpoint (including duplicate checks and source attribution) without fetching the homepage. Generic legacy URLs are discovered once and the successful endpoint is saved. Discovery shares a per-run response cache with ingestion. Entered URLs are quoted in failures; whitespace/control characters are rejected before fetching. A non-strict unsuccessful update preserves a previously resolved endpoint.
+
+Unattended legacy discovery permits at most four GET attempts; broader discovery remains an explicit operation. The runtime cache keeps only the latest response, bounding retained response memory while reusing a successfully discovered feed body.
+
 ## RFC-012: Company dossiers as deterministic composition (Phase 3, slice ii)
 
 **Decision.** `wingman company dossier <name>` produces the roadmap's dated company snapshot by composing artifacts the workspace has already validated: watched people at the company (via the Person `company` field), org-attributed sources (RFC-011), POV-card stances rendered with explicit labels (`[inference]` statement backed by a verbatim `[fact]` quote — RFC-005's fact/inference/hypothesis discipline made visible), embedding-based signals when available (alignment with the user's corpus, nearest companies), a staleness warning when the newest attributable document is older than 90 days, and an explicit Gaps section naming what is missing and the command that fills it. The dossier is deterministic — no model call, no network — and is written as dated Markdown under `reports/companies/`, the artifact convention from DESIGN.md.
@@ -218,6 +226,12 @@ Listing and run-time duplicate detection share the same company/text/link identi
 **Rationale.** Careers pages and newsrooms are where hiring signals appear first, and which pages to trust is a judgment only the user can make. Naming the exact URLs turns "did anything change at X" into a deterministic diff of user-chosen pages instead of a crawl, keeping the egress surface enumerable: every URL Wingman will ever fetch for a company is visible in `company sources`.
 
 **Revisit if.** Users want research inside `sync`/`make-it-so` (the fetch consent and cost move with it — an explicit flag, not a default), or want change history rather than a latest-snapshot diff (snapshot generations become a real archive), or want alerting (that is RFC-006 territory: Wingman still never sends anything).
+
+### RFC-015 addendum (#434, #548) — Durable decision
+
+`wingman company pause-source "Company" <url>` suspends one approved URL; `unpause-source` resumes it. MCP uses `company_source(action="pause"|"unpause", name=..., url=...)`. Source listings show paused status. Pausing preserves snapshots, retained prose, queued links, company records, POV and watchlist membership. Explicit research and overnight skip the paused URL and its queued scoring work, producing no fetch-failure action. Unpause resumes against the preserved baseline. Removing a source remains withdrawal of its evidence.
+
+Paused sources also exclude saved snapshot links from explicit full-board scoring. Pending overnight links remain queued until resumed, and dossier/pack source lists mark paused pages.
 
 ## RFC-016: Model-synthesized company themes (resolves an RFC-012 deferral)
 
@@ -869,6 +883,14 @@ One thing HAS changed since this entry was first drafted, and it changes the rea
 **Trade-offs.** Undated documents sort last in the 20-document POV budget, so at a company with twenty-plus recent feed posts a retained values page may not reach the prompt — the companies this feature exists for are precisely the ones with no feed, and inventing a date to fix ordering is not a trade worth making. Retained pages also enter `search` and `evidence`, so a marketing page's language becomes quotable material; the quote is always attributed to the company's own page, which is what it is.
 
 **Revisit if.** `company follow`'s conventional-path probe should default `/about` to retained (it is the one probed path whose content is durable — deliberately left OFF here so following a company never silently starts storing pages). Retained pages need selection within the POV budget rather than pure recency (per-source quotas — the same pressure RFC-016 already flagged). Users want the older versions of a retained page readable rather than only superseded (that is a real archive, and RFC-015's revisit trigger, not this one).
+
+### RFC-060 addendum (#463) — Durable decision
+
+New sources labelled `about` retain prose by default (case-insensitive, ignoring surrounding whitespace); all other labels remain opt-in. This supersedes RFC-060's default-off policy for about pages. `company follow` already labels its approved `/about` page this way. Explicit `--retain/--no-retain` (MCP `retain=True/False`) still overrides the default; repeat adds without a flag preserve the current setting.
+
+Existing approved about-labelled sources are enabled once when the upgraded application opens their workspace. Repository owner dhk explicitly approved this one-time migration in the implementation conversation on 2026-10-10 ("enable"): old records cannot distinguish default False from deliberate False, so both are enabled. A transactional migration marker prevents subsequent opens from overriding later opt-outs. Other labels, source timestamps, snapshots, and unknown payload fields are preserved. The next normal research fetch keeps prose even when the existing snapshot's hash is unchanged; there is no extra GET, new approved URL, crawl, or model call. Companies without an approved prose source still need one approved; the migration does not invent sources or guarantee usable prose on every about page.
+
+Theme synthesis with approved sources but no documents explains `--retain` (or MCP `retain=True`) and the required research refresh. If retention is already enabled it points at fetching/checking extraction instead of claiming retention is absent. Tests cover default-retained company themes without watched people, existing-source migration, unchanged snapshots, and durable explicit opt-outs.
 
 ## RFC-061: Wingman records where an artifact was published; it never publishes one
 
