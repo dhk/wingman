@@ -16,6 +16,7 @@ from wingman.reporting.completeness import (
     BLOCKED_SECTIONS,
     MAX_PEOPLE_LISTED,
     imported_people_line,
+    people_heading,
 )
 from wingman.reporting.export import WINGMAN_PDF_CSS
 
@@ -140,9 +141,7 @@ def render_completeness_html(report: CompletenessReport) -> str:
             "unweighted. Call job_criteria(action='review') to start the seeding "
             "interview.</p>"
         )
-    body.append(
-        f'<div class="section-divider"><span>People ({len(report.people)} tracked)</span></div>'
-    )
+    body.append(f'<div class="section-divider"><span>{people_heading(report)}</span></div>')
     if report.people:
         ordered = sorted(report.people, key=lambda p: (p.log_entries, p.linked))
         body.append('<ul class="sub-list">')

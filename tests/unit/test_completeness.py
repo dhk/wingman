@@ -10,6 +10,7 @@ from wingman.application.people import add_person, attach_feed
 from wingman.application.relationship import log_interaction
 from wingman.domain.person import FeedSource, Person, PersonOrigin
 from wingman.domain.profile import ClaimClassification, EvidenceSpan, ProfileItem, ProfileItemKind
+from wingman.domain.relationship import RelationshipObjective
 from wingman.domain.source_record import SourceRecord
 from wingman.infrastructure.config import load_config
 from wingman.infrastructure.storage import Storage
@@ -322,6 +323,61 @@ def test_a_feed_or_a_log_entry_brings_an_import_into_the_list(workspace: Path) -
     assert {person.name for person in report.people} == {"Fed Fiona", "Logged Lou"}
     assert report.imported_people == 1
     assert report.companies[0].people_watched == 2
+
+
+def test_an_objective_or_a_watchlist_entry_curates_an_import(workspace: Path) -> None:
+    """Saving a goal/thesis/next move for someone, or putting them on a
+    watchlist, is as deliberate as logging with them. Found by probing the
+    first version of this change, which left both in the 'untouched' count."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        with_goal = _import_contact(storage, "Objective Olive", company="Acme")
+        storage.save_objective(
+            RelationshipObjective(
+                person_id=with_goal.person_id, goal="g", thesis="t", next_move="n"
+            )
+        )
+        _import_contact(storage, "Watched  Wes", company="Acme")
+        storage.watchlist_add("overnight", "person", "watched wes")
+        # A company on a watchlist is not a person on it.
+        _import_contact(storage, "Acme", company="Acme")
+        storage.watchlist_add("overnight", "company", "Acme")
+        _import_contact(storage, "Untouched Una", company="Acme")
+        report = compute_completeness(storage, config)
+
+    assert {person.name for person in report.people} == {"Objective Olive", "Watched  Wes"}
+    assert report.imported_people == 2
+
+
+def test_editing_an_import_with_people_add_does_not_curate_it(workspace: Path) -> None:
+    """Documents a known limit rather than endorsing it: add_person keeps
+    origin=linkedin_connections and there is no stored 'touched' signal. If
+    this test starts failing because someone added one, update it and the
+    _split_people docstring together."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _import_contact(storage, "Edited Ed", company="Acme")
+        add_person("Edited Ed", storage, position="CTO")
+        report = compute_completeness(storage, config)
+
+    assert report.people == []
+    assert report.imported_people == 1
+
+
+def test_the_people_heading_does_not_claim_zero_tracked_over_an_import(
+    workspace: Path,
+) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        for index in range(30):
+            _import_contact(storage, f"Imported {index}")
+        report = compute_completeness(storage, config)
+
+    markdown = render_completeness_markdown(report)
+    assert "## People (0 curated)" in markdown
+    assert "tracked)" not in markdown
+    assert "People (0 curated)" in render_completeness_html(report)
+    assert "30 imported contacts" in markdown
 
 
 def test_the_report_stays_bounded_however_many_people_are_imported(workspace: Path) -> None:

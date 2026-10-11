@@ -34,6 +34,12 @@ BLOCKED_SECTIONS: tuple[tuple[str, str], ...] = ()
 MAX_PEOPLE_LISTED = 50
 
 
+def people_heading(report: CompletenessReport) -> str:
+    """The People section title. 'tracked' was wrong once imports stopped being
+    listed: it read '(0 tracked)' above a workspace holding thousands of people."""
+    return f"People ({len(report.people)} curated)"
+
+
 def imported_people_line(count: int) -> str:
     """The one line that makes an imported address book visible without making
     it a gap. Shared by the Markdown and HTML renderers so they cannot drift."""
@@ -92,7 +98,7 @@ def render_completeness_markdown(report: CompletenessReport) -> str:
         else "- job-criteria.md does not exist yet — openings are scored unweighted. "
         "Call job_criteria(action='review') to start the seeding interview.",
         "",
-        f"## People ({len(report.people)} tracked)",
+        f"## {people_heading(report)}",
         "",
     ]
     if report.people:

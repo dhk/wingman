@@ -473,13 +473,26 @@ def _split_people(storage: Storage) -> tuple[list[Person], int, Counter[str]]:
     """Curated people, the count of untouched imports, and log counts by person.
 
     Curated means somebody deliberately engaged with the person: added them by
-    hand, attached a feed, or logged an interaction. That is deterministic and
-    needs no new stored field — `origin` and the feed and log stores already say
-    it. An import that has none of the three is just an address-book row, and
-    counting it against "build a POV card" or "log what happened" measures a
-    population the metric does not mean (#465).
+    hand, attached a feed, logged an interaction, saved a relationship
+    objective, or put them on a watchlist. That is deterministic and needs no
+    new stored field. An import with none of those is just an address-book row,
+    and counting it against "build a POV card" or "log what happened" measures
+    a population the metric does not mean (#465).
+
+    Known limit: running `people add` on an imported contact to fill in their
+    company, position or email does NOT curate them. `add_person` leaves
+    `origin` alone, and there is no stored "touched" signal to read. Email
+    cannot be that signal either, because #422 makes imports store it. Telling
+    "edited by hand" apart needs a new field, which is a schema decision.
     """
     log_counts = Counter(entry.person_id for entry in storage.list_log_entries())
+    objective_ids = {objective.person_id for objective in storage.list_objectives()}
+    watched_keys = {
+        " ".join(name.lower().split())
+        for list_name, _count in storage.watchlists()
+        for kind, name in storage.watchlist_members(list_name)
+        if kind == "person"
+    }
     curated: list[Person] = []
     imported = 0
     for person in storage.list_people():
@@ -489,6 +502,8 @@ def _split_people(storage: Storage) -> tuple[list[Person], int, Counter[str]]:
             person.origin is not PersonOrigin.LINKEDIN_CONNECTIONS
             or person.sources
             or log_counts[person.person_id]
+            or person.person_id in objective_ids
+            or person.name_key in watched_keys
         ):
             curated.append(person)
         else:
