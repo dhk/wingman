@@ -279,6 +279,10 @@ defines that parallel path and its narrower invite-only trust model.
 
 **Revisit if.** Users want per-target depth control (research-only vs full model refresh — a per-member flag on the enrollment record), or digests need trend memory across runs (digest diffing becomes its own store), or the suggestion surface should reach beyond the workspace (that is a new egress decision, not an extension of this one).
 
+### RFC-018 addendum (#502) — Durable decision
+
+Each overnight run writes a versioned JSON sidecar and latest.json alongside canonical Markdown and HTML. `digest(as_json=True)` or `wingman digest --json` returns structured actions with their triage keys, per-target step statuses/details, and a first-class drop_list. Each budget drop names company, exact URL, stage (fetch or judge), budget and reason; records are captured where the budget is applied, never parsed from prose. Budget-skipped links remain queued for later runs (#481). Current JSON action reads honor triage; archived artifacts remain unchanged. Runs predating sidecars have no recoverable exact drop list and report that limitation instead of inventing history.
+
 ## RFC-019a / RFC-034a: bring-your-own-key wins over the environment
 
 **Decision (amends RFC-019 and RFC-034).** The resolution ladder becomes
@@ -1478,5 +1482,6 @@ Custom artifact freshness is explicitly unknown/unchecked. Free-text titles are 
 ### RFC-031 addendum (#501) — Durable decision
 
 `actions done <key>` and `action_triage(action="done", key=...)` complete the recorded action content and evidence, without standing suppression. Matching evidence remains completed; new evidence or changed action content can recur. Done verdicts appear separately in the verdict list and can be cleared with unmute. Overnight records generated actions before filtering, preserving the evidence available when completed. MCP and CLI mute/snooze/done reject unknown keys; legacy digests need one overnight refresh before triage. Digest files remain immutable historical snapshots.
+
 
 Done fingerprints use the stable action key and evidence, with Markdown link titles normalized to URLs; rolling age/explanation text is excluded. Digest actions include an evidence fingerprint. `actions done <key> --fingerprint <value>` / MCP `action_triage(action='done', key=…, fingerprint=…)` must echo the reviewed fingerprint; a newer evidence set is rejected rather than completed unseen. A permanent mute must be explicitly undone before completion. Markdown current reads apply verdicts; dated HTML and direct latest.html links remain snapshots until the next overnight run.
