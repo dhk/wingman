@@ -112,6 +112,7 @@ from wingman.application.research import (
     add_company_source,
     delete_company,
     list_company_sources,
+    pause_company_source,
     remove_company_source,
     rename_company,
     render_research_report,
@@ -1834,8 +1835,8 @@ def people_add(
     substack: str | None = typer.Option(
         None,
         "--substack",
-        help="Their Substack URL, e.g. https://example.substack.com — verified against "
-        "<url>/feed before it's stored. For any other blog, use 'people add-feed' instead.",
+        help="Public writing URL; bounded discovery verifies its RSS/Atom feed before storing. "
+        "For a blog without a feed, use people add-feed --index.",
     ),
     company: str | None = typer.Option(None, "--company", help="Where they work."),
     position: str | None = typer.Option(None, "--position", help="What they do."),
@@ -3936,7 +3937,7 @@ def company_add_source(
     retain: bool | None = typer.Option(
         None,
         "--retain/--no-retain",
-        help="Also keep the page's text as a citable document for this company (RFC-060).",
+        help="Keep citable prose; defaults on for new about-labelled sources (RFC-060).",
     ),
 ) -> None:
     """Approve one research URL for a company — adding it IS the approval (RFC-015).
@@ -3946,8 +3947,9 @@ def company_add_source(
 
     --retain additionally KEEPS the fetched page's prose as a document
     attributed to the company, so 'company pov' and 'evidence' can quote it.
-    Off by default: it suits a values or about page that changes twice a
-    year, not a careers page that would re-store on every run. It changes
+    On by default for new sources labelled about; off for other labels.
+    Use --no-retain to opt out. Retention suits durable prose rather than
+    careers indexes that change on every run. It changes
     nothing about the fetch — same page, same one GET. Re-run with
     --retain/--no-retain on an already-approved source to change your mind.
     """
@@ -3968,6 +3970,31 @@ def company_add_source(
         typer.echo(f'Fetch it with: wingman company research "{source.company_name}"')
     else:
         typer.echo(f"Already approved for {source.company_name}: {source.url}{kept}")
+
+
+def _pause_source(name: str, url: str, paused: bool) -> None:
+    config = load_config()
+    _require_workspace(config, "updated")
+    try:
+        with Storage(config.db_path) as storage:
+            source = pause_company_source(name, url, storage, paused=paused)
+    except IngestError as exc:
+        typer.echo(f"source pause failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    state = "Paused" if source.paused else "Resumed"
+    typer.echo(f"{state}: {source.url}. Existing research preserved.")
+
+
+@company_app.command("pause-source")
+def company_pause_source(name: str, url: str) -> None:
+    """Pause one approved URL without deleting its research history."""
+    _pause_source(name, url, True)
+
+
+@company_app.command("unpause-source")
+def company_unpause_source(name: str, url: str) -> None:
+    """Resume fetching a paused approved research URL."""
+    _pause_source(name, url, False)
 
 
 @company_app.command("remove-source")
@@ -4024,6 +4051,7 @@ def company_sources_cmd(
             if snapshot
             else "no snapshot yet"
         )
+        state += ", paused" if source.paused else ""
         kept = ", text retained" if source.retain else ""
         typer.echo(f"- {source.url}{label} — {state}{kept}")
 

@@ -131,6 +131,7 @@ from wingman.application.research import (
     add_company_source,
     delete_company,
     list_company_sources,
+    pause_company_source,
     remove_company_source,
     rename_company,
     render_research_report,
@@ -3060,13 +3061,12 @@ def people_add(
     linkedin_url: str = "",
     email: str = "",
 ) -> str:
-    """Add a person to the watchlist (or update them), optionally with their Substack URL,
+    """Add a person to the watchlist (or update them), optionally with their public writing URL,
     LinkedIn URL, and email (manual entry only — imports never read emails).
 
-    substack_url is for a Substack blog specifically — its feed is verified at
-    <url>/feed before being stored, and the call fails loudly (nothing is written) if
-    that isn't a real, fetchable feed. For any other blog, use feed_attach (or
-    feed_discover first to find its real feed URL) instead of guessing here."""
+    substack_url is a legacy name for a public writing URL. Bounded discovery
+    finds and verifies its RSS/Atom endpoint before storing. If no feed exists,
+    use feed_attach with kind="index_page" for the approved blog index instead."""
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
@@ -4277,7 +4277,7 @@ def company_feed(action: str, name: str, url: str = "", index_page: bool = False
 def company_source(
     action: str, name: str, url: str = "", label: str = "", retain: bool | None = None
 ) -> str:
-    """Manage approved research URLs for a company: action is add, remove, or list.
+    """Manage approved research URLs for a company: action is add, remove, pause, unpause, or list.
 
     Adding a source IS the approval (RFC-015): 'company_research' will fetch
     exactly the pages approved here, nothing else. https:// only.
@@ -4285,8 +4285,8 @@ def company_source(
     retain=True (RFC-060) additionally keeps that page's prose as a document
     attributed to the company, so 'company_pov', 'search' and 'evidence' can
     quote it — a values or about page becomes citable instead of only a hash
-    that says it changed. The fetch is identical either way. Off by default;
-    suits pages that change rarely, not a careers page. Pass it on an
+    that says it changed. The fetch is identical either way. On by default for
+    new sources labelled about; off for other labels. False opts out. Pass it on an
     already-approved source to change your mind (None leaves it alone).
     """
     config = _ready_config()
@@ -4303,6 +4303,10 @@ def company_source(
                 state = "Approved" if created else "Already approved"
                 kept = " (text retained as a document)" if source.retain else ""
                 return f"{state} for {source.company_name}: {source.url}{kept}"
+            if action in {"pause", "unpause"}:
+                source = pause_company_source(name, url, storage, paused=action == "pause")
+                state = "Paused" if source.paused else "Resumed"
+                return f"{state}: {source.url}. Existing research preserved."
             if action == "remove":
                 removed = remove_company_source(name, url, storage)
                 return (
@@ -4327,12 +4331,13 @@ def company_source(
                         else "no snapshot yet"
                     )
                     tag = f" ({entry.label})" if entry.label else ""
+                    state += ", paused" if entry.paused else ""
                     kept = ", text retained" if entry.retain else ""
                     lines.append(f"- {entry.url}{tag} — {state}{kept}")
                 return "\n".join(lines)
     except IngestError as exc:
         return f"company_source failed: {exc}"
-    return f"unknown action {action!r}; use add, remove, or list."
+    return f"unknown action {action!r}; use add, remove, pause, unpause, or list."
 
 
 @server.tool()

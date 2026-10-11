@@ -480,6 +480,8 @@ def _company_deep(
             )
             target.lines.append(f"research {result.url}: {result.detail}")
             target.lines.extend(f"  new: [link]({link})" for link in result.new_links)
+            if result.status == "paused":
+                continue
             if result.status == "failed":
                 actions.append(
                     ActionItem(

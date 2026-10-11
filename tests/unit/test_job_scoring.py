@@ -545,3 +545,23 @@ def test_json_digest_refuses_to_invent_historical_drops(workspace: Config) -> No
     with Storage(workspace.db_path) as storage:
         with pytest.raises(IngestError, match="cannot be reconstructed"):
             json_digest(workspace, storage)
+
+
+def test_full_board_does_not_fetch_paused_snapshot_links(workspace: Config) -> None:
+    from wingman.application.research import pause_company_source
+
+    save_criteria(workspace, CRITERIA)
+    careers = "https://acme.example/careers"
+    page = b'<html><a href="/jobs/ml">ML</a></html>'
+    with Storage(workspace.db_path) as storage:
+        add_company_source("Acme", careers, storage)
+        research_company("Acme", workspace, storage, fetcher=lambda url: page)
+        pause_company_source("Acme", careers, storage, paused=True)
+        calls = []
+
+        def fetch(url: str) -> bytes:
+            calls.append(url)
+            return _page(POSTING)
+
+        score_full_board("Acme", workspace, storage, RecordedProvider(_judgment()), fetcher=fetch)
+        assert calls == []
