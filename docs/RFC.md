@@ -1443,6 +1443,12 @@ identity key" and "do not obtain `sub` from email".
   surface's token actually carries. Until #585 ships the superseded rules still
   describe what the running service does.
 
+## RFC-082: Client-owned artifact kinds (#503) — Durable decision
+
+Published view identities accept `custom:<slug>` alongside built-in kinds. Slugs are 1–64 lowercase ASCII letters/digits/underscores/hyphens, beginning with a letter or digit. Custom views retain the same local one-record-per-kind and HTTPS URL rules. Wingman does not know their rendering inputs: freshness is explicitly unchecked and reports the recording timestamp, never a synthetic current/stale verdict. This extends RFC-061’s closed built-in set without adding any publishing action.
+
+Custom artifact freshness is explicitly unknown/unchecked. Free-text titles are whitespace-collapsed when recorded and rendered, including legacy titles, so a title cannot forge another report line.
+
 ### RFC-031 addendum (#501) — Durable decision
 
 `actions done <key>` and `action_triage(action="done", key=...)` complete the recorded action content and evidence, without standing suppression. Matching evidence remains completed; new evidence or changed action content can recur. Done verdicts appear separately in the verdict list and can be cleared with unmute. Overnight records generated actions before filtering, preserving the evidence available when completed. MCP and CLI mute/snooze/done reject unknown keys; legacy digests need one overnight refresh before triage. Digest files remain immutable historical snapshots.
