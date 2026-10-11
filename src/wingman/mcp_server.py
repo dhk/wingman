@@ -155,8 +155,11 @@ from wingman.application.telemetry_summary import (
     summarize as summarize_telemetry,
 )
 from wingman.application.triage import (
+    current_digest,
+    done_action,
     mute_action,
     render_verdicts,
+    require_action,
     snooze_action,
     unmute_action,
 )
@@ -596,10 +599,11 @@ def rubrics() -> str:
 
 
 @server.tool()
-def action_triage(action: str, key: str = "", days: int = 7) -> str:
+def action_triage(action: str, key: str = "", days: int = 7, fingerprint: str = "") -> str:
     """Triage the morning digest's action list: the user's verdicts persist (RFC-031).
 
-    action is 'mute' (never show this action key again), 'snooze' (hide it
+    For done, echo the fingerprint from the digest reviewed; stale evidence is rejected.
+    action is 'done' (complete this evidence only), 'mute' (never show this action key again), 'snooze' (hide it
     for `days` days), 'unmute' (clear a verdict), or 'list' (standing
     verdicts). Every digest action carries its key on a 'key:' line.
 
@@ -615,6 +619,11 @@ def action_triage(action: str, key: str = "", days: int = 7) -> str:
         return _NOT_INITIALIZED
     try:
         with Storage(config.db_path) as storage:
+            if action in {"mute", "snooze", "done"}:
+                require_action(key, storage)
+            if action == "done":
+                done_action(key, storage, fingerprint=fingerprint)
+                return f"Done {key} — new evidence can appear again."
             if action == "mute":
                 mute_action(key, storage)
                 return f"Muted {key} — it will not appear in future digests."
@@ -629,7 +638,7 @@ def action_triage(action: str, key: str = "", days: int = 7) -> str:
                 return render_verdicts(storage)
     except IngestError as exc:
         return f"action triage {action} failed: {exc}"
-    return f"unknown action {action!r}; use mute, snooze, unmute, or list."
+    return f"unknown action {action!r}; use done, mute, snooze, unmute, or list."
 
 
 @server.tool()
@@ -2629,7 +2638,8 @@ def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = 
     action is 'list', 'remember' (store `kind` + `url`, replacing any
     earlier record for that kind), 'show' (`kind`), 'forget' (`kind`), or
     'stale'. kind is one of: values_radar, values_radar_work, completeness,
-    profile.
+    profile, or custom:<slug> (lowercase letters/digits, underscores and hyphens).
+    Custom views round-trip but freshness is unknown; their recording timestamp is shown.
 
     Protocol: after you publish or update one of these views, call
     action='remember' with the url the client gave you. Before publishing
@@ -4191,7 +4201,8 @@ def digest(as_html: bool = False) -> str:
             "overnight' runs from this version onward. Re-run overnight to "
             "generate one, or call digest() without as_html for the Markdown."
         )
-    return newest.read_text(encoding="utf-8")
+    with Storage(config.db_path) as storage:
+        return current_digest(newest.read_text(encoding="utf-8"), storage)
 
 
 @server.tool()
