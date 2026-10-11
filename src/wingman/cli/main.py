@@ -731,7 +731,7 @@ def artifacts_list() -> None:
 @artifacts_app.command("show")
 def artifacts_show(
     kind: str = typer.Argument(
-        ..., help="values_radar, values_radar_work, completeness, or profile."
+        ..., help="values_radar, values_radar_work, completeness, profile, or custom:<slug>."
     ),
 ) -> None:
     """The recorded url for ONE view, or nothing — the question asked before
@@ -770,7 +770,7 @@ def artifacts_show(
 @artifacts_app.command("remember")
 def artifacts_remember(
     kind: str = typer.Argument(
-        ..., help="values_radar, values_radar_work, completeness, or profile."
+        ..., help="values_radar, values_radar_work, completeness, profile, or custom:<slug>."
     ),
     url: str = typer.Argument(..., help="The https:// url the client published it at."),
     title: str = typer.Option("", "--title", help="Optional label for listings."),
@@ -825,7 +825,7 @@ def artifacts_stale() -> None:
 @artifacts_app.command("forget")
 def artifacts_forget(
     kind: str = typer.Argument(
-        ..., help="values_radar, values_radar_work, completeness, or profile."
+        ..., help="values_radar, values_radar_work, completeness, profile, or custom:<slug>."
     ),
 ) -> None:
     """Drop a recorded url (the published page itself is untouched)."""
