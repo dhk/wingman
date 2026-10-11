@@ -417,3 +417,64 @@ def test_add_writing_url_stores_discovered_endpoint(workspace: Path) -> None:
         assert person.substack_url == url
         assert person.sources[0].url == feed
         assert storage.get_person(person.person_id).writing_feed_url == feed
+
+
+def test_legacy_substack_uses_feed_once_and_preserves_identity(workspace: Path) -> None:
+    from wingman.application.people import attach_feed
+    from wingman.domain.person import FeedSource, Person
+
+    config = load_config()
+    home = "https://legacy.substack.com"
+    person = Person(name="Legacy", origin=PersonOrigin.MANUAL, substack_url=home)
+    calls = []
+
+    def fetch(url: str) -> bytes:
+        calls.append(url)
+        if url == home:
+            raise FetchError("homepage blocked")
+        return RSS_FEED
+
+    with Storage(config.db_path) as storage:
+        storage.add_person(person)
+        with pytest.raises(IngestError, match="already has the source"):
+            attach_feed(person, FeedSource(url=home + "/feed"), storage)
+        for _ in range(2):
+            watched = storage.get_person(person.person_id)
+            assert watched is not None
+            fetch_person_feed(watched, config, storage, fetcher=fetch)
+        assert storage.get_person(person.person_id).writing_feed_url == home + "/feed"
+        assert all(doc.source_type == "substack_feed" for doc in storage.list_external_documents())
+    assert calls == [home + "/feed", home + "/feed"]
+
+
+def test_resolved_feed_failure_names_entered_url(workspace: Path) -> None:
+    from wingman.domain.person import Person
+
+    config = load_config()
+    entered = "https://author.example/blog"
+    person = Person(
+        name="Author",
+        origin=PersonOrigin.MANUAL,
+        substack_url=entered,
+        writing_feed_url="https://other.example/rss",
+    )
+
+    def fail(url: str) -> bytes:
+        raise FetchError("unavailable")
+
+    with Storage(config.db_path) as storage:
+        with pytest.raises(IngestError) as caught:
+            fetch_person_feed(person, config, storage, fetcher=fail)
+    assert repr(entered) in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "url", ["https://author.example/bad path", "https://author.example/bad\npath"]
+)
+def test_invalid_writing_url_is_safe_error(workspace: Path, url: str) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        with pytest.raises(IngestError) as caught:
+            add_person("Bad URL", storage, substack_url=url)
+    assert repr(url) in str(caught.value)
+    assert "\npath" not in str(caught.value)

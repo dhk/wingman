@@ -1439,3 +1439,7 @@ identity key" and "do not obtain `sub` from email".
 ### RFC-011 addendum (#474) — Durable decision
 
 The legacy `substack_url` field and `--substack` option now accept a writing URL without assuming a `/feed` endpoint. Add and fetch use bounded discovery: direct RSS/Atom, declared feeds, feed-shaped links, then conventional candidates. A verified endpoint is stored separately as `writing_feed_url`; old records are resolved when fetched. Errors identify the entered writing URL and distinguish no discoverable feed from an unreachable configured URL, suggesting explicit index-page attachment when appropriate. The existing field name remains for compatibility.
+
+Legacy Substack-hosted sources keep their known /feed endpoint (including duplicate checks and source attribution) without fetching the homepage. Generic legacy URLs are discovered once and the successful endpoint is saved. Discovery shares a per-run response cache with ingestion. Entered URLs are quoted in failures; whitespace/control characters are rejected before fetching. A non-strict unsuccessful update preserves a previously resolved endpoint.
+
+Unattended legacy discovery permits at most four GET attempts; broader discovery remains an explicit operation. The runtime cache keeps only the latest response, bounding retained response memory while reusing a successfully discovered feed body.

@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 from email.message import Message
-from http.client import HTTPMessage
+from http.client import HTTPMessage, InvalidURL
 from typing import IO
 from urllib.parse import urlparse
 
@@ -125,6 +125,8 @@ def fetch_url_final(url: str) -> tuple[bytes, str]:
     (#97) — the body looks fine and only the final URL betrays it, so
     callers that must know what page they actually got use this form.
     """
+    if any(ord(c) <= 32 or ord(c) == 127 for c in url):
+        raise FetchError(f"URL contains whitespace or control characters: {url!r}")
     if not url.startswith("https://"):
         raise FetchError(f"only https:// URLs are fetched (RFC-009); got {url!r}")
     _require_public_host(url)
@@ -140,10 +142,10 @@ def fetch_url_final(url: str) -> tuple[bytes, str]:
             if attempt == 1 and exc.code in _RETRY_STATUSES:
                 time.sleep(_retry_delay(exc.headers))
                 continue
-            raise FetchError(f"could not fetch {url} ({exc})") from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise FetchError(f"could not fetch {url} ({exc})") from exc
+            raise FetchError(f"could not fetch {url!r} ({exc})") from exc
+        except (urllib.error.URLError, TimeoutError, OSError, InvalidURL) as exc:
+            raise FetchError(f"could not fetch {url!r} ({exc})") from exc
         if len(body) > _MAX_BYTES:
-            raise FetchError(f"{url} returned more than {_MAX_BYTES} bytes; refusing to ingest")
+            raise FetchError(f"{url!r} returned more than {_MAX_BYTES} bytes; refusing to ingest")
         return body, final_url
-    raise FetchError(f"could not fetch {url} (retry exhausted)")  # pragma: no cover
+    raise FetchError(f"could not fetch {url!r} (retry exhausted)")  # pragma: no cover
