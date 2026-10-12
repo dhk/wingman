@@ -108,9 +108,13 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 
 **Rationale.** The primary way this product is actually used is through a Claude conversation. An MCP server turns that from copy-paste into typed tool calls while keeping Wingman's guarantees in Wingman's code. Stdio-local is the smallest server that delivers this, and adds no credentials, ports, or tenancy.
 
-**Parity principle (added 2026-07).** The MCP surface tracks the CLI: every user-facing capability ships on both surfaces in the same change, as thin wrappers over the same application-layer functions. Adaptations are allowed only where the medium demands them — the CLI's interactive confirm-before-attach for feeds (RFC-011) becomes a two-tool pair over MCP (`feed_discover` reports; `feed_attach` runs only after the user's explicit yes in conversation), and file inputs are accepted as local paths. A CLI command without its MCP counterpart is a review finding, not a style choice.
+**Parity principle (amended #598).** CLI and MCP share application-layer operations where counterparts exist. Every command and tool requires an explicit decision in the [surface ledger](SURFACE-PARITY.md): counterpart, deliberate exception, or deferred gap with a stated reason and open tracker. Unrecorded asymmetry is a review finding; recording a gap does not implement it. The CLI's interactive discover/confirm/attach flow for people feeds becomes `feed_discover` plus `feed_attach` over MCP, with attachment only after the user's explicit approval. Operator broadcast configuration and local diagnostics remain CLI-only. Hosted file access needs its own design rather than an assumption that server paths are user-local paths.
 
 **Revisit if.** A non-MCP consumer appears (REST/web UI), or remote access from claude.ai web/mobile is wanted (remote MCP with auth — a separate durable decision).
+
+### Parity decision ledger (#598) — Durable decision
+
+The exhaustive [CLI/MCP ledger](SURFACE-PARITY.md) records existing counterparts, deliberate exceptions, and deferred gaps. A contract test enumerates registered tools and all CLI leaf commands (including aliases), checks exact inventory coverage and reciprocal mappings, and rejects unmatched entries without a reason. Adding a row does not implement a gap. New tools, especially hosted ingestion, require a separate design; this change adds none.
 
 ## RFC-009: Read-only public-feed fetching, explicitly invoked
 

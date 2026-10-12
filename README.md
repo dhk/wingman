@@ -133,6 +133,11 @@ back. Default off; nothing is ever transmitted.
 
 ## Use from Claude (MCP)
 
+CLI and MCP share application operations, with explicit gaps and local-only
+controls recorded in the [surface parity ledger](docs/SURFACE-PARITY.md).
+The inventory test requires a decision for every command and tool; it does
+not claim that a documented gap is implemented.
+
 `wingman-mcp` exposes the workspace as MCP tools running the same
 deterministic validation as the CLI (RFC-008) — stdio for Claude Code and
 Claude Desktop on your machine, and an opt-in loopback HTTP transport with
