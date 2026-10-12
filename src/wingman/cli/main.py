@@ -4866,19 +4866,33 @@ def tenant_oauth_invite_cmd(
     registry: Path | None = typer.Option(
         None, "--registry", help="Tenant registry path (default: host setting)."
     ),
+    data_root: Path | None = typer.Option(
+        None,
+        "--data-root",
+        help="Email invites: parent directory for the prepared tenant workspaces "
+        "(for example, /home/wingman-shared/tenants).",
+    ),
+    service_user: str = typer.Option(
+        "wingman-shared",
+        "--service-user",
+        help="Email invites: OS account that owns OAuth state and tenant workspaces.",
+    ),
 ) -> None:
     """Reserve a tenant slug before a trusted invitee signs in.
 
-    With --email (or --from-csv) the invite is also bound to an address. That
-    is recorded only: until #585 lands a sign-in does not claim it, and the
-    person is approved with `oauth-approve` exactly as for a slug-only invite.
+    With --email (or --from-csv) the invite is bound to an address and its
+    empty, unbound tenant is prepared now (run with sudo: the registry is
+    root-owned). When that person signs in on either surface with the same
+    WorkOS-verified address, they are let in with no further operator step.
     """
     configure_logging()
     from wingman.infrastructure.oauth_onboarding import (
         OAuthOnboardingError,
         OAuthOnboardingStore,
         onboarding_path_for,
+        prepare_email_invites,
     )
+    from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
 
     def fail(message: str) -> NoReturn:
         typer.echo(message, err=True)
@@ -4893,6 +4907,8 @@ def tenant_oauth_invite_cmd(
         fail("Give a slug to reserve (SLUG or --slug), or --from-csv.")
     if email is not None and slug is None:
         fail("--email needs --slug: which workspace name to reserve for that address.")
+    if (email is not None or from_csv is not None) and data_root is None:
+        fail("Email invites prepare the tenant now: give --data-root (and run with sudo).")
 
     tenants, registry_path = _load_registry_or_exit(registry)
     existing = {tenant.slug for tenant in tenants}
@@ -4901,41 +4917,60 @@ def tenant_oauth_invite_cmd(
         f"After sign-in, inspect it with `wingman tenant oauth-pending --identities "
         f"{identities}` (registry: {registry_path})."
     )
-    not_claimed = (
-        "Email invites are recorded but not yet claimed automatically at sign-in "
-        "(#585): approve with `oauth-approve` as usual."
-    )
-
-    if from_csv is not None:
-        rows = _read_invite_csv(from_csv, fail)
+    if email is None and from_csv is None:
+        assert slug is not None
         try:
-            store.reserve_email_invites(
-                rows, existing_slugs=existing, expires_days=expires_days, first_line=2
-            )
+            store.reserve_invite(slug, existing_slugs=existing)
         except OAuthOnboardingError as exc:
-            fail(f"{from_csv}: {exc}. Nothing was reserved.")
-        typer.echo(
-            f"Reserved {len(rows)} email invites: {', '.join(slug for _email, slug in rows)}. "
-            f"Addresses are stored only as keyed hashes; matching expires in "
-            f"{expires_days} days. No workspace or access was created. {not_claimed}"
-        )
-        return
-
-    assert slug is not None
-    try:
-        store.reserve_invite(slug, existing_slugs=existing, email=email, expires_days=expires_days)
-    except OAuthOnboardingError as exc:
-        fail(str(exc))
-    if email is None:
+            fail(str(exc))
         typer.echo(
             f"Reserved invite slug {slug!r}. No workspace or access was created. {pending_hint}"
         )
+        return
+
+    assert data_root is not None
+    if from_csv is not None:
+        rows = _read_invite_csv(from_csv, fail)
+        first_line: int | None = 2
+        where = f"{from_csv}: "
     else:
-        typer.echo(
-            f"Reserved invite slug {slug!r} for one email address (stored only as a keyed "
-            f"hash; matching expires in {expires_days} days). No workspace or access was "
-            f"created. {not_claimed} {pending_hint}"
+        assert slug is not None and email is not None
+        rows = [(email, slug)]
+        first_line = None
+        where = ""
+    try:
+        prepare_email_invites(
+            identity_path=identities.expanduser(),
+            registry_path=registry_path,
+            data_root=data_root.expanduser(),
+            rows=rows,
+            existing_slugs=existing,
+            service_user=service_user,
+            expires_days=expires_days,
+            first_line=first_line,
         )
+    except OAuthOnboardingError as exc:
+        fail(f"{where}{exc}. No invite was left reserved for a tenant that was not prepared.")
+    slugs = ", ".join(row_slug for _email, row_slug in rows)
+    noun = "email invite" if len(rows) == 1 else "email invites"
+    typer.echo(
+        f"Reserved {len(rows)} {noun}: {slugs}. Addresses are stored only as keyed hashes; "
+        f"matching expires in {expires_days} days. Each empty workspace is prepared "
+        "(privileged=false; funded=false) and unreachable until that person signs in with "
+        "the same WorkOS-verified address, on either surface, which lets them in with no "
+        "further step."
+    )
+    try:
+        signaled_pid = signal_reload(registry_path)
+    except TenantProcessSignalError as exc:
+        fail(
+            f"The invites are prepared on disk, but the running service still has its "
+            f"previous tenant map, so a sign-in cannot claim them yet: {exc}"
+        )
+    if signaled_pid is not None:
+        typer.echo(f"Signaled the running shared service (pid {signaled_pid}) to reload.")
+    else:
+        typer.echo("No running shared service was found; the invites load at next start.")
 
 
 def _read_invite_csv(path: Path, fail: Callable[[str], NoReturn]) -> list[tuple[str, str]]:
@@ -5024,7 +5059,11 @@ def tenant_oauth_invite_revoke_cmd(
     if not removed:
         typer.echo(f"No reserved invite {slug!r}; nothing changed.", err=True)
         raise typer.Exit(code=1)
-    typer.echo(f"Revoked invite {slug!r}. No workspace existed for it; any email hash was deleted.")
+    typer.echo(
+        f"Revoked invite {slug!r}; any email hash was deleted. If it was an email invite, its "
+        "prepared workspace stays registered but unbound (no one can reach it); remove its "
+        "registry entry and directory by hand if you do not want to reuse the slug."
+    )
 
 
 @tenant_app.command("oauth-pending")

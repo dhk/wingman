@@ -1478,13 +1478,33 @@ identity key" and "do not obtain `sub` from email".
   matching; the slug stays reserved until approved or revoked.
 - **What is unchanged.** No match, an unverified address or a failed lookup
   falls back to today's path: a pending row, the reference, a 403. Manual
-  `oauth-approve` and `oauth-bind` remain. A WorkOS API key on the shared
-  service is acceptable for looking up a verified address, read-only.
-- **Staging.** #584 records invites (`oauth-invite --email/--from-csv`,
-  `oauth-invites`, `oauth-invite-revoke`) and changes no sign-in behaviour.
-  Claiming at sign-in is #585, designed after #582 establishes what each
-  surface's token actually carries. Until #585 ships the superseded rules still
-  describe what the running service does.
+  `oauth-approve` and `oauth-bind` remain.
+- **Where the verified address comes from (#582, live 2026-10-10).** Neither
+  token carries an email. The browser's code exchange returns a `user` object
+  (`id`, `email`, `email_verified`); the address counts only if `user.id` is
+  the verified session-token subject and `email_verified` is literally `true`.
+  For MCP, the AuthKit issuer's own `/oauth2/userinfo`, called with the bearer
+  token that already passed validation, returns `sub`, `email` and
+  `email_verified`, with the same checks. **No WorkOS API key and no JWT
+  template are needed**: the API-key allowance above went unused, and WorkOS
+  keys are environment-wide anyway. The lookup runs only for an unbound
+  verified identity, off the event loop, with a 5-second timeout and at most
+  one lookup per identity per minute; it is sent only to the configured https
+  issuer.
+- **One person, both surfaces.** #582 also showed one WorkOS user has the same
+  full `sub` on the browser session token and the MCP token. A claim therefore
+  binds that `sub` under both issuers this process is configured with (never
+  an issuer taken from a token), so the second surface works with no second
+  step. Each binding is still an `(iss, sub)` key.
+- **Who creates the tenant.** The registry is root-owned and the service does
+  not run as root, so `oauth-invite --email/--from-csv` (run with sudo, like
+  `oauth-approve`) prepares the empty, unprivileged, unfunded tenant when
+  inviting, marked with `.oauth-invite.json`. A sign-in only binds to a tenant
+  that is registered, carries that marker, is not privileged or funded and has
+  no identity bound yet. Revoking an email invite leaves its prepared tenant
+  registered and unreachable.
+- **Staging.** #584 recorded invites; #585 claims them at sign-in. The
+  superseded rules above now describe only the manual path.
 
 ## RFC-082: Client-owned artifact kinds (#503) — Durable decision
 
