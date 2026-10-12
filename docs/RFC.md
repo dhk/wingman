@@ -116,6 +116,38 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 
 The exhaustive [CLI/MCP ledger](SURFACE-PARITY.md) records existing counterparts, deliberate exceptions, and deferred gaps. A contract test enumerates registered tools and all CLI leaf commands (including aliases), checks exact inventory coverage and reciprocal mappings, and rejects unmatched entries without a reason. Adding a row does not implement a gap. New tools, especially hosted ingestion, require a separate design; this change adds none.
 
+### Hosted file parity completion (#598) — Durable decision
+
+MCP imports accept the actual attachment bytes as standard base64 and a basename,
+never a server filesystem path: `ingest_resume_file`, `ingest_linkedin`,
+`ingest_transcript`, and `corpus_add`. Clients must encode real attachments;
+models must not reconstruct or invent binary data. Existing browser upload remains
+the fallback for resume/LinkedIn files when the client cannot send file bytes.
+The same application pipelines enforce extraction, evidence validation, document
+lineage and deduplication. `corpus_list` and CLI `opportunities list` close the
+remaining listing gaps; deliberate operator/conversational exceptions remain in
+the ledger.
+
+Bound payloads before storing or invoking models: 10 MiB decoded, ZIP/DOCX at most
+1000 entries and 50 MiB expanded, no encrypted/unsupported compression. ZIP
+members are read as data, never extracted to caller-selected paths. Imports
+archive original bytes in the current tenant inbox, preserving prior records and
+partial successes on failure. MCP errors do not echo server paths. Opt-in tool telemetry withholds upload bytes
+and result contents, including transcript previews. Resume text
+uses the configured extraction provider; LinkedIn, corpus, and transcripts remain
+deterministic with no network or model calls.
+
+Transcript preview uses a temporary file removed immediately and persists
+nothing. `note_for` requires the user's explicit named-person instruction after
+review; only that person's local interaction summary is filed. Generated notes
+remain labeled context and speaker mismatches remain visible. No profile claims,
+messages, or external writes are made by this tool.
+
+Trade-off: base64 costs roughly one third more transport space and requires client
+attachment encoding support. There is no arbitrary server-path fallback. Larger
+exports need a smaller subset or operator-assisted local import. This does not
+claim automatic attachment access in every MCP client.
+
 ## RFC-009: Read-only public-feed fetching, explicitly invoked
 
 **Decision.** Wingman's first network access: `wingman people fetch` reads the public, unauthenticated RSS feed of a person the user has explicitly put on their watchlist. The rules, enforced in one place (`infrastructure/fetch.py`):

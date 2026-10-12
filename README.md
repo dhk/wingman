@@ -143,6 +143,10 @@ CLI and MCP share application operations, with explicit gaps and local-only
 controls recorded in the [surface parity ledger](docs/SURFACE-PARITY.md).
 The inventory test requires a decision for every command and tool; it does
 not claim that a documented gap is implemented.
+Hosted file imports now accept attachment bytes through `ingest_resume_file`,
+`ingest_linkedin`, `ingest_transcript`, and `corpus_add`; `corpus_list` lists your
+writing and `wingman opportunities list` lists assessed roles. See
+[hosted file imports](docs/MCP-FILE-IMPORTS.md) for client requirements and limits.
 
 `wingman-mcp` exposes the workspace as MCP tools running the same
 deterministic validation as the CLI (RFC-008) — stdio for Claude Code and

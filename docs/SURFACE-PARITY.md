@@ -60,8 +60,8 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `company sources` | `company_source` |  |
 | cli | `company unpause-source` | `company_source` |  |
 | cli | `company warm-path` | `woven_warm_path` |  |
-| cli | `corpus add` |  | Gap: local file ingestion has no MCP equivalent; hosted file-access design deferred (#598). |
-| cli | `corpus list` |  | Gap: corpus-specific listing has no equivalent MCP tool; defer adding tools (#598). |
+| cli | `corpus add` | `corpus_add` |  |
+| cli | `corpus list` | `corpus_list` |  |
 | cli | `criteria review` | `job_criteria` |  |
 | cli | `criteria save` | `job_criteria` |  |
 | cli | `criteria show` | `job_criteria` |  |
@@ -86,9 +86,9 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `heap show` | `heap` |  |
 | cli | `heap sort` | `heap` |  |
 | cli | `host-check` |  | Deliberately local host/runtime diagnostics. |
-| cli | `ingest` |  | Gap: local PDF/DOCX/file import is not equivalent to resume text/URL tools; hosted file ingestion design deferred (#598). |
-| cli | `ingest-linkedin` |  | Gap: profile ZIP import has no MCP equivalent; people_import_connections imports contacts only (#598). |
-| cli | `ingest-transcript` |  | Gap: transcript-file parsing has no equivalent MCP tool; import/consent design deferred (#598). |
+| cli | `ingest` | `ingest_resume_file`, `ingest_resume_url` |  |
+| cli | `ingest-linkedin` | `ingest_linkedin` |  |
+| cli | `ingest-transcript` | `ingest_transcript` |  |
 | cli | `init` |  | Deliberately local workspace bootstrap; MCP requires an initialized workspace. |
 | cli | `interview` | `interview_react` |  |
 | cli | `keys list` |  | Deliberately local credential administration; secrets are not MCP tool arguments. |
@@ -109,6 +109,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `objective review` | `relationship_objective` |  |
 | cli | `objective save` | `relationship_objective` |  |
 | cli | `objective show` | `relationship_objective` |  |
+| cli | `opportunities list` | `opportunities_list` |  |
 | cli | `overnight` | `overnight` |  |
 | cli | `pack` | `pack` |  |
 | cli | `people add` | `people_add` |  |
@@ -208,6 +209,8 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `company_similar` | `company similar` |  |
 | mcp | `company_source` | `company add-source`, `company pause-source`, `company remove-source`, `company sources`, `company unpause-source` |  |
 | mcp | `completeness` |  | Deliberately MCP structured setup/readiness diagnostic; no exact CLI equivalent. |
+| mcp | `corpus_add` | `corpus add` |  |
+| mcp | `corpus_list` | `corpus list` |  |
 | mcp | `digest` | `digest` |  |
 | mcp | `drive_auth` | `drive auth` |  |
 | mcp | `embed` | `embed` |  |
@@ -220,8 +223,11 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `gap_map` | `gap-map` |  |
 | mcp | `heap` | `heap add`, `heap remove`, `heap show`, `heap sort` |  |
 | mcp | `heap_read` |  | Deliberately MCP document/image payload retrieval; heap show lists metadata. |
+| mcp | `ingest_linkedin` | `ingest-linkedin` |  |
+| mcp | `ingest_resume_file` | `ingest` |  |
 | mcp | `ingest_resume_text` |  | Deliberately MCP text payload ingestion; CLI ingest takes a local file. |
-| mcp | `ingest_resume_url` |  | Deliberately MCP URL resume ingestion; CLI ingest takes a local file. |
+| mcp | `ingest_resume_url` | `ingest` |  |
+| mcp | `ingest_transcript` | `ingest-transcript` |  |
 | mcp | `interview_react` | `interview` |  |
 | mcp | `interview_status` |  | Deliberately MCP interview-progress inspection; terminal interview remains an interactive capture wizard. |
 | mcp | `job_criteria` | `criteria review`, `criteria save`, `criteria show` |  |
@@ -230,7 +236,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `my_pov` | `pov` |  |
 | mcp | `my_urls` | `mcp url` |  |
 | mcp | `my_values` | `values` |  |
-| mcp | `opportunities_list` |  | Gap: stored opportunity listing has no equivalent CLI command; defer adding commands (#598). |
+| mcp | `opportunities_list` | `opportunities list` |  |
 | mcp | `overnight` | `overnight` |  |
 | mcp | `pack` | `pack` |  |
 | mcp | `people_add` | `people add` |  |
@@ -286,6 +292,8 @@ chosen feed URL on both surfaces (`company add-feed` / `company_feed(attach)`);
 `feed_discover` is an optional preparation step, not an operation performed by
 that CLI command.
 
-Deferred gaps remain tracked in open issue #598. This scoped ledger change does
-not close that issue or decide the future hosted-ingestion interfaces. Reciprocal
-mappings are mechanically checked; their semantic accuracy still needs review.
+The deferred #598 gaps are implemented: MCP accepts bounded file payloads,
+not server paths; directory corpus imports use a ZIP. Transcript preview is
+read-only and note filing requires an explicitly named person. Opportunity
+listing shares its application renderer across CLI and MCP. Reciprocal mappings
+are mechanically checked; their semantic accuracy still needs review.

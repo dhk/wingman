@@ -221,6 +221,8 @@ from wingman.version import wingman_version
 app = typer.Typer(help="Wingman: local-first career intelligence.")
 corpus_app = typer.Typer(help="Manage the corpus: your writing as citable evidence.")
 app.add_typer(corpus_app, name="corpus")
+opportunities_app = typer.Typer(help="Inspect assessed opportunities.")
+app.add_typer(opportunities_app, name="opportunities")
 people_app = typer.Typer(help="Watchlist of people and their public writing.")
 app.add_typer(people_app, name="people")
 company_app = typer.Typer(help="Companies, seen through the writing of their people and blogs.")
@@ -7102,6 +7104,22 @@ def run() -> None:
             )
         except Exception:  # noqa: BLE001, S110 — the journal never breaks the CLI
             pass
+
+
+@opportunities_app.command("list")
+def opportunities_list() -> None:
+    """List assessed opportunities using the same summaries as MCP."""
+    from wingman.application.opportunities import (
+        list_opportunity_summaries,
+        render_opportunity_listing,
+    )
+
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        summaries = list_opportunity_summaries(storage, config)
+    typer.echo(render_opportunity_listing(summaries))
 
 
 if __name__ == "__main__":
