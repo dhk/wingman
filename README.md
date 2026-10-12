@@ -133,6 +133,12 @@ back. Default off; nothing is ever transmitted.
 
 ## Use from Claude (MCP)
 
+`values_chart()` returns its SVG inline for the chat client to render, without
+a server filesystem path. The client must render the supplied SVG; it is not
+shown automatically by every client. Charts above 100 KB stop inline delivery
+and ask the user to seek operator help. `wingman values-chart` still writes a
+local SVG and supports `--out`; MCP output stays inside the workspace.
+
 CLI and MCP share application operations, with explicit gaps and local-only
 controls recorded in the [surface parity ledger](docs/SURFACE-PARITY.md).
 The inventory test requires a decision for every command and tool; it does

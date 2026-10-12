@@ -3847,8 +3847,15 @@ def values_chart(out_dir: str = "", view: str = "character") -> str:
     radar/spider chart (v3 of issue #240 — presentation only: no model call,
     nothing recomputed, just a picture of the already-computed ValueProfile).
 
-    Writes under reports/charts/ (or out_dir, if given) and returns the
-    written path. Requires a stored profile — call my_values(refresh=True)
+    Writes under reports/charts/ and returns the SVG
+    inline, without a server filesystem path. Clients can render the SVG
+    payload directly. Use the client's SVG/artifact renderer to display the
+    exact returned payload; do not regenerate it or publish it unless asked.
+    Returning SVG does not guarantee that a client displays it automatically.
+    out_dir is retained for compatibility but ignored; only the local CLI
+    accepts custom output directories. Inline delivery stops above 100,000
+    UTF-8 bytes rather than truncating the chart.
+    Requires a stored profile — call my_values(refresh=True)
     first if none exists yet; this tool never builds or rebuilds one itself.
     A stale stored profile (new captures since it was built) still renders,
     with the same "N new captures" note my_values already shows, printed on
@@ -3877,14 +3884,18 @@ def values_chart(out_dir: str = "", view: str = "character") -> str:
         value_view = parse_value_view(view)
     except IngestError as exc:
         return f"values-chart failed: {exc}"
-    destination = Path(out_dir).expanduser() if out_dir.strip() else None
     with Storage(config.db_path) as storage:
         active_persona = get_active_persona(storage, config)
         try:
-            export = export_value_radar(
-                config, storage, persona=active_persona, out_dir=destination, view=value_view
-            )
-        except IngestError as exc:
+            export = export_value_radar(config, storage, persona=active_persona, view=value_view)
+        except (IngestError, OSError) as exc:
+            if isinstance(exc, OSError) or isinstance(exc.__cause__, OSError):
+                get_logger("mcp").warning("values-chart file operation failed")
+                return (
+                    "values-chart failed: Could not save the chart; existing reports were "
+                    "preserved. Ask your workspace operator to check report-directory "
+                    "permissions and available disk space, then retry."
+                )
             return f"values-chart failed: {exc}"
         acting_as = render_acting_as(active_persona)
     warnings = ""
@@ -3900,10 +3911,16 @@ def values_chart(out_dir: str = "", view: str = "character") -> str:
             f"\n{export.stale_new_captures} new {noun} since this profile was built — "
             f"{refresh_tool(value_view)} to include them."
         )
-    return (
-        f"{acting_as}\nWrote {export.path}{warnings}\n"
-        "Open it in a browser, or embed it (it's self-contained SVG)."
-    )
+    svg = export.svg
+    if len(svg.encode("utf-8")) > 100_000:
+        return (
+            f"{acting_as}{warnings}\nChart exceeds the 100 KB inline limit. "
+            "Inline delivery stopped; ask your workspace operator for help viewing "
+            "this chart. No partial chart was returned."
+        )
+    longest_run = max((len(run) for run in re.findall(r"`+", svg)), default=0)
+    fence = "`" * max(3, longest_run + 1)
+    return f"{acting_as}{warnings}\nSVG for your client to render:\n\n{fence}svg\n{svg}\n{fence}"
 
 
 def _miso_lines(report: MisoReport) -> str:
