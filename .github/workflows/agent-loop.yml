@@ -89,15 +89,28 @@ jobs:
           # Consume the trigger so a re-run needs a human to label again.
           if [ -n "$LABEL" ]; then gh issue edit "$ISSUE" --remove-label "$LABEL" >/dev/null 2>&1 || true; fi
 
-          if git ls-remote --exit-code --heads "https://github.com/$GH_REPO" "$branch" >/dev/null; then
-            gh issue comment "$ISSUE" --body "Agent loop not started: branch \`$branch\` already exists. Delete it or finish that PR first."
-            refuse "branch $branch already exists"
-          fi
+          # --exit-code: 0 = branch exists, 2 = no such branch, anything else =
+          # git could not tell (network, auth). Only 2 is safe to proceed on.
+          status=0
+          git ls-remote --exit-code --heads "https://github.com/$GH_REPO" "$branch" >/dev/null || status=$?
+          case "$status" in
+            2) ;;
+            0)
+              gh issue comment "$ISSUE" --body "Agent loop not started: branch \`$branch\` already exists. Delete it or finish that PR first."
+              refuse "branch $branch already exists" ;;
+            *) echo "::error::could not check whether $branch exists (git ls-remote exit $status)"; exit 1 ;;
+          esac
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 
   author:
     needs: gate
     if: needs.gate.outputs.proceed == 'true'
+    # A called workflow can only narrow the caller's token, never widen it, so
+    # each call grants the most its jobs need; the jobs then narrow it.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     uses: ./.github/workflows/agent-loop-author.yml
     with:
       agent: ${{ needs.gate.outputs.author }}
@@ -110,6 +123,11 @@ jobs:
   review1:
     needs: [gate, author]
     if: needs.author.outputs.status == 'pushed'
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      copilot-requests: write
     uses: ./.github/workflows/agent-loop-review.yml
     with:
       author: ${{ needs.gate.outputs.author }}
@@ -122,6 +140,12 @@ jobs:
   repair1:
     needs: [gate, author, review1]
     if: needs.review1.outputs.verdict == 'changes'
+    # A called workflow can only narrow the caller's token, never widen it, so
+    # each call grants the most its jobs need; the jobs then narrow it.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     uses: ./.github/workflows/agent-loop-author.yml
     with:
       agent: ${{ needs.gate.outputs.author }}
@@ -136,6 +160,11 @@ jobs:
   review2:
     needs: [gate, author, repair1]
     if: needs.repair1.outputs.status == 'pushed'
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      copilot-requests: write
     uses: ./.github/workflows/agent-loop-review.yml
     with:
       author: ${{ needs.gate.outputs.author }}
@@ -148,6 +177,12 @@ jobs:
   repair2:
     needs: [gate, author, review2]
     if: needs.review2.outputs.verdict == 'changes'
+    # A called workflow can only narrow the caller's token, never widen it, so
+    # each call grants the most its jobs need; the jobs then narrow it.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     uses: ./.github/workflows/agent-loop-author.yml
     with:
       agent: ${{ needs.gate.outputs.author }}
@@ -162,6 +197,11 @@ jobs:
   review3:
     needs: [gate, author, repair2]
     if: needs.repair2.outputs.status == 'pushed'
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      copilot-requests: write
     uses: ./.github/workflows/agent-loop-review.yml
     with:
       author: ${{ needs.gate.outputs.author }}

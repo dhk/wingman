@@ -35,7 +35,8 @@ One workflow run then:
 Files: [`agent-loop.yml`](../.github/workflows/agent-loop.yml) (entry and state
 machine), [`agent-loop-author.yml`](../.github/workflows/agent-loop-author.yml),
 [`agent-loop-review.yml`](../.github/workflows/agent-loop-review.yml), and the
-verdict validator in [`.github/actions/agent-loop-verdict/`](../.github/actions/agent-loop-verdict/).
+verdict validator [`.github/agent-loop/validate_verdict.py`](../.github/agent-loop/validate_verdict.py)
+(tested in `tests/unit/test_agent_loop_verdict.py`).
 
 ## Spending Copilot first
 
@@ -75,11 +76,12 @@ with the same prompt and verdict shape as the other reviewers.
 | Runaway loops | The round cap is the **shape of the job graph**. There is no counter a model could reset. |
 | Model-driven control flow | Every transition is deterministic (AGENTS.md: no model for status transitions or approval decisions). Reviewers only propose; a failing check is blocking whatever they say. |
 | Self-review | The author is never among that round's reviewers. |
-| Unusable reviewer output | Every answer goes through the same validator ([`validate.py`](../.github/actions/agent-loop-verdict/validate.py)). An invalid answer counts as that reviewer failing. If no reviewer produces a valid answer, the PR gets `needs-human`. |
+| Unusable reviewer output | Every answer goes through the same validator ([`validate_verdict.py`](../.github/agent-loop/validate_verdict.py)), run from a copy taken before the reviewer starts, so a reviewer cannot alter the code that judges it. An invalid answer counts as that reviewer failing. If no reviewer produces a valid answer, the PR gets `needs-human`. |
 | Nit ping-pong | Only `blocking` findings reach the repair prompt. |
 | Repair becoming a rewrite | Deterministic line cap: 300 changed lines per repair, 1,500 for authoring. Over the cap, the patch is refused and the PR gets `needs-human`. |
-| The loop editing itself | Any patch touching `.github/` or `.agent-loop/` is refused (source and destination paths are both checked). The token is never granted the Workflows permission. |
-| Agents holding credentials | Authors run **with no write token**; a fresh runner applies their patch. Codex runs under `permission-profile` (`:workspace` to write, `:read-only` to review). Claude gets an explicit tool allowlist and `--max-turns`. Copilot gets read-only `git` commands, file writes denied, `--max-ai-credits`. |
+| The loop editing itself | Any patch touching `.github/`, `.agent-loop/`, agent instructions (`AGENTS.md`, `CLAUDE.md`) or agent startup config (`.claude/`, `.codex/`, `.mcp.json`, `.husky/` and similar) is refused. Source and destination paths are both checked. The token is never granted the Workflows permission. |
+| Model-authored config running as code | claude-code-action restores `.claude/`, `.mcp.json`, `CLAUDE.md` and similar from the base branch only when the triggering event is a PR. This loop starts from an issue, so it restores them itself before every Claude run. Hooks or MCP servers in a model-authored head never execute. |
+| Agents holding credentials | Authors run **with no write token**; a fresh runner applies their patch. Codex runs under `permission-profile` (`:workspace` to write, `:read-only` to review). Claude gets an explicit tool allowlist and `--max-turns`. Copilot gets only `view`, `grep` and `glob` (no shell: the CLI auto-approves shell commands it judges read-only, and `git diff --output=<path>` writes files), plus `--max-ai-credits`. Claude reviews with `Read`, `Grep` and `Glob` only. |
 | Strangers triggering spend (public repo) | Only actors in `AGENT_LOOP_ALLOWED_ACTORS` can start a run, and the trigger label is removed on start. Issue text is passed to every model as untrusted data. |
 | Concurrent runs | `concurrency` per issue, never cancelling a run in progress. |
 | Wall-clock | `timeout-minutes` on every job. |
@@ -124,8 +126,8 @@ with the same prompt and verdict shape as the other reviewers.
   exits non-zero or prints an error is not documented. Either way the validator
   marks the answer unusable and the next reviewer runs, but check the first
   exhausted-month run.
-- **Copilot's file-reading tools** are not explicitly allowed. It is told the
-  inputs' paths, and read-only `git show`/`git diff` are allowed as a fallback.
+- **Copilot reads the inputs with its `view` tool.** GitHub's docs say reading
+  files is allowed automatically; the first run confirms it in this setup.
 - **`actionlint` 1.7.12 reports two false errors.** It doesn't know
   `copilot-requests` (GitHub's docs require it) or codex-action's
   `permission-profile` input (present on the action's `v1` ref). Its bundled

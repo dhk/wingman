@@ -110,7 +110,8 @@ jobs:
             fi
             echo
             echo "Rules:"
-            echo "- Never modify anything under .github/ or .agent-loop/; such a change is rejected."
+            echo "- Never modify .github/, .agent-loop/, .claude/, .codex/, .husky/, .mcp.json,"
+            echo "  AGENTS.md, CLAUDE.md or similar agent configuration; such a change is rejected."
             echo "- Do not commit or push; leave changes in the working tree."
             echo "- Assume no network. Run checks with:"
             echo "    uv run --offline --frozen ruff check ."
@@ -130,6 +131,19 @@ jobs:
           permission-profile: ":workspace"
           model: ${{ vars.AGENT_LOOP_CODEX_MODEL }}
 
+      - name: Restore agent config from the default branch
+        if: inputs.agent == 'claude'
+        # claude-code-action restores .claude/, .mcp.json, CLAUDE.md and the like
+        # from the base branch only when the triggering event is a PR. This run
+        # starts from an issue, so do it here: a model-authored head must never
+        # supply hooks or MCP servers that run before tool gating.
+        env:
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          for p in .claude .claude.json .mcp.json CLAUDE.md CLAUDE.local.md .gitmodules .ripgreprc .husky .codex; do
+            rm -rf -- "$p"
+            git checkout "origin/$BASE" -- "$p" 2>/dev/null || true
+          done
       - name: Run Claude
         if: inputs.agent == 'claude'
         uses: anthropics/claude-code-action@v1
@@ -210,12 +224,16 @@ jobs:
 
           [ -s "$patch" ] || stop no_changes "the author left the tree unchanged"
 
-          # Gate 1: the loop must never edit its own controls. Checks the source
-          # AND destination path of every file: --numstat alone shows only the
-          # destination, so a rename out of .github/ would slip through it.
+          # Gate 1: the loop must never edit its own controls: workflows, the
+          # loop's scratch area, agent instructions (AGENTS.md, CLAUDE.md), or
+          # config any agent CLI loads at startup (hooks, MCP servers), at any depth:
+          # Codex and Claude both read nested AGENTS.md / CLAUDE.md. Checks the
+          # source AND destination path of every file: --numstat alone shows only
+          # the destination, so a rename out of .github/ would slip through it.
+          protected='(\.github|\.agent-loop|\.claude|\.codex|\.husky)/|(\.mcp\.json|\.claude\.json|CLAUDE\.md|CLAUDE\.local\.md|AGENTS\.md|\.gitmodules|\.ripgreprc)( |$)'
           if grep -E '^(diff --git |rename (from|to) |copy (from|to) )' "$patch" \
-              | grep -Eq '(^| |a/|b/)(\.github|\.agent-loop)/'; then
-            stop rejected "patch_touches_.github_or_.agent-loop"
+              | grep -Eq "(^|/| )($protected)"; then
+            stop rejected "patch_touches_a_protected_path"
           fi
 
           # Gate 2: scope cap. A repair round is a fix, not a rewrite.

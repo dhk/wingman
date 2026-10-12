@@ -8,7 +8,8 @@
 # requests fail and the next reviewer takes over. No quota API is needed.
 #
 # Each reviewer runs in its own job, on its own runner, with read-only tools and
-# no write token. The verdict that drives the loop is computed by the `decide`
+# no write token. Each validates its answer with a copy of the validator taken
+# before the model ran. The verdict that drives the loop is computed by the `decide`
 # job: 'approve' only when the reviewer approves, reports no blocking findings,
 # AND every check passed. A failing check is blocking whatever any model says.
 name: Agent loop — review
@@ -157,9 +158,16 @@ jobs:
         with:
           name: review-inputs-${{ inputs.round }}
           path: .agent-loop/review
+      - name: Keep a trusted copy of the validator
+        # Copied before any model runs. The PR head's .github/ cannot be changed by
+        # the loop (push gate), and running the copy means a reviewer writing into
+        # the checkout cannot alter the code that judges its own answer.
+        run: cp .github/agent-loop/validate_verdict.py "$RUNNER_TEMP/validate_verdict.py"
       - run: npm install -g @github/copilot
       # A failure here (allowance exhausted, rate limit, outage) is expected and
       # not an error: it hands the round to the next reviewer.
+      # No shell: the CLI auto-approves shell commands it judges read-only, and
+      # `git diff`/`git show` accept --output=<path>. The diff is supplied as a file.
       - name: Run Copilot
         continue-on-error: true
         env:
@@ -169,13 +177,10 @@ jobs:
         run: |
           copilot -p "$(cat .agent-loop/review/prompt.md)" -s --no-ask-user \
             --model="$MODEL" --max-ai-credits="$MAX_CREDITS" \
-            --allow-tool='shell(git diff:*)' --allow-tool='shell(git log:*)' --allow-tool='shell(git show:*)' \
-            --deny-tool='write' --deny-tool='shell(git push)' \
+            --available-tools='view,grep,glob' --deny-tool='write' --deny-tool='shell' \
             > "$RUNNER_TEMP/copilot.txt"
       - id: verdict
-        uses: ./.github/actions/agent-loop-verdict
-        with:
-          raw-file: ${{ runner.temp }}/copilot.txt
+        run: python3 -I "$RUNNER_TEMP/validate_verdict.py" "$RUNNER_TEMP/copilot.txt"
 
   codex:
     needs: [checks, copilot]
@@ -200,6 +205,11 @@ jobs:
         with:
           name: review-inputs-${{ inputs.round }}
           path: .agent-loop/review
+      - name: Keep a trusted copy of the validator
+        # Copied before any model runs. The PR head's .github/ cannot be changed by
+        # the loop (push gate), and running the copy means a reviewer writing into
+        # the checkout cannot alter the code that judges its own answer.
+        run: cp .github/agent-loop/validate_verdict.py "$RUNNER_TEMP/validate_verdict.py"
       - name: Run Codex
         continue-on-error: true
         uses: openai/codex-action@v1
@@ -211,9 +221,7 @@ jobs:
           permission-profile: ":read-only"
           model: ${{ vars.AGENT_LOOP_CODEX_MODEL }}
       - id: verdict
-        uses: ./.github/actions/agent-loop-verdict
-        with:
-          raw-file: ${{ runner.temp }}/codex.json
+        run: python3 -I "$RUNNER_TEMP/validate_verdict.py" "$RUNNER_TEMP/codex.json"
 
   claude:
     needs: [checks, copilot, codex]
@@ -238,6 +246,23 @@ jobs:
         with:
           name: review-inputs-${{ inputs.round }}
           path: .agent-loop/review
+      - name: Keep a trusted copy of the validator
+        # Copied before any model runs. The PR head's .github/ cannot be changed by
+        # the loop (push gate), and running the copy means a reviewer writing into
+        # the checkout cannot alter the code that judges its own answer.
+        run: cp .github/agent-loop/validate_verdict.py "$RUNNER_TEMP/validate_verdict.py"
+      - name: Restore agent config from the default branch
+        # claude-code-action restores .claude/, .mcp.json, CLAUDE.md and the like
+        # from the base branch only when the triggering event is a PR. This run
+        # starts from an issue, so do it here: a model-authored head must never
+        # supply hooks or MCP servers that run before tool gating.
+        env:
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          for p in .claude .claude.json .mcp.json CLAUDE.md CLAUDE.local.md .gitmodules .ripgreprc .husky .codex; do
+            rm -rf -- "$p"
+            git checkout "origin/$BASE" -- "$p" 2>/dev/null || true
+          done
       - name: Run Claude
         id: claude
         continue-on-error: true
@@ -250,16 +275,14 @@ jobs:
             Return the verdict as your structured output.
           claude_args: >-
             --max-turns 30
-            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+            --allowedTools "Read,Grep,Glob"
             --json-schema '${{ env.REVIEW_SCHEMA }}'
       - name: Save answer
         env:
           ANSWER: ${{ steps.claude.outputs.structured_output }}
         run: printf '%s' "$ANSWER" > "$RUNNER_TEMP/claude.json"
       - id: verdict
-        uses: ./.github/actions/agent-loop-verdict
-        with:
-          raw-file: ${{ runner.temp }}/claude.json
+        run: python3 -I "$RUNNER_TEMP/validate_verdict.py" "$RUNNER_TEMP/claude.json"
 
   decide:
     needs: [checks, copilot, codex, claude]
