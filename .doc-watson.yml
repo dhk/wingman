@@ -34,7 +34,7 @@ triggers:
     reason: One owner authors all changes; review routing is not shared.
   contributing:
     applies: true
-    reason: The repository is public and outside contributions are invited; every change merges only with the owner\'s approval (owner, 2026-10-07). CONTRIBUTING.md states this.
+    reason: The repository is public and outside contributions are invited; every change merges only with the owner's approval (owner, 2026-10-07). CONTRIBUTING.md states this.
   governance:
     applies: false
     reason: One maintainer.
