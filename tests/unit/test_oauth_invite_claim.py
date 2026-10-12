@@ -13,6 +13,8 @@ import logging
 import os
 import pwd
 import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import anyio
@@ -28,6 +30,7 @@ from wingman.infrastructure.oauth_bearer import (
 )
 from wingman.infrastructure.oauth_invite_claim import (
     EmailInviteClaimer,
+    _urllib_fetch,
     userinfo_url,
     verified_email_from,
     verified_userinfo_email,
@@ -187,6 +190,43 @@ def test_simultaneous_claims_from_both_surfaces_bind_one_tenant(world: _World) -
     assert world.store.invites() == []
 
 
+def test_a_binding_committed_without_consuming_the_invite_is_reconciled_on_retry(
+    world: _World,
+) -> None:
+    # The identity map was written, then the onboarding state write failed (or
+    # the process exited) before the invite was consumed. A retry by the same
+    # verified person must finish the job rather than return the binding and
+    # leave an invite that reads as unclaimed forever.
+    world.invite()
+    world.store.record_pending(MCP_ISSUER, SUB)
+    world.identity_path.write_text(
+        f'[[identity]]\niss = "{BROWSER_ISSUER}"\nsub = "{SUB}"\nslug = "pat"\n'
+        f'[[identity]]\niss = "{MCP_ISSUER}"\nsub = "{SUB}"\nslug = "pat"\n',
+        encoding="utf-8",
+    )
+    assert [item.slug for item in world.store.invites()] == ["pat"]
+
+    assert world.claimer().claim(MCP_ISSUER, SUB, EMAIL) == "pat"
+
+    assert world.store.invites() == []
+    assert world.store.pending() == []
+    assert not (world.data_root / "pat" / INVITE_MARKER).exists()
+    assert world.on_disk() == {(BROWSER_ISSUER, SUB): "pat", (MCP_ISSUER, SUB): "pat"}
+
+
+def test_reconciling_never_consumes_an_invite_for_a_different_tenant(world: _World) -> None:
+    world.invite()
+    world.invite("someone@example.com", "other")
+    world.identity_path.write_text(
+        f'[[identity]]\niss = "{MCP_ISSUER}"\nsub = "{SUB}"\nslug = "other"\n',
+        encoding="utf-8",
+    )
+
+    # Bound to "other"; Pat's invite (for "pat") is not this person's to consume.
+    assert world.claimer().claim(MCP_ISSUER, SUB, EMAIL) == "other"
+    assert sorted(item.slug for item in world.store.invites()) == ["other", "pat"]
+
+
 def test_a_slug_already_bound_to_someone_is_never_claimed(world: _World) -> None:
     world.invite()
     world.identity_path.write_text(
@@ -282,6 +322,99 @@ def test_userinfo_requires_200_matching_sub_and_verified_flag() -> None:
 
     assert verified_userinfo_email(MCP_ISSUER, "tok", SUB, fetch=post_only) == EMAIL
     assert methods == ["GET", "POST"]
+
+
+class _Recorder(BaseHTTPRequestHandler):
+    hits: list[str]
+    location: str | None
+
+    def do_GET(self) -> None:  # noqa: N802 — http.server API
+        type(self).hits.append(self.headers.get("Authorization", ""))
+        if type(self).location is not None:
+            self.send_response(302)
+            self.send_header("Location", type(self).location)
+            self.end_headers()
+            return
+        body = json.dumps({"sub": SUB, "email": EMAIL, "email_verified": True}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    do_POST = do_GET  # noqa: N815
+
+    def log_message(self, *_args: object) -> None:
+        pass
+
+
+def _serve(location: str | None) -> tuple[ThreadingHTTPServer, type[_Recorder]]:
+    handler = type("Handler", (_Recorder,), {"hits": [], "location": location})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, handler
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_the_real_transport_never_follows_a_redirect_with_the_token(method: str) -> None:
+    # urllib follows redirects by default and keeps Authorization; the token
+    # must never reach whatever the issuer endpoint redirects to (#619 review).
+    elsewhere, elsewhere_hits = _serve(None)
+    redirecting, redirecting_hits = _serve(f"http://127.0.0.1:{elsewhere.server_port}/steal")
+    try:
+        status, body = _urllib_fetch(
+            f"http://127.0.0.1:{redirecting.server_port}/oauth2/userinfo", method, "secret-tok"
+        )
+    finally:
+        redirecting.shutdown()
+        elsewhere.shutdown()
+
+    assert status == 302 and body == b""  # refused: any status but 200 is a miss
+    assert redirecting_hits.hits == ["Bearer secret-tok"]
+    assert elsewhere_hits.hits == []
+
+
+def test_concurrent_lookups_for_one_identity_make_one_userinfo_call(world: _World) -> None:
+    calls: list[str] = []
+    release = threading.Event()
+
+    def slow_401(_url: str, _method: str, _token: str) -> tuple[int, bytes]:
+        calls.append(_method)
+        release.wait(5)
+        return 401, b""
+
+    claimer = EmailInviteClaimer(
+        world.identity_path,
+        world.store,
+        world.index,
+        world.identities,
+        (MCP_ISSUER, BROWSER_ISSUER),
+        fetch=slow_401,
+    )
+    n = 12
+    start = threading.Barrier(n)
+    finished: list[str | None] = []
+
+    def run() -> None:
+        start.wait()
+        finished.append(claimer.claim_with_userinfo(MCP_ISSUER, SUB, "tok"))
+
+    threads = [threading.Thread(target=run) for _ in range(n)]
+    for thread in threads:
+        thread.start()
+    # Everyone but the one lookup in flight should give up at once.
+    deadline = time.monotonic() + 3
+    while len(finished) < n - 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    release.set()
+    for thread in threads:
+        thread.join()
+
+    assert finished == [None] * n
+    assert len(calls) == 1
+    # The miss is remembered: a later request inside the window costs nothing.
+    assert claimer.claim_with_userinfo(MCP_ISSUER, SUB, "tok") is None
+    assert len(calls) == 1
 
 
 # --- the two surfaces --------------------------------------------------------

@@ -844,7 +844,8 @@ AuthKit issuer's `/oauth2/userinfo` with the already-validated token: no
 WorkOS API key is needed. `oauth-invites` and `oauth-invite-revoke` list and
 withdraw invites. The slug-only form below remains the fallback.
 
-Their first successful WorkOS sign-in is still refused with 403. It records
+**Slug-only invites (the fallback), and anyone signing in without a matching
+email invite:** their first successful WorkOS sign-in is refused with 403. It records
 only the verified opaque `(iss, sub)`, first/last-seen times, and sign-in count
 in `oauth-identities-onboarding.json`; no bearer token or email is stored, no
 workspace exists, and no tenant data is reachable. Browser setup and MCP use
@@ -911,7 +912,9 @@ sudo -iu wingman-shared wingman tenant oauth-bind taylor \
   --registry /etc/wingman/tenants.toml
 ```
 
-Approval is the only step that creates a workspace. It claims both the invite
+For a slug-only invite, approval is the step that creates the workspace (an
+email invite's workspace is created earlier, by `oauth-invite --email`, and
+`oauth-approve` accepts it as the manual fallback). It claims both the invite
 and identity against competing operators, writes an isolated workspace and
 registry entry, binds the exact verified identity, consumes the pending row,
 and signals the shared process to reload. Signal delivery is reported exactly;

@@ -63,6 +63,20 @@ _MISS_LIMIT = 4096
 Fetch = Callable[[str, str, str], tuple[int, bytes]]
 
 
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: urllib would carry Authorization to the new URL.
+
+    A 3xx from the issuer's userinfo endpoint is surfaced as its own status,
+    which the caller treats like any other non-200: a miss, never an admission.
+    """
+
+    def redirect_request(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_RefuseRedirects())
+
+
 def _urllib_fetch(url: str, method: str, token: str) -> tuple[int, bytes]:
     request = urllib.request.Request(
         url,
@@ -71,7 +85,7 @@ def _urllib_fetch(url: str, method: str, token: str) -> tuple[int, bytes]:
         method=method,
     )
     try:
-        with urllib.request.urlopen(  # noqa: S310 — https issuer checked by userinfo_url
+        with _OPENER.open(  # https issuer checked by userinfo_url; no redirects followed
             request, timeout=_USERINFO_TIMEOUT_SECONDS
         ) as response:
             return int(response.status), response.read(_USERINFO_MAX_BYTES)
@@ -162,13 +176,19 @@ class EmailInviteClaimer:
             expiry = self._misses.get(key)
             if expiry is not None and expiry > now:
                 return None
+            self._misses = {k: v for k, v in self._misses.items() if v > now}
+            if len(self._misses) >= _MISS_LIMIT:
+                # No room to reserve, so no way to bound the lookups: fail closed.
+                return None
+            # Reserve before the network call, so concurrent requests for the
+            # same identity skip rather than each fanning out a lookup. A miss
+            # keeps the reservation for the window; a claim releases it.
+            self._misses[key] = now + _MISS_TTL_SECONDS
         email = verified_userinfo_email(issuer, token, subject, fetch=self._fetch)
         slug = self.claim(issuer, subject, email) if email is not None else None
-        if slug is None:
+        if slug is not None:
             with self._lock:
-                self._misses = {k: v for k, v in self._misses.items() if v > now}
-                if len(self._misses) < _MISS_LIMIT:
-                    self._misses[key] = now + _MISS_TTL_SECONDS
+                self._misses.pop(key, None)
         return slug
 
     def claim(self, issuer: str, subject: str, verified_email: str) -> str | None:
@@ -211,8 +231,23 @@ class EmailInviteClaimer:
             current = _identity_map_or_empty(path)
             bound = current.slug_for(issuer, subject)
             if bound is not None:
-                # A concurrent claim from the other surface got here first.
-                return bound if self._index.by_slug(bound) is not None else None
+                # A concurrent claim from the other surface got here first, or
+                # an earlier claim committed the binding and then failed (or
+                # the process exited) before consuming the invite. Finish that
+                # one now: consume this verified address's invite only if it is
+                # for the tenant this identity is already bound to. Nothing is
+                # written to the identity map.
+                if self._index.by_slug(bound) is None:
+                    return None
+                self._store.claim_email_invite(
+                    verified_email,
+                    subject=subject,
+                    issuers=self._issuers,
+                    ready=lambda slug: slug == bound,
+                    commit=lambda _slug: None,
+                    now=self._now(),
+                )
+                return bound
             wall = time.time()
             for key in keys:
                 if current.slug_for(*key) is not None:

@@ -165,8 +165,8 @@ sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-inv
   --registry /etc/wingman/tenants.toml
 ```
 
-The invitee's first verified sign-in remains forbidden and creates no
-workspace. It records the opaque issuer/subject pair in the bounded pending
+With a slug-only invite, the invitee's first verified sign-in remains
+forbidden and creates no workspace. It records the opaque issuer/subject pair in the bounded pending
 queue. Browser setup and MCP use different WorkOS token classes and issuers,
 so have the invitee attempt both flows before approval. `oauth-pending` may
 show two rows for that person. Confirm both identities out of band; do not

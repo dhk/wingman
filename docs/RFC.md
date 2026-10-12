@@ -1489,8 +1489,9 @@ identity key" and "do not obtain `sub` from email".
   template are needed**: the API-key allowance above went unused, and WorkOS
   keys are environment-wide anyway. The lookup runs only for an unbound
   verified identity, off the event loop, with a 5-second timeout and at most
-  one lookup per identity per minute; it is sent only to the configured https
-  issuer.
+  one lookup per identity per minute, reserved before the call so concurrent
+  requests cannot multiply it; it is sent only to the configured https issuer,
+  and a redirect is never followed (urllib would carry the token along).
 - **One person, both surfaces.** #582 also showed one WorkOS user has the same
   full `sub` on the browser session token and the MCP token. A claim therefore
   binds that `sub` under both issuers this process is configured with (never
