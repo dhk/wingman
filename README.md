@@ -134,8 +134,10 @@ back. Default off; nothing is ever transmitted.
 ## Use from Claude (MCP)
 
 `values_chart()` returns its SVG inline for the chat client to render, without
-a server filesystem path. Charts above 100 KB stop inline delivery and request
-a delivery-design review; `wingman values-chart` still writes a local SVG.
+a server filesystem path. The client must render the supplied SVG; it is not
+shown automatically by every client. Charts above 100 KB stop inline delivery
+and ask the user to seek operator help. `wingman values-chart` still writes a
+local SVG and supports `--out`; MCP output stays inside the workspace.
 
 `wingman-mcp` exposes the workspace as MCP tools running the same
 deterministic validation as the CLI (RFC-008) — stdio for Claude Code and
