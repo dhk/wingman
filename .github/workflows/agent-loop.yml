@@ -1,0 +1,202 @@
+# Codex-authors / Claude-reviews PR loop (pilot). Design and setup: docs/AGENT-LOOP.md.
+#
+# The whole loop is ONE workflow run. Rounds are chained as jobs, not as GitHub
+# events, so no handoff can be lost to the rule that GITHUB_TOKEN events start no
+# new runs, and the round cap is the shape of this graph: there is no counter a
+# model could reset. Every state transition below is a deterministic expression
+# (AGENTS.md: no model for status transitions or approval decisions).
+#
+#   gate -> author -> review1 -> repair1 -> review2 -> repair2 -> review3 -> finalize
+#
+# A human always merges. Nothing here approves, enables auto-merge, or merges.
+name: Agent loop
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Issue number to implement"
+        required: true
+        type: number
+
+concurrency:
+  group: agent-loop-issue-${{ github.event.issue.number || inputs.issue }}
+  # Never cancel: a cancelled push job could leave a half-applied round behind.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    # Cheap filter first: only the trigger label starts anything.
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'codex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+      issue: ${{ steps.check.outputs.issue }}
+      branch: ${{ steps.check.outputs.branch }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ENABLED: ${{ vars.AGENT_LOOP_ENABLED }}
+          ALLOWED: ${{ vars.AGENT_LOOP_ALLOWED_ACTORS || github.repository_owner }}
+          ACTOR: ${{ github.actor }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+        run: |
+          set -euo pipefail
+          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+          echo "branch=codex/issue-$ISSUE" >> "$GITHUB_OUTPUT"
+          refuse() { echo "::warning::agent loop not started: $1"; echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0; }
+
+          # Kill switch: unset or anything but 'true' stops every new run.
+          [ "$ENABLED" = "true" ] || refuse "repository variable AGENT_LOOP_ENABLED is not 'true'"
+
+          # Public repo: anyone with triage can label, and issue text is untrusted.
+          # Only an allowlisted actor's label vouches for an issue.
+          case ",${ALLOWED// /}," in
+            *",$ACTOR,"*) ;;
+            *) refuse "actor '$ACTOR' is not in AGENT_LOOP_ALLOWED_ACTORS" ;;
+          esac
+
+          # Consume the trigger so a re-run needs a human to label again.
+          gh issue edit "$ISSUE" --remove-label codex >/dev/null 2>&1 || true
+
+          if git ls-remote --exit-code --heads "https://github.com/$GH_REPO" "codex/issue-$ISSUE" >/dev/null; then
+            gh issue comment "$ISSUE" --body "Agent loop not started: branch \`codex/issue-$ISSUE\` already exists. Delete it or finish that PR first."
+            refuse "branch codex/issue-$ISSUE already exists"
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+  author:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
+    uses: ./.github/workflows/agent-loop-codex.yml
+    with:
+      mode: author
+      issue: ${{ needs.gate.outputs.issue }}
+      branch: ${{ needs.gate.outputs.branch }}
+      round: 0
+    secrets: inherit
+
+  review1:
+    needs: [gate, author]
+    if: needs.author.outputs.status == 'pushed'
+    uses: ./.github/workflows/agent-loop-review.yml
+    with:
+      issue: ${{ needs.gate.outputs.issue }}
+      branch: ${{ needs.gate.outputs.branch }}
+      pr: ${{ needs.author.outputs.pr }}
+      round: 1
+    secrets: inherit
+
+  repair1:
+    needs: [gate, author, review1]
+    if: needs.review1.outputs.verdict == 'changes'
+    uses: ./.github/workflows/agent-loop-codex.yml
+    with:
+      mode: repair
+      issue: ${{ needs.gate.outputs.issue }}
+      branch: ${{ needs.gate.outputs.branch }}
+      pr: ${{ needs.author.outputs.pr }}
+      round: 1
+      findings: ${{ needs.review1.outputs.findings }}
+    secrets: inherit
+
+  review2:
+    needs: [gate, author, repair1]
+    if: needs.repair1.outputs.status == 'pushed'
+    uses: ./.github/workflows/agent-loop-review.yml
+    with:
+      issue: ${{ needs.gate.outputs.issue }}
+      branch: ${{ needs.gate.outputs.branch }}
+      pr: ${{ needs.author.outputs.pr }}
+      round: 2
+    secrets: inherit
+
+  repair2:
+    needs: [gate, author, review2]
+    if: needs.review2.outputs.verdict == 'changes'
+    uses: ./.github/workflows/agent-loop-codex.yml
+    with:
+      mode: repair
+      issue: ${{ needs.gate.outputs.issue }}
+      branch: ${{ needs.gate.outputs.branch }}
+      pr: ${{ needs.author.outputs.pr }}
+      round: 2
+      findings: ${{ needs.review2.outputs.findings }}
+    secrets: inherit
+
+  review3:
+    needs: [gate, author, repair2]
+    if: needs.repair2.outputs.status == 'pushed'
+    uses: ./.github/workflows/agent-loop-review.yml
+    with:
+      issue: ${{ needs.gate.outputs.issue }}
+      branch: ${{ needs.gate.outputs.branch }}
+      pr: ${{ needs.author.outputs.pr }}
+      round: 3
+    secrets: inherit
+
+  finalize:
+    needs: [gate, author, review1, repair1, review2, repair2, review3]
+    if: always() && needs.gate.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ISSUE: ${{ needs.gate.outputs.issue }}
+          PR: ${{ needs.author.outputs.pr }}
+          # One line per stage: name, job result, stage output, refusal reason.
+          STAGES: |
+            author ${{ needs.author.result }} ${{ needs.author.outputs.status || '-' }} ${{ needs.author.outputs.reason || '-' }}
+            review1 ${{ needs.review1.result }} ${{ needs.review1.outputs.verdict || '-' }} -
+            repair1 ${{ needs.repair1.result }} ${{ needs.repair1.outputs.status || '-' }} ${{ needs.repair1.outputs.reason || '-' }}
+            review2 ${{ needs.review2.result }} ${{ needs.review2.outputs.verdict || '-' }} -
+            repair2 ${{ needs.repair2.result }} ${{ needs.repair2.outputs.status || '-' }} ${{ needs.repair2.outputs.reason || '-' }}
+            review3 ${{ needs.review3.result }} ${{ needs.review3.outputs.verdict || '-' }} -
+        run: |
+          set -euo pipefail
+          outcome="needs-human"
+          why="the loop ended without an approving review"
+          while read -r name result value reason; do
+            [ -n "$name" ] || continue
+            case "$result" in
+              failure|cancelled) why="$name $result (see the run log)"; break ;;
+              skipped) continue ;;
+            esac
+            case "$name:$value" in
+              review*:approve) outcome="ready-for-merge"; why="$name approved with all checks passing"; break ;;
+              review3:changes) why="round cap reached: review 3 still requests changes" ;;
+              review*:error)   why="$name could not produce a verdict"; break ;;
+              author:no_changes|repair*:no_changes) why="$name produced no changes"; break ;;
+              author:rejected|repair*:rejected) why="$name was refused: ${reason//_/ }"; break ;;
+            esac
+          done <<< "$STAGES"
+
+          for label in agent-loop ready-for-merge needs-human; do
+            gh label create "$label" >/dev/null 2>&1 || true
+          done
+          body="Agent loop finished: **$outcome**. $why. [Run log]($RUN_URL)"
+          if [ -n "$PR" ]; then
+            gh pr edit "$PR" --add-label "$outcome"
+            gh pr comment "$PR" --body "$body"
+            if [ "$outcome" = "ready-for-merge" ]; then gh pr ready "$PR"; fi
+          else
+            gh issue edit "$ISSUE" --add-label needs-human
+            gh issue comment "$ISSUE" --body "$body"
+          fi
+          echo "$outcome: $why" >> "$GITHUB_STEP_SUMMARY"

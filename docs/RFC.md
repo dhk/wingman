@@ -1498,3 +1498,13 @@ Custom artifact freshness is explicitly unknown/unchecked. Free-text titles are 
 
 
 Done fingerprints use the stable action key and evidence, with Markdown link titles normalized to URLs; rolling age/explanation text is excluded. Digest actions include an evidence fingerprint. `actions done <key> --fingerprint <value>` / MCP `action_triage(action='done', key=…, fingerprint=…)` must echo the reviewed fingerprint; a newer evidence set is rejected rather than completed unseen. A permanent mute must be explicitly undone before completion. Markdown current reads apply verdicts; dated HTML and direct latest.html links remain snapshots until the next overnight run.
+
+## RFC-083: A bounded Codex-authors / Claude-reviews PR loop (pilot)
+
+**Decision (pilot, not durable).** An issue labelled `codex` by an allowlisted actor starts one workflow run in which Codex implements the issue and opens a draft PR, Claude reviews it, and Codex repairs blocking findings. There are at most three reviews and two repairs. The run ends with `ready-for-merge` or `needs-human`, and a human merges. The design and setup are in [`AGENT-LOOP.md`](AGENT-LOOP.md).
+
+**Why one run rather than event chaining.** Events created with `GITHUB_TOKEN` start no new workflow run, so a loop chained through `pull_request` and `pull_request_review` events stalls silently unless every hop uses a separate credential. Chaining rounds as jobs in one run removes the hop. It also makes the round cap the shape of the job graph rather than a counter, which is the governance property the loop exists to have.
+
+**Why the model only proposes.** This applies invariant 5. Claude returns a schema-validated verdict, and deterministic steps decide everything: a failing check is blocking regardless of the verdict, only blocking findings reach the repair prompt, a patch touching `.github/` or `.agent-loop/` or exceeding the line cap is refused, and the terminal label is computed from job outputs. Codex runs without a write credential, and a separate runner applies its patch, so nothing it leaves in the checkout reaches the job that holds the push token.
+
+**Open until a run proves it.** Whether `uv run --offline --frozen` works inside Codex's no-network `:workspace` profile. Codex has no documented turn or spend cap, so its ceiling is `timeout-minutes` plus the provider budget. The PAT makes the owner the PR author, which rules out a required self-review; the merge is the human gate. Promote this to a durable decision, or remove it, after the pilot.
