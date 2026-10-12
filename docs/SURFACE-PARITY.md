@@ -104,15 +104,15 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `mcp url` | `my_urls` |  |
 | cli | `miso` | `make_it_so` |  |
 | cli | `motd history` | `motd` |  |
-| cli | `motd set` | `motd` |  |
-| cli | `motd show` | `motd` |  |
+| cli | `motd set` |  | Deliberately local operator broadcast configuration/diagnostics; tenant MCP tools cannot perform this operation. |
+| cli | `motd show` |  | Deliberately local operator broadcast configuration/diagnostics; tenant MCP tools cannot perform this operation. |
 | cli | `objective review` | `relationship_objective` |  |
 | cli | `objective save` | `relationship_objective` |  |
 | cli | `objective show` | `relationship_objective` |  |
 | cli | `overnight` | `overnight` |  |
 | cli | `pack` | `pack` |  |
 | cli | `people add` | `people_add` |  |
-| cli | `people add-feed` | `feed_attach` |  |
+| cli | `people add-feed` | `feed_attach`, `feed_discover` |  |
 | cli | `people brief` | `people_brief` |  |
 | cli | `people deep-dive` | `people_deep_dive` |  |
 | cli | `people delete` | `people_manage` |  |
@@ -144,7 +144,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `qa` | `qa_capture` |  |
 | cli | `qotd answer` | `qotd` |  |
 | cli | `qotd answers` | `qotd` |  |
-| cli | `qotd set` | `qotd` |  |
+| cli | `qotd set` |  | Deliberately local operator broadcast configuration/diagnostics; tenant MCP tools cannot perform this operation. |
 | cli | `qotd show` | `qotd` |  |
 | cli | `restore` |  | Deliberately local destructive whole-workspace replacement requiring terminal confirmation. |
 | cli | `rubrics` | `rubrics` |  |
@@ -175,7 +175,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `tenant url` | `tenant_url` |  |
 | cli | `tenant urls` | `tenant_urls` |  |
 | cli | `tenant validate` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
-| cli | `today` |  | Gap: terminal daily view has no exact MCP counterpart; briefing is a different read surface (#598). |
+| cli | `today` | `changelog` |  |
 | cli | `values` | `my_values` |  |
 | cli | `values-chart` | `values_chart` |  |
 | cli | `watchlist add` | `watchlist` |  |
@@ -189,10 +189,10 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `assess_job` | `assess` |  |
 | mcp | `assess_job_url` | `assess` |  |
 | mcp | `backup` | `backup` |  |
-| mcp | `briefing` |  | Deliberately MCP overview for conversation; today is not a matching contract. |
+| mcp | `briefing` |  | Deliberately MCP overview for conversation, with no exact CLI operation; today reports release history. |
 | mcp | `career_profile` |  | Deliberately MCP read of the canonical profile; profile CLI subcommands edit/list items. |
 | mcp | `carve_off_persona` | `carve-off-persona` |  |
-| mcp | `changelog` |  | Deliberately MCP version-aware release history for conversational clients; no CLI command. |
+| mcp | `changelog` | `today` |  |
 | mcp | `coach_persona` | `coach-persona` |  |
 | mcp | `commentary` | `commentary find`, `commentary list`, `commentary remove`, `commentary save`, `commentary show` |  |
 | mcp | `company_deep_dive` | `company deep-dive` |  |
@@ -216,7 +216,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `export_pdf` | `export career`, `export company`, `export person` |  |
 | mcp | `feature_request` | `feature request` |  |
 | mcp | `feed_attach` | `people add-feed` |  |
-| mcp | `feed_discover` |  | Gap: feed discovery has no standalone CLI counterpart; people add may discover as part of a write (#598). |
+| mcp | `feed_discover` | `people add-feed` |  |
 | mcp | `gap_map` | `gap-map` |  |
 | mcp | `heap` | `heap add`, `heap remove`, `heap show`, `heap sort` |  |
 | mcp | `heap_read` |  | Deliberately MCP document/image payload retrieval; heap show lists metadata. |
@@ -226,7 +226,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `interview_status` |  | Deliberately MCP interview-progress inspection; terminal interview remains an interactive capture wizard. |
 | mcp | `job_criteria` | `criteria review`, `criteria save`, `criteria show` |  |
 | mcp | `make_it_so` | `make-it-so`, `miso` |  |
-| mcp | `motd` | `motd history`, `motd set`, `motd show` |  |
+| mcp | `motd` | `motd history` |  |
 | mcp | `my_pov` | `pov` |  |
 | mcp | `my_urls` | `mcp url` |  |
 | mcp | `my_values` | `values` |  |
@@ -253,7 +253,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `profile_html` |  | Deliberately MCP inline profile presentation; export career writes a different artifact. |
 | mcp | `profile_manage` | `profile amend`, `profile clear`, `profile correct`, `profile list`, `profile rekind`, `profile rename`, `profile resolve`, `profile rm` |  |
 | mcp | `qa_capture` | `qa` |  |
-| mcp | `qotd` | `qotd answer`, `qotd answers`, `qotd set`, `qotd show` |  |
+| mcp | `qotd` | `qotd answer`, `qotd answers`, `qotd show` |  |
 | mcp | `relationship_log` | `log`, `people log` |  |
 | mcp | `relationship_objective` | `objective review`, `objective save`, `objective show` |  |
 | mcp | `resolve_requirement` |  | Deliberately MCP evidence clarification for an assessed requirement; no matching CLI operation. |
@@ -270,3 +270,22 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `wingman_demo` | `demo` |  |
 | mcp | `wingman_flow` |  | Deliberately MCP conversational next-step guidance; terminal perspectives has its own wizard. |
 | mcp | `woven_warm_path` | `company warm-path`, `people warm-path` |  |
+
+## Action-level exceptions
+
+The inventory guard covers command/tool registration, not every string-valued
+action. Human review must check action coverage when either side changes.
+
+| Tool action | Decision |
+| --- | --- |
+| `examples(action="add")` | Deliberately MCP-only capture of conversational examples; CLI examples has list/show/kinds/remove but no add command. |
+
+`people add-feed` discovers, confirms, then attaches; MCP splits that flow into
+`feed_discover` and `feed_attach`. Company attachment instead accepts an already
+chosen feed URL on both surfaces (`company add-feed` / `company_feed(attach)`);
+`feed_discover` is an optional preparation step, not an operation performed by
+that CLI command.
+
+Deferred gaps remain tracked in open issue #598. This scoped ledger change does
+not close that issue or decide the future hosted-ingestion interfaces. Reciprocal
+mappings are mechanically checked; their semantic accuracy still needs review.
