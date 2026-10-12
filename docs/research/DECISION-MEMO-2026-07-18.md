@@ -1,5 +1,7 @@
 # Competitive Research — Decision Memo (2026-07-18)
 
+Parity claims in this dated document are superseded by the [current CLI/MCP ledger](../SURFACE-PARITY.md) and amended RFC-008 (#598).
+
 **Context.** Three artifacts from the `docs/RESEARCH-BRIEFING.md` competitive research pass, reviewed together on 2026-07-18:
 
 - `competitive-landscape-2026-07-18-reality-check.md` — "Wingman Competitive Landscape — v0.2.x Reality Check"
