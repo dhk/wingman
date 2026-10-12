@@ -14,6 +14,10 @@ Label an issue to pick who writes the code:
 | `agent:codex` | Codex | Copilot → Claude |
 | `agent:claude` | Claude | Copilot → Codex |
 
+**Copilot reviews only; it never writes code.** This is the owner's decision
+(2026-10-12), not a gap to fill. Do not add an `agent:copilot` author. The gate
+in `agent-loop.yml` refuses any author other than `codex` or `claude`.
+
 One workflow run then:
 
 1. **Author.** The author implements the issue and the loop opens a **draft** PR.
