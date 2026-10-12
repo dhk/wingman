@@ -10,8 +10,9 @@
 # Each reviewer runs in its own job, on its own runner, with read-only tools and
 # no write token. Each validates its answer with a copy of the validator taken
 # before the model ran. The verdict that drives the loop is computed by the `decide`
-# job: 'approve' only when the reviewer approves, reports no blocking findings,
-# AND every check passed. A failing check is blocking whatever any model says.
+# job: 'approve' exactly when there are no blocking findings and every check
+# passed. The reviewer's own verdict word is ignored; a failing check is
+# blocking whatever any model says.
 name: Agent loop — review
 
 on:
@@ -330,7 +331,10 @@ jobs:
               blocking.push({ severity: 'blocking', file: '(checks)', line: 0, title: `${name} failed`,
                 detail: `The ${name} check failed on this head. See the review job log.` });
             }
-            const verdict = (review.verdict === 'approve' && blocking.length === 0) ? 'approve' : 'changes';
+            // The transition depends on the blocking list alone, never on the
+            // model's verdict word: "changes" with only nits must not start an
+            // empty repair round, and "approve" with a blocking finding must not pass.
+            const verdict = blocking.length === 0 ? 'approve' : 'changes';
             core.setOutput('verdict', verdict);
             core.setOutput('findings', JSON.stringify(blocking));
 

@@ -111,7 +111,8 @@ jobs:
             echo
             echo "Rules:"
             echo "- Never modify .github/, .agent-loop/, .claude/, .codex/, .husky/, .mcp.json,"
-            echo "  AGENTS.md, CLAUDE.md or similar agent configuration; such a change is rejected."
+            echo "  AGENTS.md, AGENTS.override.md, CLAUDE.md or similar agent configuration;"
+            echo "  such a change is rejected."
             echo "- Do not commit or push; leave changes in the working tree."
             echo "- Assume no network. Run checks with:"
             echo "    uv run --offline --frozen ruff check ."
@@ -156,7 +157,7 @@ jobs:
             Write your final summary to .agent-loop/final-message.md as well.
           claude_args: >-
             --max-turns 80
-            --allowedTools "Read,Write,Edit,MultiEdit,Glob,Grep,Bash(uv run:*),Bash(git diff:*),Bash(git status:*),Bash(git log:*),Bash(git show:*)"
+            --allowedTools "Read,Write,Edit,MultiEdit,Glob,Grep,Bash(uv run --offline --frozen ruff check:*),Bash(uv run --offline --frozen ruff format:*),Bash(uv run --offline --frozen mypy:*),Bash(uv run --offline --frozen pytest:*),Bash(git diff:*),Bash(git status:*),Bash(git log:*),Bash(git show:*)"
 
       # Hooks disabled: the checkout is now model-touched. This job holds no write
       # token, so the worst a planted hook could do here is corrupt the patch,
@@ -222,15 +223,27 @@ jobs:
           msg="$RUNNER_TEMP/round/final-message.md"
           stop() { printf 'status=%s\nreason=%s\npr=%s\n' "$1" "$2" "$PR" >> "$GITHUB_OUTPUT"; echo "::warning::$1: $2"; exit 0; }
 
-          [ -s "$patch" ] || stop no_changes "the author left the tree unchanged"
+          if [ ! -s "$patch" ]; then
+            # The repair prompt tells the author to leave code alone and explain
+            # when it judges a finding wrong. Post that explanation so the human
+            # who gets needs-human can read it.
+            { echo "### $AGENT round $ROUND: no changes"; echo; cat "$msg"; } > "$RUNNER_TEMP/body.md"
+            if [ -n "$PR" ]; then
+              gh pr comment "$PR" --body-file "$RUNNER_TEMP/body.md" || true
+            else
+              gh issue comment "$ISSUE" --body-file "$RUNNER_TEMP/body.md" || true
+            fi
+            stop no_changes "the author left the tree unchanged"
+          fi
 
           # Gate 1: the loop must never edit its own controls: workflows, the
-          # loop's scratch area, agent instructions (AGENTS.md, CLAUDE.md), or
+          # loop's scratch area, agent instructions (AGENTS.md, AGENTS.override.md,
+          # which Codex prefers over AGENTS.md, CLAUDE.md), or
           # config any agent CLI loads at startup (hooks, MCP servers), at any depth:
           # Codex and Claude both read nested AGENTS.md / CLAUDE.md. Checks the
           # source AND destination path of every file: --numstat alone shows only
           # the destination, so a rename out of .github/ would slip through it.
-          protected='(\.github|\.agent-loop|\.claude|\.codex|\.husky)/|(\.mcp\.json|\.claude\.json|CLAUDE\.md|CLAUDE\.local\.md|AGENTS\.md|\.gitmodules|\.ripgreprc)( |$)'
+          protected='(\.github|\.agent-loop|\.claude|\.codex|\.husky)/|(\.mcp\.json|\.claude\.json|CLAUDE\.md|CLAUDE\.local\.md|AGENTS(\.override)?\.md|\.gitmodules|\.ripgreprc)( |$)'
           if grep -E '^(diff --git |rename (from|to) |copy (from|to) )' "$patch" \
               | grep -Eq "(^|/| )($protected)"; then
             stop rejected "patch_touches_a_protected_path"
