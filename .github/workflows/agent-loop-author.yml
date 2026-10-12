@@ -1,17 +1,22 @@
-# Codex author / repair round for the agent loop. Design: docs/AGENT-LOOP.md.
+# Author / repair round for the agent loop, by Codex or Claude. Design:
+# docs/AGENT-LOOP.md.
 #
 # Two jobs on two runners, on purpose:
-#   codex  — runs Codex with no write credential at all and exports a patch.
+#   write  — runs the author agent with no write credential at all and exports a patch.
 #   push   — fresh runner, never runs model output; applies the patch only if it
 #            passes deterministic gates, then pushes with AGENT_LOOP_TOKEN.
 # codex-action's default safety strategy (drop-sudo) asks to be the last step that
-# matters in its job; anything Codex could have planted in the checkout (git
-# hooks, config) never reaches the job that holds the push token.
-name: Agent loop — Codex
+# matters in its job; and anything either agent could have planted in the checkout
+# (git hooks, config) never reaches the job that holds the push token.
+name: Agent loop — author
 
 on:
   workflow_call:
     inputs:
+      agent:
+        description: "codex | claude"
+        required: true
+        type: string
       mode:
         description: "author | repair"
         required: true
@@ -47,7 +52,7 @@ permissions:
   contents: read
 
 jobs:
-  codex:
+  write:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -61,7 +66,7 @@ jobs:
           persist-credentials: false
 
       # Codex's :workspace profile has no network, so dependencies are installed
-      # before it starts; Codex runs checks with --offline --frozen.
+      # before either agent starts; both run checks with --offline --frozen.
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
@@ -77,6 +82,9 @@ jobs:
           FINDINGS: ${{ inputs.findings }}
         run: |
           set -euo pipefail
+          # The patch is taken against this commit, so it also captures any
+          # commits the agent makes despite being told not to.
+          echo "BASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           mkdir -p .agent-loop
           echo ".agent-loop/" >> .git/info/exclude
           gh issue view "$ISSUE" --json title,body --jq '"# " + .title + "\n\n" + (.body // "")' > .agent-loop/issue.md
@@ -104,7 +112,7 @@ jobs:
             echo "Rules:"
             echo "- Never modify anything under .github/ or .agent-loop/; such a change is rejected."
             echo "- Do not commit or push; leave changes in the working tree."
-            echo "- There is no network. Run checks with:"
+            echo "- Assume no network. Run checks with:"
             echo "    uv run --offline --frozen ruff check ."
             echo "    uv run --offline --frozen ruff format ."
             echo "    uv run --offline --frozen mypy src"
@@ -113,7 +121,7 @@ jobs:
           } > .agent-loop/prompt.md
 
       - name: Run Codex
-        id: codex
+        if: inputs.agent == 'codex'
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -122,6 +130,20 @@ jobs:
           permission-profile: ":workspace"
           model: ${{ vars.AGENT_LOOP_CODEX_MODEL }}
 
+      - name: Run Claude
+        if: inputs.agent == 'claude'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Read-only token: Claude can edit the checkout but cannot push.
+          github_token: ${{ github.token }}
+          prompt: |
+            Read .agent-loop/prompt.md and do exactly what it says.
+            Write your final summary to .agent-loop/final-message.md as well.
+          claude_args: >-
+            --max-turns 80
+            --allowedTools "Read,Write,Edit,MultiEdit,Glob,Grep,Bash(uv run:*),Bash(git diff:*),Bash(git status:*),Bash(git log:*),Bash(git show:*)"
+
       # Hooks disabled: the checkout is now model-touched. This job holds no write
       # token, so the worst a planted hook could do here is corrupt the patch,
       # which the push job's gates then judge.
@@ -129,20 +151,20 @@ jobs:
         run: |
           set -euo pipefail
           git -c core.hooksPath=/dev/null add -A
-          git -c core.hooksPath=/dev/null diff --cached --binary --no-renames HEAD > "$RUNNER_TEMP/changes.patch"
+          git -c core.hooksPath=/dev/null diff --cached --binary --no-renames "$BASE_SHA" > "$RUNNER_TEMP/changes.patch"
           cp .agent-loop/final-message.md "$RUNNER_TEMP/final-message.md" 2>/dev/null || echo "(no final message)" > "$RUNNER_TEMP/final-message.md"
           wc -l < "$RUNNER_TEMP/changes.patch"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: codex-round-${{ inputs.round }}
+          name: author-round-${{ inputs.round }}
           path: |
             ${{ runner.temp }}/changes.patch
             ${{ runner.temp }}/final-message.md
           retention-days: 14
 
   push:
-    needs: codex
+    needs: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -163,7 +185,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: codex-round-${{ inputs.round }}
+          name: author-round-${{ inputs.round }}
           path: ${{ runner.temp }}/round
 
       - name: Gate, apply and push
@@ -172,6 +194,7 @@ jobs:
           GH_TOKEN: ${{ secrets.AGENT_LOOP_TOKEN }}
           GH_REPO: ${{ github.repository }}
           MODE: ${{ inputs.mode }}
+          AGENT: ${{ inputs.agent }}
           ISSUE: ${{ inputs.issue }}
           BRANCH: ${{ inputs.branch }}
           PR: ${{ inputs.pr }}
@@ -185,7 +208,7 @@ jobs:
           msg="$RUNNER_TEMP/round/final-message.md"
           stop() { printf 'status=%s\nreason=%s\npr=%s\n' "$1" "$2" "$PR" >> "$GITHUB_OUTPUT"; echo "::warning::$1: $2"; exit 0; }
 
-          [ -s "$patch" ] || stop no_changes "Codex left the tree unchanged"
+          [ -s "$patch" ] || stop no_changes "the author left the tree unchanged"
 
           # Gate 1: the loop must never edit its own controls. Checks the source
           # AND destination path of every file: --numstat alone shows only the
@@ -200,15 +223,15 @@ jobs:
           limit=$MAX_REPAIR_LINES; [ "$MODE" = "author" ] && limit=$MAX_AUTHOR_LINES
           [ "$changed" -le "$limit" ] || stop rejected "${changed}_changed_lines_exceeds_the_${MODE}_cap_of_${limit}"
 
-          git config user.name "codex-loop"
-          git config user.email "codex-loop@users.noreply.github.com"
+          git config user.name "$AGENT-loop"
+          git config user.email "$AGENT-loop@users.noreply.github.com"
           if [ "$MODE" = "author" ]; then git switch -c "$BRANCH"; fi
           git apply --index "$patch"
           title=$(gh issue view "$ISSUE" --json title --jq .title)
           if [ "$MODE" = "author" ]; then
-            git commit -q -m "Implement #$ISSUE: $title" -m "Authored by Codex via the agent loop (round 0)."
+            git commit -q -m "Implement #$ISSUE: $title" -m "Authored by $AGENT via the agent loop (round 0)."
           else
-            git commit -q -m "Repair round $ROUND for #$ISSUE" -m "Codex fixes for the blocking review findings of round $ROUND."
+            git commit -q -m "Repair round $ROUND for #$ISSUE" -m "$AGENT fixes for the blocking review findings of round $ROUND."
           fi
           git push -u origin "$BRANCH"
 
@@ -217,16 +240,16 @@ jobs:
             {
               echo "Closes #$ISSUE"
               echo
-              echo "Opened by the agent loop: Codex authors, Claude reviews, Codex repairs (max 2 repair rounds). A human merges. See docs/AGENT-LOOP.md."
+              echo "Opened by the agent loop: $AGENT authors and repairs, a different agent reviews (max 2 repair rounds). A human merges. See docs/AGENT-LOOP.md."
               echo
-              echo "### Codex summary"
+              echo "### $AGENT summary"
               cat "$msg"
             } > "$RUNNER_TEMP/body.md"
             url=$(gh pr create --draft --base "$BASE" --head "$BRANCH" \
               --title "$title" --body-file "$RUNNER_TEMP/body.md" --label agent-loop)
             PR="${url##*/}"
           else
-            { echo "### Codex repair round $ROUND"; echo; cat "$msg"; } > "$RUNNER_TEMP/body.md"
+            { echo "### $AGENT repair round $ROUND"; echo; cat "$msg"; } > "$RUNNER_TEMP/body.md"
             gh pr comment "$PR" --body-file "$RUNNER_TEMP/body.md"
           fi
           printf 'status=pushed\nreason=-\npr=%s\n' "$PR" >> "$GITHUB_OUTPUT"

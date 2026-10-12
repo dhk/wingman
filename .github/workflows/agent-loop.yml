@@ -1,4 +1,8 @@
-# Codex-authors / Claude-reviews PR loop (pilot). Design and setup: docs/AGENT-LOOP.md.
+# Author / review / repair PR loop (pilot). Design and setup: docs/AGENT-LOOP.md.
+#
+# Label an issue `agent:codex` or `agent:claude` to pick the author. Reviewers are
+# tried Copilot -> Codex -> Claude (never the author) until one returns a valid
+# verdict, so Copilot's prepaid allowance is spent first.
 #
 # The whole loop is ONE workflow run. Rounds are chained as jobs, not as GitHub
 # events, so no handoff can be lost to the rule that GITHUB_TOKEN events start no
@@ -20,6 +24,11 @@ on:
         description: "Issue number to implement"
         required: true
         type: number
+      author:
+        description: "Agent that writes and repairs the code"
+        required: true
+        type: choice
+        options: [codex, claude]
 
 concurrency:
   group: agent-loop-issue-${{ github.event.issue.number || inputs.issue }}
@@ -31,8 +40,10 @@ permissions:
 
 jobs:
   gate:
-    # Cheap filter first: only the trigger label starts anything.
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'codex'
+    # Cheap filter first: only a trigger label starts anything.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.label.name == 'agent:codex' || github.event.label.name == 'agent:claude'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -41,6 +52,7 @@ jobs:
       proceed: ${{ steps.check.outputs.proceed }}
       issue: ${{ steps.check.outputs.issue }}
       branch: ${{ steps.check.outputs.branch }}
+      author: ${{ steps.check.outputs.author }}
     steps:
       - id: check
         env:
@@ -50,10 +62,18 @@ jobs:
           ALLOWED: ${{ vars.AGENT_LOOP_ALLOWED_ACTORS || github.repository_owner }}
           ACTOR: ${{ github.actor }}
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          LABEL: ${{ github.event.label.name }}
+          INPUT_AUTHOR: ${{ inputs.author }}
         run: |
           set -euo pipefail
-          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
-          echo "branch=codex/issue-$ISSUE" >> "$GITHUB_OUTPUT"
+          author="${INPUT_AUTHOR:-${LABEL#agent:}}"
+          case "$author" in codex|claude) ;; *) echo "::error::unknown author '$author'"; exit 1 ;; esac
+          branch="agent/issue-$ISSUE"
+          {
+            echo "issue=$ISSUE"
+            echo "branch=$branch"
+            echo "author=$author"
+          } >> "$GITHUB_OUTPUT"
           refuse() { echo "::warning::agent loop not started: $1"; echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0; }
 
           # Kill switch: unset or anything but 'true' stops every new run.
@@ -67,19 +87,20 @@ jobs:
           esac
 
           # Consume the trigger so a re-run needs a human to label again.
-          gh issue edit "$ISSUE" --remove-label codex >/dev/null 2>&1 || true
+          if [ -n "$LABEL" ]; then gh issue edit "$ISSUE" --remove-label "$LABEL" >/dev/null 2>&1 || true; fi
 
-          if git ls-remote --exit-code --heads "https://github.com/$GH_REPO" "codex/issue-$ISSUE" >/dev/null; then
-            gh issue comment "$ISSUE" --body "Agent loop not started: branch \`codex/issue-$ISSUE\` already exists. Delete it or finish that PR first."
-            refuse "branch codex/issue-$ISSUE already exists"
+          if git ls-remote --exit-code --heads "https://github.com/$GH_REPO" "$branch" >/dev/null; then
+            gh issue comment "$ISSUE" --body "Agent loop not started: branch \`$branch\` already exists. Delete it or finish that PR first."
+            refuse "branch $branch already exists"
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 
   author:
     needs: gate
     if: needs.gate.outputs.proceed == 'true'
-    uses: ./.github/workflows/agent-loop-codex.yml
+    uses: ./.github/workflows/agent-loop-author.yml
     with:
+      agent: ${{ needs.gate.outputs.author }}
       mode: author
       issue: ${{ needs.gate.outputs.issue }}
       branch: ${{ needs.gate.outputs.branch }}
@@ -91,6 +112,7 @@ jobs:
     if: needs.author.outputs.status == 'pushed'
     uses: ./.github/workflows/agent-loop-review.yml
     with:
+      author: ${{ needs.gate.outputs.author }}
       issue: ${{ needs.gate.outputs.issue }}
       branch: ${{ needs.gate.outputs.branch }}
       pr: ${{ needs.author.outputs.pr }}
@@ -100,8 +122,9 @@ jobs:
   repair1:
     needs: [gate, author, review1]
     if: needs.review1.outputs.verdict == 'changes'
-    uses: ./.github/workflows/agent-loop-codex.yml
+    uses: ./.github/workflows/agent-loop-author.yml
     with:
+      agent: ${{ needs.gate.outputs.author }}
       mode: repair
       issue: ${{ needs.gate.outputs.issue }}
       branch: ${{ needs.gate.outputs.branch }}
@@ -115,6 +138,7 @@ jobs:
     if: needs.repair1.outputs.status == 'pushed'
     uses: ./.github/workflows/agent-loop-review.yml
     with:
+      author: ${{ needs.gate.outputs.author }}
       issue: ${{ needs.gate.outputs.issue }}
       branch: ${{ needs.gate.outputs.branch }}
       pr: ${{ needs.author.outputs.pr }}
@@ -124,8 +148,9 @@ jobs:
   repair2:
     needs: [gate, author, review2]
     if: needs.review2.outputs.verdict == 'changes'
-    uses: ./.github/workflows/agent-loop-codex.yml
+    uses: ./.github/workflows/agent-loop-author.yml
     with:
+      agent: ${{ needs.gate.outputs.author }}
       mode: repair
       issue: ${{ needs.gate.outputs.issue }}
       branch: ${{ needs.gate.outputs.branch }}
@@ -139,6 +164,7 @@ jobs:
     if: needs.repair2.outputs.status == 'pushed'
     uses: ./.github/workflows/agent-loop-review.yml
     with:
+      author: ${{ needs.gate.outputs.author }}
       issue: ${{ needs.gate.outputs.issue }}
       branch: ${{ needs.gate.outputs.branch }}
       pr: ${{ needs.author.outputs.pr }}
