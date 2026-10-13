@@ -10,8 +10,10 @@ fetch/sync/discover tools do the same explicit, read-only public-feed reads
 as their CLI counterparts (RFC-009/011), and embedding tools carry the same
 RFC-010 egress semantics.
 
-Parity rule (RFC-008): the MCP surface tracks the CLI — every user-facing
-capability ships on both. The one adaptation: the CLI's interactive
+Parity decisions (RFC-008) are recorded in docs/SURFACE-PARITY.md.
+The surfaces share application code but retain documented gaps and local-only
+controls; a live inventory contract test requires a decision for each entry.
+One adaptation: the CLI's interactive
 confirm-before-attach for feeds becomes a two-tool pair here
 (feed_discover, then feed_attach only after the user says yes in
 conversation).
@@ -80,6 +82,7 @@ from wingman.application.feature_request import (
 )
 from wingman.application.focus import (
     follow_company,
+    json_digest,
     latest_digest,
     overnight_run,
     render_follow_report,
@@ -130,10 +133,12 @@ from wingman.application.research import (
     add_company_source,
     delete_company,
     list_company_sources,
+    pause_company_source,
     remove_company_source,
     rename_company,
     render_research_report,
     research_company,
+    source_duplicates,
 )
 from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import (
@@ -155,8 +160,11 @@ from wingman.application.telemetry_summary import (
     summarize as summarize_telemetry,
 )
 from wingman.application.triage import (
+    current_digest,
+    done_action,
     mute_action,
     render_verdicts,
+    require_action,
     snooze_action,
     unmute_action,
 )
@@ -605,10 +613,11 @@ def rubrics() -> str:
 
 
 @server.tool()
-def action_triage(action: str, key: str = "", days: int = 7) -> str:
+def action_triage(action: str, key: str = "", days: int = 7, fingerprint: str = "") -> str:
     """Triage the morning digest's action list: the user's verdicts persist (RFC-031).
 
-    action is 'mute' (never show this action key again), 'snooze' (hide it
+    For done, echo the fingerprint from the digest reviewed; stale evidence is rejected.
+    action is 'done' (complete this evidence only), 'mute' (never show this action key again), 'snooze' (hide it
     for `days` days), 'unmute' (clear a verdict), or 'list' (standing
     verdicts). Every digest action carries its key on a 'key:' line.
 
@@ -624,6 +633,11 @@ def action_triage(action: str, key: str = "", days: int = 7) -> str:
         return _NOT_INITIALIZED
     try:
         with Storage(config.db_path) as storage:
+            if action in {"mute", "snooze", "done"}:
+                require_action(key, storage)
+            if action == "done":
+                done_action(key, storage, fingerprint=fingerprint)
+                return f"Done {key} — new evidence can appear again."
             if action == "mute":
                 mute_action(key, storage)
                 return f"Muted {key} — it will not appear in future digests."
@@ -638,7 +652,7 @@ def action_triage(action: str, key: str = "", days: int = 7) -> str:
                 return render_verdicts(storage)
     except IngestError as exc:
         return f"action triage {action} failed: {exc}"
-    return f"unknown action {action!r}; use mute, snooze, unmute, or list."
+    return f"unknown action {action!r}; use done, mute, snooze, unmute, or list."
 
 
 @server.tool()
@@ -2638,7 +2652,8 @@ def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = 
     action is 'list', 'remember' (store `kind` + `url`, replacing any
     earlier record for that kind), 'show' (`kind`), 'forget' (`kind`), or
     'stale'. kind is one of: values_radar, values_radar_work, completeness,
-    profile.
+    profile, or custom:<slug> (lowercase letters/digits, underscores and hyphens).
+    Custom views round-trip but freshness is unknown; their recording timestamp is shown.
 
     Protocol: after you publish or update one of these views, call
     action='remember' with the url the client gave you. Before publishing
@@ -3058,13 +3073,12 @@ def people_add(
     linkedin_url: str = "",
     email: str = "",
 ) -> str:
-    """Add a person to the watchlist (or update them), optionally with their Substack URL,
-    LinkedIn URL, and email (manual entry only — imports never read emails).
+    """Add a person to the watchlist (or update them), optionally with their public writing URL,
+    LinkedIn URL, and email (private address-book field; also imported from Connections.csv).
 
-    substack_url is for a Substack blog specifically — its feed is verified at
-    <url>/feed before being stored, and the call fails loudly (nothing is written) if
-    that isn't a real, fetchable feed. For any other blog, use feed_attach (or
-    feed_discover first to find its real feed URL) instead of guessing here."""
+    substack_url is a legacy name for a public writing URL. Bounded discovery
+    finds and verifies its RSS/Atom endpoint before storing. If no feed exists,
+    use feed_attach with kind="index_page" for the approved blog index instead."""
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
@@ -3842,8 +3856,15 @@ def values_chart(out_dir: str = "", view: str = "character") -> str:
     radar/spider chart (v3 of issue #240 — presentation only: no model call,
     nothing recomputed, just a picture of the already-computed ValueProfile).
 
-    Writes under reports/charts/ (or out_dir, if given) and returns the
-    written path. Requires a stored profile — call my_values(refresh=True)
+    Writes under reports/charts/ and returns the SVG
+    inline, without a server filesystem path. Clients can render the SVG
+    payload directly. Use the client's SVG/artifact renderer to display the
+    exact returned payload; do not regenerate it or publish it unless asked.
+    Returning SVG does not guarantee that a client displays it automatically.
+    out_dir is retained for compatibility but ignored; only the local CLI
+    accepts custom output directories. Inline delivery stops above 100,000
+    UTF-8 bytes rather than truncating the chart.
+    Requires a stored profile — call my_values(refresh=True)
     first if none exists yet; this tool never builds or rebuilds one itself.
     A stale stored profile (new captures since it was built) still renders,
     with the same "N new captures" note my_values already shows, printed on
@@ -3872,14 +3893,18 @@ def values_chart(out_dir: str = "", view: str = "character") -> str:
         value_view = parse_value_view(view)
     except IngestError as exc:
         return f"values-chart failed: {exc}"
-    destination = Path(out_dir).expanduser() if out_dir.strip() else None
     with Storage(config.db_path) as storage:
         active_persona = get_active_persona(storage, config)
         try:
-            export = export_value_radar(
-                config, storage, persona=active_persona, out_dir=destination, view=value_view
-            )
-        except IngestError as exc:
+            export = export_value_radar(config, storage, persona=active_persona, view=value_view)
+        except (IngestError, OSError) as exc:
+            if isinstance(exc, OSError) or isinstance(exc.__cause__, OSError):
+                get_logger("mcp").warning("values-chart file operation failed")
+                return (
+                    "values-chart failed: Could not save the chart; existing reports were "
+                    "preserved. Ask your workspace operator to check report-directory "
+                    "permissions and available disk space, then retry."
+                )
             return f"values-chart failed: {exc}"
         acting_as = render_acting_as(active_persona)
     warnings = ""
@@ -3895,10 +3920,16 @@ def values_chart(out_dir: str = "", view: str = "character") -> str:
             f"\n{export.stale_new_captures} new {noun} since this profile was built — "
             f"{refresh_tool(value_view)} to include them."
         )
-    return (
-        f"{acting_as}\nWrote {export.path}{warnings}\n"
-        "Open it in a browser, or embed it (it's self-contained SVG)."
-    )
+    svg = export.svg
+    if len(svg.encode("utf-8")) > 100_000:
+        return (
+            f"{acting_as}{warnings}\nChart exceeds the 100 KB inline limit. "
+            "Inline delivery stopped; ask your workspace operator for help viewing "
+            "this chart. No partial chart was returned."
+        )
+    longest_run = max((len(run) for run in re.findall(r"`+", svg)), default=0)
+    fence = "`" * max(3, longest_run + 1)
+    return f"{acting_as}{warnings}\nSVG for your client to render:\n\n{fence}svg\n{svg}\n{fence}"
 
 
 def _miso_lines(report: MisoReport) -> str:
@@ -4171,10 +4202,14 @@ def feature_request(title: str = "", body: str = "", confirmed: bool = False) ->
 
 
 @server.tool()
-def digest(as_html: bool = False) -> str:
+def digest(as_html: bool = False, as_json: bool = False) -> str:
     """The newest overnight digest — what changed, what failed, and the action
     list (what/why/who/evidence). The morning starting point after a scheduled
     'wingman overnight' run; pair with 'search' to dig into anything it raises.
+
+    as_json=True returns action records, target step results and the exact budget
+    drop list (company, URL, fetch/judge stage and budget). Older runs without
+    a JSON sidecar cannot recover missing drop URLs; re-run overnight.
 
     Every overnight run already writes a styled HTML twin alongside the
     Markdown (same design tokens as every other wingman export, action list
@@ -4186,6 +4221,14 @@ def digest(as_html: bool = False) -> str:
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
+    if as_json:
+        if as_html:
+            return "Choose as_json or as_html, not both."
+        try:
+            with Storage(config.db_path) as storage:
+                return json_digest(config, storage)
+        except IngestError as exc:
+            return str(exc)
     newest = latest_digest(config)
     if newest is None:
         return (
@@ -4201,7 +4244,8 @@ def digest(as_html: bool = False) -> str:
             "overnight' runs from this version onward. Re-run overnight to "
             "generate one, or call digest() without as_html for the Markdown."
         )
-    return newest.read_text(encoding="utf-8")
+    with Storage(config.db_path) as storage:
+        return current_digest(newest.read_text(encoding="utf-8"), storage)
 
 
 @server.tool()
@@ -4262,7 +4306,7 @@ def company_feed(action: str, name: str, url: str = "", index_page: bool = False
 def company_source(
     action: str, name: str, url: str = "", label: str = "", retain: bool | None = None
 ) -> str:
-    """Manage approved research URLs for a company: action is add, remove, or list.
+    """Manage approved research URLs for a company: action is add, remove, pause, unpause, or list.
 
     Adding a source IS the approval (RFC-015): 'company_research' will fetch
     exactly the pages approved here, nothing else. https:// only.
@@ -4270,8 +4314,8 @@ def company_source(
     retain=True (RFC-060) additionally keeps that page's prose as a document
     attributed to the company, so 'company_pov', 'search' and 'evidence' can
     quote it — a values or about page becomes citable instead of only a hash
-    that says it changed. The fetch is identical either way. Off by default;
-    suits pages that change rarely, not a careers page. Pass it on an
+    that says it changed. The fetch is identical either way. On by default for
+    new sources labelled about; off for other labels. False opts out. Pass it on an
     already-approved source to change your mind (None leaves it alone).
     """
     config = _ready_config()
@@ -4288,6 +4332,10 @@ def company_source(
                 state = "Approved" if created else "Already approved"
                 kept = " (text retained as a document)" if source.retain else ""
                 return f"{state} for {source.company_name}: {source.url}{kept}"
+            if action in {"pause", "unpause"}:
+                source = pause_company_source(name, url, storage, paused=action == "pause")
+                state = "Paused" if source.paused else "Resumed"
+                return f"{state}: {source.url}. Existing research preserved."
             if action == "remove":
                 removed = remove_company_source(name, url, storage)
                 return (
@@ -4302,6 +4350,7 @@ def company_source(
                         f"No approved research sources for {name!r}. "
                         "Approve one with company_source(action='add', ...)."
                     )
+                duplicates = source_duplicates(sources, storage)
                 lines = []
                 for entry in sources:
                     snapshot = storage.get_research_snapshot(entry.company_key, entry.url)
@@ -4311,13 +4360,16 @@ def company_source(
                         if snapshot
                         else "no snapshot yet"
                     )
+                    if entry.url in duplicates:
+                        state += f", duplicate of {duplicates[entry.url]}"
                     tag = f" ({entry.label})" if entry.label else ""
+                    state += ", paused" if entry.paused else ""
                     kept = ", text retained" if entry.retain else ""
                     lines.append(f"- {entry.url}{tag} — {state}{kept}")
                 return "\n".join(lines)
     except IngestError as exc:
         return f"company_source failed: {exc}"
-    return f"unknown action {action!r}; use add, remove, or list."
+    return f"unknown action {action!r}; use add, remove, pause, unpause, or list."
 
 
 @server.tool()
@@ -4640,17 +4692,26 @@ def feed_attach(person_name: str, url: str, kind: str = "rss", organization: str
 
 @server.tool()
 def people_import_connections(export_path: str) -> str:
-    """Seed the watchlist from a LinkedIn export zip's Connections.csv (names/roles only, never emails)."""
+    """Seed the watchlist from a LinkedIn export zip's Connections.csv (private contact identifiers, including emails)."""
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
     try:
+        path = Path(export_path).expanduser()
+        if not config.privileged:
+            try:
+                path = path.resolve()
+                if not path.is_relative_to(config.inbox_dir.resolve()):
+                    raise IngestError("shared imports require a zip in this tenant's private inbox")
+            except OSError as exc:
+                raise IngestError("could not resolve the tenant inbox import path") from exc
         with Storage(config.db_path) as storage:
-            report = seed_from_connections(Path(export_path).expanduser(), storage)
+            report = seed_from_connections(path, storage)
     except IngestError as exc:
         return f"import failed: {exc}"
     return (
-        f"Created: {report.created}  Already known: {report.skipped_existing}  "
+        f"Created: {report.created}  Updated: {report.updated}  Unchanged: {report.skipped_existing}  "
+        f"Conflicts (preserved; review identity/values): {report.conflicts}  "
         f"Incomplete rows skipped: {report.skipped_incomplete}"
     )
 
@@ -5539,6 +5600,7 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         build_oauth_settings,
         jwks_key_resolver,
     )
+    from wingman.infrastructure.oauth_invite_claim import EmailInviteClaimer
     from wingman.infrastructure.oauth_onboarding import (
         OAuthOnboardingStore,
         onboarding_path_for,
@@ -5565,23 +5627,10 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
     onboarding_store = OAuthOnboardingStore(onboarding_path_for(identity_path))
     notifier = notifier_from_env(os.environ, identity_path)
     record_pending = pending_recorder(identity_path, onboarding_store, notifier)
-    bind_oauth_routing(
-        app,
-        f"{prefix}/mcp/{{token}}",
-        f"{prefix}/mcp",
-        index,
-        identities,
-        settings,
-        resolve_key,
-        record_pending,
-    )
     oauth_web_client_id = getattr(args, "oauth_web_client_id", None)
+    browser_settings = None
     if oauth_web_client_id:
-        from wingman.infrastructure.oauth_browser import (
-            OAuthBrowserSessions,
-            bind_oauth_browser,
-            build_oauth_browser_settings,
-        )
+        from wingman.infrastructure.oauth_browser import build_oauth_browser_settings
 
         try:
             browser_settings = build_oauth_browser_settings(
@@ -5593,6 +5642,29 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         except OAuthConfigError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
+    # Email-bound invites (#585): the two issuers this process trusts are the
+    # only ones a claim binds under — one WorkOS user, one subject, both surfaces.
+    invite_claimer = EmailInviteClaimer(
+        identity_path,
+        onboarding_store,
+        index,
+        identities,
+        [settings.issuer] + ([browser_settings.session_issuer] if browser_settings else []),
+    )
+    bind_oauth_routing(
+        app,
+        f"{prefix}/mcp/{{token}}",
+        f"{prefix}/mcp",
+        index,
+        identities,
+        settings,
+        resolve_key,
+        record_pending,
+        invite_claimer=invite_claimer,
+    )
+    if browser_settings is not None:
+        from wingman.infrastructure.oauth_browser import OAuthBrowserSessions, bind_oauth_browser
+
         bind_oauth_browser(
             app,
             prefix,
@@ -5603,6 +5675,7 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
                 index,
                 jwks_key_resolver(browser_settings.session_jwks_uri),
                 record_pending=record_pending,
+                invite_claimer=invite_claimer,
             ),
         )
     if notifier is not None:

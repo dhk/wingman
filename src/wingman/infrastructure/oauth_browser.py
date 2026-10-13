@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import anyio
 import jwt
@@ -48,6 +48,9 @@ from wingman.infrastructure.oauth_onboarding import (
     unapproved_message,
 )
 from wingman.infrastructure.tenants import TenantIndex
+
+if TYPE_CHECKING:
+    from wingman.infrastructure.oauth_invite_claim import EmailInviteClaimer
 
 _COOKIE = "wingman_setup_session"
 _STATE_COOKIE = "wingman_oauth_state"
@@ -143,7 +146,9 @@ class _Session:
     expires_at: float
 
 
-TokenExchange = Callable[[str, str], str]
+# The access token, optionally with the authenticate response's `user` object
+# (id, email, email_verified), which an email-bound invite (#585) reads.
+TokenExchange = Callable[[str, str], "str | tuple[str, object]"]
 PendingRecorder = Callable[[str, str], PendingResult]
 
 
@@ -221,6 +226,7 @@ class OAuthBrowserSessions:
         *,
         token_exchange: TokenExchange | None = None,
         record_pending: PendingRecorder | None = None,
+        invite_claimer: EmailInviteClaimer | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings = settings
@@ -230,6 +236,7 @@ class OAuthBrowserSessions:
         self._resolve_key = resolve_key
         self._exchange = token_exchange or self._exchange_code
         self._record_pending = record_pending
+        self._invite_claimer = invite_claimer
         self._monotonic = monotonic
         self._pending: dict[str, _Pending] = {}
         self._sessions: dict[str, _Session] = {}
@@ -288,9 +295,19 @@ class OAuthBrowserSessions:
         return pending.verifier if pending is not None else None
 
     def finish(self, code: str, verifier: str) -> str:
-        access_token = self._exchange(code, verifier)
+        exchanged = self._exchange(code, verifier)
+        access_token, user = exchanged if isinstance(exchanged, tuple) else (exchanged, None)
         identity = validate_browser_session_token(access_token, self._settings, self._resolve_key)
         slug = self._identities.slug_for(identity.issuer, identity.subject)
+        if slug is None and self._invite_claimer is not None:
+            # An email-bound invite (#585). The address counts only if the
+            # authenticate response's user is this verified subject and
+            # WorkOS marked the address verified.
+            from wingman.infrastructure.oauth_invite_claim import verified_email_from
+
+            email = verified_email_from(user, identity.subject, id_field="id")
+            if email is not None:
+                slug = self._invite_claimer.claim(identity.issuer, identity.subject, email)
         if not slug or self._index.by_slug(slug) is None:
             # The reference, never the subject (see oauth_bearer).
             _logger.info(
@@ -349,7 +366,7 @@ class OAuthBrowserSessions:
         with self._lock:
             self._sessions.pop(session_id, None)
 
-    def _exchange_code(self, code: str, verifier: str) -> str:
+    def _exchange_code(self, code: str, verifier: str) -> tuple[str, object]:
         body = json.dumps(
             {
                 "client_id": self._settings.client_id,
@@ -377,7 +394,8 @@ class OAuthBrowserSessions:
         token = payload.get("access_token") if isinstance(payload, dict) else None
         if not isinstance(token, str) or not token:
             raise OAuthConfigError("OAuth token exchange returned no access token")
-        return token
+        # Kept only for the caller to check against the verified token; never logged.
+        return token, payload.get("user")
 
 
 def bind_oauth_browser(

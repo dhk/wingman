@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -45,6 +46,13 @@ class FeedSource(BaseModel):
     org_name: str | None = None
 
 
+class ConnectionImport(BaseModel):
+    """Private address-book row and the exact import source supporting it."""
+
+    source_record_id: str
+    fields: dict[str, str]
+
+
 class Person(BaseModel):
     """One watched or known person; identified by a normalized name key."""
 
@@ -52,11 +60,14 @@ class Person(BaseModel):
     name: str = Field(min_length=1)
     origin: PersonOrigin
     substack_url: str | None = None
+    writing_feed_url: str | None = None
+    writing_feed_kind: FeedKind = FeedKind.RSS
     feeds: list[FeedSource] = Field(default_factory=list)
     linkedin_url: str | None = None
-    # Only ever set manually ('wingman people add --email'): imports never
-    # read email addresses (the Connections.csv privacy decision stands).
+    # Local address-book data, imported or entered manually; excluded from publication.
     email: str | None = None
+    connection_fields: dict[str, str] = Field(default_factory=dict)
+    connection_imports: list[ConnectionImport] = Field(default_factory=list)
     company: str | None = None
     position: str | None = None
     connected_on: str | None = None
@@ -69,10 +80,16 @@ class Person(BaseModel):
 
     @property
     def sources(self) -> list[FeedSource]:
-        """Every configured source: the Substack URL (as a feed) plus added feeds."""
+        """The discovered writing feed (or unresolved entered URL), plus added feeds."""
         configured: list[FeedSource] = []
         if self.substack_url:
-            configured.append(FeedSource(url=self.substack_url.rstrip("/") + "/feed"))
+            legacy = self.substack_url
+            host = (urlsplit(legacy).hostname or "").lower()
+            if not self.writing_feed_url and host.endswith(".substack.com"):
+                legacy = legacy.rstrip("/") + "/feed"
+            configured.append(
+                FeedSource(url=self.writing_feed_url or legacy, kind=self.writing_feed_kind)
+            )
         configured.extend(self.feeds)
         return configured
 

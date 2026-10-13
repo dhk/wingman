@@ -2,13 +2,10 @@
 
 Entirely deterministic — no model calls. Three operations:
 
-- add_person: manual watchlist entry, optionally with a Substack URL.
-- seed_from_connections: create Person records from a LinkedIn export's
-  Connections.csv. Deliberate PII minimization: names, profile URLs, company,
-  position, and connection date are kept; email addresses are never read into
-  a Person, and the CSV itself is not copied into the workspace — the
-  SourceRecord's locator points at the export zip on the user's disk, and its
-  content hash proves which bytes were consumed.
+- add_person: manual watchlist entry, optionally with a public writing URL.
+- seed_from_connections: upsert the owner's address book from an explicit
+  LinkedIn export, including emails and extra identifying columns. Private
+  fields and source provenance stay local; reports never render addresses.
 - fetch_person_feed: read a person's public sources — Substack, any RSS 2.0
   or Atom feed (Medium, WordPress, Ghost), or a configured blog index page
   on a feed-less site (RFC-009/RFC-011) — storing each post as an immutable
@@ -31,6 +28,7 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import ClassVar
+from urllib.error import HTTPError
 from urllib.parse import urljoin, urlsplit
 
 from pydantic import BaseModel, Field
@@ -39,6 +37,7 @@ from wingman.application.corpus import extract_document
 from wingman.application.ingest import IngestError
 from wingman.domain import SourceRecord
 from wingman.domain.person import (
+    ConnectionImport,
     ExternalDocument,
     ExternalEvidenceHit,
     FeedAttribution,
@@ -62,6 +61,8 @@ _ATOM_NS = "{http://www.w3.org/2005/Atom}"
 class ConnectionsSeedReport(BaseModel):
     created: int
     skipped_existing: int
+    updated: int = 0
+    conflicts: int = 0
     skipped_incomplete: int
 
 
@@ -74,39 +75,36 @@ class FeedFetchReport(BaseModel):
     skipped_empty: int
     titles: list[str] = Field(default_factory=list)
     failed_sources: list[str] = Field(default_factory=list)
+    corrected_sources: list[str] = Field(default_factory=list)
 
 
-def _verify_substack_feed(url: str, fetcher: Callable[[str], bytes]) -> None:
-    """Confirm <url>/feed is a real, fetchable, parseable RSS/Atom feed
-    before storing it as someone's substack_url (#483). Wrongly guessing
-    a non-Substack blog has its feed at /feed used to be discovered only
-    hours later, at overnight-fetch time, as a 404 — this fails loud at
-    write time instead, and points at the right tool for anything that
-    isn't actually a Substack blog."""
-    feed_url = url.rstrip("/") + "/feed"
-    hint = (
-        f"If {url!r} isn't a Substack blog, its feed probably isn't at /feed — use "
-        "'wingman people add-feed \"<name>\" <url>' (or feed_discover) instead, which "
-        "finds and validates the real feed URL."
-    )
+def _resolve_writing_feed(
+    url: str, fetcher: Callable[[str], bytes], max_fetches: int | None = None
+) -> str:
+    """Resolve an entered writing URL using bounded RSS/Atom discovery."""
+    attempts = 0
+
+    def bounded_fetch(candidate: str) -> bytes:
+        nonlocal attempts
+        if max_fetches is not None and attempts >= max_fetches:
+            raise FetchError("legacy discovery budget exhausted; run feed_discover explicitly")
+        attempts += 1
+        return fetcher(candidate)
+
     try:
-        feed_bytes = fetcher(feed_url)
-    except FetchError as exc:
-        raise IngestError(f"the feed at {feed_url} could not be fetched ({exc}). {hint}") from exc
-    try:
-        root = ET.fromstring(feed_bytes)
-    except ET.ParseError as exc:
+        discovery = discover_feed(url, fetcher=bounded_fetch)
+    except IngestError as exc:
         raise IngestError(
-            f"the feed at {feed_url} is not parseable RSS/Atom ({exc}). {hint}"
+            f"writing URL {url!r} could not be fetched. Use add-feed or feed_discover "
+            f"to check the configured URL. {exc}"
         ) from exc
-    # A root tag check, not an item-count check: zero items is a real,
-    # legitimate feed (a brand-new blog with nothing posted yet) and must
-    # not be rejected; well-formed XML that isn't RSS/Atom at all (e.g. an
-    # HTML page that happens to parse) must be.
-    if root.tag != "rss" and root.tag != f"{_ATOM_NS}feed":
+    if discovery.feed_url is None:
         raise IngestError(
-            f"the feed at {feed_url} doesn't look like RSS/Atom (root element {root.tag!r}). {hint}"
+            f"no feed was discoverable at writing URL {url!r}; "
+            "use add-feed with --index (MCP: feed_attach(kind='index_page')) "
+            "for a blog index, or supply a verified RSS/Atom URL."
         )
+    return discovery.feed_url
 
 
 def add_person(
@@ -123,8 +121,7 @@ def add_person(
     """Add a person to the watchlist; updates the existing record if the name is known.
 
     Returns (person, created) — created is False when an existing person was
-    updated. email is a manual-entry field only: imports never read email
-    addresses. A passed substack_url's derived feed (<url>/feed) is verified
+    updated. email is private address-book data, also populated by explicit imports. A passed writing URL uses bounded feed discovery and is verified
     real and parseable before it's stored — nothing is written if it isn't
     (#483); fetcher exists only as the test seam, matching every other feed
     function in this module (fetch_person_feed, discover_feed, ...). strict
@@ -133,14 +130,19 @@ def add_person(
     discovers and reports an unreachable feed gracefully rather than
     rejecting the person outright — never for a live person typing a URL.
     """
+    writing_feed_url = None
     if substack_url is not None:
         substack_url = substack_url.rstrip("/")
-        if not substack_url.startswith("https://"):
+        if not substack_url.startswith("https://") or any(
+            ord(c) <= 32 or ord(c) == 127 for c in substack_url
+        ):
             raise IngestError(
-                f"Substack URL must start with https:// (RFC-009); got {substack_url!r}"
+                f"Writing URL must start with https:// (RFC-009); got {substack_url!r}"
             )
         try:
-            _verify_substack_feed(substack_url, fetcher if fetcher is not None else fetch_url)
+            writing_feed_url = _resolve_writing_feed(
+                substack_url, fetcher if fetcher is not None else fetch_url
+            )
         except IngestError:
             if strict:
                 raise
@@ -156,6 +158,7 @@ def add_person(
         name=name,
         origin=PersonOrigin.MANUAL,
         substack_url=substack_url,
+        writing_feed_url=writing_feed_url,
         company=company,
         position=position,
         linkedin_url=linkedin_url,
@@ -168,6 +171,12 @@ def add_person(
     updated = existing.model_copy(
         update={
             "substack_url": substack_url or existing.substack_url,
+            "writing_feed_kind": FeedKind.RSS
+            if substack_url is not None
+            else existing.writing_feed_kind,
+            "writing_feed_url": writing_feed_url
+            if substack_url is not None and writing_feed_url is not None
+            else existing.writing_feed_url,
             "company": company or existing.company,
             "position": position or existing.position,
             "linkedin_url": linkedin_url or existing.linkedin_url,
@@ -273,7 +282,7 @@ def _connections_rows(raw: str) -> list[dict[str, str]]:
 
 
 def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSeedReport:
-    """Create Person records from a LinkedIn export's Connections.csv."""
+    """Upsert private address-book fields from a LinkedIn export's Connections.csv."""
     try:
         with zipfile.ZipFile(export_path) as archive:
             entry_name = next(
@@ -303,8 +312,9 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
     content_hash = hashlib.sha256(raw_bytes).hexdigest()
     record = storage.get_source_record_by_hash(content_hash)
     if record is None:
-        # The CSV holds contact emails, so the bytes stay in the user's export
-        # zip — only the locator and hash are recorded (PII minimization).
+        # The owner authorized importing their address book, including emails.
+        # Rows stay in the local database; the original zip remains the source
+        # artifact. Record its locator/hash without copying or transmitting it.
         record = SourceRecord(
             source_type="linkedin_connections",
             source_locator=f"{export_path}!{entry_name}",
@@ -313,6 +323,8 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
         storage.add_source_record(record)
 
     created = 0
+    updated_count = 0
+    conflicts = 0
     skipped_existing = 0
     skipped_incomplete = 0
     for row in rows:
@@ -322,17 +334,105 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
         if not name:
             skipped_incomplete += 1
             continue
+        fields = {
+            key: value.strip()
+            for key, value in row.items()
+            if isinstance(key, str) and isinstance(value, str) and value.strip()
+        }
+        imported = ConnectionImport(source_record_id=record.record_id, fields=fields)
         person = Person(
             name=name,
             origin=PersonOrigin.LINKEDIN_CONNECTIONS,
-            linkedin_url=(row.get("URL") or "").strip() or None,
+            email=fields.get("Email Address"),
+            connection_fields=fields,
+            connection_imports=[imported],
+            linkedin_url=fields.get("URL")
+            or fields.get("LinkedIn URL")
+            or fields.get("Profile URL"),
             company=(row.get("Company") or "").strip() or None,
             position=(row.get("Position") or "").strip() or None,
             connected_on=(row.get("Connected On") or "").strip() or None,
             source_record_id=record.record_id,
         )
-        if storage.find_person_by_name_key(person.name_key) is not None:
-            skipped_existing += 1
+        existing = storage.find_person_by_name_key(person.name_key)
+        if existing is not None:
+            identifiers = ("email", "linkedin_url")
+
+            def normalized(value: str | None) -> str:
+                return (value or "").strip().rstrip("/").casefold()
+
+            contradictory_identity = any(
+                getattr(existing, field)
+                and getattr(person, field)
+                and normalized(getattr(existing, field)) != normalized(getattr(person, field))
+                for field in identifiers
+            )
+            matched_identity = any(
+                getattr(existing, field)
+                and getattr(person, field)
+                and normalized(getattr(existing, field)) == normalized(getattr(person, field))
+                for field in identifiers
+            )
+            # Legacy LinkedIn rows can be backfilled from the same original
+            # export only when their already-known role corroborates identity.
+            legacy_match = (
+                existing.origin == PersonOrigin.LINKEDIN_CONNECTIONS
+                and existing.source_record_id == record.record_id
+                and bool(existing.company or existing.position)
+                and existing.company == person.company
+                and existing.position == person.position
+            )
+            meaningful = any(key not in {"First Name", "Last Name"} for key in fields)
+            if not meaningful:
+                skipped_existing += 1
+                continue
+            if contradictory_identity or not (matched_identity or legacy_match):
+                conflicts += 1
+                continue
+            canonical = ("linkedin_url", "email", "company", "position", "connected_on")
+            if any(
+                getattr(existing, key)
+                and getattr(person, key)
+                and normalized(getattr(existing, key)) != normalized(getattr(person, key))
+                for key in canonical
+            ):
+                conflicts += 1
+            history = list(existing.connection_imports)
+            if existing.source_record_id and not history:
+                history.append(
+                    ConnectionImport(
+                        source_record_id=existing.source_record_id,
+                        fields={
+                            key: str(value)
+                            for key, value in {
+                                "Company": existing.company,
+                                "Position": existing.position,
+                                "Connected On": existing.connected_on,
+                                "URL": existing.linkedin_url,
+                                "Email Address": existing.email,
+                            }.items()
+                            if value
+                        },
+                    )
+                )
+            if not any(item.fields == imported.fields for item in history):
+                history.append(imported)
+            merged = existing.model_copy(
+                update={
+                    **{
+                        key: getattr(existing, key) or getattr(person, key)
+                        for key in ("linkedin_url", "email", "company", "position", "connected_on")
+                    },
+                    "source_record_id": existing.source_record_id or record.record_id,
+                    "connection_fields": {**fields, **existing.connection_fields},
+                    "connection_imports": history,
+                }
+            )
+            if merged == existing:
+                skipped_existing += 1
+            else:
+                storage.update_person(merged)
+                updated_count += 1
             continue
         storage.add_person(person)
         created += 1
@@ -345,6 +445,8 @@ def seed_from_connections(export_path: Path, storage: Storage) -> ConnectionsSee
     )
     return ConnectionsSeedReport(
         created=created,
+        updated=updated_count,
+        conflicts=conflicts,
         skipped_existing=skipped_existing,
         skipped_incomplete=skipped_incomplete,
     )
@@ -545,6 +647,67 @@ def _fetch_index_source(
         _ingest_post(person, source, "", link, "", raw_html, "web_page", config, storage, tally)
 
 
+def _recover_feed_source(
+    source: FeedSource, fetch: Callable[[str], bytes], *, missing: bool
+) -> FeedSource:
+    """Correct source format using the existing bounded discovery policy."""
+    parts = urlsplit(source.url)
+    path = parts.path.rstrip("/")
+    if missing and "/" + path.rsplit("/", 1)[-1] in CONVENTIONAL_FEED_PATHS:
+        path = path.rsplit("/", 1)[0]
+    index_url = parts._replace(path=path, query="", fragment="").geturl().rstrip("/")
+    if not urlsplit(index_url).path.strip("/"):
+        raise FetchError(
+            "origin root is not an approved publication index; attach a specific index page"
+        )
+    cache: dict[str, bytes] = {}
+    index_data = b""
+    attempts = 0
+
+    def cached(url: str) -> bytes:
+        nonlocal index_data, attempts
+        if url not in cache:
+            if attempts >= 4:
+                raise FetchError("feed recovery GET budget exhausted; run feed_discover explicitly")
+            attempts += 1
+            cache.clear()
+            cache[url] = fetch(url)
+            if url == index_url:
+                index_data = cache[url]
+        return cache[url]
+
+    try:
+        discovered = discover_feed(index_url, fetcher=cached)
+    except IngestError as exc:
+        raise FetchError(
+            f"no feed was discoverable at {source.url!r}; index recovery failed: {exc}"
+        ) from exc
+    if discovered.feed_url:
+        return source.model_copy(update={"url": discovered.feed_url})
+    if not _index_post_links(index_data, index_url):
+        raise FetchError(
+            f"no feed was discoverable at {source.url!r}; no post links in a readable HTML index"
+        )
+    return source.model_copy(update={"url": index_url, "kind": FeedKind.INDEX_PAGE})
+
+
+def _save_source_correction(
+    person: Person, old: FeedSource, corrected: FeedSource, storage: Storage
+) -> None:
+    current = storage.get_person(person.person_id)
+    if current is None:
+        return
+    if person.substack_url and old == person.sources[0]:
+        updated = current.model_copy(
+            update={"writing_feed_url": corrected.url, "writing_feed_kind": corrected.kind}
+        )
+    else:
+        updated = current.model_copy(
+            update={"feeds": [corrected if item == old else item for item in current.feeds]}
+        )
+    storage.update_person(updated)
+
+
 def fetch_person_feed(
     person: Person,
     config: Config,
@@ -565,23 +728,58 @@ def fetch_person_feed(
             f"'wingman people add \"{person.name}\" --substack <url>' or "
             f"'wingman people add-feed \"{person.name}\" <url>'."
         )
-    fetch = fetcher if fetcher is not None else fetch_url
+    raw_fetch = fetcher if fetcher is not None else fetch_url
+    cached: dict[str, bytes] = {}
+
+    def fetch(url: str) -> bytes:
+        if url not in cached:
+            cached.clear()
+            cached[url] = raw_fetch(url)
+        return cached[url]
+
     tally = _Tally()
     failed_sources: list[str] = []
-    for source in sources:
+    corrected_sources: list[str] = []
+    for index, source in enumerate(sources):
+        primary = index == 0 and bool(person.substack_url)
+        legacy = primary and not person.writing_feed_url
+        entered_url = person.substack_url if primary else source.url
         try:
             if source.kind == FeedKind.INDEX_PAGE:
                 _fetch_index_source(person, source, config, storage, fetch, tally)
                 continue
-            feed_bytes = fetch(source.url)
+            original = source
+            try:
+                feed_bytes = fetch(source.url)
+            except FetchError as exc:
+                if not isinstance(exc.__cause__, HTTPError) or exc.__cause__.code != 404:
+                    raise
+                source = _recover_feed_source(source, fetch, missing=True)
+                feed_bytes = b""
+            if source == original and _feed_title(feed_bytes) is None:
+                source = _recover_feed_source(source, fetch, missing=False)
+                feed_bytes = b""
+            if source.kind == FeedKind.INDEX_PAGE:
+                _fetch_index_source(person, source, config, storage, fetch, tally)
+                _save_source_correction(person, original, source, storage)
+                corrected_sources.append(f"{original.url} → {source.url} ({source.kind.value})")
+                continue
+            if not feed_bytes:
+                feed_bytes = fetch(source.url)
+            if source != original:
+                _save_source_correction(person, original, source, storage)
+                corrected_sources.append(f"{original.url} → {source.url} ({source.kind.value})")
             items = _parse_feed_items(feed_bytes, source.url)
             tally.items += len(items)
-            # The Substack-derived source is the one synthesized from
-            # substack_url — reliable even for custom-domain publications.
-            substack_feed = (
-                person.substack_url.rstrip("/") + "/feed" if person.substack_url else None
+            if legacy:
+                person = person.model_copy(update={"writing_feed_url": source.url})
+                storage.update_person(person)
+            host = (urlsplit(person.substack_url or "").hostname or "").lower()
+            source_type = (
+                "substack_feed"
+                if primary and (legacy or host.endswith(".substack.com"))
+                else "rss_feed"
             )
-            source_type = "substack_feed" if source.url == substack_feed else "rss_feed"
             for item in items:
                 _ingest_post(
                     person,
@@ -596,7 +794,7 @@ def fetch_person_feed(
                     tally,
                 )
         except FetchError as exc:
-            failed_sources.append(f"{source.url}: {exc}")
+            failed_sources.append(f"{entered_url!r}: {exc}")
     if len(failed_sources) == len(sources):
         raise IngestError(
             f"every source failed for {person.name}: "
@@ -623,6 +821,7 @@ def fetch_person_feed(
         skipped_empty=tally.skipped_empty,
         titles=tally.titles,
         failed_sources=failed_sources,
+        corrected_sources=corrected_sources,
     )
 
 

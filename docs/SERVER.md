@@ -831,15 +831,21 @@ sudo -iu wingman-shared wingman tenant oauth-invite taylor \
   --registry /etc/wingman/tenants.toml
 ```
 
-`--email <addr> --slug <slug>` (or `--from-csv`, header `email,slug`) also
-binds the invite to an address, stored as HMAC-SHA256 under a per-install key
-in `oauth-identities-onboarding.key` (mode 0600, created by the first email
+`--email <addr> --slug <slug>` (or `--from-csv`, header `email,slug`), run
+with `sudo` and `--data-root /home/wingman-shared/tenants`, binds the invite to
+an address and prepares the person's empty, unbound tenant now. The address is
+stored as HMAC-SHA256 under a per-install key in
+`oauth-identities-onboarding.key` (mode 0600, created by the first email
 invite; back it up with the state file, or existing email invites show
-`key-mismatch` and stop matching). `oauth-invites` and `oauth-invite-revoke`
-list and withdraw invites. This is recording only until #585: sign-in does not
-yet claim an email invite (RFC-081, 2026-10-09 amendment).
+`key-mismatch` and stop matching). A sign-in on either surface whose
+WorkOS-verified address matches binds that identity under both trusted issuers
+and lets them in (#585; RFC-081, 2026-10-09 amendment). The MCP side asks the
+AuthKit issuer's `/oauth2/userinfo` with the already-validated token: no
+WorkOS API key is needed. `oauth-invites` and `oauth-invite-revoke` list and
+withdraw invites. The slug-only form below remains the fallback.
 
-Their first successful WorkOS sign-in is still refused with 403. It records
+**Slug-only invites (the fallback), and anyone signing in without a matching
+email invite:** their first successful WorkOS sign-in is refused with 403. It records
 only the verified opaque `(iss, sub)`, first/last-seen times, and sign-in count
 in `oauth-identities-onboarding.json`; no bearer token or email is stored, no
 workspace exists, and no tenant data is reachable. Browser setup and MCP use
@@ -906,7 +912,9 @@ sudo -iu wingman-shared wingman tenant oauth-bind taylor \
   --registry /etc/wingman/tenants.toml
 ```
 
-Approval is the only step that creates a workspace. It claims both the invite
+For a slug-only invite, approval is the step that creates the workspace (an
+email invite's workspace is created earlier, by `oauth-invite --email`, and
+`oauth-approve` accepts it as the manual fallback). It claims both the invite
 and identity against competing operators, writes an isolated workspace and
 registry entry, binds the exact verified identity, consumes the pending row,
 and signals the shared process to reload. Signal delivery is reported exactly;
@@ -1688,3 +1696,5 @@ EOF
 the placeholder default compiled into `gdrive_auth.py`). These aren't
 per-account secrets — the same client id identifies the app for every
 account on the box, so they live in `wingman.env`, not `secrets.env`.
+
+OAuth setup and workspace-summary headers display the workspace slug, never the server filesystem path (#581). The shared OAuth routes serve only setup, key entry, upload and logout; exported profile pages already hide paths. OAuth upload and key-store failures use safe recovery messages rather than raw exceptions containing server paths. Workspace headers use the registered tenant slug even when the directory basename differs.

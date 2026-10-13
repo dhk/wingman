@@ -108,9 +108,13 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 
 **Rationale.** The primary way this product is actually used is through a Claude conversation. An MCP server turns that from copy-paste into typed tool calls while keeping Wingman's guarantees in Wingman's code. Stdio-local is the smallest server that delivers this, and adds no credentials, ports, or tenancy.
 
-**Parity principle (added 2026-07).** The MCP surface tracks the CLI: every user-facing capability ships on both surfaces in the same change, as thin wrappers over the same application-layer functions. Adaptations are allowed only where the medium demands them — the CLI's interactive confirm-before-attach for feeds (RFC-011) becomes a two-tool pair over MCP (`feed_discover` reports; `feed_attach` runs only after the user's explicit yes in conversation), and file inputs are accepted as local paths. A CLI command without its MCP counterpart is a review finding, not a style choice.
+**Parity principle (amended #598).** CLI and MCP share application-layer operations where counterparts exist. Every command and tool requires an explicit decision in the [surface ledger](SURFACE-PARITY.md): counterpart, deliberate exception, or deferred gap with a stated reason and open tracker. Unrecorded asymmetry is a review finding; recording a gap does not implement it. The CLI's interactive discover/confirm/attach flow for people feeds becomes `feed_discover` plus `feed_attach` over MCP, with attachment only after the user's explicit approval. Operator broadcast configuration and local diagnostics remain CLI-only. Hosted file access needs its own design rather than an assumption that server paths are user-local paths.
 
 **Revisit if.** A non-MCP consumer appears (REST/web UI), or remote access from claude.ai web/mobile is wanted (remote MCP with auth — a separate durable decision).
+
+### Parity decision ledger (#598) — Durable decision
+
+The exhaustive [CLI/MCP ledger](SURFACE-PARITY.md) records existing counterparts, deliberate exceptions, and deferred gaps. A contract test enumerates registered tools and all CLI leaf commands (including aliases), checks exact inventory coverage and reciprocal mappings, and rejects unmatched entries without a reason. Adding a row does not implement a gap. New tools, especially hosted ingestion, require a separate design; this change adds none.
 
 ## RFC-009: Read-only public-feed fetching, explicitly invoked
 
@@ -129,6 +133,12 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 **Rationale.** Relationship intelligence needs other people's public writing, and an RSS feed is that writing in its author-published, terms-of-service-clean form. Confining network access to one function with hard invariants keeps the local-first promise auditable: the workspace never talks to the network unless the user just asked it to, and everything fetched is traceable to the command that fetched it.
 
 **Revisit if.** Feed refresh becomes tedious enough that the user wants scheduled sync — that is Phase 8's connector architecture decision, not a quiet relaxation of this entry.
+
+### RFC-009 addendum (#422, #478) — Durable decision
+
+Explicit Connections.csv import keeps the owner's address book, including Email Address and other non-empty identifying columns. Repository owner dhk explicitly requested email import/backfill in #422 plus #478 in the 2026-10-09 implementation request; this supersedes the earlier email minimization decision. These addresses stay local during import and are omitted, together with private import metadata, from published person reports. Whole-workspace backups contain them. An already-authorized Drive backup upload transmits the archive, including contact identifiers; use CLI `backup --no-drive` or MCP `backup(drive=False)` for a local-only backup. Email possession contributes no relationship warmth.
+
+Names locate candidates but do not authorize identity merges. Matching email or LinkedIn URL corroborates a merge; contradictory identifiers or uncorroborated same-name rows are reported as conflicts without modifying the existing person. A legacy imported contact can be backfilled from the same original export only when its known company/role also matches. Ambiguous names without that evidence need explicit identity resolution. Existing non-empty canonical values and extra fields win; contradictory role values are reported and kept in private import history for a corroborated identity. Blank values do not erase, absent people are never deleted, and IDs and writing sources remain intact. Source locator and exact CSV-byte hash identify each import; identical per-person field snapshots are not duplicated merely because export-file hashes differ. Reports name counts only, not private identifiers. Shared MCP imports require a path resolving inside that tenant's private inbox, including symlink checks; privileged local CLI imports retain operator-selected paths.
 
 ## RFC-010: Semantic similarity via embeddings, stored in SQLite
 
@@ -161,6 +171,19 @@ Everything else RFC-009 established holds unchanged: explicit invocation only, r
 **Rationale.** Public writing is the raw material of relationship intelligence, and it lives behind exactly two shapes: feeds (near-universal on personal-blog platforms) and feed-less marketing sites. Covering both with one confirm-gated command keeps the watchlist honest about attribution and keeps every fetched byte inside the existing provenance rules.
 
 **Revisit if.** Index-page extraction proves too brittle against redesigns (then sitemap.xml `lastmod`-driven fetching becomes the refinement, still within these invariants), or per-author attribution on company blogs is wanted (post-page metadata reading — a further widening that gets its own look).
+
+### RFC-011 addendum (#474) — Durable decision
+
+The legacy `substack_url` field and `--substack` option now accept a writing URL without assuming a `/feed` endpoint. Add and fetch use bounded discovery: direct RSS/Atom, declared feeds, feed-shaped links, then conventional candidates. A verified endpoint is stored separately as `writing_feed_url`; old records are resolved when fetched. Errors identify the entered writing URL and distinguish no discoverable feed from an unreachable configured URL, suggesting explicit index-page attachment when appropriate. The existing field name remains for compatibility.
+
+Legacy Substack-hosted sources keep their known /feed endpoint (including duplicate checks and source attribution) without fetching the homepage. Generic legacy URLs are discovered once and the successful endpoint is saved. Discovery shares a per-run response cache with ingestion. Entered URLs are quoted in failures; whitespace/control characters are rejected before fetching. A non-strict unsuccessful update preserves a previously resolved endpoint.
+
+Unattended legacy discovery permits at most four GET attempts; broader discovery remains an explicit operation. The runtime cache keeps only the latest response, bounding retained response memory while reusing a successfully discovered feed body.
+
+### RFC-011 addendum (#546) — Durable decision
+
+On an HTTP 404 or a response that is not RSS/Atom, source fetch performs bounded discovery at the configured page (or the parent of a conventional feed path such as `/blog/feed`). A verified replacement feed is used; otherwise a specific HTML index with at least one same-site post link beneath its path can be used. An origin root is never inferred as an index, and HTML challenge/maintenance pages with no post links fail without changing the stored source. Recovery is capped at four GET attempts and caches at most the latest candidate plus the index body. Successful correction is persisted, preserving attribution and the original writing URL. Later runs use the corrected format. Other HTTP failures do not trigger fallback. Index fetching remains same-site, beneath the approved index, and bounded to ten new posts. This format correction is automatic; it does not change the publication being watched.
+
 
 ## RFC-012: Company dossiers as deterministic composition (Phase 3, slice ii)
 
@@ -205,6 +228,12 @@ Two deferrals, on the demonstrated-need rule:
 
 **Amended by RFC-060** (issue #349): "reduces each page deterministically to a snapshot" is no longer *all* a fetch keeps. A source may be marked `retain`, in which case the page's prose is ALSO kept as a company-attributed document, so a values page becomes something a stance can quote instead of only a hash saying it changed. Default OFF, per source; the fetch, the snapshot, the diff and the egress below are unchanged — only what survives the fetch differs. Everything else here stands.
 
+### RFC-015 addendum (#464) — Durable decision
+
+Research keeps each approved URL's baseline, but identical visible-text hashes and absolute link sets within one company's current fetch are diffed once. The later source is reported as `duplicate of <url>` in research and source listings. Comparing links as well as text prevents unrelated link-only pages from collapsing. Duplicate pages do not repeat scoring or consume action slots. Existing action-level deduplication additionally coalesces overlapping evidence for the same action kind and company before the ten-action cap. Distinct kinds of action remain distinct.
+
+Listing and run-time duplicate detection share the same company/text/link identity. Overnight coverage verifies that matching sources score their combined pending evidence once.
+
 **Decision.** Per-company research sources, added explicitly by the user and fetched only on explicit command — the network-scope decision RFC-012 deferred, now resolved. `wingman company add-source "X" <url> [--label]` records an approved HTTPS source for a company; **the act of adding is the approval** — no confirmation theater at fetch time. `wingman company sources "X"` lists them (`remove-source` withdraws one, snapshot included); `wingman company research "X"` makes one read-only GET per approved source (RFC-009 shape: explicit invocation, https-only, visible failures, one page per URL — no crawling), reduces each page deterministically to a snapshot (SHA-256 of visible text + the page's set of https links), stores it replace-on-refresh keyed `(company_key, url)`, and reports the diff against the previous snapshot: **new links are the hiring/announcement signal**, a changed text hash the weaker "page changed" signal, and "unchanged since \<date\>" an honest answer. A failed source keeps its previous snapshot and is reported, never fatal. The dossier gains a "Research (approved sources)" section rendering stored snapshots with a 30-day staleness flag — no fetch at dossier time, preserving RFC-012's determinism. MCP parity (RFC-008): `company_source(action=add|remove|list, ...)` following the watchlist single-tool convention, plus `company_research`.
 
 **Alternatives.** Fetching at dossier time (couples an artifact to the network and breaks dossier determinism); crawling beyond the approved page (scope creep — the user approved one URL, one GET honors exactly that); a model summarizing the fetched page (unauditable claims where a link-set diff is deterministic and explainable); a first-class Organization entity (still deferred — a `(company_key, url)` table is the metadata that actually arrived; aliases/notes remain the demonstrated-need trigger).
@@ -212,6 +241,12 @@ Two deferrals, on the demonstrated-need rule:
 **Rationale.** Careers pages and newsrooms are where hiring signals appear first, and which pages to trust is a judgment only the user can make. Naming the exact URLs turns "did anything change at X" into a deterministic diff of user-chosen pages instead of a crawl, keeping the egress surface enumerable: every URL Wingman will ever fetch for a company is visible in `company sources`.
 
 **Revisit if.** Users want research inside `sync`/`make-it-so` (the fetch consent and cost move with it — an explicit flag, not a default), or want change history rather than a latest-snapshot diff (snapshot generations become a real archive), or want alerting (that is RFC-006 territory: Wingman still never sends anything).
+
+### RFC-015 addendum (#434, #548) — Durable decision
+
+`wingman company pause-source "Company" <url>` suspends one approved URL; `unpause-source` resumes it. MCP uses `company_source(action="pause"|"unpause", name=..., url=...)`. Source listings show paused status. Pausing preserves snapshots, retained prose, queued links, company records, POV and watchlist membership. Explicit research and overnight skip the paused URL and its queued scoring work, producing no fetch-failure action. Unpause resumes against the preserved baseline. Removing a source remains withdrawal of its evidence.
+
+Paused sources also exclude saved snapshot links from explicit full-board scoring. Pending overnight links remain queued until resumed, and dossier/pack source lists mark paused pages.
 
 ## RFC-016: Model-synthesized company themes (resolves an RFC-012 deferral)
 
@@ -252,6 +287,10 @@ defines that parallel path and its narrower invite-only trust model.
 **Rationale.** The user's stated loop is: name a company, wake up to answers. Everything the deep pipeline runs already existed as consented single commands; this RFC adds only assembly (follow) and sequencing plus a digest (overnight), so the cheapest new surface delivers the loop while every invariant keeps its existing enforcement point. Answers-on-demand then falls to the search improvement already queued ahead of this work.
 
 **Revisit if.** Users want per-target depth control (research-only vs full model refresh — a per-member flag on the enrollment record), or digests need trend memory across runs (digest diffing becomes its own store), or the suggestion surface should reach beyond the workspace (that is a new egress decision, not an extension of this one).
+
+### RFC-018 addendum (#502) — Durable decision
+
+Each overnight run writes a versioned JSON sidecar and latest.json alongside canonical Markdown and HTML. `digest(as_json=True)` or `wingman digest --json` returns structured actions with their triage keys, per-target step statuses/details, and a first-class drop_list. Each budget drop names company, exact URL, stage (fetch or judge), budget and reason; records are captured where the budget is applied, never parsed from prose. Budget-skipped links remain queued for later runs (#481). Current JSON action reads honor triage; archived artifacts remain unchanged. Runs predating sidecars have no recoverable exact drop list and report that limitation instead of inventing history.
 
 ## RFC-019a / RFC-034a: bring-your-own-key wins over the environment
 
@@ -734,6 +773,10 @@ Storage: a new `value_profiles` table (`subject_id` unique, `payload` JSON, inse
 **Alternatives (amendment).** Truncating a long name with an ellipsis — rejected outright: an axis name IS the meaning of its spoke, and a cut one is worse than a wrapped one because the reader cannot tell that anything was lost. Numbering the spokes and moving the names to the legend, which already lists every axis — rejected for trading away the one thing a radar chart is for, reading the shape at a glance. Widening the viewBox (or shrinking `_MAX_RADIUS`) as the whole fix — rejected as the issue itself argues: it buys a fixed amount of room and the next longer name exceeds it again; it is kept only as a legibility measure ON TOP of wrapping, which is what makes the guarantee. Wrapping the legend's name column too — deliberately not done here: the legend is one fixed-height row per axis and both the notice rows and the viewBox height are computed from that, so variable-height rows are a larger change than this bug justifies; the columns move with the wider canvas instead, and the chart itself now spells the full name out.
 
 **Revisit if.** Axis count ever exceeds `MAX_AXES = 6` (a v2 constant change) — the fixed label-radius/legend-row geometry here was tuned for 3-6 spokes; a larger bound would need the layout constants revisited, not just axis count. Real usage wants the chart to visually distinguish *evidence volume* per axis (RFC-051's own "Revisit if" flags this as a `score` contract gap first) — once `ValueAxis` grows a confidence/spread field, this module should render it (e.g. vertex size or a shaded band) rather than ignoring it. The webui "linked file, not inline" choice reverses if a later redesign makes inline previews the norm for every report type, not just an exception carved out for charts. `<title>`-tooltip evidence excerpts prove too terse to be useful in practice — extend the excerpt or the tooltip content, not the underlying geometry. Axis names routinely run past ~55 characters and crowd the legend's name column (issue #354 left the legend as fixed-height rows) — that is the trigger for variable-height legend rows, and it should reuse `_wrap_to_budget` rather than grow a second wrapper.
+### Inline MCP chart delivery (#547) — Durable decision
+
+`values_chart` returns the generated SVG as an inline `svg` text block, with persona and freshness warnings, instead of a host path and a suggestion to open it. A chat client can render the supplied SVG without host filesystem access. The existing local report and CLI path output remain available. This neither publishes a URL nor registers a published artifact. Inline delivery uses this call's in-memory SVG and stops above 100,000 UTF-8 bytes with a message asking the user to seek operator help; no chart is truncated. The local chart is saved by atomic replacement so concurrent readers see a complete old or new file. Markdown fences exceed every backtick run in the payload. MCP file-operation errors omit host paths, and MCP ignores the legacy out_dir argument; CLI --out remains supported. A client must render the exact supplied SVG itself: returning SVG is sufficient by owner decision, not a guarantee of automatic display or authority to publish.
+
 ## RFC-054: Persona carve-off, Phase 2 — merging into an already-populated target, no new flag
 
 **Decision.** `wingman carve-off-persona <persona> <target>` (MCP: `carve_off_persona(persona, target_dir)`) now writes into a TARGET workspace that already has its own profile items, closing out #235: `seed_new_workspace`'s Phase-1 refusal (`IngestError` if `target_storage.count_profile_items() > 0`) is removed outright, with no replacement flag or confirmation gate. The command's whole body is now just: export the persona's items (`export_persona`, unchanged), then call `profile_store.persist_items` — the exact same RFC-028 dedup/supersede/conflict call every other ingestion path in this codebase (`ingest`, `linkedin` import, `interview` capture) already uses for "a new item that might collide with something already there." An item matching nothing existing is `accepted`; one matching an existing item's stored value merges new evidence in (`evidence_merged`) or is a no-op duplicate (`skipped_duplicates`); one that genuinely disagrees — same `name_key`, different `detail`/`classification`/`intensity`/`company_reason` — is never silently overwritten: it's stored as a side-by-side `ItemStatus.CONFLICT` row (`conflicts`), exactly like a second document or a LinkedIn re-import disagreeing with the profile today, visible via `wingman profile list` and settled via `wingman profile resolve <id>` (RFC-027) — no carve-off-specific resolution path, because none is needed. `render_carveoff_report` now prints every `ItemCounts` bucket that fired (added / evidence-merged / already-present / superseded / conflicts) instead of Phase 1's single "N item(s) seeded," and — only when `conflicts > 0` — an explicit line naming the count and pointing at `wingman profile list`/`resolve` against the target workspace, so a partial/contentious merge is never a quietly-successful-looking report. The CLI argument help and both docstrings (CLI, MCP) drop the "must be brand-new/empty" language and describe the merge behavior instead. One consequence of lifting the refusal needed its own fix: RFC-049's placeholder `SourceRecord`s deliberately reuse the same `record_id` on every export of the same persona, so re-carving the same persona into a target that already received an earlier carve-off of them would hit a `DuplicateRecordError` on the second placeholder insert even though nothing about the content changed; `seed_new_workspace` now skips inserting a placeholder whose id is already present in the target rather than propagating that as an unhandled exception at the CLI/MCP boundary.
@@ -863,6 +906,14 @@ One thing HAS changed since this entry was first drafted, and it changes the rea
 **Trade-offs.** Undated documents sort last in the 20-document POV budget, so at a company with twenty-plus recent feed posts a retained values page may not reach the prompt — the companies this feature exists for are precisely the ones with no feed, and inventing a date to fix ordering is not a trade worth making. Retained pages also enter `search` and `evidence`, so a marketing page's language becomes quotable material; the quote is always attributed to the company's own page, which is what it is.
 
 **Revisit if.** `company follow`'s conventional-path probe should default `/about` to retained (it is the one probed path whose content is durable — deliberately left OFF here so following a company never silently starts storing pages). Retained pages need selection within the POV budget rather than pure recency (per-source quotas — the same pressure RFC-016 already flagged). Users want the older versions of a retained page readable rather than only superseded (that is a real archive, and RFC-015's revisit trigger, not this one).
+
+### RFC-060 addendum (#463) — Durable decision
+
+New sources labelled `about` retain prose by default (case-insensitive, ignoring surrounding whitespace); all other labels remain opt-in. This supersedes RFC-060's default-off policy for about pages. `company follow` already labels its approved `/about` page this way. Explicit `--retain/--no-retain` (MCP `retain=True/False`) still overrides the default; repeat adds without a flag preserve the current setting.
+
+Existing approved about-labelled sources are enabled once when the upgraded application opens their workspace. Repository owner dhk explicitly approved this one-time migration in the implementation conversation on 2026-10-10 ("enable"): old records cannot distinguish default False from deliberate False, so both are enabled. A transactional migration marker prevents subsequent opens from overriding later opt-outs. Other labels, source timestamps, snapshots, and unknown payload fields are preserved. The next normal research fetch keeps prose even when the existing snapshot's hash is unchanged; there is no extra GET, new approved URL, crawl, or model call. Companies without an approved prose source still need one approved; the migration does not invent sources or guarantee usable prose on every about page.
+
+Theme synthesis with approved sources but no documents explains `--retain` (or MCP `retain=True`) and the required research refresh. If retention is already enabled it points at fetching/checking extraction instead of claiming retention is absent. Tests cover default-retained company themes without watched people, existing-source migration, unchanged snapshots, and durable explicit opt-outs.
 
 ## RFC-061: Wingman records where an artifact was published; it never publishes one
 
@@ -1429,10 +1480,56 @@ identity key" and "do not obtain `sub` from email".
   matching; the slug stays reserved until approved or revoked.
 - **What is unchanged.** No match, an unverified address or a failed lookup
   falls back to today's path: a pending row, the reference, a 403. Manual
-  `oauth-approve` and `oauth-bind` remain. A WorkOS API key on the shared
-  service is acceptable for looking up a verified address, read-only.
-- **Staging.** #584 records invites (`oauth-invite --email/--from-csv`,
-  `oauth-invites`, `oauth-invite-revoke`) and changes no sign-in behaviour.
-  Claiming at sign-in is #585, designed after #582 establishes what each
-  surface's token actually carries. Until #585 ships the superseded rules still
-  describe what the running service does.
+  `oauth-approve` and `oauth-bind` remain.
+- **Where the verified address comes from (#582, live 2026-10-10).** Neither
+  token carries an email. The browser's code exchange returns a `user` object
+  (`id`, `email`, `email_verified`); the address counts only if `user.id` is
+  the verified session-token subject and `email_verified` is literally `true`.
+  For MCP, the AuthKit issuer's own `/oauth2/userinfo`, called with the bearer
+  token that already passed validation, returns `sub`, `email` and
+  `email_verified`, with the same checks. **No WorkOS API key and no JWT
+  template are needed**: the API-key allowance above went unused, and WorkOS
+  keys are environment-wide anyway. The lookup runs only for an unbound
+  verified identity, off the event loop, with a 5-second timeout and at most
+  one lookup per identity per minute, reserved before the call so concurrent
+  requests cannot multiply it; it is sent only to the configured https issuer,
+  and a redirect is never followed (urllib would carry the token along).
+- **One person, both surfaces.** #582 also showed one WorkOS user has the same
+  full `sub` on the browser session token and the MCP token. A claim therefore
+  binds that `sub` under both issuers this process is configured with (never
+  an issuer taken from a token), so the second surface works with no second
+  step. Each binding is still an `(iss, sub)` key.
+- **Who creates the tenant.** The registry is root-owned and the service does
+  not run as root, so `oauth-invite --email/--from-csv` (run with sudo, like
+  `oauth-approve`) prepares the empty, unprivileged, unfunded tenant when
+  inviting, marked with `.oauth-invite.json`. A sign-in only binds to a tenant
+  that is registered, carries that marker, is not privileged or funded and has
+  no identity bound yet. Revoking an email invite leaves its prepared tenant
+  registered and unreachable.
+- **Staging.** #584 recorded invites; #585 claims them at sign-in. The
+  superseded rules above now describe only the manual path.
+
+## RFC-082: Client-owned artifact kinds (#503) — Durable decision
+
+Published view identities accept `custom:<slug>` alongside built-in kinds. Slugs are 1–64 lowercase ASCII letters/digits/underscores/hyphens, beginning with a letter or digit. Custom views retain the same local one-record-per-kind and HTTPS URL rules. Wingman does not know their rendering inputs: freshness is explicitly unchecked and reports the recording timestamp, never a synthetic current/stale verdict. This extends RFC-061’s closed built-in set without adding any publishing action.
+
+Custom artifact freshness is explicitly unknown/unchecked. Free-text titles are whitespace-collapsed when recorded and rendered, including legacy titles, so a title cannot forge another report line.
+
+### RFC-031 addendum (#501) — Durable decision
+
+`actions done <key>` and `action_triage(action="done", key=...)` complete the recorded action content and evidence, without standing suppression. Matching evidence remains completed; new evidence or changed action content can recur. Done verdicts appear separately in the verdict list and can be cleared with unmute. Overnight records generated actions before filtering, preserving the evidence available when completed. MCP and CLI mute/snooze/done reject unknown keys; legacy digests need one overnight refresh before triage. Digest files remain immutable historical snapshots.
+
+
+Done fingerprints use the stable action key and evidence, with Markdown link titles normalized to URLs; rolling age/explanation text is excluded. Digest actions include an evidence fingerprint. `actions done <key> --fingerprint <value>` / MCP `action_triage(action='done', key=…, fingerprint=…)` must echo the reviewed fingerprint; a newer evidence set is rejected rather than completed unseen. A permanent mute must be explicitly undone before completion. Markdown current reads apply verdicts; dated HTML and direct latest.html links remain snapshots until the next overnight run.
+
+## RFC-083: A bounded author / reviewer / repair PR loop (pilot)
+
+**Decision (pilot, not durable).** An issue labelled `agent:codex` or `agent:claude` by an allowlisted actor starts one workflow run in which that agent implements the issue and opens a draft PR. A different agent reviews it, and the author repairs blocking findings. There are at most three reviews and two repairs. The run ends with `ready-for-merge` or `needs-human`, and a human merges. Reviewers are tried in a fixed order, Copilot → Codex → Claude, never including the author, and the first valid verdict wins. Copilot is a reviewer only, by owner decision (2026-10-12): it never authors, and the gate refuses any author other than `codex` or `claude`. The design and setup are in [`AGENT-LOOP.md`](AGENT-LOOP.md).
+
+**Why one run rather than event chaining.** Events created with `GITHUB_TOKEN` start no new workflow run, so a loop chained through PR events stalls silently unless every hop uses a separate credential. Chaining rounds as jobs in one run removes the hop. It also makes the round cap the shape of the job graph rather than a counter, which is the governance property the loop exists to have.
+
+**Why Copilot first, as a fall-through rather than a quota check.** Copilot's monthly AI-credit allowance is prepaid and does not roll over. With no additional-usage budget, an exhausted allowance makes Copilot's requests fail, and a failed or invalid answer hands the round to the next reviewer. That spends the prepaid allowance before any metered API key, with no quota API and no state. The Copilot CLI runs inside the review job, billed to the owner's seat through the workflow token, rather than Copilot's native PR review. That review is comment-only by default, has no severity, runs outside the run, and may repeat earlier comments.
+
+**Why the models only propose.** This applies invariant 5. Every reviewer's answer passes one validator into one schema, and deterministic steps decide the rest: a failing check is blocking regardless of the verdict, only blocking findings reach the repair prompt, a patch touching `.github/`, `.agent-loop/`, agent instructions or agent startup config, or exceeding the line cap, is refused, and the terminal label is computed from job outputs. Authors run without a write credential, and a separate runner applies their patch.
+
+**Open until a run proves it.** How the Copilot CLI fails when the allowance is exhausted (the fall-through handles either a non-zero exit or an error message, but neither is documented). Whether `uv run --offline --frozen` works inside Codex's no-network sandbox. Codex has no documented turn or spend cap. The PAT makes the owner the PR author, so the merge is the human gate. Promote this to a durable decision, or remove it, after the pilot.

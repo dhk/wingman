@@ -122,7 +122,7 @@ def test_add_person_rejects_a_substack_url_whose_feed_is_not_xml(
     monkeypatch.setattr(people_module, "fetch_url", lambda url: b"<html>not a feed</html>")
     config = load_config()
     with Storage(config.db_path) as storage:
-        with pytest.raises(IngestError, match="doesn't look like RSS/Atom"):
+        with pytest.raises(IngestError, match="no feed was discoverable"):
             add_person("Someone", storage, substack_url="https://someone.example.com")
         assert storage.find_person_by_name_key("someone") is None
 
@@ -146,7 +146,7 @@ def test_add_person_strict_false_stores_despite_unverifiable_feed(
         assert person.substack_url == "https://someone.example.com"
 
 
-def test_seed_from_connections_keeps_names_never_emails(workspace: Path, tmp_path: Path) -> None:
+def test_seed_from_connections_keeps_private_identifiers(workspace: Path, tmp_path: Path) -> None:
     config = load_config()
     export = connections_zip(
         tmp_path,
@@ -163,8 +163,8 @@ def test_seed_from_connections_keeps_names_never_emails(workspace: Path, tmp_pat
         assert mario.origin == PersonOrigin.LINKEDIN_CONNECTIONS
         assert mario.company == "GoSimple"
         assert mario.source_record_id is not None
-        # PII minimization: the email never lands anywhere in the workspace
-        assert "mario@example.com" not in mario.model_dump_json()
+        assert mario.email == "mario@example.com"
+        assert mario.connection_imports[0].source_record_id == mario.source_record_id
         record = storage.get_source_record(mario.source_record_id)
         assert record is not None and record.source_type == "linkedin_connections"
         # the locator names the actual (nested) entry that was consumed, and
@@ -202,7 +202,7 @@ def test_fetch_person_feed_indexes_new_posts(workspace: Path) -> None:
             return RSS_FEED
 
         report = fetch_person_feed(person, config, storage, fetcher=fake_fetch)
-        assert fetched == ["https://example.substack.com/feed"]
+        assert fetched == ["https://example.substack.com"]
         assert report.items == 3
         assert report.added == 2  # the empty post is skipped, not stored
         assert report.skipped_empty == 1
@@ -238,8 +238,9 @@ def test_fetch_requires_feed_url_and_valid_xml(
 
         monkeypatch.setattr(people_module, "fetch_url", lambda url: RSS_FEED)
         watched, _ = add_person("Bad Feed", storage, substack_url="https://bad.substack.com")
-        with pytest.raises(IngestError, match="not parseable"):
+        with pytest.raises(IngestError):
             fetch_person_feed(watched, config, storage, fetcher=lambda url: b"<html>nope")
+        assert storage.get_person(watched.person_id).writing_feed_kind == "rss"
 
 
 def test_people_evidence_attributes_authors(workspace: Path) -> None:
@@ -362,3 +363,276 @@ def test_delete_person_not_found_raises(workspace: Path) -> None:
     with Storage(config.db_path) as storage:
         with pytest.raises(IngestError, match="no person matching"):
             delete_person("Nobody Here", storage)
+
+
+def test_connections_upsert_backfills_and_keeps_blank_fields(
+    workspace: Path, tmp_path: Path
+) -> None:
+    config = load_config()
+    export = connections_zip(
+        tmp_path,
+        "Jane,Author,https://linkedin.com/in/jane,jane@example.com,New Co,CEO,01 Jan 2026\n",
+    )
+    with Storage(config.db_path) as storage:
+        original, _ = add_person(
+            "Jane Author",
+            storage,
+            company="Old Co",
+            position="Engineer",
+            linkedin_url="https://linkedin.com/in/jane",
+        )
+        add_person("Absent Person", storage)
+        report = seed_from_connections(export, storage)
+        updated = storage.get_person(original.person_id)
+        assert updated.email == "jane@example.com"
+        assert updated.company == "Old Co" and updated.position == "Engineer"
+        assert report.conflicts == 1
+        assert report.updated == 1
+        blanker = connections_zip(tmp_path, "Jane,Author,,,,,\nNew,Person,,,,,\n")
+        report = seed_from_connections(blanker, storage)
+        kept = storage.get_person(original.person_id)
+        assert kept.email == updated.email and kept.company == updated.company
+        assert kept.linkedin_url == updated.linkedin_url
+        assert storage.count_people() == 3 and report.created == 1
+
+
+def test_connections_preserve_extra_identifiers_and_prior_imports(
+    workspace: Path, tmp_path: Path
+) -> None:
+    config = load_config()
+    export = tmp_path / "contacts.zip"
+    with zipfile.ZipFile(export, "w") as archive:
+        archive.writestr(
+            "Connections.csv",
+            "First Name,Last Name,Profile URL,Email Address,Phone,Title History\nJane,Author,https://linkedin.com/in/jane,jane@example.com,555-0100,Engineer\n",
+        )
+    with Storage(config.db_path) as storage:
+        seed_from_connections(export, storage)
+        before = storage.find_person_by_name_key("jane author")
+        assert before.linkedin_url == "https://linkedin.com/in/jane"
+        assert before.connection_fields["Phone"] == "555-0100"
+        assert before.connection_fields["Title History"] == "Engineer"
+        changed = connections_zip(
+            tmp_path, "Jane,Author,https://linkedin.com/in/jane,jane@example.com,New Co,CEO,\n"
+        )
+        seed_from_connections(changed, storage)
+        after = storage.get_person(before.person_id)
+        assert after.email == "jane@example.com"
+        assert after.connection_fields["Phone"] == "555-0100"
+        assert len(after.connection_imports) == 2
+        assert after.connection_imports[0].fields["Email Address"] == "jane@example.com"
+
+
+def test_same_name_conflicting_identifiers_do_not_merge(workspace: Path, tmp_path: Path) -> None:
+    config = load_config()
+    export = connections_zip(
+        tmp_path,
+        "John,Smith,https://linkedin.com/in/john-a,a@acme.example,Acme,CEO,\nJohn,Smith,https://linkedin.com/in/john-b,b@other.example,Other,Nurse,\n",
+    )
+    with Storage(config.db_path) as storage:
+        report = seed_from_connections(export, storage)
+        person = storage.find_person_by_name_key("john smith")
+        assert person.email == "a@acme.example"
+        assert person.linkedin_url == "https://linkedin.com/in/john-a"
+        assert person.company == "Acme"
+        assert len(person.connection_imports) == 1
+        assert report.conflicts == 1
+
+
+def test_import_does_not_replace_manual_identity(workspace: Path, tmp_path: Path) -> None:
+    config = load_config()
+    export = connections_zip(
+        tmp_path, "Jane,Author,https://linkedin.com/in/other,other@x.example,Elsewhere,Dentist,\n"
+    )
+    with Storage(config.db_path) as storage:
+        original, _ = add_person(
+            "Jane Author",
+            storage,
+            company="MyCo",
+            position="Founder",
+            linkedin_url="https://linkedin.com/in/real",
+            email="real@myco.example",
+        )
+        seed_from_connections(export, storage)
+        assert storage.get_person(original.person_id) == original
+
+
+def test_same_contact_values_in_new_export_do_not_duplicate_history(
+    workspace: Path, tmp_path: Path
+) -> None:
+    config = load_config()
+    row = "Jane,Author,https://linkedin.com/in/jane,jane@example.com,Acme,Engineer,\n"
+    export = connections_zip(tmp_path, row)
+    with Storage(config.db_path) as storage:
+        seed_from_connections(export, storage)
+        before = storage.find_person_by_name_key("jane author")
+        # Extra blank CSV line changes the exact artifact hash, not the contact.
+        changed = connections_zip(tmp_path, row + "\n")
+        report = seed_from_connections(changed, storage)
+        assert report.updated == 0
+        assert storage.get_person(before.person_id) == before
+
+
+def test_same_export_backfills_legacy_connection_identifiers(
+    workspace: Path, tmp_path: Path
+) -> None:
+    config = load_config()
+    export = connections_zip(
+        tmp_path, "Jane,Author,https://linkedin.com/in/jane,jane@example.com,Acme,Engineer,\n"
+    )
+    with Storage(config.db_path) as storage:
+        seed_from_connections(export, storage)
+        person = storage.find_person_by_name_key("jane author")
+        storage.update_person(
+            person.model_copy(
+                update={
+                    "linkedin_url": None,
+                    "email": None,
+                    "connection_fields": {},
+                    "connection_imports": [],
+                }
+            )
+        )
+        report = seed_from_connections(export, storage)
+        assert report.updated == 1
+        assert storage.get_person(person.person_id).email == "jane@example.com"
+
+
+def test_shared_connection_import_rejects_other_tenant_path(
+    workspace: Path, tmp_path: Path
+) -> None:
+    from wingman.infrastructure.config import tenant_config_scope
+    from wingman.mcp_server import people_import_connections
+
+    config = load_config().model_copy(update={"privileged": False})
+    export = connections_zip(
+        tmp_path, "Jane,Author,https://linkedin.com/in/jane,jane@example.com,Acme,Engineer,\n"
+    )
+    Storage(config.db_path).close()
+    with tenant_config_scope(config):
+        assert "private inbox" in people_import_connections(str(export))
+        config.inbox_dir.mkdir(parents=True, exist_ok=True)
+        link = config.inbox_dir / "escape.zip"
+        link.symlink_to(export)
+        assert "private inbox" in people_import_connections(str(link))
+        inside = config.inbox_dir / "contacts.zip"
+        inside.write_bytes(export.read_bytes())
+        response = people_import_connections(str(inside))
+        assert "Created: 1" in response
+        assert "jane@example.com" not in response
+
+
+def test_legacy_writing_url_discovers_declared_feed(workspace: Path) -> None:
+    from wingman.domain.person import Person
+
+    config = load_config()
+    url = "https://author.example.com/blog"
+    feed = "https://author.example.com/updates.xml"
+    person = Person(name="Author", origin=PersonOrigin.MANUAL, substack_url=url)
+    seen: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        seen.append(url)
+        return (
+            f'<link rel="alternate" type="application/rss+xml" href="{feed}">'.encode()
+            if url.endswith("/blog")
+            else RSS_FEED
+        )
+
+    with Storage(config.db_path) as storage:
+        storage.add_person(person)
+        report = fetch_person_feed(person, config, storage, fetcher=fetch)
+    assert report.added == 2
+    assert feed in seen and url + "/feed" not in seen
+
+
+def test_missing_writing_feed_names_entered_url(workspace: Path) -> None:
+    from wingman.domain.person import Person
+
+    config = load_config()
+    url = "https://author.example.com/blog"
+    person = Person(name="Author", origin=PersonOrigin.MANUAL, substack_url=url)
+    with Storage(config.db_path) as storage:
+        with pytest.raises(IngestError, match="no feed was discoverable") as error:
+            fetch_person_feed(person, config, storage, fetcher=lambda _: b"not a page")
+    assert url in str(error.value)
+    assert url + "/feed" not in str(error.value)
+
+
+def test_add_writing_url_stores_discovered_endpoint(workspace: Path) -> None:
+    url = "https://author.example.com/blog"
+    feed = "https://author.example.com/updates.xml"
+
+    def fetch(candidate: str) -> bytes:
+        if candidate == url:
+            return f'<link rel="alternate" type="application/rss+xml" href="{feed}">'.encode()
+        assert candidate == feed
+        return RSS_FEED
+
+    with Storage(load_config().db_path) as storage:
+        person, created = add_person("Author", storage, substack_url=url, fetcher=fetch)
+        assert created
+        assert person.substack_url == url
+        assert person.sources[0].url == feed
+        assert storage.get_person(person.person_id).writing_feed_url == feed
+
+
+def test_legacy_substack_uses_feed_once_and_preserves_identity(workspace: Path) -> None:
+    from wingman.application.people import attach_feed
+    from wingman.domain.person import FeedSource, Person
+
+    config = load_config()
+    home = "https://legacy.substack.com"
+    person = Person(name="Legacy", origin=PersonOrigin.MANUAL, substack_url=home)
+    calls = []
+
+    def fetch(url: str) -> bytes:
+        calls.append(url)
+        if url == home:
+            raise FetchError("homepage blocked")
+        return RSS_FEED
+
+    with Storage(config.db_path) as storage:
+        storage.add_person(person)
+        with pytest.raises(IngestError, match="already has the source"):
+            attach_feed(person, FeedSource(url=home + "/feed"), storage)
+        for _ in range(2):
+            watched = storage.get_person(person.person_id)
+            assert watched is not None
+            fetch_person_feed(watched, config, storage, fetcher=fetch)
+        assert storage.get_person(person.person_id).writing_feed_url == home + "/feed"
+        assert all(doc.source_type == "substack_feed" for doc in storage.list_external_documents())
+    assert calls == [home + "/feed", home + "/feed"]
+
+
+def test_resolved_feed_failure_names_entered_url(workspace: Path) -> None:
+    from wingman.domain.person import Person
+
+    config = load_config()
+    entered = "https://author.example/blog"
+    person = Person(
+        name="Author",
+        origin=PersonOrigin.MANUAL,
+        substack_url=entered,
+        writing_feed_url="https://other.example/rss",
+    )
+
+    def fail(url: str) -> bytes:
+        raise FetchError("unavailable")
+
+    with Storage(config.db_path) as storage:
+        with pytest.raises(IngestError) as caught:
+            fetch_person_feed(person, config, storage, fetcher=fail)
+    assert repr(entered) in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "url", ["https://author.example/bad path", "https://author.example/bad\npath"]
+)
+def test_invalid_writing_url_is_safe_error(workspace: Path, url: str) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        with pytest.raises(IngestError) as caught:
+            add_person("Bad URL", storage, substack_url=url)
+    assert repr(url) in str(caught.value)
+    assert "\npath" not in str(caught.value)

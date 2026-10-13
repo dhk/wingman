@@ -45,7 +45,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import anyio
@@ -71,6 +71,9 @@ from wingman.infrastructure.tenant_asgi import (
     request_origin_scope,
 )
 from wingman.infrastructure.tenants import TenantIndex
+
+if TYPE_CHECKING:
+    from wingman.infrastructure.oauth_invite_claim import EmailInviteClaimer
 
 _logger = get_logger("oauth_bearer")
 
@@ -566,6 +569,40 @@ def preflight_trusted_identity(path: Path, issuer: str, subject: str, slug: str)
         return available
 
 
+def write_identity_map_locked(path: Path, entries: dict[tuple[str, str], str]) -> None:
+    """Atomically replace the identity map. The caller holds _identity_map_lock."""
+    lines: list[str] = []
+    for (row_issuer, row_subject), row_slug in sorted(entries.items()):
+        lines.extend(
+            (
+                "[[identity]]",
+                f"iss = {json.dumps(row_issuer)}",
+                f"sub = {json.dumps(row_subject)}",
+                f"slug = {json.dumps(row_slug)}",
+                "",
+            )
+        )
+    temporary: str | None = None
+    try:
+        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines))
+            handle.flush()
+            os.fsync(handle.fileno())
+        Path(temporary).chmod(0o600)
+        os.replace(temporary, path)
+    except OSError as exc:
+        if temporary is not None:
+            try:
+                Path(temporary).unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise IdentityMapError(
+            f"identity map {path} could not be replaced; the previous identity map "
+            f"was preserved: {exc}"
+        ) from exc
+
+
 def bind_trusted_identity(
     path: Path,
     issuer: str,
@@ -605,38 +642,8 @@ def bind_trusted_identity(
                     ) from exc
             return False
         entries = identities.entries()
-        key = (issuer, subject)
-        entries[key] = slug
-        lines: list[str] = []
-        for (row_issuer, row_subject), row_slug in sorted(entries.items()):
-            lines.extend(
-                (
-                    "[[identity]]",
-                    f"iss = {json.dumps(row_issuer)}",
-                    f"sub = {json.dumps(row_subject)}",
-                    f"slug = {json.dumps(row_slug)}",
-                    "",
-                )
-            )
-        temporary: str | None = None
-        try:
-            fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write("\n".join(lines))
-                handle.flush()
-                os.fsync(handle.fileno())
-            Path(temporary).chmod(0o600)
-            os.replace(temporary, path)
-        except OSError as exc:
-            if temporary is not None:
-                try:
-                    Path(temporary).unlink(missing_ok=True)
-                except OSError:
-                    pass
-            raise IdentityMapError(
-                f"identity map {path} could not be replaced; the previous identity map "
-                f"was preserved: {exc}"
-            ) from exc
+        entries[(issuer, subject)] = slug
+        write_identity_map_locked(path, entries)
         if active is not None:
             reservation_path = _reservation_path(path, issuer, subject)
             try:
@@ -697,6 +704,7 @@ class BearerRoutingASGIApp:
         local_mcp_path: str = "/mcp",
         session_bindings: TenantSessionBindings | None = None,
         record_pending: Callable[[str, str], PendingResult] | None = None,
+        invite_claimer: EmailInviteClaimer | None = None,
     ) -> None:
         self._inner = inner
         self._index = index
@@ -706,6 +714,7 @@ class BearerRoutingASGIApp:
         self._local_mcp_path = local_mcp_path
         self._session_bindings = session_bindings or TenantSessionBindings()
         self._record_pending = record_pending
+        self._invite_claimer = invite_claimer
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -735,6 +744,16 @@ class BearerRoutingASGIApp:
             )
             return
         slug = self._identities.slug_for(identity.issuer, identity.subject)
+        if slug is None and self._invite_claimer is not None:
+            # An email-bound invite (#585): ask the issuer for this token's
+            # verified address and bind on a match. Off the event loop; any
+            # failure falls through to the pending path below.
+            slug = await anyio.to_thread.run_sync(
+                self._invite_claimer.claim_with_userinfo,
+                identity.issuer,
+                identity.subject,
+                presented,
+            )
         tenant = self._index.by_slug(slug) if slug else None
         if tenant is None:
             # Verified, but not provisioned (or provisioned to a tenant that
@@ -802,6 +821,7 @@ def bind_oauth_routing(
     settings: OAuthSettings,
     resolve_key: KeyResolver,
     record_pending: Callable[[str, str], PendingResult] | None = None,
+    invite_claimer: EmailInviteClaimer | None = None,
 ) -> None:
     """Add a bearer-authenticated MCP route and the metadata routes.
 
@@ -844,6 +864,7 @@ def bind_oauth_routing(
         local_mcp_path=oauth_path,
         session_bindings=session_bindings,
         record_pending=record_pending,
+        invite_claimer=invite_claimer,
     )
     added: list[Route] = [Route(oauth_path, endpoint=wrapped)]
     added.extend(

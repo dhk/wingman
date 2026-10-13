@@ -61,6 +61,7 @@ from wingman.application.feature_request import (
 from wingman.application.focus import (
     OvernightReport,
     follow_company,
+    json_digest,
     latest_digest,
     overnight_run,
     render_follow_report,
@@ -111,10 +112,12 @@ from wingman.application.research import (
     add_company_source,
     delete_company,
     list_company_sources,
+    pause_company_source,
     remove_company_source,
     rename_company,
     render_research_report,
     research_company,
+    source_duplicates,
 )
 from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import (
@@ -135,8 +138,11 @@ from wingman.application.telemetry_summary import (
     summarize as summarize_telemetry,
 )
 from wingman.application.triage import (
+    current_digest,
+    done_action,
     mute_action,
     render_verdicts,
+    require_action,
     snooze_action,
     unmute_action,
 )
@@ -728,7 +734,7 @@ def artifacts_list() -> None:
 @artifacts_app.command("show")
 def artifacts_show(
     kind: str = typer.Argument(
-        ..., help="values_radar, values_radar_work, completeness, or profile."
+        ..., help="values_radar, values_radar_work, completeness, profile, or custom:<slug>."
     ),
 ) -> None:
     """The recorded url for ONE view, or nothing — the question asked before
@@ -767,7 +773,7 @@ def artifacts_show(
 @artifacts_app.command("remember")
 def artifacts_remember(
     kind: str = typer.Argument(
-        ..., help="values_radar, values_radar_work, completeness, or profile."
+        ..., help="values_radar, values_radar_work, completeness, profile, or custom:<slug>."
     ),
     url: str = typer.Argument(..., help="The https:// url the client published it at."),
     title: str = typer.Option("", "--title", help="Optional label for listings."),
@@ -822,7 +828,7 @@ def artifacts_stale() -> None:
 @artifacts_app.command("forget")
 def artifacts_forget(
     kind: str = typer.Argument(
-        ..., help="values_radar, values_radar_work, completeness, or profile."
+        ..., help="values_radar, values_radar_work, completeness, profile, or custom:<slug>."
     ),
 ) -> None:
     """Drop a recorded url (the published page itself is untouched)."""
@@ -1830,14 +1836,16 @@ def people_add(
     substack: str | None = typer.Option(
         None,
         "--substack",
-        help="Their Substack URL, e.g. https://example.substack.com — verified against "
-        "<url>/feed before it's stored. For any other blog, use 'people add-feed' instead.",
+        help="Public writing URL; bounded discovery verifies its RSS/Atom feed before storing. "
+        "For a blog without a feed, use people add-feed --index.",
     ),
     company: str | None = typer.Option(None, "--company", help="Where they work."),
     position: str | None = typer.Option(None, "--position", help="What they do."),
     linkedin: str | None = typer.Option(None, "--linkedin", help="Their LinkedIn profile URL."),
     email: str | None = typer.Option(
-        None, "--email", help="Their email (manual entry only — imports never read emails)."
+        None,
+        "--email",
+        help="Their email (private address-book field; also imported from Connections.csv).",
     ),
 ) -> None:
     """Add a person to the watchlist (or update them if already known)."""
@@ -2022,7 +2030,7 @@ def people_add_feed(
 def people_import_connections(
     export: Path = typer.Argument(..., help="Path to a LinkedIn data-export zip."),
 ) -> None:
-    """Seed Person records from Connections.csv (names and roles only — never emails)."""
+    """Seed Person records from Connections.csv (private address-book fields, including emails)."""
     configure_logging()
     config = load_config()
     _require_workspace(config, "seeded")
@@ -2033,7 +2041,8 @@ def people_import_connections(
         typer.echo(f"import-connections failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(
-        f"Created: {report.created}  Already known: {report.skipped_existing}  "
+        f"Created: {report.created}  Updated: {report.updated}  Unchanged: {report.skipped_existing}  "
+        f"Conflicts (preserved; review identity/values): {report.conflicts}  "
         f"Incomplete rows skipped: {report.skipped_incomplete}"
     )
 
@@ -2089,6 +2098,8 @@ def people_fetch(
             )
             for title in report.titles:
                 typer.echo(f"  + {title}")
+            for correction in report.corrected_sources:
+                typer.echo(f"  corrected source: {correction}")
             for failure in report.failed_sources:
                 typer.echo(f"  ! {failure}", err=True)
     if failures:
@@ -3794,12 +3805,25 @@ def overnight(
 
 @app.command()
 def digest(
+    as_json: bool = typer.Option(
+        False, "--json", help="Structured actions, steps and budget drops."
+    ),
     path_only: bool = typer.Option(False, "--path", help="Print only the path."),
     open_it: bool = typer.Option(False, "--open", help="Open it with the system viewer."),
 ) -> None:
     """Show the newest overnight digest — the morning read, one word away."""
     configure_logging()
     config = load_config()
+    if as_json and (path_only or open_it):
+        raise typer.BadParameter("--json cannot be combined with --path or --open")
+    if as_json:
+        try:
+            with Storage(config.db_path) as storage:
+                typer.echo(json_digest(config, storage))
+        except IngestError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        return
     newest = latest_digest(config)
     if newest is None:
         typer.echo(
@@ -3819,7 +3843,8 @@ def digest(
         typer.launch(str(target))
         typer.echo(f"Opened {target}")
         return
-    typer.echo(newest.read_text(encoding="utf-8"))
+    with Storage(config.db_path) as storage:
+        typer.echo(current_digest(newest.read_text(encoding="utf-8"), storage))
 
 
 @app.command()
@@ -3918,7 +3943,7 @@ def company_add_source(
     retain: bool | None = typer.Option(
         None,
         "--retain/--no-retain",
-        help="Also keep the page's text as a citable document for this company (RFC-060).",
+        help="Keep citable prose; defaults on for new about-labelled sources (RFC-060).",
     ),
 ) -> None:
     """Approve one research URL for a company — adding it IS the approval (RFC-015).
@@ -3928,8 +3953,9 @@ def company_add_source(
 
     --retain additionally KEEPS the fetched page's prose as a document
     attributed to the company, so 'company pov' and 'evidence' can quote it.
-    Off by default: it suits a values or about page that changes twice a
-    year, not a careers page that would re-store on every run. It changes
+    On by default for new sources labelled about; off for other labels.
+    Use --no-retain to opt out. Retention suits durable prose rather than
+    careers indexes that change on every run. It changes
     nothing about the fetch — same page, same one GET. Re-run with
     --retain/--no-retain on an already-approved source to change your mind.
     """
@@ -3950,6 +3976,31 @@ def company_add_source(
         typer.echo(f'Fetch it with: wingman company research "{source.company_name}"')
     else:
         typer.echo(f"Already approved for {source.company_name}: {source.url}{kept}")
+
+
+def _pause_source(name: str, url: str, paused: bool) -> None:
+    config = load_config()
+    _require_workspace(config, "updated")
+    try:
+        with Storage(config.db_path) as storage:
+            source = pause_company_source(name, url, storage, paused=paused)
+    except IngestError as exc:
+        typer.echo(f"source pause failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    state = "Paused" if source.paused else "Resumed"
+    typer.echo(f"{state}: {source.url}. Existing research preserved.")
+
+
+@company_app.command("pause-source")
+def company_pause_source(name: str, url: str) -> None:
+    """Pause one approved URL without deleting its research history."""
+    _pause_source(name, url, True)
+
+
+@company_app.command("unpause-source")
+def company_unpause_source(name: str, url: str) -> None:
+    """Resume fetching a paused approved research URL."""
+    _pause_source(name, url, False)
 
 
 @company_app.command("remove-source")
@@ -3984,6 +4035,7 @@ def company_sources_cmd(
     try:
         with Storage(config.db_path) as storage:
             sources = list_company_sources(name, storage)
+            duplicates = source_duplicates(sources, storage)
             snapshots = {
                 source.url: storage.get_research_snapshot(source.company_key, source.url)
                 for source in sources
@@ -4006,6 +4058,9 @@ def company_sources_cmd(
             if snapshot
             else "no snapshot yet"
         )
+        if source.url in duplicates:
+            state += f", duplicate of {duplicates[source.url]}"
+        state += ", paused" if source.paused else ""
         kept = ", text retained" if source.retain else ""
         typer.echo(f"- {source.url}{label} — {state}{kept}")
 
@@ -4093,6 +4148,8 @@ def company_fetch(
     )
     for title in report.titles:
         typer.echo(f"  + {title}")
+    for correction in report.corrected_sources:
+        typer.echo(f"  corrected source: {correction}")
     for failure in report.failed_sources:
         typer.echo(f"  ! {failure}", err=True)
 
@@ -4809,19 +4866,33 @@ def tenant_oauth_invite_cmd(
     registry: Path | None = typer.Option(
         None, "--registry", help="Tenant registry path (default: host setting)."
     ),
+    data_root: Path | None = typer.Option(
+        None,
+        "--data-root",
+        help="Email invites: parent directory for the prepared tenant workspaces "
+        "(for example, /home/wingman-shared/tenants).",
+    ),
+    service_user: str = typer.Option(
+        "wingman-shared",
+        "--service-user",
+        help="Email invites: OS account that owns OAuth state and tenant workspaces.",
+    ),
 ) -> None:
     """Reserve a tenant slug before a trusted invitee signs in.
 
-    With --email (or --from-csv) the invite is also bound to an address. That
-    is recorded only: until #585 lands a sign-in does not claim it, and the
-    person is approved with `oauth-approve` exactly as for a slug-only invite.
+    With --email (or --from-csv) the invite is bound to an address and its
+    empty, unbound tenant is prepared now (run with sudo: the registry is
+    root-owned). When that person signs in on either surface with the same
+    WorkOS-verified address, they are let in with no further operator step.
     """
     configure_logging()
     from wingman.infrastructure.oauth_onboarding import (
         OAuthOnboardingError,
         OAuthOnboardingStore,
         onboarding_path_for,
+        prepare_email_invites,
     )
+    from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
 
     def fail(message: str) -> NoReturn:
         typer.echo(message, err=True)
@@ -4836,6 +4907,8 @@ def tenant_oauth_invite_cmd(
         fail("Give a slug to reserve (SLUG or --slug), or --from-csv.")
     if email is not None and slug is None:
         fail("--email needs --slug: which workspace name to reserve for that address.")
+    if (email is not None or from_csv is not None) and data_root is None:
+        fail("Email invites prepare the tenant now: give --data-root (and run with sudo).")
 
     tenants, registry_path = _load_registry_or_exit(registry)
     existing = {tenant.slug for tenant in tenants}
@@ -4844,41 +4917,60 @@ def tenant_oauth_invite_cmd(
         f"After sign-in, inspect it with `wingman tenant oauth-pending --identities "
         f"{identities}` (registry: {registry_path})."
     )
-    not_claimed = (
-        "Email invites are recorded but not yet claimed automatically at sign-in "
-        "(#585): approve with `oauth-approve` as usual."
-    )
-
-    if from_csv is not None:
-        rows = _read_invite_csv(from_csv, fail)
+    if email is None and from_csv is None:
+        assert slug is not None
         try:
-            store.reserve_email_invites(
-                rows, existing_slugs=existing, expires_days=expires_days, first_line=2
-            )
+            store.reserve_invite(slug, existing_slugs=existing)
         except OAuthOnboardingError as exc:
-            fail(f"{from_csv}: {exc}. Nothing was reserved.")
-        typer.echo(
-            f"Reserved {len(rows)} email invites: {', '.join(slug for _email, slug in rows)}. "
-            f"Addresses are stored only as keyed hashes; matching expires in "
-            f"{expires_days} days. No workspace or access was created. {not_claimed}"
-        )
-        return
-
-    assert slug is not None
-    try:
-        store.reserve_invite(slug, existing_slugs=existing, email=email, expires_days=expires_days)
-    except OAuthOnboardingError as exc:
-        fail(str(exc))
-    if email is None:
+            fail(str(exc))
         typer.echo(
             f"Reserved invite slug {slug!r}. No workspace or access was created. {pending_hint}"
         )
+        return
+
+    assert data_root is not None
+    if from_csv is not None:
+        rows = _read_invite_csv(from_csv, fail)
+        first_line: int | None = 2
+        where = f"{from_csv}: "
     else:
-        typer.echo(
-            f"Reserved invite slug {slug!r} for one email address (stored only as a keyed "
-            f"hash; matching expires in {expires_days} days). No workspace or access was "
-            f"created. {not_claimed} {pending_hint}"
+        assert slug is not None and email is not None
+        rows = [(email, slug)]
+        first_line = None
+        where = ""
+    try:
+        prepare_email_invites(
+            identity_path=identities.expanduser(),
+            registry_path=registry_path,
+            data_root=data_root.expanduser(),
+            rows=rows,
+            existing_slugs=existing,
+            service_user=service_user,
+            expires_days=expires_days,
+            first_line=first_line,
         )
+    except OAuthOnboardingError as exc:
+        fail(f"{where}{exc}. No invite was left reserved for a tenant that was not prepared.")
+    slugs = ", ".join(row_slug for _email, row_slug in rows)
+    noun = "email invite" if len(rows) == 1 else "email invites"
+    typer.echo(
+        f"Reserved {len(rows)} {noun}: {slugs}. Addresses are stored only as keyed hashes; "
+        f"matching expires in {expires_days} days. Each empty workspace is prepared "
+        "(privileged=false; funded=false) and unreachable until that person signs in with "
+        "the same WorkOS-verified address, on either surface, which lets them in with no "
+        "further step."
+    )
+    try:
+        signaled_pid = signal_reload(registry_path)
+    except TenantProcessSignalError as exc:
+        fail(
+            f"The invites are prepared on disk, but the running service still has its "
+            f"previous tenant map, so a sign-in cannot claim them yet: {exc}"
+        )
+    if signaled_pid is not None:
+        typer.echo(f"Signaled the running shared service (pid {signaled_pid}) to reload.")
+    else:
+        typer.echo("No running shared service was found; the invites load at next start.")
 
 
 def _read_invite_csv(path: Path, fail: Callable[[str], NoReturn]) -> list[tuple[str, str]]:
@@ -4967,7 +5059,11 @@ def tenant_oauth_invite_revoke_cmd(
     if not removed:
         typer.echo(f"No reserved invite {slug!r}; nothing changed.", err=True)
         raise typer.Exit(code=1)
-    typer.echo(f"Revoked invite {slug!r}. No workspace existed for it; any email hash was deleted.")
+    typer.echo(
+        f"Revoked invite {slug!r}; any email hash was deleted. If it was an email invite, its "
+        "prepared workspace stays registered but unbound (no one can reach it); remove its "
+        "registry entry and directory by hand if you do not want to reuse the slug."
+    )
 
 
 @tenant_app.command("oauth-pending")
@@ -6619,6 +6715,25 @@ def commentary_remove(
     typer.echo(f"Removed commentary [{removed.entry_id[:8]}].")
 
 
+@actions_app.command("done")
+def actions_done(
+    key: str = typer.Argument(..., help="Action key from a digest."),
+    fingerprint: str = typer.Option(
+        ..., "--fingerprint", help="Evidence fingerprint from the digest reviewed."
+    ),
+) -> None:
+    """Complete this action's evidence; future changes can recur."""
+    config = load_config()
+    _require_workspace(config, "completed")
+    try:
+        with Storage(config.db_path) as storage:
+            done_action(key, storage, fingerprint=fingerprint)
+    except IngestError as exc:
+        typer.echo(f"done failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Done {key} — new evidence can appear again.")
+
+
 @actions_app.command("mute")
 def actions_mute(
     key: str = typer.Argument(..., help="Action key (shown under each digest action)."),
@@ -6629,6 +6744,7 @@ def actions_mute(
     _require_workspace(config, "muted")
     try:
         with Storage(config.db_path) as storage:
+            require_action(key, storage)
             mute_action(key, storage)
     except IngestError as exc:
         typer.echo(f"mute failed: {exc}", err=True)
@@ -6647,6 +6763,7 @@ def actions_snooze(
     _require_workspace(config, "snoozed")
     try:
         with Storage(config.db_path) as storage:
+            require_action(key, storage)
             until = snooze_action(key, storage, days=days)
     except IngestError as exc:
         typer.echo(f"snooze failed: {exc}", err=True)

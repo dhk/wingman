@@ -186,7 +186,9 @@ def build_application_pack(
         if sources:
             lines.append("")
             lines.append("Approved research sources (run 'wingman company research'):")
-            lines.extend(f"- {source.url}" for source in sources)
+            lines.extend(
+                f"- {source.url}" + (" (paused)" if source.paused else "") for source in sources
+            )
     else:
         lines.extend(
             [
