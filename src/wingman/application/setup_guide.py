@@ -143,8 +143,8 @@ def _finished_steps(report: CompletenessReport) -> list[str]:
         done.append("job criteria set, so openings are scored")
     if report.values.profile_built:
         done.append("a values profile built")
-    if report.people:
-        done.append(f"{len(report.people)} people tracked")
+    if report.people or report.imported_people:
+        done.append(f"{len(report.people) + report.imported_people} people tracked")
     return done
 
 
