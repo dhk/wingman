@@ -69,8 +69,8 @@ as rollback for at least one normal operating cycle.
 
 An existing tenant is never invited or approved: `oauth-invite` plus
 `oauth-approve` would create a second, empty workspace. Have the person sign in
-through both surfaces so `oauth-pending` lists their exact identities, then
-bind each one to the existing slug:
+on either surface so `oauth-pending` lists their exact verified identity, then
+bind it to the existing slug with **one** command:
 
 ```bash
 sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-bind <existing-slug> \
@@ -80,9 +80,24 @@ sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-bin
   --registry /etc/wingman/tenants.toml
 ```
 
-`oauth-bind` signals the reload itself and removes the bound identity from the
-pending queue. Rerunning it on an exact existing binding is safe and clears a
-pending row left behind by a build that predates that cleanup.
+`oauth-bind` binds that subject under `--issuer` **and** under the other
+issuer the shared service trusts (#618): one WorkOS user has the same full
+`sub` on the browser-session token and the AuthKit MCP token (#582), so the
+person is let in on both surfaces without a second sign-in, refusal, or
+command. The trusted issuers are read from the service's own OAuth env files
+(`/etc/wingman/oauth.env`, or the path in `/etc/wingman/oauth-config-path`,
+and `/etc/wingman/oauth-web.env`), never from a flag; `--oauth-config` /
+`--oauth-web-config` point at those files on a box that keeps them elsewhere.
+The command refuses, binding nothing, if those files cannot be read, if
+`--issuer` is not one of the trusted issuers, or if the subject is already
+bound to a **different** tenant on either surface. Both bindings are written
+in one replacement of the identity map, or neither is. The output lists each
+issuer as `bound` or `already bound`; `--preflight` lists what it `would bind`.
+
+`oauth-bind` signals the reload itself and removes the bound identity's pending
+rows on both surfaces. Rerunning it is safe: on an exact existing binding it
+changes nothing, and on a tenant bound under only one issuer by an earlier
+build it adds the other.
 
 After binding, the browser sign-in (`/shared/login`) shows a migrated tenant
 **Your workspace**: a summary of their key status, how many documents are
@@ -112,12 +127,13 @@ First decide which path the person is on:
 
 | Person | Path |
 |---|---|
-| Already has a tenant (a capability URL today) | §3: `oauth-bind` each verified identity to their **existing** slug. Never `oauth-invite` or `oauth-approve` them: that creates a second, empty workspace. |
+| Already has a tenant (a capability URL today) | §3: one `oauth-bind` of their verified identity to their **existing** slug (it covers both surfaces). Never `oauth-invite` or `oauth-approve` them: that creates a second, empty workspace. |
 | New to this server, address known | This section, **email invite**: `oauth-invite --email` (or `--from-csv`) with sudo, send the [invitee message](OAUTH-INVITEE-MESSAGE.md). Their first sign-in with that verified address, on either surface, lets them in. Nothing else to do. |
-| New to this server, address unknown, or the email invite did not match | This section, **fallback**: `oauth-invite` a slug, they sign in, `oauth-approve` one verified identity, `oauth-bind` the other to the same slug. |
+| New to this server, address unknown, or the email invite did not match | This section, **fallback**: `oauth-invite` a slug, they sign in on either surface, `oauth-approve` their verified identity. That one command covers both surfaces. |
 
-Either way, `oauth-bind` removes the identity it binds from the pending queue
-(#569), so `oauth-pending` afterwards lists only people still waiting.
+Either way, `oauth-bind` and `oauth-approve` remove the identity they bind from
+the pending queue on both surfaces (#569, #618), so `oauth-pending` afterwards
+lists only people still waiting.
 
 Send the invitee the [invitee message](OAUTH-INVITEE-MESSAGE.md) with the
 connector address. It tells them which Google address to use and what to
@@ -168,9 +184,11 @@ sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-inv
 With a slug-only invite, the invitee's first verified sign-in remains
 forbidden and creates no workspace. It records the opaque issuer/subject pair in the bounded pending
 queue. Browser setup and MCP use different WorkOS token classes and issuers,
-so have the invitee attempt both flows before approval. `oauth-pending` may
-show two rows for that person. Confirm both identities out of band; do not
-assume their opaque `sub` values are equal or infer a link from them.
+but one WorkOS user has the same full `sub` under both (#582), so one sign-in
+on either surface is enough. If they tried both, `oauth-pending` shows two rows
+with the same subject; approving either one covers both. Confirm the identity
+out of band. Two rows with **different** subjects are two different WorkOS
+users; never link them by inference.
 
 Each refusal shows the person a reference such as `K3QF-7XWD` and asks them to
 send it to you; the same `ref=` appears on their row in `oauth-pending`. Match
@@ -179,25 +197,26 @@ If `WINGMAN_OPERATOR_TODOIST_TOKEN` is configured (see [SERVER.md](SERVER.md)),
 you also get a Todoist task carrying that reference the first time they sign in,
 so you need not wait for them to get in touch.
 
-Approve one exact verified identity to create the reserved tenant, then bind
-the other exact verified identity to that same tenant:
+Approve the exact verified identity to create the reserved tenant. Like
+`oauth-bind`, `oauth-approve` binds the subject under `--issuer` and under the
+other issuer the shared service trusts, read from the service's OAuth env
+files as data. It runs as root through plain `sudo`, whose environment never
+loads those files, so it parses only the issuer settings from them (never
+sources them; nothing else in them, including the browser client secret, is
+printed). It refuses before creating anything if the files cannot be read,
+`--issuer` is not trusted, or the subject already belongs to a different
+tenant on the other surface. Its output ends with `Bound under: <issuers>`.
 
 ```bash
 sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-pending \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml
 
 sudo /home/wingman-shared/.local/bin/wingman tenant oauth-approve <slug> \
-  --issuer <exact-verified-iss-for-one-surface> \
-  --subject <exact-verified-sub-for-one-surface> \
+  --issuer <exact-verified-iss> \
+  --subject <exact-verified-sub> \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
   --registry /etc/wingman/tenants.toml \
   --data-root /home/wingman-shared/tenants
-
-sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-bind <slug> \
-  --issuer <exact-verified-iss-for-the-other-surface> \
-  --subject <exact-verified-sub-for-the-other-surface> \
-  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
-  --registry /etc/wingman/tenants.toml
 ```
 
 Do not obtain `sub` from email, a screenshot, or user input; use the verified
@@ -231,10 +250,10 @@ For canary A:
 2. Attempt both the browser `/login` flow and the MCP connector flow through
    WorkOS.
 3. Confirm each verified-but-unapproved identity can see no tenant data.
-4. Confirm the browser and MCP attempts produced their two exact pending
-   identities. Do not assume their `sub` values match.
-5. Approve one identity into a new unprivileged, unfunded workspace, then use
-   `oauth-bind` to bind the other verified identity to the same slug.
+4. Confirm the browser and MCP attempts produced pending rows with the same
+   exact `sub` under the two issuers (#582).
+5. Approve one identity into a new unprivileged, unfunded workspace with
+   `oauth-approve`; confirm its output lists both issuers under `Bound under:`.
 6. Sign in again and confirm both surfaces reach the approved slug.
 7. Open the OAuth-protected `/login` → `/setup/` surface, add a BYOK credential, and upload a
    harmless test CV. Confirm the credential never appears in chat, logs, or
