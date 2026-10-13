@@ -474,7 +474,10 @@ def _split_people(storage: Storage) -> tuple[list[Person], int, Counter[str]]:
 
     Curated means somebody deliberately engaged with the person: added them by
     hand, attached a feed, logged an interaction, saved a relationship
-    objective, or put them on a watchlist. That is deterministic and needs no
+    objective, put them on a watchlist, or approved and saved a deep-dive
+    dossier (`people_deep_dive_save` is itself the approval gate). A POV card
+    is deliberately not a signal: it is one of the gaps this report measures,
+    so it cannot also decide who is measured. That is deterministic and needs no
     new stored field. An import with none of those is just an address-book row,
     and counting it against "build a POV card" or "log what happened" measures
     a population the metric does not mean (#465).
@@ -487,6 +490,7 @@ def _split_people(storage: Storage) -> tuple[list[Person], int, Counter[str]]:
     """
     log_counts = Counter(entry.person_id for entry in storage.list_log_entries())
     objective_ids = {objective.person_id for objective in storage.list_objectives()}
+    dossier_ids = storage.person_dossier_ids()
     watched_keys = {
         " ".join(name.lower().split())
         for list_name, _count in storage.watchlists()
@@ -503,6 +507,7 @@ def _split_people(storage: Storage) -> tuple[list[Person], int, Counter[str]]:
             or person.sources
             or log_counts[person.person_id]
             or person.person_id in objective_ids
+            or person.person_id in dossier_ids
             or person.name_key in watched_keys
         ):
             curated.append(person)

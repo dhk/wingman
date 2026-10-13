@@ -1025,6 +1025,11 @@ class Storage:
         row: tuple[str] | None = cursor.fetchone()
         return PersonDossier.model_validate_json(row[0]) if row else None
 
+    def person_dossier_ids(self) -> set[str]:
+        """Every person_id with a saved dossier, in one query (no payloads)."""
+        cursor = self._conn.execute("SELECT person_id FROM person_dossiers")
+        return {row[0] for row in cursor.fetchall()}
+
     def save_company_dossier(self, dossier: CompanyDossier) -> None:
         """Insert or replace a company's deep dive (rebuilt, not versioned — #350)."""
         self._conn.execute(

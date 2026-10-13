@@ -15,7 +15,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from wingman.application.completeness import CompletenessReport, compute_completeness
+from wingman.application.completeness import (
+    CompanyCompleteness,
+    CompletenessReport,
+    compute_completeness,
+)
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.storage import Storage
 
@@ -33,11 +37,23 @@ BLOCKED_SECTIONS: tuple[tuple[str, str], ...] = ()
 # so beyond this the rest are a count. The neediest come first.
 MAX_PEOPLE_LISTED = 50
 
+# The same bound for Companies: 2,000 curated people at distinct employers
+# would otherwise render 2,000 rows (~150k characters of Markdown, ~1.2M of HTML).
+MAX_COMPANIES_LISTED = 50
+
 
 def people_heading(report: CompletenessReport) -> str:
     """The People section title. 'tracked' was wrong once imports stopped being
     listed: it read '(0 tracked)' above a workspace holding thousands of people."""
     return f"People ({len(report.people)} curated)"
+
+
+def companies_listed(report: CompletenessReport) -> tuple[list[CompanyCompleteness], int]:
+    """The companies to name inline, neediest (most missing POV cards) first,
+    and how many more there are. Shared by both renderers so the cap and the
+    order cannot drift."""
+    ordered = sorted(report.companies, key=lambda c: (-c.missing_pov_cards, c.name))
+    return ordered[:MAX_COMPANIES_LISTED], max(0, len(ordered) - MAX_COMPANIES_LISTED)
 
 
 def imported_people_line(count: int) -> str:
@@ -137,12 +153,15 @@ def render_completeness_markdown(report: CompletenessReport) -> str:
     )
     lines.extend(["", f"## Companies ({len(report.companies)} attributable)", ""])
     if report.companies:
-        for company in report.companies:
+        shown, more = companies_listed(report)
+        for company in shown:
             lines.append(
                 f"- {company.name} — {company.people_watched} people watched, "
                 f"{company.documents} documents, {company.pov_cards} POV cards "
                 f"({company.missing_pov_cards} missing)"
             )
+        if more:
+            lines.append(f"- …and {more} more")
     else:
         lines.append("_None yet — no watched person has a company set._")
     if BLOCKED_SECTIONS:

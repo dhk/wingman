@@ -15,6 +15,7 @@ from wingman.domain.source_record import SourceRecord
 from wingman.infrastructure.config import load_config
 from wingman.infrastructure.storage import Storage
 from wingman.reporting.completeness import (
+    MAX_COMPANIES_LISTED,
     MAX_PEOPLE_LISTED,
     render_completeness_markdown,
     write_completeness,
@@ -406,6 +407,83 @@ def test_curated_people_are_capped_in_the_rendered_report(workspace: Path) -> No
     assert len(report.people) == MAX_PEOPLE_LISTED + 7
     assert "…and 7 more" in render_completeness_markdown(report)
     assert "…and 7 more" in render_completeness_html(report)
+
+
+def test_companies_are_capped_when_many_curated_people_work_at_distinct_companies(
+    workspace: Path,
+) -> None:
+    """Capping People alone left Companies unbounded: 2,000 curated people at
+    distinct employers rendered ~150k characters of Markdown and ~1.2M of HTML."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        for index in range(2000):
+            add_person(f"Person {index:04d}", storage, company=f"Company {index:04d}")
+        report = compute_completeness(storage, config)
+
+    assert len(report.companies) == 2000
+    more = 2000 - MAX_COMPANIES_LISTED
+    markdown = render_completeness_markdown(report)
+    html = render_completeness_html(report)
+    assert f"…and {more} more" in markdown
+    assert f"…and {more} more" in html
+    assert "Company 1999" not in markdown
+    assert "Company 1999" not in html
+    assert "## Companies (2000 attributable)" in markdown
+    assert len(markdown) < 20_000
+    assert len(html) < 60_000
+
+
+def test_companies_list_the_neediest_first(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_person("Ann", storage, company="Alpha")
+        add_person("Bo", storage, company="Zeta")
+        add_person("Cy", storage, company="Zeta")
+        report = compute_completeness(storage, config)
+
+    markdown = render_completeness_markdown(report)
+    assert markdown.index("- Zeta") < markdown.index("- Alpha")
+
+
+def test_an_approved_deep_dive_dossier_curates_an_import(workspace: Path) -> None:
+    """people_deep_dive_save is an explicit approval gate, so saved research
+    is a deliberate act on that person, the same as a feed or a log entry."""
+    from wingman.application.dossier_research import save_person_dossier
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _import_contact(storage, "Researched Rae", company="Acme")
+        _import_contact(storage, "Untouched Uma", company="Initech")
+        save_person_dossier("Researched Rae", "Findings the owner approved.", storage)
+        report = compute_completeness(storage, config)
+
+    assert [person.name for person in report.people] == ["Researched Rae"]
+    assert report.imported_people == 1
+    assert [company.name for company in report.companies] == ["Acme"]
+
+
+def test_a_pov_card_alone_does_not_curate_an_import(workspace: Path) -> None:
+    """A POV card is one of the gaps this report measures; letting it decide
+    who is measured would make the metric circular."""
+    from wingman.domain.pov import PovCard
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        person = _import_contact(storage, "Carded Cal")
+        storage.save_pov_card(
+            PovCard(
+                person_id=person.person_id,
+                person_name=person.name,
+                documents_used=0,
+                provider="test",
+                model="test",
+                prompt_version="test",
+            )
+        )
+        report = compute_completeness(storage, config)
+
+    assert report.people == []
+    assert report.imported_people == 1
 
 
 def test_setup_guide_still_counts_imported_people_as_tracked(workspace: Path) -> None:

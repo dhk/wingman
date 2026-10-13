@@ -15,6 +15,7 @@ from wingman.application.completeness import CompletenessReport, PersonCompleten
 from wingman.reporting.completeness import (
     BLOCKED_SECTIONS,
     MAX_PEOPLE_LISTED,
+    companies_listed,
     imported_people_line,
     people_heading,
 )
@@ -158,7 +159,8 @@ def render_completeness_html(report: CompletenessReport) -> str:
         f"({len(report.companies)} attributable)</span></div>"
     )
     if report.companies:
-        for company in report.companies:
+        shown, more = companies_listed(report)
+        for company in shown:
             body.append(f"<h3>{_e(company.name)}</h3>")
             body.append(_meter("People watched", company.people_watched))
             body.append(_meter("Documents", company.documents))
@@ -169,6 +171,8 @@ def render_completeness_html(report: CompletenessReport) -> str:
                     target=company.people_watched or None,
                 )
             )
+        if more:
+            body.append(f'<p class="dim">…and {more} more</p>')
     else:
         body.append('<p class="dim">None yet — no watched person has a company set.</p>')
     # The interview is the one section with a denominator the code actually
