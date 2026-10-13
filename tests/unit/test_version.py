@@ -1,10 +1,12 @@
 """Version surfacing: git-derived build stamp, visible at every first touch."""
 
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+import wingman.version
 from wingman.cli.main import app
 from wingman.infrastructure.config import load_config
 from wingman.infrastructure.storage import Storage
@@ -20,6 +22,22 @@ def test_cli_version_flag() -> None:
     result = CliRunner().invoke(app, ["--version"])
     assert result.exit_code == 0
     assert f"wingman {wingman_version()}" in result.output
+
+
+def _not_installed(name: str) -> str:
+    raise PackageNotFoundError(name)
+
+
+def test_version_falls_back_when_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wingman.version, "version", _not_installed)
+    assert wingman_version() == "unknown (not installed)"
+
+
+def test_cli_version_flag_when_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wingman.version, "version", _not_installed)
+    result = CliRunner().invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert "wingman unknown (not installed)" in result.output
 
 
 def test_status_and_doctor_show_the_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
