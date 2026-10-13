@@ -82,6 +82,7 @@ from wingman.application.people import (
     fetch_person_feed,
     find_people_evidence,
     fix_person,
+    follow_person,
     match_people,
     rename_person,
     seed_from_connections,
@@ -1848,7 +1849,7 @@ def people_add(
         help="Their email (private address-book field; also imported from Connections.csv).",
     ),
 ) -> None:
-    """Add a person to the watchlist (or update them if already known)."""
+    """Add a person and follow them (the 'following' watchlist), or update them if known."""
     configure_logging()
     config = load_config()
     _require_workspace(config, "added")
@@ -1863,6 +1864,7 @@ def people_add(
                 linkedin_url=linkedin,
                 email=email,
             )
+            follow_person(storage, person)
     except IngestError as exc:
         typer.echo(f"people add failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc

@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from wingman.application.company_feeds import is_company_anchor
 from wingman.application.job_scoring import load_criteria
+from wingman.application.people import FOLLOWING_LIST
 from wingman.application.similarity import company_key
 from wingman.domain.person import Person, PersonOrigin
 from wingman.domain.profile import ItemStatus, ProfileItemKind
@@ -178,15 +179,15 @@ class CompletenessReport(BaseModel):
     generated_at: datetime
     career: CareerProfileCompleteness
     job_criteria: JobCriteriaCompleteness
-    # Curated people only (#424/#465/#545): added by hand, given a feed, or
-    # logged with. A LinkedIn-connections import puts thousands of contacts in
-    # the same store, and measuring every one of them against "has a POV card"
-    # or "has a log entry" turns completeness into a wall nobody can act on.
+    # Followed people only (#624): members of any watchlist, the explicit,
+    # revocable follow set. A LinkedIn import or one past interaction does not
+    # make someone a person the owner is following, and measuring them against
+    # "has a POV card" or "has a log entry" is a wall nobody can act on (#465).
     people: list[PersonCompleteness]
-    # Imported contacts nobody has attended to yet. A count, not a list and not
-    # a debt: the size of the address book is worth seeing, but an entry the
-    # owner has never touched is not a gap in their workspace.
-    imported_people: int = 0
+    # Everyone in the store who is not followed. A count, not a list and not a
+    # debt: the size of the address book is worth seeing, but someone the owner
+    # is not following is not a gap in their workspace.
+    unfollowed_people: int = 0
     companies: list[CompanyCompleteness]
     values: ValuesCompleteness
     interview: list[InterviewCompleteness]
@@ -469,55 +470,79 @@ def _job_criteria_completeness(config: Config) -> JobCriteriaCompleteness:
     return JobCriteriaCompleteness(exists=load_criteria(config) is not None)
 
 
-def _split_people(storage: Storage) -> tuple[list[Person], int, Counter[str]]:
-    """Curated people, the count of untouched imports, and log counts by person.
+_FOLLOWING_BACKFILL = "624_following_backfill"
 
-    Curated means somebody deliberately engaged with the person: added them by
-    hand, attached a feed, logged an interaction, saved a relationship
-    objective, put them on a watchlist, or approved and saved a deep-dive
-    dossier (`people_deep_dive_save` is itself the approval gate). A POV card
-    is deliberately not a signal: it is one of the gaps this report measures,
-    so it cannot also decide who is measured. That is deterministic and needs no
-    new stored field. An import with none of those is just an address-book row,
-    and counting it against "build a POV card" or "log what happened" measures
-    a population the metric does not mean (#465).
 
-    Known limit: running `people add` on an imported contact to fill in their
-    company, position or email does NOT curate them. `add_person` leaves
-    `origin` alone, and there is no stored "touched" signal to read. Email
-    cannot be that signal either, because #422 makes imports store it. Telling
-    "edited by hand" apart needs a new field, which is a schema decision.
-    """
-    log_counts = Counter(entry.person_id for entry in storage.list_log_entries())
+def _previously_curated(storage: Storage) -> list[Person]:
+    """Who completeness measured before #624 (the #601 derived rule): added by
+    hand, or with a feed, a log entry, an objective, a saved dossier or a
+    watchlist entry. Used only by the one-time backfill, so that nobody the
+    report already listed silently drops out when the rule becomes the
+    explicit follow set."""
+    logged = {entry.person_id for entry in storage.list_log_entries()}
     objective_ids = {objective.person_id for objective in storage.list_objectives()}
     dossier_ids = storage.person_dossier_ids()
-    watched_keys = {
+    return [
+        person
+        for person in storage.list_people()
+        if not is_company_anchor(person)
+        and (
+            person.origin is not PersonOrigin.LINKEDIN_CONNECTIONS
+            or person.sources
+            or person.person_id in logged
+            or person.person_id in objective_ids
+            or person.person_id in dossier_ids
+        )
+    ]
+
+
+def ensure_following_backfilled(storage: Storage) -> int | None:
+    """Put everyone the old rule measured on FOLLOWING_LIST, once per workspace.
+
+    Runs at most once ever (a marker in schema_migrations), so a person the
+    owner later removes from every list is never silently re-added. Returns
+    how many were added, or None when it already ran.
+    """
+    if storage.migration_done(_FOLLOWING_BACKFILL):
+        return None
+    names = [person.name for person in _previously_curated(storage)]
+    return storage.backfill_watchlist_once(_FOLLOWING_BACKFILL, FOLLOWING_LIST, "person", names)
+
+
+def _split_people(storage: Storage) -> tuple[list[Person], int, Counter[str]]:
+    """Followed people, the count of everyone else, and log counts by person.
+
+    Followed means a `person` member of any watchlist (#624). `people add`
+    enrolls into FOLLOWING_LIST; `company_follow` enrolls a company's people
+    with writing into the overnight list; `watchlist add/remove` edits either.
+    That is the whole rule: no derived signal (a log entry, a dossier, a feed)
+    makes someone followed, because "who am I following" is the owner's
+    explicit, revocable choice, not an inference.
+
+    Known limit: `people manage fix` (a merge) removes the absorbed name from
+    its lists without enrolling the survivor, so merging a followed duplicate
+    into an unfollowed record unfollows them.
+    """
+    log_counts = Counter(entry.person_id for entry in storage.list_log_entries())
+    followed_keys = {
         " ".join(name.lower().split())
-        for list_name, _count in storage.watchlists()
-        for kind, name in storage.watchlist_members(list_name)
+        for kind, name in storage.all_watchlist_members()
         if kind == "person"
     }
-    curated: list[Person] = []
-    imported = 0
+    followed: list[Person] = []
+    unfollowed = 0
     for person in storage.list_people():
         if is_company_anchor(person):
             continue
-        if (
-            person.origin is not PersonOrigin.LINKEDIN_CONNECTIONS
-            or person.sources
-            or log_counts[person.person_id]
-            or person.person_id in objective_ids
-            or person.person_id in dossier_ids
-            or person.name_key in watched_keys
-        ):
-            curated.append(person)
+        if person.name_key in followed_keys:
+            followed.append(person)
         else:
-            imported += 1
-    return curated, imported, log_counts
+            unfollowed += 1
+    return followed, unfollowed, log_counts
 
 
 def _people_completeness(storage: Storage) -> tuple[list[PersonCompleteness], int]:
-    people, imported, log_counts = _split_people(storage)
+    people, unfollowed, log_counts = _split_people(storage)
     return (
         [
             PersonCompleteness(
@@ -528,23 +553,26 @@ def _people_completeness(storage: Storage) -> tuple[list[PersonCompleteness], in
             )
             for person in people
         ],
-        imported,
+        unfollowed,
     )
 
 
 def _companies_completeness(storage: Storage) -> list[CompanyCompleteness]:
-    all_people = storage.list_people()
-    watched, _imported, _logs = _split_people(storage)
+    """One row per followed company: a `company` member of any watchlist (#624).
 
-    # Keyed by company_key(), not the raw string: two people whose company
-    # fields are spelled or cased differently ("Acme" vs "ACME") share a key
-    # and must land in one row, not two duplicate, double-counted ones — the
-    # same normalization every other company-keyed code path (dossier.py,
-    # pack.py's company inference) already relies on.
+    A followed person's employer does not get a row of its own; it shows on
+    that person's line. people_watched counts followed people at the company.
+    """
+    all_people = storage.list_people()
+    followed_people, _unfollowed, _logs = _split_people(storage)
+
+    # Keyed by company_key(), not the raw string, so "Acme" and "ACME" on two
+    # lists are one row — the same normalization every other company-keyed
+    # code path (dossier.py, pack.py's company inference) relies on.
     display_by_key: dict[str, str] = {}
-    for person in sorted(watched, key=lambda p: p.name):
-        if person.company and (key := company_key(person.company)):
-            display_by_key.setdefault(key, person.company)
+    for kind, name in sorted(storage.all_watchlist_members(), key=lambda row: row[1]):
+        if kind == "company" and (key := company_key(name)):
+            display_by_key.setdefault(key, name.strip())
 
     all_documents = storage.list_external_documents()
     people_by_id = {person.person_id: person for person in all_people}
@@ -552,7 +580,7 @@ def _companies_completeness(storage: Storage) -> list[CompanyCompleteness]:
 
     results: list[CompanyCompleteness] = []
     for key, name in sorted(display_by_key.items(), key=lambda kv: kv[1]):
-        people = [person for person in watched if company_key(person.company or "") == key]
+        people = [person for person in followed_people if company_key(person.company or "") == key]
         documents = [
             document
             for document in all_documents
@@ -578,6 +606,9 @@ def _companies_completeness(storage: Storage) -> list[CompanyCompleteness]:
 def compute_completeness(storage: Storage, config: Config) -> CompletenessReport:
     """The current completeness snapshot across the four measurable sections.
 
+    The first call in a workspace runs the one-time #624 follow-set backfill
+    (ensure_following_backfilled); after that this function writes nothing.
+
     Reads the box-wide operator broadcast but never marks it delivered —
     this function is also called by paths with no human on the other end
     (the profile page's progress band, the profile HTML export), and
@@ -592,13 +623,14 @@ def compute_completeness(storage: Storage, config: Config) -> CompletenessReport
     from wingman.application.qotd import pending_question
 
     refused = model_rejection(config)
-    people, imported_people = _people_completeness(storage)
+    ensure_following_backfilled(storage)
+    people, unfollowed_people = _people_completeness(storage)
     return CompletenessReport(
         generated_at=datetime.now(UTC),
         career=_career_completeness(storage),
         job_criteria=_job_criteria_completeness(config),
         people=people,
-        imported_people=imported_people,
+        unfollowed_people=unfollowed_people,
         companies=_companies_completeness(storage),
         values=_values_completeness(storage),
         interview=_interview_completeness(storage),

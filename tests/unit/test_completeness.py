@@ -4,9 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from wingman.application.completeness import compute_completeness, next_actions
+from wingman.application.completeness import (
+    compute_completeness,
+    ensure_following_backfilled,
+    next_actions,
+)
 from wingman.application.job_scoring import save_criteria
-from wingman.application.people import add_person, attach_feed
+from wingman.application.people import FOLLOWING_LIST, add_person, attach_feed, follow_person
 from wingman.application.relationship import log_interaction
 from wingman.domain.person import FeedSource, Person, PersonOrigin
 from wingman.domain.profile import ClaimClassification, EvidenceSpan, ProfileItem, ProfileItemKind
@@ -107,19 +111,43 @@ def test_people_reflect_links_and_log_entries(workspace: Path) -> None:
     assert by_name["Cait Collins"].company == "Example Co"
 
 
-def test_companies_derived_from_watched_people(workspace: Path) -> None:
+def _settled(storage: Storage) -> None:
+    """Run the one-time #624 backfill on the empty workspace, so a test sees the
+    steady-state rule (only watchlist members are followed) rather than the
+    first-call migration."""
+    ensure_following_backfilled(storage)
+
+
+def test_company_rows_are_followed_companies(workspace: Path) -> None:
+    """#624: a company gets a row because it is followed, not because a
+    followed person happens to work there."""
     config = load_config()
     with Storage(config.db_path) as storage:
-        add_person("Jack Beckwith", storage, company="The DataFace")
-        add_person("Michael Hester", storage, company="The DataFace")
-        add_person("No Company Person", storage)
+        _settled(storage)
+        storage.watchlist_add("overnight", "company", "The DataFace")
+        for name, company in (
+            ("Jack Beckwith", "The DataFace"),
+            ("Michael Hester", "The DataFace"),
+            ("Olive Other", "Other Co"),
+        ):
+            person, _ = add_person(name, storage, company=company)
+            follow_person(storage, person)
         report = compute_completeness(storage, config)
-    assert len(report.companies) == 1
+    assert [company.name for company in report.companies] == ["The DataFace"]
     company = report.companies[0]
-    assert company.name == "The DataFace"
     assert company.people_watched == 2
     assert company.pov_cards == 0
     assert company.missing_pov_cards == 2
+    assert "Olive Other" in {person.name for person in report.people}
+
+
+def test_a_followed_company_with_nobody_followed_there_still_appears(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _settled(storage)
+        storage.watchlist_add("targets", "company", "Acme")
+        report = compute_completeness(storage, config)
+    assert [(c.name, c.people_watched) for c in report.companies] == [("Acme", 0)]
 
 
 def test_companies_dedup_by_key_not_raw_string(workspace: Path) -> None:
@@ -127,8 +155,12 @@ def test_companies_dedup_by_key_not_raw_string(workspace: Path) -> None:
     one row, not two duplicate, double-counted ones (review comment on #313)."""
     config = load_config()
     with Storage(config.db_path) as storage:
-        add_person("Alice", storage, company="Acme")
-        add_person("Bob", storage, company="ACME")
+        _settled(storage)
+        storage.watchlist_add("overnight", "company", "Acme")
+        storage.watchlist_add("targets", "company", "ACME")
+        for name, company in (("Alice", "Acme"), ("Bob", "ACME")):
+            person, _ = add_person(name, storage, company=company)
+            follow_person(storage, person)
         report = compute_completeness(storage, config)
     assert len(report.companies) == 1
     assert report.companies[0].people_watched == 2
@@ -290,100 +322,125 @@ def _import_contact(storage: Storage, name: str, company: str | None = None) -> 
     return person
 
 
-def test_imported_contacts_are_not_completeness_gaps(workspace: Path) -> None:
-    """#465/#545: a connections import put 2,600+ people in the store and the
-    whole 'Things to do' list became 'build POV cards for 2628 watched people'
-    and 'log what happened with 2669 people' — walls, not actions."""
+def _followed(storage: Storage, name: str, company: str | None = None) -> Person:
+    person, _ = add_person(name, storage, company=company)
+    follow_person(storage, person)
+    return person
+
+
+def test_only_watchlist_members_are_measured(workspace: Path) -> None:
+    """#624: completeness measures the follow set. An import, a hand-added
+    record nobody followed, a log entry, an objective or a dossier does not
+    make someone followed; a watchlist entry does."""
+    from wingman.application.dossier_research import save_person_dossier
+
     config = load_config()
     with Storage(config.db_path) as storage:
-        add_person("Curated Carla", storage, company="Acme")
+        _settled(storage)
+        _followed(storage, "Followed Fay", company="Acme")
+        storage.watchlist_add("overnight", "person", "Overnight Otto")
+        add_person("Overnight Otto", storage)
+        add_person("Unfollowed Ursula", storage)
+        _import_contact(storage, "Logged Lou")
+        log_interaction("Logged Lou", "Coffee.", config, storage)
+        objective_target = _import_contact(storage, "Objective Ola")
+        storage.save_objective(
+            RelationshipObjective(
+                person_id=objective_target.person_id, goal="g", thesis="t", next_move="n"
+            )
+        )
+        _import_contact(storage, "Researched Rae")
+        save_person_dossier("Researched Rae", "Approved findings.", storage)
         for index in range(25):
             _import_contact(storage, f"Imported {index}", company="Initech")
         report = compute_completeness(storage, config)
         titles = [action.title for action in next_actions(report)]
 
-    assert [person.name for person in report.people] == ["Curated Carla"]
-    assert report.imported_people == 25
-    assert "Build POV cards for 1 watched people" in titles
-    assert "Log what happened with 1 people" in titles
-    # The import's company must not create a company row either: Initech has
-    # no curated person.
-    assert [company.name for company in report.companies] == ["Acme"]
+    assert sorted(person.name for person in report.people) == ["Followed Fay", "Overnight Otto"]
+    assert report.unfollowed_people == 29
+    assert report.companies == []
+    assert not any("29" in title or "27" in title for title in titles)
 
 
-def test_a_feed_or_a_log_entry_brings_an_import_into_the_list(workspace: Path) -> None:
+def test_removing_someone_from_every_list_unfollows_them(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
-        fed = _import_contact(storage, "Fed Fiona", company="Acme")
-        _import_contact(storage, "Logged Lou", company="Acme")
-        _import_contact(storage, "Untouched Una", company="Acme")
-        attach_feed(fed, FeedSource(url="https://fiona.example/feed"), storage)
-        log_interaction("Logged Lou", "Coffee.", config, storage)
+        _settled(storage)
+        _followed(storage, "Fay")
+        storage.watchlist_add("overnight", "person", "Fay")
+        storage.watchlist_remove(FOLLOWING_LIST, "person", "Fay")
+        assert [p.name for p in compute_completeness(storage, config).people] == ["Fay"]
+        storage.watchlist_remove("overnight", "person", "Fay")
         report = compute_completeness(storage, config)
-
-    assert {person.name for person in report.people} == {"Fed Fiona", "Logged Lou"}
-    assert report.imported_people == 1
-    assert report.companies[0].people_watched == 2
+    assert report.people == []
+    assert report.unfollowed_people == 1
 
 
-def test_an_objective_or_a_watchlist_entry_curates_an_import(workspace: Path) -> None:
-    """Saving a goal/thesis/next move for someone, or putting them on a
-    watchlist, is as deliberate as logging with them. Found by probing the
-    first version of this change, which left both in the 'untouched' count."""
+def test_the_backfill_follows_everyone_the_previous_rule_measured(workspace: Path) -> None:
+    """Upgrading must not silently empty the People section: everyone #601's
+    derived rule listed is put on FOLLOWING_LIST on the first run."""
+    from wingman.application.dossier_research import save_person_dossier
+
     config = load_config()
     with Storage(config.db_path) as storage:
-        with_goal = _import_contact(storage, "Objective Olive", company="Acme")
+        add_person("Hand Added Hal", storage)
+        _import_contact(storage, "Logged Lou")
+        log_interaction("Logged Lou", "Coffee.", config, storage)
+        objective_target = _import_contact(storage, "Objective Ola")
         storage.save_objective(
             RelationshipObjective(
-                person_id=with_goal.person_id, goal="g", thesis="t", next_move="n"
+                person_id=objective_target.person_id, goal="g", thesis="t", next_move="n"
             )
         )
-        _import_contact(storage, "Watched  Wes", company="Acme")
-        storage.watchlist_add("overnight", "person", "watched wes")
-        # A company on a watchlist is not a person on it.
-        _import_contact(storage, "Acme", company="Acme")
-        storage.watchlist_add("overnight", "company", "Acme")
-        _import_contact(storage, "Untouched Una", company="Acme")
+        _import_contact(storage, "Researched Rae")
+        save_person_dossier("Researched Rae", "Approved findings.", storage)
+        fed = _import_contact(storage, "Fed Fran")
+        attach_feed(fed, FeedSource(url="https://fran.example/feed"), storage)
+        _import_contact(storage, "Untouched Uma")
         report = compute_completeness(storage, config)
+        following = {name for _kind, name in storage.watchlist_members(FOLLOWING_LIST)}
 
-    assert {person.name for person in report.people} == {"Objective Olive", "Watched  Wes"}
-    assert report.imported_people == 2
+    expected = {"Hand Added Hal", "Logged Lou", "Objective Ola", "Researched Rae", "Fed Fran"}
+    assert following == expected
+    assert {person.name for person in report.people} == expected
+    assert report.unfollowed_people == 1
+    assert fed.person_id
 
 
-def test_editing_an_import_with_people_add_does_not_curate_it(workspace: Path) -> None:
-    """Documents a known limit rather than endorsing it: add_person keeps
-    origin=linkedin_connections and there is no stored 'touched' signal. If
-    this test starts failing because someone added one, update it and the
-    _split_people docstring together."""
+def test_the_backfill_runs_once_and_never_re_adds_someone_removed(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
-        _import_contact(storage, "Edited Ed", company="Acme")
-        add_person("Edited Ed", storage, position="CTO")
+        add_person("Hal", storage)
+        assert ensure_following_backfilled(storage) == 1
+        storage.watchlist_remove(FOLLOWING_LIST, "person", "Hal")
+        assert ensure_following_backfilled(storage) is None
+        add_person("Later Lee", storage)
         report = compute_completeness(storage, config)
-
+        assert storage.watchlist_members(FOLLOWING_LIST) == []
     assert report.people == []
-    assert report.imported_people == 1
+    assert report.unfollowed_people == 2
 
 
-def test_the_people_heading_does_not_claim_zero_tracked_over_an_import(
-    workspace: Path,
-) -> None:
+def test_the_people_heading_counts_followed_people(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
-        for index in range(30):
+        _settled(storage)
+        _followed(storage, "Fay")
+        for index in range(3):
             _import_contact(storage, f"Imported {index}")
         report = compute_completeness(storage, config)
-
     markdown = render_completeness_markdown(report)
-    assert "## People (0 curated)" in markdown
-    assert "tracked)" not in markdown
-    assert "People (0 curated)" in render_completeness_html(report)
-    assert "30 imported contacts" in markdown
+    html = render_completeness_html(report)
+    assert "## People (1 followed)" in markdown
+    assert "People (1 followed)" in html
+    assert "3 other people you are not following" in markdown
+    assert "3 other people you are not following" in html
 
 
 def test_the_report_stays_bounded_however_many_people_are_imported(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
+        _settled(storage)
         for index in range(2000):
             _import_contact(storage, f"Contact {index}", company=f"Company {index % 400}")
         report = compute_completeness(storage, config)
@@ -392,16 +449,17 @@ def test_the_report_stays_bounded_however_many_people_are_imported(workspace: Pa
     html = render_completeness_html(report)
     assert len(markdown) < 8_000
     assert len(html) < 40_000
-    assert "2000 imported contacts not listed or counted as gaps" in markdown
+    assert "2000 other people you are not following" in markdown
     assert "Contact 17" not in markdown
     assert report.companies == []
 
 
-def test_curated_people_are_capped_in_the_rendered_report(workspace: Path) -> None:
+def test_followed_people_are_capped_in_the_rendered_report(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
+        _settled(storage)
         for index in range(MAX_PEOPLE_LISTED + 7):
-            add_person(f"Person {index:03d}", storage)
+            _followed(storage, f"Person {index:03d}")
         report = compute_completeness(storage, config)
 
     assert len(report.people) == MAX_PEOPLE_LISTED + 7
@@ -409,15 +467,12 @@ def test_curated_people_are_capped_in_the_rendered_report(workspace: Path) -> No
     assert "…and 7 more" in render_completeness_html(report)
 
 
-def test_companies_are_capped_when_many_curated_people_work_at_distinct_companies(
-    workspace: Path,
-) -> None:
-    """Capping People alone left Companies unbounded: 2,000 curated people at
-    distinct employers rendered ~150k characters of Markdown and ~1.2M of HTML."""
+def test_companies_are_capped_when_many_companies_are_followed(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
+        _settled(storage)
         for index in range(2000):
-            add_person(f"Person {index:04d}", storage, company=f"Company {index:04d}")
+            storage.watchlist_add("targets", "company", f"Company {index:04d}")
         report = compute_completeness(storage, config)
 
     assert len(report.companies) == 2000
@@ -436,62 +491,25 @@ def test_companies_are_capped_when_many_curated_people_work_at_distinct_companie
 def test_companies_list_the_neediest_first(workspace: Path) -> None:
     config = load_config()
     with Storage(config.db_path) as storage:
-        add_person("Ann", storage, company="Alpha")
-        add_person("Bo", storage, company="Zeta")
-        add_person("Cy", storage, company="Zeta")
+        _settled(storage)
+        storage.watchlist_add("targets", "company", "Alpha")
+        storage.watchlist_add("targets", "company", "Zeta")
+        _followed(storage, "Ann", company="Alpha")
+        _followed(storage, "Bo", company="Zeta")
+        _followed(storage, "Cy", company="Zeta")
         report = compute_completeness(storage, config)
 
     markdown = render_completeness_markdown(report)
     assert markdown.index("- Zeta") < markdown.index("- Alpha")
 
 
-def test_an_approved_deep_dive_dossier_curates_an_import(workspace: Path) -> None:
-    """people_deep_dive_save is an explicit approval gate, so saved research
-    is a deliberate act on that person, the same as a feed or a log entry."""
-    from wingman.application.dossier_research import save_person_dossier
-
-    config = load_config()
-    with Storage(config.db_path) as storage:
-        _import_contact(storage, "Researched Rae", company="Acme")
-        _import_contact(storage, "Untouched Uma", company="Initech")
-        save_person_dossier("Researched Rae", "Findings the owner approved.", storage)
-        report = compute_completeness(storage, config)
-
-    assert [person.name for person in report.people] == ["Researched Rae"]
-    assert report.imported_people == 1
-    assert [company.name for company in report.companies] == ["Acme"]
-
-
-def test_a_pov_card_alone_does_not_curate_an_import(workspace: Path) -> None:
-    """A POV card is one of the gaps this report measures; letting it decide
-    who is measured would make the metric circular."""
-    from wingman.domain.pov import PovCard
-
-    config = load_config()
-    with Storage(config.db_path) as storage:
-        person = _import_contact(storage, "Carded Cal")
-        storage.save_pov_card(
-            PovCard(
-                person_id=person.person_id,
-                person_name=person.name,
-                documents_used=0,
-                provider="test",
-                model="test",
-                prompt_version="test",
-            )
-        )
-        report = compute_completeness(storage, config)
-
-    assert report.people == []
-    assert report.imported_people == 1
-
-
-def test_setup_guide_still_counts_imported_people_as_tracked(workspace: Path) -> None:
+def test_setup_guide_still_counts_everyone_as_tracked(workspace: Path) -> None:
     from wingman.application.setup_guide import _finished_steps
 
     config = load_config()
     with Storage(config.db_path) as storage:
-        add_person("Curated Carla", storage)
+        _settled(storage)
+        _followed(storage, "Fay")
         _import_contact(storage, "Imported A")
         _import_contact(storage, "Imported B")
         report = compute_completeness(storage, config)
