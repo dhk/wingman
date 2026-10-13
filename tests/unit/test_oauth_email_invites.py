@@ -1,7 +1,7 @@
 """Email-bound OAuth invites: the store and CLI (#584, RFC-081 amendment #583).
 
-Recording only. Nothing here changes what a sign-in does; claiming an invite
-on a verified sign-in is #585.
+The CLI also prepares each invite's tenant (#585); claiming it on a verified
+sign-in is tested in test_oauth_invite_claim.
 """
 
 from __future__ import annotations
@@ -39,6 +39,19 @@ def _files(tmp_path: Path) -> tuple[Path, Path, Path]:
         encoding="utf-8",
     )
     return identities, registry, onboarding_path_for(identities)
+
+
+def _prepare_args(tmp_path: Path) -> list[str]:
+    """Email invites prepare the tenant now (#585): where, and as whom."""
+    import os
+    import pwd
+
+    return [
+        "--data-root",
+        str(tmp_path / "tenants"),
+        "--service-user",
+        pwd.getpwuid(os.getuid()).pw_name,
+    ]
 
 
 def _everything_on_disk(directory: Path) -> str:
@@ -228,14 +241,30 @@ def test_cli_email_invite_reserves_without_echoing_the_address(tmp_path: Path) -
             str(identities),
             "--registry",
             str(registry),
+            *_prepare_args(tmp_path),
         ],
     )
 
     assert result.exit_code == 0, result.output
     assert "pat" in result.output
     assert "example.com" not in result.output.lower()
-    assert "#585" in result.output  # says plainly it is not claimed automatically yet
+    assert "no further step" in result.output  # a matching sign-in lets them in
     assert _store(tmp_path).match_email(EMAIL) == "pat"
+    assert 'slug = "pat"' in registry.read_text(encoding="utf-8")  # tenant prepared now
+
+
+def test_cli_email_invite_needs_a_data_root(tmp_path: Path) -> None:
+    identities, registry, _state = _files(tmp_path)
+
+    result = cli.invoke(
+        app,
+        ["tenant", "oauth-invite", "--email", EMAIL, "--slug", "pat"]
+        + ["--identities", str(identities), "--registry", str(registry)],
+    )
+
+    assert result.exit_code == 1
+    assert "--data-root" in result.output
+    assert _store(tmp_path).invites() == []
 
 
 def test_cli_positional_slug_invite_still_works(tmp_path: Path) -> None:
@@ -286,7 +315,7 @@ def test_cli_csv_import_is_all_or_nothing_and_names_lines_not_addresses(tmp_path
     refused = cli.invoke(
         app,
         ["tenant", "oauth-invite", "--from-csv", str(bad), "--identities", str(identities)]
-        + ["--registry", str(registry)],
+        + ["--registry", str(registry), *_prepare_args(tmp_path)],
     )
 
     assert refused.exit_code == 1
@@ -301,7 +330,7 @@ def test_cli_csv_import_is_all_or_nothing_and_names_lines_not_addresses(tmp_path
     accepted = cli.invoke(
         app,
         ["tenant", "oauth-invite", "--from-csv", str(good), "--identities", str(identities)]
-        + ["--registry", str(registry)],
+        + ["--registry", str(registry), *_prepare_args(tmp_path)],
     )
 
     assert accepted.exit_code == 0, accepted.output
@@ -331,7 +360,7 @@ def test_cli_csv_validation(tmp_path: Path, body: str, message: str) -> None:
     result = cli.invoke(
         app,
         ["tenant", "oauth-invite", "--from-csv", str(csv_path), "--identities", str(identities)]
-        + ["--registry", str(registry)],
+        + ["--registry", str(registry), *_prepare_args(tmp_path)],
     )
 
     assert result.exit_code == 1
