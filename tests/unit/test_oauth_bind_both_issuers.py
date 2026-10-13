@@ -201,6 +201,80 @@ def test_quoted_values_are_read_as_systemd_reads_them(service_config: Path) -> N
     assert read_service_issuers().mcp == MCP_ISSUER
 
 
+def _write_web_args(service_config: Path, args: str) -> None:
+    (service_config / "oauth-web.env").write_text(
+        f"WINGMAN_OAUTH_WEB_CLIENT_SECRET={SECRET}\nWINGMAN_OAUTH_WEB_ARGS={args}\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        f"--oauth-web-client-id '{CLIENT_ID}' --oauth-web-redirect-uri https://x.example/cb",
+        f'--oauth-web-client-id "{CLIENT_ID}" --oauth-web-redirect-uri https://x.example/cb',
+        f"--oauth-web-client-id='{CLIENT_ID}' --oauth-web-redirect-uri https://x.example/cb",
+        f"\"--oauth-web-client-id {CLIENT_ID} --oauth-web-redirect-uri 'https://x.example/cb'\"",
+    ],
+)
+def test_quoted_arguments_are_unquoted_as_the_service_receives_them(
+    service_config: Path, args: str
+) -> None:
+    # systemd splits an unquoted $VAR in ExecStart= into words, honouring and
+    # removing quotes; the CLI must derive the issuer the service actually uses.
+    _write_web_args(service_config, args)
+
+    assert read_service_issuers().browser == BROWSER_ISSUER
+
+
+def test_a_quoted_issuer_argument_is_unquoted(service_config: Path) -> None:
+    (service_config / "oauth.env").write_text(
+        f"WINGMAN_OAUTH_ARGS=--oauth-issuer '{MCP_ISSUER}' --oauth-audience x\n",
+        encoding="utf-8",
+    )
+
+    assert read_service_issuers().mcp == MCP_ISSUER
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        f"--oauth-web-client-id '{CLIENT_ID} --oauth-web-redirect-uri https://x.example/cb",
+        f"--oauth-web-client-id {CLIENT_ID}\\x --oauth-web-redirect-uri https://x.example/cb",
+        f"--oauth-web-client-id 'client {CLIENT_ID}' --oauth-web-redirect-uri {SECRET}",
+    ],
+)
+def test_argument_syntax_the_reader_cannot_match_exactly_is_refused(
+    service_config: Path, args: str
+) -> None:
+    _write_web_args(service_config, args)
+
+    with pytest.raises(ServiceIssuersError) as caught:
+        read_service_issuers()
+
+    assert SECRET not in str(caught.value)
+    assert "nothing was bound" in str(caught.value)
+
+
+def test_bind_with_a_quoted_client_id_binds_the_real_browser_issuer(
+    service_config: Path, tmp_path: Path
+) -> None:
+    _write_web_args(
+        service_config,
+        f"--oauth-web-client-id '{CLIENT_ID}' --oauth-web-redirect-uri https://x.example/cb",
+    )
+    registry = _registry(tmp_path, "trent")
+    identities = tmp_path / "oauth-identities.toml"
+
+    result = cli.invoke(app, _bind("trent", identities, registry, issuer=MCP_ISSUER))
+
+    assert result.exit_code == 0, result.output
+    assert IdentityMap.from_toml(identities).entries() == {
+        (MCP_ISSUER, SUB): "trent",
+        (BROWSER_ISSUER, SUB): "trent",
+    }
+
+
 # --- oauth-bind ---------------------------------------------------------------
 
 

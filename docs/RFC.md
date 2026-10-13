@@ -1525,6 +1525,10 @@ trusts, on the same #582 evidence (one WorkOS user, one `sub`, both issuers).
   plain `sudo`, whose environment never loads them, so they are parsed as
   data: never sourced, only those keys kept, and nothing else in them (the
   browser client secret included) printed, logged or put in an exception.
+  The args are split as systemd expands an unquoted `$VAR`: whitespace
+  words, single and double quotes honoured and removed. A backslash or an
+  unbalanced quote is refused, since that is where the two parsers could
+  disagree and bind an issuer the service never checks.
   `--oauth-config` / `--oauth-web-config` may name the files on an unusual
   install; they cannot name an issuer.
 - **Fail closed.** Absent or unreadable configuration (reported distinctly),

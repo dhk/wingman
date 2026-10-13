@@ -21,6 +21,7 @@ ever reaches a message, a log line or an exception.
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -106,22 +107,51 @@ def read_env_keys(text: str, names: set[str]) -> dict[str, str]:
     return values
 
 
-def _flag_value(args: str, flag: str, *, key: str, path: Path) -> str:
-    """The single value given to `flag` in a whitespace-split args string.
+def _split_like_systemd(args: str, *, key: str, path: Path) -> list[str]:
+    """`args` as the words the service receives from an unquoted `$VAR`.
 
-    systemd expands an unquoted `$VAR` in ExecStart= into whitespace-separated
-    words, so that is how the service sees these. Missing or repeated with
-    different values is refused; the message names the flag and key, never
-    the string itself.
+    systemd splits at whitespace and honours and removes single and double
+    quotes, so `'client_01X'` reaches the service as `client_01X`. Plain and
+    quoted words are matched exactly here. Backslash escapes and unbalanced
+    quotes are where the two parsers could differ, so they are refused rather
+    than guessed at. The message names the key, never the string.
     """
-    words = args.split()
+    unsupported = ServiceIssuersError(
+        f"{key} in {path} uses argument syntax this command cannot read exactly as the "
+        "shared service does (a backslash or an unbalanced quote), so its trusted "
+        "issuers are unknown; nothing was bound"
+    )
+    if "\\" in args:
+        raise unsupported
+    lexer = shlex.shlex(args, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        raise unsupported from None
+
+
+def _flag_value(args: str, flag: str, *, key: str, path: Path) -> str:
+    """The single value given to `flag` in the service's args string.
+
+    Missing, empty, repeated with different values, or a value that is not one
+    plain word (whitespace or a quote left in it) is refused; the message names
+    the flag and key, never the string itself.
+    """
+    words = _split_like_systemd(args, key=key, path=path)
     found: list[str] = []
     for position, word in enumerate(words):
         if word == flag and position + 1 < len(words):
             found.append(words[position + 1])
         elif word.startswith(flag + "="):
             found.append(word.split("=", 1)[1])
-    if not found or not all(found) or len(set(found)) != 1:
+    if (
+        not found
+        or not all(found)
+        or len(set(found)) != 1
+        or any(char.isspace() or char in "\"'" for char in found[0])
+    ):
         raise ServiceIssuersError(
             f"{key} in {path} does not give exactly one {flag} value, so the shared "
             "service's trusted issuers are unknown; nothing was bound"

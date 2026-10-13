@@ -934,7 +934,10 @@ browser login, so the MCP issuer alone). `oauth-approve` runs as root, whose
 environment never loads those files, so they are parsed as data: never
 sourced, only those two keys (and `WINGMAN_OAUTH_ISSUER`, cross-checked) kept,
 and nothing else from them, including the browser client secret, ever
-printed or logged. `--oauth-config` / `--oauth-web-config` point at the files
+printed or logged. The args are split into words the way systemd expands an
+unquoted `$VAR`, quotes honoured and removed (`'client_01X'` is
+`client_01X`); a backslash or an unbalanced quote is refused rather than
+guessed at. `--oauth-config` / `--oauth-web-config` point at the files
 on a box provisioned with `WINGMAN_SHARED_OAUTH_CONFIG` /
 `WINGMAN_SHARED_OAUTH_WEB_CONFIG`; they name files, not issuers.
 
