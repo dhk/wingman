@@ -254,9 +254,10 @@ def test_workos_code_exchange_uses_documented_json_shape(
     monkeypatch.setattr(browser_module.urllib.request, "urlopen", open_request)
     sessions = client.app.state.oauth_sessions
 
-    token = sessions._exchange_code("code-good", "verifier-good")
+    token, user = sessions._exchange_code("code-good", "verifier-good")
 
     assert token == "access-good"
+    assert user is None  # no user object in this response
     request = requests[0]
     assert request.headers["Content-type"] == "application/json"
     assert json.loads(request.data) == {

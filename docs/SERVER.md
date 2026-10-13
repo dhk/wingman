@@ -831,15 +831,21 @@ sudo -iu wingman-shared wingman tenant oauth-invite taylor \
   --registry /etc/wingman/tenants.toml
 ```
 
-`--email <addr> --slug <slug>` (or `--from-csv`, header `email,slug`) also
-binds the invite to an address, stored as HMAC-SHA256 under a per-install key
-in `oauth-identities-onboarding.key` (mode 0600, created by the first email
+`--email <addr> --slug <slug>` (or `--from-csv`, header `email,slug`), run
+with `sudo` and `--data-root /home/wingman-shared/tenants`, binds the invite to
+an address and prepares the person's empty, unbound tenant now. The address is
+stored as HMAC-SHA256 under a per-install key in
+`oauth-identities-onboarding.key` (mode 0600, created by the first email
 invite; back it up with the state file, or existing email invites show
-`key-mismatch` and stop matching). `oauth-invites` and `oauth-invite-revoke`
-list and withdraw invites. This is recording only until #585: sign-in does not
-yet claim an email invite (RFC-081, 2026-10-09 amendment).
+`key-mismatch` and stop matching). A sign-in on either surface whose
+WorkOS-verified address matches binds that identity under both trusted issuers
+and lets them in (#585; RFC-081, 2026-10-09 amendment). The MCP side asks the
+AuthKit issuer's `/oauth2/userinfo` with the already-validated token: no
+WorkOS API key is needed. `oauth-invites` and `oauth-invite-revoke` list and
+withdraw invites. The slug-only form below remains the fallback.
 
-Their first successful WorkOS sign-in is still refused with 403. It records
+**Slug-only invites (the fallback), and anyone signing in without a matching
+email invite:** their first successful WorkOS sign-in is refused with 403. It records
 only the verified opaque `(iss, sub)`, first/last-seen times, and sign-in count
 in `oauth-identities-onboarding.json`; no bearer token or email is stored, no
 workspace exists, and no tenant data is reachable. Browser setup and MCP use
@@ -906,7 +912,9 @@ sudo -iu wingman-shared wingman tenant oauth-bind taylor \
   --registry /etc/wingman/tenants.toml
 ```
 
-Approval is the only step that creates a workspace. It claims both the invite
+For a slug-only invite, approval is the step that creates the workspace (an
+email invite's workspace is created earlier, by `oauth-invite --email`, and
+`oauth-approve` accepts it as the manual fallback). It claims both the invite
 and identity against competing operators, writes an isolated workspace and
 registry entry, binds the exact verified identity, consumes the pending row,
 and signals the shared process to reload. Signal delivery is reported exactly;
@@ -1690,73 +1698,3 @@ per-account secrets — the same client id identifies the app for every
 account on the box, so they live in `wingman.env`, not `secrets.env`.
 
 OAuth setup and workspace-summary headers display the workspace slug, never the server filesystem path (#581). The shared OAuth routes serve only setup, key entry, upload and logout; exported profile pages already hide paths. OAuth upload and key-store failures use safe recovery messages rather than raw exceptions containing server paths. Workspace headers use the registered tenant slug even when the directory basename differs.
-### Temporary OAuth identity investigation (#582)
-
-`WINGMAN_OAUTH_IDENTITY_DIAGNOSTICS=1` enables an operator-only local log
-probe; any other value (including unset) disables it. Enable only for an
-announced, short diagnostic window on the shared process. It observes every
-valid identity using that process during the window, not just the tester.
-There is no new endpoint, tool, credential, or admission behavior.
-
-After normal signature/issuer/expiry/audience or browser-client validation,
-`wingman.oauth_diagnostics` emits JSON tagged `oauth_identity_diagnostic`:
-known claim names, a count of unfamiliar names, strict boolean email
-verification flags (missing/malformed is null), and whether the complete
-subject was seen on the other configured surface. Browser code exchange
-also reports known user-field names, verification, and whether response
-`user.id` equals the verified session-token subject. No token, code, secret,
-email value, issuer value, subject value, digest, scope value, or user profile
-value is emitted by this probe. Existing application logging is unchanged.
-
-The cross-surface observation uses process-random HMAC digests held only in
-memory, expires after ten minutes, and is capped at 64 observations. A false
-result means **not observed matching**, not proof of different identities:
-restart, expiry, the cap, or different worker processes can cause it. Each
-surface/subject emits once per window. Use a fresh browser login and a read-only
-Claude connector request in the same process/window; whichever is second
-can report a match. The exchange observation requires a fresh browser login;
-a previously authenticated setup page does not repeat the code exchange.
-This compares subject values across the two operator-configured trusted
-surfaces solely for research, and never changes tenant bindings.
-
-Known custom names include `urn:wingman:email`,
-`urn:wingman:email_verified`, and `urn:myapp:email`. Other names are counted
-rather than printed because even a claim name could contain sensitive text.
-The custom verification flag is reported separately from `email_verified`.
-The probe does not establish which sign-in provider was used; correlate the
-controlled Google sign-in separately.
-
-**Userinfo (MCP surface).** The first time a subject is seen on the MCP
-surface in a window, a background daemon thread (never the request path, never
-admission) sends that same already-validated access token to the configured
-issuer's own `…/oauth2/userinfo` (GET; one POST retry on 405; 5 s timeout).
-The token is sent only when the issuer is https and the endpoint is on the
-issuer's own host; otherwise the line says `"status": "refused-issuer"`. It
-logs `surface: "mcp_userinfo"`, the HTTP status (or the exception class name),
-which known fields came back (`sub`, `email`, `email_verified`, `name`,
-`given_name`, `family_name`, `picture`, `updated_at`; others counted), the
-strict boolean `email_verified`, and `sub_matches_verified_sub`. Never the
-token, the body, the email, the subject or any header. This answers whether
-Claude's resource-bound token can read a verified email without a management
-API key or a WorkOS JWT template.
-
-**Procedure** (on lobster; one short window, announced):
-
-1. Add `WINGMAN_OAUTH_IDENTITY_DIAGNOSTICS=1` as a line in
-   `/home/wingman-shared/.config/wingman/wingman.env`.
-2. `wg redeploy-shared`.
-3. Within ten minutes: a fresh browser login at
-   https://lobster.tail08dfce.ts.net/shared/login (sign out first, or use a
-   private window, so the code exchange actually happens), **and** one
-   read-only tool call through the Claude connector
-   (https://lobster.tail08dfce.ts.net/shared/mcp), e.g. ask "what's my status?".
-4. Read the lines:
-   `journalctl _UID=$(id -u wingman-shared) --since "15 min ago" | grep oauth_identity_diagnostic`
-5. Remove the line from `wingman.env`, then `wg redeploy-shared` again.
-
-This code is temporary: it is removed in a follow-up PR once #582 closes.
-
-Review and authorize deployment/restart separately. After collecting the
-sanitized lines, unset the environment variable and restart to remove the
-in-memory observations; retain or remove sanitized logs under the host's
-normal policy. Do not paste complete authentication responses into an issue.

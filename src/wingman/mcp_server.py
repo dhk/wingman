@@ -5838,6 +5838,7 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         build_oauth_settings,
         jwks_key_resolver,
     )
+    from wingman.infrastructure.oauth_invite_claim import EmailInviteClaimer
     from wingman.infrastructure.oauth_onboarding import (
         OAuthOnboardingStore,
         onboarding_path_for,
@@ -5864,23 +5865,10 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
     onboarding_store = OAuthOnboardingStore(onboarding_path_for(identity_path))
     notifier = notifier_from_env(os.environ, identity_path)
     record_pending = pending_recorder(identity_path, onboarding_store, notifier)
-    bind_oauth_routing(
-        app,
-        f"{prefix}/mcp/{{token}}",
-        f"{prefix}/mcp",
-        index,
-        identities,
-        settings,
-        resolve_key,
-        record_pending,
-    )
     oauth_web_client_id = getattr(args, "oauth_web_client_id", None)
+    browser_settings = None
     if oauth_web_client_id:
-        from wingman.infrastructure.oauth_browser import (
-            OAuthBrowserSessions,
-            bind_oauth_browser,
-            build_oauth_browser_settings,
-        )
+        from wingman.infrastructure.oauth_browser import build_oauth_browser_settings
 
         try:
             browser_settings = build_oauth_browser_settings(
@@ -5892,6 +5880,29 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
         except OAuthConfigError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
+    # Email-bound invites (#585): the two issuers this process trusts are the
+    # only ones a claim binds under — one WorkOS user, one subject, both surfaces.
+    invite_claimer = EmailInviteClaimer(
+        identity_path,
+        onboarding_store,
+        index,
+        identities,
+        [settings.issuer] + ([browser_settings.session_issuer] if browser_settings else []),
+    )
+    bind_oauth_routing(
+        app,
+        f"{prefix}/mcp/{{token}}",
+        f"{prefix}/mcp",
+        index,
+        identities,
+        settings,
+        resolve_key,
+        record_pending,
+        invite_claimer=invite_claimer,
+    )
+    if browser_settings is not None:
+        from wingman.infrastructure.oauth_browser import OAuthBrowserSessions, bind_oauth_browser
+
         bind_oauth_browser(
             app,
             prefix,
@@ -5902,6 +5913,7 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
                 index,
                 jwks_key_resolver(browser_settings.session_jwks_uri),
                 record_pending=record_pending,
+                invite_claimer=invite_claimer,
             ),
         )
     if notifier is not None:

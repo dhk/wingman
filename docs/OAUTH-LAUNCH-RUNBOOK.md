@@ -113,16 +113,51 @@ First decide which path the person is on:
 | Person | Path |
 |---|---|
 | Already has a tenant (a capability URL today) | §3: `oauth-bind` each verified identity to their **existing** slug. Never `oauth-invite` or `oauth-approve` them: that creates a second, empty workspace. |
-| New to this server | This section: `oauth-invite` a slug, they sign in on **both** surfaces (browser `/login` and the Claude connector), `oauth-approve` one verified identity, `oauth-bind` the other to the same slug. |
+| New to this server, address known | This section, **email invite**: `oauth-invite --email` (or `--from-csv`) with sudo, send the [invitee message](OAUTH-INVITEE-MESSAGE.md). Their first sign-in with that verified address, on either surface, lets them in. Nothing else to do. |
+| New to this server, address unknown, or the email invite did not match | This section, **fallback**: `oauth-invite` a slug, they sign in, `oauth-approve` one verified identity, `oauth-bind` the other to the same slug. |
 
 Either way, `oauth-bind` removes the identity it binds from the pending queue
 (#569), so `oauth-pending` afterwards lists only people still waiting.
 
 Send the invitee the [invitee message](OAUTH-INVITEE-MESSAGE.md) with the
-connector address. It tells them that "couldn't connect" before approval is
-expected and what to send you, which the Claude error itself does not.
+connector address. It tells them which Google address to use and what to
+send you if something goes wrong, which the Claude error itself does not.
 
-Reserve the slug before sending the connector address:
+**Email invite (the normal path, #585).** Prepare the tenant and bind it to the
+address you are sending the invite to:
+
+```bash
+sudo /home/wingman-shared/.local/bin/wingman tenant oauth-invite \
+  --email <addr> --slug <slug> \
+  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
+  --registry /etc/wingman/tenants.toml \
+  --data-root /home/wingman-shared/tenants
+```
+
+Or many at once with `--from-csv invites.csv` instead of `--email/--slug`
+(header `email,slug`; every row is checked before any is saved, and errors
+name lines, not addresses). It needs sudo because it adds the empty,
+unprivileged, unfunded tenant to the root-owned registry now; nobody can reach
+it until a sign-in claims it. The command signals the running service to
+reload. The address is stored only as a keyed hash; matching expires after
+`--expires-days` (default 30). `oauth-invites` lists them (slug, kind, expiry,
+status; never an address). `--email` puts the address in shell history; prefer
+the CSV, and delete it afterwards.
+
+When the person signs in, in Claude or in the browser, in either order, with a
+Google account whose WorkOS-verified address is that one, they are bound to
+the prepared tenant on **both** surfaces and let straight in. The invite is
+consumed. The log line is `email invite claimed: ref=XXXX-XXXX slug=<slug>`.
+
+If they sign in with a different address, theirs is unverified, or the invite
+expired, they get today's refusal and reference instead; use the fallback
+below with the same slug (`oauth-approve` accepts a prepared tenant).
+`oauth-invite-revoke <slug>` withdraws an unclaimed invite; its prepared
+tenant stays registered but unbound, so remove its registry entry and
+directory by hand if you will not reuse the slug.
+
+**Fallback: slug-only invite and manual approval.** Reserve the slug before
+sending the connector address:
 
 ```bash
 sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-invite <slug> \
@@ -130,19 +165,8 @@ sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-inv
   --registry /etc/wingman/tenants.toml
 ```
 
-**Email invites (recorded, not yet claimed).** You may bind the invite to the
-address you sent it to, with `--email <addr> --slug <slug>`, or many at once
-with `--from-csv invites.csv` (header `email,slug`; every row is checked
-before any is saved, and errors name lines, not addresses). The address is
-stored only as a keyed hash and matching expires after `--expires-days`
-(default 30). `oauth-invites` lists them (slug, kind, expiry, status; never an
-address) and `oauth-invite-revoke <slug>` withdraws one. Until #585 ships, a
-sign-in does **not** claim an email invite: the person still gets a pending
-row and a reference, and you approve them exactly as below. `--email` puts the
-address in shell history; prefer the CSV, and delete it afterwards.
-
-The invitee's first verified sign-in remains forbidden and creates no
-workspace. It records the opaque issuer/subject pair in the bounded pending
+With a slug-only invite, the invitee's first verified sign-in remains
+forbidden and creates no workspace. It records the opaque issuer/subject pair in the bounded pending
 queue. Browser setup and MCP use different WorkOS token classes and issuers,
 so have the invitee attempt both flows before approval. `oauth-pending` may
 show two rows for that person. Confirm both identities out of band; do not
@@ -178,8 +202,8 @@ sudo -iu wingman-shared /home/wingman-shared/.local/bin/wingman tenant oauth-bin
 
 Do not obtain `sub` from email, a screenshot, or user input; use the verified
 pending record from the completed OAuth exchange. (The RFC-081 email-invite
-amendment narrows this once #585 ships: the service itself, never an
-operator, may match an issuer-verified address to an invite.) The lower-level direct
+amendment narrows this: the service itself, never an operator, may match an
+issuer-verified address to an invite.) The lower-level direct
 trusted-user command in [SERVER.md](SERVER.md) remains an operator fallback,
 not the normal invite path.
 

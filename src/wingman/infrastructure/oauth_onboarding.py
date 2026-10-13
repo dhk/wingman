@@ -6,9 +6,10 @@ receives no workspace and no data until an operator consumes a reserved slug.
 The file contains opaque provider subjects only; access tokens and email
 addresses are never persisted.  An email-bound invite (RFC-081 amendment,
 2026-10-09) stores a keyed HMAC of the normalised address, never the address
-itself; the key lives beside the state file, owner-only.  Recording such an
-invite changes nothing about sign-in yet: claiming it on a verified sign-in
-is #585.
+itself; the key lives beside the state file, owner-only.  The operator's
+invite prepares the empty, unbound tenant up front (the registry is
+root-owned); a verified sign-in whose WorkOS-verified address matches only
+binds the identity to it (#585, oauth_invite_claim).
 """
 
 from __future__ import annotations
@@ -48,6 +49,8 @@ _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _HEX16 = re.compile(r"[0-9a-f]{16}")
 _KEY_BYTES = 32
+#: In a tenant directory prepared for an email invite and not yet claimed.
+INVITE_MARKER = ".oauth-invite.json"
 
 
 class PendingResult(Enum):
@@ -545,6 +548,66 @@ class OAuthOnboardingStore:
                     return str(item["slug"])
         return None
 
+    def claim_email_invite(
+        self,
+        verified_email: str,
+        *,
+        subject: str,
+        issuers: tuple[str, ...],
+        ready: Callable[[str], bool],
+        commit: Callable[[str], None],
+        now: float | None = None,
+    ) -> str | None:
+        """Consume the unexpired invite for a verified address, under the lock.
+
+        `ready(slug)` vets the prepared tenant; `commit(slug)` writes the
+        identity binding. Only after commit succeeds are the invite and any
+        pending rows for this subject on the trusted issuers removed; if it
+        raises, this state is left exactly as it was.
+        """
+        current = time.time() if now is None else now
+        try:
+            email = normalise_email(verified_email)
+        except OAuthOnboardingError:
+            return None
+        try:
+            if not self.path.exists():
+                return None
+        except OSError as exc:
+            raise OAuthOnboardingError(
+                f"OAuth onboarding state {self.path} could not be checked: {exc}"
+            ) from exc
+        key = self._invite_key(create=False)
+        if key is None:
+            return None
+        key_id = self._key_id(key)
+        digest = self._email_hmac(key, email)
+        with self._locked() as state:
+            match: dict[str, Any] | None = None
+            for item in state["invites"]:
+                self._expire_claim(item, current)
+                if (
+                    "claim" not in item
+                    and item.get("key_id") == key_id
+                    and hmac.compare_digest(str(item.get("email_hmac", "")), digest)
+                    and float(item["expires_at"]) > current
+                ):
+                    match = item
+                    break
+            if match is None:
+                return None
+            slug = str(match["slug"])
+            if not ready(slug):
+                return None
+            commit(slug)
+            state["invites"] = [item for item in state["invites"] if item is not match]
+            state["pending"] = [
+                item
+                for item in state["pending"]
+                if not (item.get("subject") == subject and item.get("issuer") in issuers)
+            ]
+            return slug
+
     def record_pending(
         self, issuer: str, subject: str, *, now: float | None = None
     ) -> PendingResult:
@@ -858,6 +921,84 @@ def _as_service_user(username: str) -> Iterator[None]:
             os.setegid(original_gid)
 
 
+def _create_workspace(data_dir: Path, source: str) -> None:
+    """The empty workspace files a new tenant starts with. Idempotent."""
+    from wingman.infrastructure.config import Config
+    from wingman.infrastructure.storage import Storage
+    from wingman.providers.router import DEFAULT_MODELS_TOML
+
+    config = Config(data_dir=data_dir, data_dir_source=source)
+    config.inbox_dir.mkdir(parents=True, exist_ok=True)
+    config.reports_dir.mkdir(parents=True, exist_ok=True)
+    Storage(config.db_path).close()
+    if not config.models_config_path.exists():
+        config.models_config_path.write_text(DEFAULT_MODELS_TOML, encoding="utf-8")
+
+
+def _prepared_for_invite(data_dir: Path, slug: str) -> bool:
+    try:
+        marker = json.loads((data_dir / INVITE_MARKER).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(marker == {"slug": slug})
+
+
+def prepare_email_invites(
+    *,
+    identity_path: Path,
+    registry_path: Path,
+    data_root: Path,
+    rows: list[tuple[str, str]],
+    existing_slugs: set[str],
+    service_user: str,
+    expires_days: int = DEFAULT_INVITE_DAYS,
+    first_line: int | None = None,
+) -> list[Path]:
+    """Reserve email invites and prepare each one's empty, unbound tenant.
+
+    The tenant registry is root-owned, so the shared service cannot add a
+    tenant when someone signs in. The operator's invite (run with sudo, like
+    `oauth-approve`) does it here instead: an unprivileged, unfunded registry
+    entry and an empty workspace that no identity can reach. A verified
+    sign-in with the matching address then only binds the identity (#585).
+
+    All-or-nothing for the reservations. If preparing a tenant fails, every
+    reservation not yet fully prepared is withdrawn; a directory already
+    created keeps its invite marker, so re-running the same invite resumes.
+    """
+    store = OAuthOnboardingStore(onboarding_path_for(identity_path))
+    with _as_service_user(service_user):
+        store.reserve_email_invites(
+            rows, existing_slugs=existing_slugs, expires_days=expires_days, first_line=first_line
+        )
+    prepared: list[Path] = []
+    done: set[str] = set()
+    try:
+        for _email, slug in rows:
+            data_dir = data_root / slug
+            with _as_service_user(service_user):
+                if data_dir.exists() and not _prepared_for_invite(data_dir, slug):
+                    raise OAuthOnboardingError(
+                        f"tenant directory {data_dir} already exists and was not prepared for "
+                        "this invite; nothing was overwritten"
+                    )
+                data_dir.mkdir(parents=True, exist_ok=True)
+                marker = data_dir / INVITE_MARKER
+                marker.write_text(json.dumps({"slug": slug}) + "\n", encoding="utf-8")
+                marker.chmod(0o600)
+                _create_workspace(data_dir, "OAuth email invite")
+            _register_unprivileged_tenant(registry_path, slug, data_dir)
+            done.add(slug)
+            prepared.append(data_dir)
+    except BaseException:
+        with _as_service_user(service_user):
+            for _email, slug in rows:
+                if slug not in done:
+                    store.revoke_invite(slug)
+        raise
+    return prepared
+
+
 def approve_pending_tenant(
     *,
     identity_path: Path,
@@ -875,15 +1016,12 @@ def approve_pending_tenant(
     partial tenant that the same command can finish; it never grants a
     different identity or silently changes privilege/funding.
     """
-    from wingman.infrastructure.config import Config
     from wingman.infrastructure.oauth_bearer import (
         IdentityMapError,
         bind_trusted_identity,
         release_trusted_identity_reservation,
         reserve_trusted_identity,
     )
-    from wingman.infrastructure.storage import Storage
-    from wingman.providers.router import DEFAULT_MODELS_TOML
 
     store = OAuthOnboardingStore(onboarding_path_for(identity_path))
     with _as_service_user(service_user):
@@ -895,7 +1033,11 @@ def approve_pending_tenant(
         marker = data_dir / ".oauth-approval.json"
         with _as_service_user(service_user):
             reservation = reserve_trusted_identity(identity_path, issuer, subject, slug)
-            if data_dir.exists():
+            if _prepared_for_invite(data_dir, slug):
+                # An email invite's tenant, prepared by `oauth-invite --email`
+                # and approved by hand instead of claimed at sign-in.
+                pass
+            elif data_dir.exists():
                 try:
                     marker_data = json.loads(marker.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError) as exc:
@@ -916,18 +1058,14 @@ def approve_pending_tenant(
                     encoding="utf-8",
                 )
                 marker.chmod(0o600)
-            config = Config(data_dir=data_dir, data_dir_source="OAuth invite approval")
-            config.inbox_dir.mkdir(parents=True, exist_ok=True)
-            config.reports_dir.mkdir(parents=True, exist_ok=True)
-            Storage(config.db_path).close()
-            if not config.models_config_path.exists():
-                config.models_config_path.write_text(DEFAULT_MODELS_TOML, encoding="utf-8")
+            _create_workspace(data_dir, "OAuth invite approval")
         _register_unprivileged_tenant(registry_path, slug, data_dir)
         with _as_service_user(service_user):
             bind_trusted_identity(identity_path, issuer, subject, slug, reservation=reservation)
             reservation = None
             store.finish_approval(slug, approval)
             marker.unlink(missing_ok=True)
+            (data_dir / INVITE_MARKER).unlink(missing_ok=True)
         completed = True
         return data_dir
     except IdentityMapError as exc:

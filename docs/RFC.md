@@ -1510,13 +1510,34 @@ identity key" and "do not obtain `sub` from email".
   matching; the slug stays reserved until approved or revoked.
 - **What is unchanged.** No match, an unverified address or a failed lookup
   falls back to today's path: a pending row, the reference, a 403. Manual
-  `oauth-approve` and `oauth-bind` remain. A WorkOS API key on the shared
-  service is acceptable for looking up a verified address, read-only.
-- **Staging.** #584 records invites (`oauth-invite --email/--from-csv`,
-  `oauth-invites`, `oauth-invite-revoke`) and changes no sign-in behaviour.
-  Claiming at sign-in is #585, designed after #582 establishes what each
-  surface's token actually carries. Until #585 ships the superseded rules still
-  describe what the running service does.
+  `oauth-approve` and `oauth-bind` remain.
+- **Where the verified address comes from (#582, live 2026-10-10).** Neither
+  token carries an email. The browser's code exchange returns a `user` object
+  (`id`, `email`, `email_verified`); the address counts only if `user.id` is
+  the verified session-token subject and `email_verified` is literally `true`.
+  For MCP, the AuthKit issuer's own `/oauth2/userinfo`, called with the bearer
+  token that already passed validation, returns `sub`, `email` and
+  `email_verified`, with the same checks. **No WorkOS API key and no JWT
+  template are needed**: the API-key allowance above went unused, and WorkOS
+  keys are environment-wide anyway. The lookup runs only for an unbound
+  verified identity, off the event loop, with a 5-second timeout and at most
+  one lookup per identity per minute, reserved before the call so concurrent
+  requests cannot multiply it; it is sent only to the configured https issuer,
+  and a redirect is never followed (urllib would carry the token along).
+- **One person, both surfaces.** #582 also showed one WorkOS user has the same
+  full `sub` on the browser session token and the MCP token. A claim therefore
+  binds that `sub` under both issuers this process is configured with (never
+  an issuer taken from a token), so the second surface works with no second
+  step. Each binding is still an `(iss, sub)` key.
+- **Who creates the tenant.** The registry is root-owned and the service does
+  not run as root, so `oauth-invite --email/--from-csv` (run with sudo, like
+  `oauth-approve`) prepares the empty, unprivileged, unfunded tenant when
+  inviting, marked with `.oauth-invite.json`. A sign-in only binds to a tenant
+  that is registered, carries that marker, is not privileged or funded and has
+  no identity bound yet. Revoking an email invite leaves its prepared tenant
+  registered and unreachable.
+- **Staging.** #584 recorded invites; #585 claims them at sign-in. The
+  superseded rules above now describe only the manual path.
 
 ## RFC-082: Client-owned artifact kinds (#503) — Durable decision
 
@@ -1530,3 +1551,15 @@ Custom artifact freshness is explicitly unknown/unchecked. Free-text titles are 
 
 
 Done fingerprints use the stable action key and evidence, with Markdown link titles normalized to URLs; rolling age/explanation text is excluded. Digest actions include an evidence fingerprint. `actions done <key> --fingerprint <value>` / MCP `action_triage(action='done', key=…, fingerprint=…)` must echo the reviewed fingerprint; a newer evidence set is rejected rather than completed unseen. A permanent mute must be explicitly undone before completion. Markdown current reads apply verdicts; dated HTML and direct latest.html links remain snapshots until the next overnight run.
+
+## RFC-083: A bounded author / reviewer / repair PR loop (pilot)
+
+**Decision (pilot, not durable).** An issue labelled `agent:codex` or `agent:claude` by an allowlisted actor starts one workflow run in which that agent implements the issue and opens a draft PR. A different agent reviews it, and the author repairs blocking findings. There are at most three reviews and two repairs. The run ends with `ready-for-merge` or `needs-human`, and a human merges. Reviewers are tried in a fixed order, Copilot → Codex → Claude, never including the author, and the first valid verdict wins. Copilot is a reviewer only, by owner decision (2026-10-12): it never authors, and the gate refuses any author other than `codex` or `claude`. The design and setup are in [`AGENT-LOOP.md`](AGENT-LOOP.md).
+
+**Why one run rather than event chaining.** Events created with `GITHUB_TOKEN` start no new workflow run, so a loop chained through PR events stalls silently unless every hop uses a separate credential. Chaining rounds as jobs in one run removes the hop. It also makes the round cap the shape of the job graph rather than a counter, which is the governance property the loop exists to have.
+
+**Why Copilot first, as a fall-through rather than a quota check.** Copilot's monthly AI-credit allowance is prepaid and does not roll over. With no additional-usage budget, an exhausted allowance makes Copilot's requests fail, and a failed or invalid answer hands the round to the next reviewer. That spends the prepaid allowance before any metered API key, with no quota API and no state. The Copilot CLI runs inside the review job, billed to the owner's seat through the workflow token, rather than Copilot's native PR review. That review is comment-only by default, has no severity, runs outside the run, and may repeat earlier comments.
+
+**Why the models only propose.** This applies invariant 5. Every reviewer's answer passes one validator into one schema, and deterministic steps decide the rest: a failing check is blocking regardless of the verdict, only blocking findings reach the repair prompt, a patch touching `.github/`, `.agent-loop/`, agent instructions or agent startup config, or exceeding the line cap, is refused, and the terminal label is computed from job outputs. Authors run without a write credential, and a separate runner applies their patch.
+
+**Open until a run proves it.** How the Copilot CLI fails when the allowance is exhausted (the fall-through handles either a non-zero exit or an error message, but neither is documented). Whether `uv run --offline --frozen` works inside Codex's no-network sandbox. Codex has no documented turn or spend cap. The PAT makes the owner the PR author, so the merge is the human gate. Promote this to a durable decision, or remove it, after the pilot.
