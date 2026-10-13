@@ -7,6 +7,7 @@ import binascii
 import io
 import re
 import zipfile
+import zlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,6 +28,9 @@ def decode_file(content_base64: str, filename: str, suffixes: set[str]) -> tuple
     suffix = Path(name).suffix.lower()
     if suffix not in suffixes:
         raise ValueError("Unsupported file type. Supported: " + ", ".join(sorted(suffixes)))
+    # Clients often wrap base64 at 76 columns (MIME, `base64.encodebytes`);
+    # whitespace is never part of the payload, so drop it before measuring.
+    content_base64 = "".join(content_base64.split())
     if len(content_base64) > 4 * ((MAX_FILE_BYTES + 2) // 3):
         raise ValueError("File exceeds the 10 MiB limit; send a smaller file.")
     try:
@@ -57,9 +61,31 @@ def decode_file(content_base64: str, filename: str, suffixes: set[str]) -> tuple
                 # Verify CRC and declared sizes within the bounded archive before application reads.
                 if archive.testzip() is not None:
                     raise ValueError("Archive is damaged; re-export and retry.")
-        except (zipfile.BadZipFile, OSError, RuntimeError, NotImplementedError) as exc:
+        except (
+            zipfile.BadZipFile,
+            zlib.error,
+            EOFError,
+            OSError,
+            RuntimeError,
+            NotImplementedError,
+        ) as exc:
             raise ValueError("Archive could not be read; re-export and retry.") from exc
     return name, raw
+
+
+def discard_upload(path: Path) -> None:
+    """Remove an inbox copy whose content was rejected, so retries do not pile
+    up private copies of files that imported nothing. Best effort."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def rejection_reason(exc: Exception, path: Path, name: str) -> str:
+    """An IngestError's own explanation, with the stamped inbox path replaced by
+    the filename the client sent (the internal path is not theirs to see)."""
+    return str(exc).replace(str(path), name).replace(path.name, name)
 
 
 def archive_file(name: str, raw: bytes, config: Config) -> Path:

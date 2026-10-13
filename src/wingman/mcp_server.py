@@ -80,7 +80,12 @@ from wingman.application.feature_request import (
     render_preview,
     stamp_operator,
 )
-from wingman.application.file_payload import archive_file, decode_file
+from wingman.application.file_payload import (
+    archive_file,
+    decode_file,
+    discard_upload,
+    rejection_reason,
+)
 from wingman.application.focus import (
     follow_company,
     json_digest,
@@ -2980,7 +2985,12 @@ def ingest_resume_file(content_base64: str, filename: str) -> str:
             report = ingest_resume(
                 path, config, storage, get_provider(CapabilityClass.EXTRACT_FAST, config)
             )
-    except (IngestError, OSError, ModelConfigError, ProviderError, ProposalParseError):
+    except IngestError as exc:
+        # The file's content was rejected before anything was persisted;
+        # keeping the copy would only pile up private uploads on retry.
+        discard_upload(path)
+        return f"Nothing was ingested: {rejection_reason(exc, path, name)} The upload was not kept."
+    except (OSError, ModelConfigError, ProviderError, ProposalParseError):
         return _file_import_failure(stored)
     return (
         f"Accepted: {report.accepted}  Duplicates skipped: {report.skipped_duplicates}  "
@@ -3027,7 +3037,10 @@ def ingest_linkedin(content_base64: str, filename: str = "linkedin.zip") -> str:
         stored = True
         with Storage(config.db_path) as storage:
             report = import_linkedin(path, config, storage)
-    except (IngestError, OSError):
+    except IngestError as exc:
+        discard_upload(path)
+        return f"Nothing was imported: {rejection_reason(exc, path, name)} The upload was not kept."
+    except OSError:
         return _file_import_failure(stored)
     counts = report.counts
     return (
@@ -3063,13 +3076,27 @@ def corpus_add(content_base64: str, filename: str, source_type: str = "writing")
         stored = True
         with Storage(config.db_path) as storage:
             report = add_to_corpus(path, source_type, config, storage)
-    except (IngestError, OSError):
+    except IngestError as exc:
+        discard_upload(path)
+        return f"Nothing was added: {rejection_reason(exc, path, name)} The upload was not kept."
+    except OSError:
         return _file_import_failure(stored)
+    kept = ""
+    if not report.added and not report.skipped_duplicates:
+        # Nothing landed in the corpus (add_to_corpus keeps its own copy of
+        # each document it does add), so this upload is not lineage for anything.
+        discard_upload(path)
+        kept = "\nNothing was added, so the upload was not kept."
     return (
         f"Added: {report.added}  Duplicates skipped: {report.skipped_duplicates}  "
         f"Unsupported: {len(report.skipped_unsupported)}  Failures: {len(report.failures)}\n"
         + "\n".join(f"+ {title}" for title in report.titles)
-        + "\n".join(f"\nfailed {failure.name!r}: {failure.reason}" for failure in report.failures)
+        + "\n".join(
+            f"\nfailed {(name if failure.name == path.name else failure.name)!r}: "
+            f"{rejection_reason(Exception(failure.reason), path, name)}"
+            for failure in report.failures
+        )
+        + kept
     )
 
 
@@ -3132,9 +3159,20 @@ def ingest_transcript(content_base64: str, filename: str, note_for: str = "") ->
         if transcript.next_steps:
             summary += f" Next steps, as the export recorded them: {transcript.next_steps}"
         with Storage(config.db_path) as storage:
-            person = _find_person(storage, note_for)
-            if isinstance(person, str):
-                return preview + "\nNothing was filed: " + person
+            # Filing writes to a person's record, so the recipient must be named
+            # in full: a unique partial match ("Sam") would be an inferred
+            # recipient, which this tool's contract forbids.
+            exact = storage.find_person_by_name_key(" ".join(note_for.lower().split()))
+            if exact is None:
+                found = _find_person(storage, note_for)
+                hint = (
+                    found
+                    if isinstance(found, str)
+                    else f"{note_for!r} is not a full name; did you mean {found.name!r}? "
+                    "Call again with the full name."
+                )
+                return preview + "\nNothing was filed: " + hint
+            person = exact
             log_interaction(person.name, summary, config, storage)
     except (IngestError, OSError):
         return "Transcript could not be read or filed. Check the format and named person; existing records were preserved. No message was sent."

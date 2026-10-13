@@ -3,6 +3,7 @@
 import base64
 import io
 import zipfile
+import zlib
 
 import pytest
 
@@ -32,3 +33,34 @@ def test_archive_limits_before_decompression(monkeypatch):
 
 def test_filename_is_only_a_basename():
     assert files.decode_file("eA==", r"C:\private\resume.txt", {".txt"}) == ("resume.txt", b"x")
+
+
+def _corrupt_deflate_zip() -> bytes:
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("a.txt", b"hello world " * 1000)
+    raw = bytearray(stream.getvalue())
+    # Flip two bytes at the head of the deflate data (30-byte local header + name):
+    # the block header becomes invalid, which zlib reports as zlib.error.
+    start = 30 + len("a.txt")
+    raw[start + 2] ^= 0xFF
+    raw[start + 3] ^= 0xFF
+    corrupt = bytes(raw)
+    with pytest.raises(zlib.error), zipfile.ZipFile(io.BytesIO(corrupt)) as archive:
+        archive.testzip()  # the fixture really does reach the zlib.error path
+    return corrupt
+
+
+def test_a_corrupt_deflate_stream_is_a_clean_refusal_not_a_zlib_error():
+    """testzip() lets zlib.error escape; a client must never see the raw library message."""
+    data = base64.b64encode(_corrupt_deflate_zip()).decode()
+    with pytest.raises(ValueError, match="re-export and retry"):
+        files.decode_file(data, "linkedin.zip", {".zip"})
+
+
+def test_line_wrapped_base64_is_accepted():
+    """base64.encodebytes / MIME wrap at 76 columns; the payload is the same bytes."""
+    raw = b"synthetic resume text " * 20
+    wrapped = base64.encodebytes(raw).decode()
+    assert "\n" in wrapped
+    assert files.decode_file(wrapped, "resume.txt", {".txt"})[1] == raw

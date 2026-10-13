@@ -93,8 +93,11 @@ def test_resume_docx_uses_existing_pipeline(workspace, monkeypatch):
     result = mcp.ingest_resume_file(data, "../../resume.docx")
     assert seen and "Synthetic resume" in seen[0]
     assert str(workspace.data_dir) not in result
-    assert "preserved" in result
-    assert len(list(workspace.inbox_dir.iterdir())) == 1
+    assert result.startswith("Nothing was ingested:")
+    assert "resume.docx" in result
+    # IngestError is a content rejection raised before anything is persisted,
+    # so the upload is not kept (retries must not pile up private copies).
+    assert list(workspace.inbox_dir.iterdir()) == []
 
 
 def test_opportunities_cli_matches_mcp(workspace):
@@ -219,3 +222,48 @@ def test_registered_file_payload_is_not_duplicated_into_telemetry(workspace, mon
     asyncio.run(mcp.server.call_tool("corpus_add", {"content_base64": data, "filename": "note.md"}))
     assert captured
     assert data not in str(captured)
+
+
+def test_a_linkedin_zip_with_nothing_importable_is_not_kept(workspace):
+    """Content rejected after archiving must not leave a private copy behind,
+    and the reply names the real problem rather than storage or the model."""
+    result = mcp.ingest_linkedin(archive({"readme.txt": "not an export"}), "linkedin.zip")
+    assert result.startswith("Nothing was imported:")
+    assert "LinkedIn data export" in result
+    assert "model availability" not in result
+    assert list(workspace.inbox_dir.iterdir()) == []
+
+
+def test_a_corpus_file_that_adds_nothing_is_not_kept_or_named_internally(workspace):
+    result = mcp.corpus_add(payload(b"\xff\xfe not utf-8 \xff"), "essay.txt")
+    assert "Added: 0" in result
+    assert "failed 'essay.txt'" in result
+    assert "the upload was not kept" in result
+    assert list(workspace.inbox_dir.iterdir()) == []
+
+
+def test_a_resume_with_no_extractable_text_is_not_kept(workspace, monkeypatch):
+    class NoModel:
+        def complete(self, request):
+            raise AssertionError("model called for a rejected file")
+
+    monkeypatch.setattr(mcp, "get_provider", lambda *args: NoModel())
+    result = mcp.ingest_resume_file(payload(b"   \n  "), "resume.txt")
+    assert result.startswith("Nothing was ingested:")
+    assert "resume.txt" in result
+    assert list(workspace.inbox_dir.iterdir()) == []
+
+
+def test_transcript_filing_requires_the_full_name(workspace):
+    """A unique partial match is an inferred recipient; the tool contract forbids it."""
+    from wingman.application.people import add_person
+
+    with Storage(workspace.db_path) as storage:
+        sam, _ = add_person("Sam Sample", storage)
+    data = payload(b"# Transcript\n\n00:00:00\n\nSam: Synthetic conversation.")
+    result = mcp.ingest_transcript(data, "call.txt", "Sam")
+    assert "Nothing was filed" in result
+    assert "'Sam Sample'" in result
+    with Storage(workspace.db_path) as storage:
+        assert storage.list_log_entries(sam.person_id) == []
+    assert "Filed against Sam Sample" in mcp.ingest_transcript(data, "call.txt", "sam  sample")
