@@ -139,7 +139,7 @@ deterministic with no network or model calls.
 
 Transcript preview uses a temporary file removed immediately and persists
 nothing. `note_for` requires the user's explicit named-person instruction after
-review; only that person's local interaction summary is filed. Generated notes
+review, as a full name (a partial match is refused, not resolved); only that person's local interaction summary is filed. Generated notes
 remain labeled context and speaker mismatches remain visible. No profile claims,
 messages, or external writes are made by this tool.
 

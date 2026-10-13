@@ -20,17 +20,21 @@ Paths in filenames are stripped; tools cannot read an arbitrary server file.
 
 Limits: 10 MiB decoded file bytes; ZIP/DOCX at most 1000 entries and 50 MiB total
 expanded bytes. Archives must use stored/deflated entries without encryption.
-Invalid inputs are rejected before inbox storage or model calls. Original files
-are archived in your workspace inbox on profile/corpus import. Import failures
-preserve existing records and any successful partial work; retrying uses the
-ordinary content-hash deduplication. Resume text goes to your configured extraction
+Base64 may be line-wrapped; whitespace is ignored. Invalid inputs are rejected
+before inbox storage or model calls. Original files are archived in your workspace
+inbox on profile/corpus import. A file whose content is rejected (nothing
+importable in a LinkedIn export, no extractable resume text, a corpus upload that
+adds nothing) is not kept, and the reply names the reason. Other import failures
+(storage, model availability) keep the upload and preserve existing records and
+any successful partial work; retrying uses the ordinary content-hash deduplication. Resume text goes to your configured extraction
 provider. LinkedIn, corpus and transcript parsing make no model or network calls.
 Even with opt-in telemetry enabled, these tools withhold file bytes and result
 contents from the journal; ordinary invocation metadata is still recorded.
 
 Transcript preview persists nothing. Review its generated-note warnings and speaker
 mismatches before asking to file it against a specific watched person. The client
-then calls again with `note_for` set to that name. The resulting note is a local
+then calls again with `note_for` set to that person's full name; a partial name
+is refused with a suggestion, never resolved silently. The resulting note is a local
 summary, not a profile claim, and sends no message. It does not infer a recipient
 from the transcript.
 
