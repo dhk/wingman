@@ -12,6 +12,12 @@ the live Typer command tree and registered FastMCP tools, rejects missing/stale
 rows, requires a reason for unmatched rows, and checks reciprocal counterparts.
 CLI `--help` options and group menus are not separate executable leaf commands.
 
+File-upload mappings are client-dependent: actual byte encoding must happen in
+client software, never by model reconstruction. Claude.ai/Desktop native attachment
+forwarding has not been verified; corpus/transcript have no browser fallback.
+The transcript mapping covers local file bytes only: CLI `--url` has no MCP
+counterpart. Both filing surfaces require the reviewed content hash.
+
 | Surface | Name | Counterparts | Reason when unmatched |
 | --- | --- | --- | --- |
 | cli | `actions done` | `action_triage` |  |
@@ -60,7 +66,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `company sources` | `company_source` |  |
 | cli | `company unpause-source` | `company_source` |  |
 | cli | `company warm-path` | `woven_warm_path` |  |
-| cli | `corpus add` | `corpus_add` |  |
+| cli | `corpus add` | `corpus_add` | Client-dependent byte upload; native hosted attachment forwarding unverified. |
 | cli | `corpus list` | `corpus_list` |  |
 | cli | `criteria review` | `job_criteria` |  |
 | cli | `criteria save` | `job_criteria` |  |
@@ -87,8 +93,8 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `heap sort` | `heap` |  |
 | cli | `host-check` |  | Deliberately local host/runtime diagnostics. |
 | cli | `ingest` | `ingest_resume_file`, `ingest_resume_url` |  |
-| cli | `ingest-linkedin` | `ingest_linkedin` |  |
-| cli | `ingest-transcript` | `ingest_transcript` |  |
+| cli | `ingest-linkedin` | `ingest_linkedin` | Client-dependent byte upload; native hosted attachment forwarding unverified. |
+| cli | `ingest-transcript` | `ingest_transcript` | Client-dependent byte upload; transcript URL fetching remains CLI-only. |
 | cli | `init` |  | Deliberately local workspace bootstrap; MCP requires an initialized workspace. |
 | cli | `interview` | `interview_react` |  |
 | cli | `keys list` |  | Deliberately local credential administration; secrets are not MCP tool arguments. |
@@ -209,7 +215,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `company_similar` | `company similar` |  |
 | mcp | `company_source` | `company add-source`, `company pause-source`, `company remove-source`, `company sources`, `company unpause-source` |  |
 | mcp | `completeness` |  | Deliberately MCP structured setup/readiness diagnostic; no exact CLI equivalent. |
-| mcp | `corpus_add` | `corpus add` |  |
+| mcp | `corpus_add` | `corpus add` | Client-dependent byte upload; native hosted attachment forwarding unverified. |
 | mcp | `corpus_list` | `corpus list` |  |
 | mcp | `digest` | `digest` |  |
 | mcp | `drive_auth` | `drive auth` |  |
@@ -223,11 +229,11 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `gap_map` | `gap-map` |  |
 | mcp | `heap` | `heap add`, `heap remove`, `heap show`, `heap sort` |  |
 | mcp | `heap_read` |  | Deliberately MCP document/image payload retrieval; heap show lists metadata. |
-| mcp | `ingest_linkedin` | `ingest-linkedin` |  |
-| mcp | `ingest_resume_file` | `ingest` |  |
+| mcp | `ingest_linkedin` | `ingest-linkedin` | Client-dependent byte upload; native hosted attachment forwarding unverified. |
+| mcp | `ingest_resume_file` | `ingest` | Client-dependent byte upload; native hosted attachment forwarding unverified. |
 | mcp | `ingest_resume_text` |  | Deliberately MCP text payload ingestion; CLI ingest takes a local file. |
 | mcp | `ingest_resume_url` | `ingest` |  |
-| mcp | `ingest_transcript` | `ingest-transcript` |  |
+| mcp | `ingest_transcript` | `ingest-transcript` | Client-dependent byte upload; transcript URL fetching remains CLI-only. |
 | mcp | `interview_react` | `interview` |  |
 | mcp | `interview_status` |  | Deliberately MCP interview-progress inspection; terminal interview remains an interactive capture wizard. |
 | mcp | `job_criteria` | `criteria review`, `criteria save`, `criteria show` |  |

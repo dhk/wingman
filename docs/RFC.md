@@ -116,7 +116,7 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 
 The exhaustive [CLI/MCP ledger](SURFACE-PARITY.md) records existing counterparts, deliberate exceptions, and deferred gaps. A contract test enumerates registered tools and all CLI leaf commands (including aliases), checks exact inventory coverage and reciprocal mappings, and rejects unmatched entries without a reason. Adding a row does not implement a gap. New tools, especially hosted ingestion, require a separate design; this change adds none.
 
-### Hosted file parity completion (#598) — Durable decision
+### Client-dependent file import operations (#598) — Durable decision
 
 MCP imports accept the actual attachment bytes as standard base64 and a basename,
 never a server filesystem path: `ingest_resume_file`, `ingest_linkedin`,
@@ -133,20 +133,28 @@ Bound payloads before storing or invoking models: 10 MiB decoded, ZIP/DOCX at mo
 members are read as data, never extracted to caller-selected paths. Imports
 archive original bytes in the current tenant inbox, preserving prior records and
 partial successes on failure. MCP errors do not echo server paths. Opt-in tool telemetry withholds upload bytes
-and result contents, including transcript previews. Resume text
+and all argument values/result contents, including names, transcript previews and
+corpus titles. Unexpected import exceptions return a generic recovery message,
+never exception text. Resume text
 uses the configured extraction provider; LinkedIn, corpus, and transcripts remain
 deterministic with no network or model calls.
 
 Transcript preview uses a temporary file removed immediately and persists
-nothing. `note_for` requires the user's explicit named-person instruction after
-review, as a full name (a partial match is refused, not resolved); only that person's local interaction summary is filed. Generated notes
-remain labeled context and speaker mismatches remain visible. No profile claims,
+nothing, including CLI URL previews. Filing requires the user's explicit full-name
+instruction after review and the SHA-256 `reviewed_hash` of the previewed bytes
+(`--reviewed-hash` on CLI). The hash binds content, not proof of human review.
+Both surfaces share a filing helper: archive original bytes and a source record,
+link the local artifact from the log entry, and record Gemini-generated notes as
+ENDORSED, never OBSERVED. Speaker mismatches remain visible. No profile claims,
 messages, or external writes are made by this tool.
 
 Trade-off: base64 costs roughly one third more transport space and requires client
 attachment encoding support. There is no arbitrary server-path fallback. Larger
 exports need a smaller subset or operator-assisted local import. This does not
-claim automatic attachment access in every MCP client.
+claim automatic attachment access in every MCP client. Claude.ai/Desktop native
+attachment forwarding is unverified. Corpus/transcript remain hosted gaps for
+clients without a byte encoder; no browser fallback ships for them. Transcript
+URL fetching is CLI-only. No model may re-encode text into purported original bytes.
 
 ## RFC-009: Read-only public-feed fetching, explicitly invoked
 

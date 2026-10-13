@@ -8,6 +8,7 @@ a company conversation at once.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -247,7 +248,17 @@ def test_the_cli_files_a_note_only_against_the_person_you_name(tmp_path: Path, m
     path = tmp_path / "call.md"
     path.write_text(REAL, encoding="utf-8")
 
-    result = runner.invoke(app, ["ingest-transcript", str(path), "--note-for", "Chuck Patel"])
+    result = runner.invoke(
+        app,
+        [
+            "ingest-transcript",
+            str(path),
+            "--note-for",
+            "Chuck Patel",
+            "--reviewed-hash",
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+        ],
+    )
 
     assert result.exit_code == 0, result.output
     assert "Filed against Chuck Patel" in result.output

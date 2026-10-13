@@ -1483,101 +1483,50 @@ def restore(
 
 @app.command("ingest-transcript")
 def ingest_transcript(
-    path: Path | None = typer.Argument(
-        None, help="A Gemini call transcript: Markdown, plain text, or an exported PDF."
-    ),
-    url: str | None = typer.Option(
-        None,
-        "--url",
-        help="Fetch a link-accessible Google Doc instead (the tabbed Notes + Transcript export).",
-    ),
+    path: Path | None = typer.Argument(None, help="Gemini transcript: Markdown, text, or PDF."),
+    url: str | None = typer.Option(None, "--url", help="Fetch a link-accessible Google Doc."),
     note_for: str = typer.Option(
-        "",
-        "--note-for",
-        help="After reviewing the preview: file this call as an interaction note on a "
-        "watched person. Only ever the person you name — never inferred from the export.",
+        "", "--note-for", help="Full name of the person to file against after review."
+    ),
+    reviewed_hash: str = typer.Option(
+        "", "--reviewed-hash", help="Hash printed by the approved preview; required for filing."
     ),
 ) -> None:
-    """Read a Google Meet / Gemini call transcript and show what is in it (#134).
+    """Preview a Gemini transcript; file approved generated context as endorsed.
 
-    Previews by default and writes nothing. Three things about the real
-    export shape the output.
-
-    Only the Transcript tab is anybody's words. The Summary, Next steps and
-    Details sections are Gemini's paraphrase — Google's own footer says to
-    check them — so they are carried as context and never quoted as
-    evidence that a human said something.
-
-    Speaker labels are generated and do get names wrong. In the first real
-    export used to build this, the invitee 'Chuck Patel
-    <cpatel@champsinc.com>' is transcribed throughout as 'Chuck Norris'. So
-    attribution comes from the calendar Invited line, and any speaker that
-    does not match an invitee is flagged for you to confirm rather than
-    reconciled automatically.
-
-    A call is often BOTH an interview and a company conversation, so this
-    classifies nothing. It shows you what it found; --note-for files the
-    call against the person you name.
+    Preview persists nothing, including for --url. Filing archives the original
+    and links it from the endorsed interaction note. Never infers a recipient.
     """
     configure_logging()
-    from wingman.application.transcript import (
-        match_speakers,
-        parse_transcript,
-        render_transcript,
-    )
+    from wingman.application.transcript_import import file_transcript, preview_transcript
 
     config = load_config()
     _require_workspace(config, "read")
     if path is None and not url:
         typer.echo("Give a transcript file, or --url for a link-accessible Google Doc.", err=True)
         raise typer.Exit(code=2)
-
     try:
-        from wingman.application.resume_formats import extract_resume_text
-
         if url:
-            # The same one explicit, https-only fetch resume ingestion uses
-            # (RFC-009): the raw bytes are archived to the inbox first, so
-            # the original artifact is the provenance record.
             from wingman.application.resume_formats import fetch_resume_bytes
 
             name, raw = fetch_resume_bytes(url)
-            config.inbox_dir.mkdir(parents=True, exist_ok=True)
-            archived = config.inbox_dir / name
-            archived.write_bytes(raw)
-            text = extract_resume_text(archived)
         else:
-            text = extract_resume_text(path)  # type: ignore[arg-type]
-        transcript = parse_transcript(text)
-    except IngestError as exc:
-        typer.echo(f"transcript read failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-
-    matches = match_speakers(transcript)
-    typer.echo(render_transcript(transcript, matches))
-
-    if not note_for:
-        typer.echo(
-            "Nothing was written. Re-run with --note-for '<person>' to file this call "
-            "as an interaction note on somebody you name."
-        )
-        return
-
-    from wingman.application.relationship import log_interaction
-
-    summary = f"Call: {transcript.title or 'transcript'}"
-    if transcript.date:
-        summary += f" ({transcript.date})"
-    summary += f". {len(transcript.turns)} turns transcribed by Gemini."
-    if transcript.next_steps:
-        summary += f" Next steps, as the export recorded them: {transcript.next_steps}"
-    try:
+            assert path is not None
+            name, raw = path.name, path.read_bytes()
+        transcript, preview, _digest = preview_transcript(raw, name)
+        typer.echo(preview)
+        if not note_for:
+            typer.echo(
+                "Nothing was written. After review, re-run with --note-for and --reviewed-hash."
+            )
+            return
         with Storage(config.db_path) as storage:
-            log_interaction(note_for, summary, config, storage)
-    except IngestError as exc:
-        typer.echo(f"note failed: {exc}", err=True)
+            typer.echo(
+                file_transcript(raw, name, transcript, note_for, reviewed_hash, config, storage)
+            )
+    except (IngestError, OSError) as exc:
+        typer.echo(f"Transcript failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(f"Filed against {note_for}: {summary}")
 
 
 @app.command()

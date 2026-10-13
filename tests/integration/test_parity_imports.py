@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import io
 import zipfile
 from pathlib import Path
@@ -161,7 +162,12 @@ def test_transcript_files_only_explicit_named_person(workspace):
         blair, _ = add_person("Blair Sample", storage)
     data = payload(b"# Transcript\n\n00:00:00\n\nAlex: Synthetic conversation.")
     assert "Nothing was filed" in mcp.ingest_transcript(data, "call.txt", "Nobody")
-    assert "Filed against Blair Sample" in mcp.ingest_transcript(data, "call.txt", "Blair Sample")
+    assert "Filed against Blair Sample" in mcp.ingest_transcript(
+        data,
+        "call.txt",
+        "Blair Sample",
+        reviewed_hash=hashlib.sha256(base64.b64decode(data)).hexdigest(),
+    )
     with Storage(workspace.db_path) as storage:
         assert storage.list_log_entries(alex.person_id) == []
         entries = storage.list_log_entries(blair.person_id)
@@ -261,9 +267,104 @@ def test_transcript_filing_requires_the_full_name(workspace):
     with Storage(workspace.db_path) as storage:
         sam, _ = add_person("Sam Sample", storage)
     data = payload(b"# Transcript\n\n00:00:00\n\nSam: Synthetic conversation.")
-    result = mcp.ingest_transcript(data, "call.txt", "Sam")
+    result = mcp.ingest_transcript(
+        data,
+        "call.txt",
+        "Sam",
+        reviewed_hash=hashlib.sha256(base64.b64decode(data)).hexdigest(),
+    )
     assert "Nothing was filed" in result
     assert "'Sam Sample'" in result
     with Storage(workspace.db_path) as storage:
         assert storage.list_log_entries(sam.person_id) == []
-    assert "Filed against Sam Sample" in mcp.ingest_transcript(data, "call.txt", "sam  sample")
+    assert "Filed against Sam Sample" in mcp.ingest_transcript(
+        data,
+        "call.txt",
+        "sam  sample",
+        reviewed_hash=hashlib.sha256(base64.b64decode(data)).hexdigest(),
+    )
+
+
+def test_transcript_filing_requires_matching_review_hash(workspace):
+    from wingman.application.people import add_person
+
+    with Storage(workspace.db_path) as storage:
+        person, _ = add_person("Robin Example", storage)
+    raw = b"# Transcript\nRobin: Synthetic conversation."
+    data = payload(raw)
+    result = mcp.ingest_transcript(data, "call.txt", "Robin Example")
+    assert "Nothing was filed" in result
+    assert "reviewed_hash" in result
+    assert list(workspace.inbox_dir.iterdir()) == []
+    assert "Nothing was filed" in mcp.ingest_transcript(
+        data, "call.txt", "Robin Example", reviewed_hash="0" * 64
+    )
+    preview = mcp.ingest_transcript(data, "call.txt")
+    assert hashlib.sha256(raw).hexdigest() in preview
+    with Storage(workspace.db_path) as storage:
+        assert storage.list_log_entries(person.person_id) == []
+
+
+def test_filed_transcript_is_endorsed_and_preserves_original(workspace):
+
+    from wingman.application.people import add_person
+    from wingman.domain.relationship import EvidenceTier
+
+    with Storage(workspace.db_path) as storage:
+        person, _ = add_person("Robin Example", storage)
+    raw = (
+        b"## Next steps\n- Robin will send an offer.\n# Transcript\nRobin: Synthetic conversation."
+    )
+    kwargs = {"reviewed_hash": hashlib.sha256(raw).hexdigest()}
+    result = mcp.ingest_transcript(payload(raw), "call.txt", "Robin Example", **kwargs)
+    assert "Filed against Robin Example" in result
+    with Storage(workspace.db_path) as storage:
+        [entry] = storage.list_log_entries(person.person_id)
+        assert entry.evidence_tier is EvidenceTier.ENDORSED
+        original = workspace.data_dir / entry.source_url
+        assert original.read_bytes() == raw
+        assert storage.get_source_record_by_hash(hashlib.sha256(raw).hexdigest()) is not None
+    assert "[endorsed]" in result
+
+
+def test_file_import_journal_withholds_names_results_and_corpus_titles(workspace, monkeypatch):
+    captured = []
+    monkeypatch.setattr(mcp, "record_event", lambda *args, **kwargs: captured.append(args[3]))
+    asyncio.run(
+        mcp.server.call_tool(
+            "corpus_add",
+            {
+                "content_base64": payload(b"# Confidential synthetic title\nPrivate prose."),
+                "filename": "private-client-name.md",
+                "source_type": "private-label",
+            },
+        )
+    )
+    asyncio.run(mcp.server.call_tool("corpus_list", {}))
+    journal = str(captured)
+    for private in (
+        "Confidential synthetic title",
+        "private-client-name",
+        "private-label",
+        "Private prose",
+    ):
+        assert private not in journal
+
+
+def test_unexpected_import_error_is_redacted_at_tool_boundary(workspace, monkeypatch):
+    def broken(*args):
+        raise RuntimeError("private exception content /secret/path")
+
+    monkeypatch.setattr("wingman.application.corpus.add_to_corpus", broken)
+    result = asyncio.run(
+        mcp.server.call_tool(
+            "corpus_add",
+            {
+                "content_base64": payload(b"# Synthetic essay"),
+                "filename": "essay.md",
+            },
+        )
+    )
+    assert "private exception content" not in str(result)
+    assert "/secret/path" not in str(result)
+    assert "Import failed" in str(result)

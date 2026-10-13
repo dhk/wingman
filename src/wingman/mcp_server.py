@@ -3119,20 +3119,19 @@ def corpus_list() -> str:
 
 
 @server.tool()
-def ingest_transcript(content_base64: str, filename: str, note_for: str = "") -> str:
-    """Preview supplied Gemini transcript (.md/.txt/.pdf), writing nothing by default.
+def ingest_transcript(
+    content_base64: str, filename: str, note_for: str = "", reviewed_hash: str = ""
+) -> str:
+    """Preview actual Gemini file bytes (.md/.txt/.pdf), writing nothing by default.
 
-    Standard base64, max 10 MiB. Summary/next steps remain generated context,
-    not human quotes; unmatched speaker labels are flagged. Only after the
-    user reviews the preview and explicitly asks to file it, call again with
-    note_for naming exactly one watched person. Never infer a recipient.
-    Filing records a local interaction summary, not a profile claim or message.
+    Client-dependent: requires attachment byte encoding, never reconstructed bytes.
+    After showing the preview and obtaining explicit approval, call with an exact
+    full note_for name and reviewed_hash copied from that preview. A different
+    file needs a new preview. The original is archived and generated notes are
+    ENDORSED context, never human quotes. Speaker mismatches remain visible.
+    Filing is local only; sends no message. URL import is available via CLI only.
     """
-    from tempfile import TemporaryDirectory
-
-    from wingman.application.relationship import log_interaction
-    from wingman.application.resume_formats import extract_resume_text
-    from wingman.application.transcript import match_speakers, parse_transcript, render_transcript
+    from wingman.application.transcript_import import file_transcript, preview_transcript
 
     config = _ready_config()
     if config is None:
@@ -3142,41 +3141,27 @@ def ingest_transcript(content_base64: str, filename: str, note_for: str = "") ->
     except ValueError as exc:
         return f"Nothing was written: {exc}"
     try:
-        with TemporaryDirectory(prefix="wingman-transcript-") as directory:
-            path = Path(directory) / name
-            path.write_bytes(raw)
-            transcript = parse_transcript(extract_resume_text(path))
-        preview = render_transcript(transcript, match_speakers(transcript))
+        transcript, preview, _digest = preview_transcript(raw, name)
         if not note_for.strip():
             return (
                 preview
-                + "\nNothing was written. Review this preview before asking to file a note against a named person."
+                + "\nNothing was written. Review before filing with note_for and reviewed_hash."
             )
-        summary = f"Call: {transcript.title or 'transcript'}"
-        if transcript.date:
-            summary += f" ({transcript.date})"
-        summary += f". {len(transcript.turns)} turns transcribed by Gemini."
-        if transcript.next_steps:
-            summary += f" Next steps, as the export recorded them: {transcript.next_steps}"
+        if not reviewed_hash:
+            return preview + "\nNothing was filed: pass reviewed_hash from the approved preview."
         with Storage(config.db_path) as storage:
-            # Filing writes to a person's record, so the recipient must be named
-            # in full: a unique partial match ("Sam") would be an inferred
-            # recipient, which this tool's contract forbids.
-            exact = storage.find_person_by_name_key(" ".join(note_for.lower().split()))
-            if exact is None:
+            if storage.find_person_by_name_key(" ".join(note_for.lower().split())) is None:
                 found = _find_person(storage, note_for)
-                hint = (
-                    found
-                    if isinstance(found, str)
-                    else f"{note_for!r} is not a full name; did you mean {found.name!r}? "
-                    "Call again with the full name."
-                )
+                hint = found if isinstance(found, str) else f"Use the full name {found.name!r}."
                 return preview + "\nNothing was filed: " + hint
-            person = exact
-            log_interaction(person.name, summary, config, storage)
-    except (IngestError, OSError):
-        return "Transcript could not be read or filed. Check the format and named person; existing records were preserved. No message was sent."
-    return preview + f"\nFiled against {person.name}: {summary}"
+            result = file_transcript(
+                raw, name, transcript, note_for, reviewed_hash, config, storage
+            )
+        return preview + "\n" + result
+    except IngestError as exc:
+        return str(exc)
+    except OSError:
+        return "Transcript filing failed. Existing records and any stored original were preserved; check storage permissions before retrying. No message was sent."
 
 
 @server.tool()
@@ -5506,14 +5491,10 @@ def _instrument_tools() -> None:
                 "ingest_linkedin",
                 "ingest_transcript",
                 "corpus_add",
+                "corpus_list",
             }
             journal_args = (
-                {
-                    key: ("[upload bytes withheld]" if key == "content_base64" else value)
-                    for key, value in kwargs.items()
-                }
-                if file_import
-                else kwargs
+                {"content": "[file import arguments withheld]"} if file_import else kwargs
             )
             try:
                 result = __original(*args, **kwargs)
@@ -5529,6 +5510,11 @@ def _instrument_tools() -> None:
                     outcome="error",
                     duration_ms=int((time.monotonic() - started) * 1000),
                 )
+                if file_import:
+                    return (
+                        "Import failed. Existing records and any stored upload were preserved. "
+                        "Ask your operator to inspect storage and retry."
+                    )
                 raise
             record_event(
                 load_config(),

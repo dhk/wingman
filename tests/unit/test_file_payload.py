@@ -64,3 +64,30 @@ def test_line_wrapped_base64_is_accepted():
     wrapped = base64.encodebytes(raw).decode()
     assert "\n" in wrapped
     assert files.decode_file(wrapped, "resume.txt", {".txt"})[1] == raw
+
+
+@pytest.mark.parametrize("compression", [zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA])
+def test_unsupported_compression_is_refused(compression):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression) as archive:
+        archive.writestr("essay.txt", b"synthetic")
+    with pytest.raises(ValueError, match="stored or deflated"):
+        files.decode_file(base64.b64encode(stream.getvalue()).decode(), "a.zip", {".zip"})
+
+
+def test_bad_crc_and_encrypted_entries_are_refused():
+    import struct
+
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_STORED) as archive:
+        archive.writestr("essay.txt", b"synthetic")
+    raw = bytearray(stream.getvalue())
+    raw[30 + len("essay.txt")] ^= 1
+    with pytest.raises(ValueError, match="damaged"):
+        files.decode_file(base64.b64encode(raw).decode(), "a.zip", {".zip"})
+    raw = bytearray(stream.getvalue())
+    central = raw.index(b"PK\x01\x02")
+    struct.pack_into("<H", raw, 6, 1)
+    struct.pack_into("<H", raw, central + 8, 1)
+    with pytest.raises(ValueError, match="unencrypted"):
+        files.decode_file(base64.b64encode(raw).decode(), "a.zip", {".zip"})
