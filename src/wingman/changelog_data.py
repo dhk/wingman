@@ -10,6 +10,35 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    (
+        "2026-10-14",
+        623,
+        "feat(oauth): oauth-bind and oauth-approve bind both trusted issuers (#618)",
+    ),
+    (
+        "2026-10-13",
+        601,
+        "fix: completeness no longer counts imported contacts as gaps (#465, #545)",
+    ),
+    (
+        "2026-10-13",
+        622,
+        "Implement #621: Cover wingman_version()'s not-installed fallback with a test",
+    ),
+    (
+        "2026-10-13",
+        619,
+        "feat(oauth): claim email invites on a verified sign-in, both surfaces (#585)",
+    ),
+    (
+        "2026-10-12",
+        620,
+        "Add a bounded author/review/repair PR loop (Claude or Codex write; Copilot, Codex or Claude review)",
+    ),
+    ("2026-10-11", 613, "Remove a stray backslash from the .doc-watson.yml contributing reason"),
+    ("2026-10-11", 610, "Return values-chart SVG inline without host filesystem paths"),
+    ("2026-10-11", 609, "Record CLI/MCP parity decisions and enforce surface drift"),
+    ("2026-10-11", 605, "Recover missing feeds as publication index pages"),
     ("2026-10-11", 607, "Expose structured digests with exact budget drop URLs"),
     ("2026-10-11", 606, "Upsert LinkedIn contacts and backfill private identifiers"),
     ("2026-10-11", 603, "Diff duplicate research pages once and expose matching sources"),
@@ -874,7 +903,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "657f3d84fea43b2fe70772ab3d3914520f3c666a"
+GENERATED_FROM_COMMIT = "26c181f2ee450d4d6bae4c182535adc406a7aaea"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -884,4 +913,4 @@ GENERATED_FROM_COMMIT = "657f3d84fea43b2fe70772ab3d3914520f3c666a"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 114
+GENERATED_FROM_DISTANCE = 123
