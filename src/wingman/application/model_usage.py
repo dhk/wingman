@@ -24,7 +24,7 @@ class PricedUsage:
 def render_tenant_usage(tenant: Tenant, limit: int) -> tuple[str, bool]:
     """Read one tenant without creating its DB or hiding later tenants on failure."""
     try:
-        config = tenant.config()
+        config = Config(data_dir=tenant.data_dir, data_dir_source="read-only usage report")
         if not config.db_path.exists():
             return f"Tenant {tenant.slug}: no workspace yet ({config.db_path} missing).", True
         rows, total, present = read_usage(config.db_path, limit)
@@ -187,7 +187,7 @@ def funded_ranking(tenants: list[Tenant], limit: int) -> str:
     ranked: list[tuple[Decimal, str, bool]] = []
     for tenant in tenants:
         try:
-            config = tenant.config()
+            config = Config(data_dir=tenant.data_dir, data_dir_source="read-only usage report")
             rows, total, _present = read_usage(config.db_path, limit)
             funded = [
                 item

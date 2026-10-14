@@ -240,3 +240,20 @@ def test_offline_calls_are_marked_non_billable_and_funded_ranking_is_explicit(tm
         storage.add_model_usage(row(input_tokens=1000000))
     report = funded_ranking([Tenant(slug="sample", data_dir=tmp_path)], 10)
     assert "sample: $1.000000" in report and "lower bound" in report
+
+
+def test_operator_reports_never_load_tenant_credentials(tmp_path, monkeypatch):
+    from wingman.application.model_usage import funded_ranking
+
+    tenant = Tenant(slug="sample", data_dir=tmp_path)
+    with Storage(tmp_path / "wingman.db") as storage:
+        storage.add_model_usage(row(input_tokens=1))
+
+    def forbidden(*args):
+        raise AssertionError("credential-bearing tenant config loaded")
+
+    monkeypatch.setattr(Tenant, "config", forbidden)
+    report, failed = render_tenant_usage(tenant, 10)
+    assert not failed, report
+    assert "1 successful call(s)" in report
+    assert "sample:" in funded_ranking([tenant], 10)
