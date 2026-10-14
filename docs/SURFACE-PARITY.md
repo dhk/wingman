@@ -13,8 +13,8 @@ rows, requires a reason for unmatched rows, and checks reciprocal counterparts.
 CLI `--help` options and group menus are not separate executable leaf commands.
 
 File-upload mappings are client-dependent: actual byte encoding must happen in
-client software, never by model reconstruction. Claude.ai/Desktop native attachment
-forwarding has not been verified; corpus/transcript have no browser fallback.
+client software, never by model reconstruction. Claude.ai/Desktop do not forward
+an attachment's bytes to a connector (see below); there is no browser fallback yet.
 The transcript mapping covers local file bytes only: CLI `--url` has no MCP
 counterpart. Both filing surfaces require the reviewed content hash.
 
@@ -298,8 +298,12 @@ chosen feed URL on both surfaces (`company add-feed` / `company_feed(attach)`);
 `feed_discover` is an optional preparation step, not an operation performed by
 that CLI command.
 
-The deferred #598 gaps are implemented: MCP accepts bounded file payloads,
-not server paths; directory corpus imports use a ZIP. Transcript preview is
-read-only and note filing requires an explicitly named person. Opportunity
+The deferred #598 gaps are closed for clients that can send file bytes: MCP
+accepts bounded file payloads, not server paths, and directory corpus imports
+use a ZIP. Claude.ai and Claude Desktop cannot: a connector's tool arguments
+are written by the model, which sees an attachment as extracted text, not its
+bytes. For those hosted users the file imports remain gaps until a browser
+upload exists (Beads `wingman-m4l`). Transcript preview is read-only, and
+filing requires the preview's review hash and the person's full name. Opportunity
 listing shares its application renderer across CLI and MCP. Reciprocal mappings
 are mechanically checked; their semantic accuracy still needs review.

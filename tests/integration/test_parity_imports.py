@@ -240,6 +240,26 @@ def test_a_linkedin_zip_with_nothing_importable_is_not_kept(workspace):
     assert list(workspace.inbox_dir.iterdir()) == []
 
 
+@pytest.mark.parametrize(
+    "files",
+    [
+        # A good CSV read before a bad one: the bad one fails the whole import.
+        {"Positions.csv": "Company Name,Title\nSynthetic Co,Engineer\n", "Skills.csv": b"\xff\xfe"},
+        # CSVs present but with no rows: nothing to import.
+        {"Positions.csv": "Company Name,Title\n", "Skills.csv": "Name\n"},
+    ],
+)
+def test_a_failed_linkedin_import_leaves_nothing_behind(workspace, files):
+    """The reply says nothing was imported and the upload was not kept, so no
+    CSV copy and no source record may survive from an earlier CSV in the zip."""
+    result = mcp.ingest_linkedin(archive(files), "linkedin.zip")
+    assert result.startswith("Nothing was imported:")
+    assert list(workspace.inbox_dir.iterdir()) == []
+    with Storage(workspace.db_path) as storage:
+        assert storage.count_source_records() == 0
+        assert storage.list_profile_items() == []
+
+
 def test_a_corpus_file_that_adds_nothing_is_not_kept_or_named_internally(workspace):
     result = mcp.corpus_add(payload(b"\xff\xfe not utf-8 \xff"), "essay.txt")
     assert "Added: 0" in result
