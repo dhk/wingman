@@ -55,6 +55,12 @@ case "$OAUTH_SERVICE_CONFIG" in
   /*) ;;
   *) echo "shared OAuth config path must be absolute: $OAUTH_SERVICE_CONFIG. No tenant state was created." >&2; exit 2 ;;
 esac
+# 'oauth-bind' binds the subject under every issuer the shared service trusts
+# (#618), read from these same files; pass the paths this script resolved.
+OAUTH_BIND_CONFIG_ARGS=(--oauth-config "$OAUTH_SERVICE_CONFIG")
+if [ -n "${WINGMAN_SHARED_OAUTH_WEB_CONFIG:-}" ]; then
+  OAUTH_BIND_CONFIG_ARGS+=(--oauth-web-config "$WINGMAN_SHARED_OAUTH_WEB_CONFIG")
+fi
 SLUG="${1:?usage: $0 <slug> [--telemetry|--no-telemetry]}"
 shift
 TELEMETRY=""
@@ -299,6 +305,7 @@ release_reservation() {
       --issuer "$OAUTH_ISSUER" \
       --subject "$OAUTH_SUBJECT" \
       --identities "$OAUTH_IDENTITIES" \
+      "${OAUTH_BIND_CONFIG_ARGS[@]}" \
       --release-reservation "$RESERVATION" >/dev/null 2>&1 || true
 }
 trap release_reservation EXIT
@@ -313,6 +320,7 @@ if [ "$oauth_fields" -eq 3 ]; then
       --issuer "$OAUTH_ISSUER" \
       --subject "$OAUTH_SUBJECT" \
       --identities "$OAUTH_IDENTITIES" \
+      "${OAUTH_BIND_CONFIG_ARGS[@]}" \
       --reserve)"
 fi
 
@@ -340,6 +348,7 @@ if [ "$oauth_fields" -eq 3 ]; then
       --issuer "$OAUTH_ISSUER" \
       --subject "$OAUTH_SUBJECT" \
       --identities "$OAUTH_IDENTITIES" \
+      "${OAUTH_BIND_CONFIG_ARGS[@]}" \
       --renew-reservation "$RESERVATION"
 fi
 
@@ -359,6 +368,7 @@ if [ "$oauth_fields" -eq 3 ]; then
       --issuer "$OAUTH_ISSUER" \
       --subject "$OAUTH_SUBJECT" \
       --identities "$OAUTH_IDENTITIES" \
+      "${OAUTH_BIND_CONFIG_ARGS[@]}" \
       --registry "$REGISTRY_PATH" \
       --reservation "$RESERVATION"
   RESERVATION=""

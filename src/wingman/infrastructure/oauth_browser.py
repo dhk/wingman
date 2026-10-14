@@ -66,6 +66,15 @@ _LEEWAY_SECONDS = 30
 _logger = get_logger("oauth_browser")
 
 
+def workos_session_issuer(client_id: str) -> str:
+    """The `iss` WorkOS puts on this client's browser session tokens.
+
+    One definition, shared with the operator CLI (#618), which derives the
+    same issuer from the service's saved --oauth-web-client-id.
+    """
+    return _WORKOS_SESSION_ISSUER.format(client_id=client_id)
+
+
 @dataclass(frozen=True)
 class OAuthBrowserSettings:
     client_id: str
@@ -94,7 +103,7 @@ class OAuthBrowserSettings:
 
     @property
     def session_issuer(self) -> str:
-        return _WORKOS_SESSION_ISSUER.format(client_id=self.client_id)
+        return workos_session_issuer(self.client_id)
 
     @property
     def session_jwks_uri(self) -> str:

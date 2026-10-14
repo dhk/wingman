@@ -26,7 +26,7 @@ import re
 import secrets
 import tempfile
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -727,7 +727,13 @@ class OAuthOnboardingStore:
             }
             return token
 
-    def finish_approval(self, slug: str, token: str) -> None:
+    def finish_approval(self, slug: str, token: str, *, issuers: Iterable[str] = ()) -> None:
+        """Consume the claimed invite and the approved identity's pending rows.
+
+        `issuers` (#618): the subject was bound under each of these too, so
+        its pending rows on those surfaces go as well.
+        """
+        cleared = set(issuers)
         with self._locked() as state:
             invite = next((item for item in state["invites"] if item.get("slug") == slug), None)
             claim = invite.get("claim") if isinstance(invite, dict) else None
@@ -735,13 +741,13 @@ class OAuthOnboardingStore:
                 str(claim.get("token", "")), token
             ):
                 raise OAuthOnboardingError("OAuth approval claim is absent, expired, or changed")
-            issuer = claim.get("issuer")
+            cleared.add(str(claim.get("issuer")))
             subject = claim.get("subject")
             state["invites"] = [item for item in state["invites"] if item is not invite]
             state["pending"] = [
                 item
                 for item in state["pending"]
-                if not (item.get("issuer") == issuer and item.get("subject") == subject)
+                if not (item.get("issuer") in cleared and item.get("subject") == subject)
             ]
 
     def cancel_approval(self, slug: str, token: str) -> None:
@@ -1008,6 +1014,7 @@ def approve_pending_tenant(
     issuer: str,
     subject: str,
     service_user: str,
+    trusted_issuers: Sequence[str],
 ) -> Path:
     """Consume one invite and create its isolated, unfunded tenant.
 
@@ -1015,6 +1022,12 @@ def approve_pending_tenant(
     durable step is idempotent, so interruption leaves a safe inaccessible
     partial tenant that the same command can finish; it never grants a
     different identity or silently changes privilege/funding.
+
+    `trusted_issuers` is the set the shared service trusts (read from its
+    config by the caller, #618). The subject is reserved and then bound under
+    every one of them, all or nothing, so the person is not refused again on
+    the other surface. An issuer outside that set is refused before anything
+    changes.
     """
     from wingman.infrastructure.oauth_bearer import (
         IdentityMapError,
@@ -1023,6 +1036,12 @@ def approve_pending_tenant(
         reserve_trusted_identity,
     )
 
+    if issuer not in trusted_issuers:
+        raise OAuthOnboardingError(
+            f"issuer {issuer!r} is not one of the issuers the shared service trusts "
+            f"({', '.join(trusted_issuers)}); nothing was bound"
+        )
+    also = tuple(other for other in dict.fromkeys(trusted_issuers) if other != issuer)
     store = OAuthOnboardingStore(onboarding_path_for(identity_path))
     with _as_service_user(service_user):
         approval = store.begin_approval(slug, issuer, subject)
@@ -1032,7 +1051,9 @@ def approve_pending_tenant(
         data_dir = data_root / slug
         marker = data_dir / ".oauth-approval.json"
         with _as_service_user(service_user):
-            reservation = reserve_trusted_identity(identity_path, issuer, subject, slug)
+            reservation = reserve_trusted_identity(
+                identity_path, issuer, subject, slug, also_issuers=also
+            )
             if _prepared_for_invite(data_dir, slug):
                 # An email invite's tenant, prepared by `oauth-invite --email`
                 # and approved by hand instead of claimed at sign-in.
@@ -1061,9 +1082,13 @@ def approve_pending_tenant(
             _create_workspace(data_dir, "OAuth invite approval")
         _register_unprivileged_tenant(registry_path, slug, data_dir)
         with _as_service_user(service_user):
-            bind_trusted_identity(identity_path, issuer, subject, slug, reservation=reservation)
+            # Identity map first, then onboarding: the same lock order as
+            # the pending recorder and the email-invite claim.
+            bind_trusted_identity(
+                identity_path, issuer, subject, slug, reservation=reservation, also_issuers=also
+            )
             reservation = None
-            store.finish_approval(slug, approval)
+            store.finish_approval(slug, approval, issuers=(issuer, *also))
             marker.unlink(missing_ok=True)
             (data_dir / INVITE_MARKER).unlink(missing_ok=True)
         completed = True
@@ -1075,7 +1100,7 @@ def approve_pending_tenant(
             try:
                 with _as_service_user(service_user):
                     release_trusted_identity_reservation(
-                        identity_path, issuer, subject, reservation
+                        identity_path, issuer, subject, reservation, also_issuers=also
                     )
             except IdentityMapError:
                 pass

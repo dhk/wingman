@@ -26,6 +26,23 @@ cli = CliRunner()
 ISSUER = "https://idp.example.com"
 
 
+@pytest.fixture(autouse=True)
+def _service_trusts_only_issuer(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A shared service with the MCP login only: ISSUER is its one trusted issuer.
+
+    `oauth-bind` / `oauth-approve` read the trusted issuers from the service's
+    OAuth env file (#618); with one issuer they bind exactly as before.
+    Both-surface binding is covered in test_oauth_bind_both_issuers.py.
+    """
+    from wingman.infrastructure import oauth_service_issuers
+
+    oauth = tmp_path_factory.mktemp("service-oauth") / "oauth.env"
+    oauth.write_text(f"WINGMAN_OAUTH_ARGS=--oauth-issuer {ISSUER}\n", encoding="utf-8")
+    monkeypatch.setattr(oauth_service_issuers, "DEFAULT_OAUTH_CONFIG_PATH", oauth)
+
+
 def test_invite_pending_and_approval_create_an_unprivileged_unfunded_tenant(
     tmp_path: Path, monkeypatch
 ) -> None:
