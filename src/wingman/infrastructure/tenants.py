@@ -479,6 +479,11 @@ class TenantIndex:
         """
         self._load(load_registry(path))
 
+    def replace_with(self, fresh: TenantIndex) -> None:
+        """Install a fully loaded candidate index without rereading the registry."""
+        self._by_slug = fresh._by_slug
+        self._by_token_hash = fresh._by_token_hash
+
     @property
     def tenants(self) -> list[Tenant]:
         return list(self._by_slug.values())

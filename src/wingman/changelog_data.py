@@ -10,6 +10,80 @@ committed static file rather than a live git read.
 from __future__ import annotations
 
 CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
+    ("2026-10-11", 607, "Expose structured digests with exact budget drop URLs"),
+    ("2026-10-11", 606, "Upsert LinkedIn contacts and backfill private identifiers"),
+    ("2026-10-11", 603, "Diff duplicate research pages once and expose matching sources"),
+    ("2026-10-11", 602, "Pause individual research sources while preserving history"),
+    ("2026-10-11", 594, "Retain about-source prose by default and migrate existing sources"),
+    ("2026-10-11", 604, "Discover writing feeds and name the entered URL in errors"),
+    ("2026-10-11", 592, "Accept custom artifact kinds and report unknown freshness"),
+    ("2026-10-11", 608, "Document manual Wingman/Woven sync and missing prerequisites"),
+    ("2026-10-11", 591, "fix: hide server paths on OAuth setup pages (#581)"),
+    ("2026-10-11", 595, "Complete digest actions without suppressing future evidence"),
+    ("2026-10-10", 593, "diag(oauth): temporary off-by-default identity probe for #582"),
+    ("2026-10-09", 590, "fix(oauth): log the pending reference, never the subject, on refusal"),
+    ("2026-10-09", 588, "feat(oauth): Todoist approval task is due today"),
+    (
+        "2026-10-09",
+        587,
+        "feat(oauth): record email-bound invites; RFC-081 durable decision (#583, #584)",
+    ),
+    (
+        "2026-10-09",
+        580,
+        "fix(oauth): existing tenants see a workspace summary, not first-run setup (#579)",
+    ),
+    (
+        "2026-10-09",
+        578,
+        "fix(deploy): wingman-upgrade-all never restarts the shared service (#577)",
+    ),
+    (
+        "2026-10-08",
+        576,
+        "fix(deploy): registry route model and a healthy-but-unregistered redeploy",
+    ),
+    (
+        "2026-10-08",
+        575,
+        "feat(oauth): Todoist task for the operator when someone first waits for approval",
+    ),
+    (
+        "2026-10-08",
+        572,
+        "docs(oauth): onboarding checklist, connector triage, durable root metadata route",
+    ),
+    ("2026-10-08", 573, "feat(oauth): tell a verified but unapproved person what to do next"),
+    (
+        "2026-10-08",
+        571,
+        "feat(shared): sanitized wingman.access request log; one-line logs under journald",
+    ),
+    ("2026-10-08", 569, "fix(oauth): oauth-bind removes the bound identity from the pending queue"),
+    ("2026-10-08", 568, "Fix WorkOS browser session token validation"),
+    ("2026-10-08", 567, "Accept cookie-bound WorkOS callback state"),
+    ("2026-10-07", 566, "Fix AuthKit browser provider selection"),
+    ("2026-10-07", 564, "Enforce OAuth-only launch migration"),
+    ("2026-10-07", 563, "Protect browser onboarding with OAuth"),
+    ("2026-10-07", 562, "Add invite-only OAuth approval flow"),
+    ("2026-10-07", 561, "Accept durable invite-only OAuth RFC"),
+    ("2026-10-07", 565, "docs: resolve the 2026-10-05 Doc Watson sweep findings"),
+    ("2026-10-07", 560, "Land OAuth bearer validation and trusted tenant provisioning"),
+    ("2026-10-07", 559, "Invite outside contributions (owner-gated); fix one broken docs link"),
+    ("2026-10-02", 542, "feat: tenant keys --by-key — who is spending this credential (#536)"),
+    (
+        "2026-10-02",
+        540,
+        "feat: wg reload, and stop telling operators to restart the box (#533, #534, #535)",
+    ),
+    ("2026-10-02", 556, "fix: tenant keys reports the ladder the resolvers actually walk"),
+    ("2026-10-02", 538, "fix: the flag that spends somebody else's money now fails closed (#532)"),
+    ("2026-10-02", 541, "fix: '--scope host' must name the account whose file it writes (#537)"),
+    (
+        "2026-10-02",
+        539,
+        "feat: keys set --scope global — stop hand-editing the tier that funds everyone (#531)",
+    ),
     (
         "2026-10-02",
         555,
@@ -800,7 +874,7 @@ CHANGELOG_DATA: tuple[tuple[str, int, str], ...] = (
 # runtime against the running build's own hatch-vcs-embedded commit hash
 # (wingman.domain.changelog.staleness_note) so the tool can say when its
 # own data is known to be behind, instead of reporting a confident zero.
-GENERATED_FROM_COMMIT = "5a6fc11b6e866d2520bc521e58c2bd7344f485e0"
+GENERATED_FROM_COMMIT = "657f3d84fea43b2fe70772ab3d3914520f3c666a"
 
 # Commits past the most recent tag at that same sha (#202, #228 review).
 # The sha above is an IDENTITY — what the self-consistency test
@@ -810,4 +884,4 @@ GENERATED_FROM_COMMIT = "5a6fc11b6e866d2520bc521e58c2bd7344f485e0"
 # This distance survives being committed and is the same number a
 # version's '.devN' carries, so staleness_note can subtract the two and
 # say how many merges are missing. -1 means 'cannot verify'.
-GENERATED_FROM_DISTANCE = 76
+GENERATED_FROM_DISTANCE = 114

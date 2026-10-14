@@ -1,5 +1,7 @@
 # Research Briefing: Wingman vs. the Field
 
+Parity claims in this dated document are superseded by the [current CLI/MCP ledger](SURFACE-PARITY.md) and amended RFC-008 (#598).
+
 **Purpose.** A reality check before the next few versions. Wingman has grown a
 wide surface quickly (34 merged PRs, 33 MCP tools). This briefing instructs a
 researcher — human or AI agent with live web access — to compare that surface

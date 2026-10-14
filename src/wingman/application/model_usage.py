@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from wingman.domain.model_usage import ModelUsage
 from wingman.infrastructure.config import Config
-from wingman.infrastructure.storage import Storage
+from wingman.infrastructure.usage_ledger import read_usage
 
 if TYPE_CHECKING:
     from wingman.infrastructure.tenants import Tenant
@@ -27,15 +27,10 @@ def render_tenant_usage(tenant: Tenant, limit: int) -> tuple[str, bool]:
         config = tenant.config()
         if not config.db_path.exists():
             return f"Tenant {tenant.slug}: no workspace yet ({config.db_path} missing).", True
-        with Storage(config.db_path) as storage:
-            return (
-                render_usage(
-                    config,
-                    storage.list_model_usage(limit=limit),
-                    heading=f"Tenant {tenant.slug}",
-                ),
-                False,
-            )
+        rows, total, present = read_usage(config.db_path, limit)
+        if not present:
+            return f"Tenant {tenant.slug}: no usage recorded (ledger not yet created).", False
+        return render_usage(config, rows, heading=f"Tenant {tenant.slug}", total_count=total), False
     except Exception as exc:  # noqa: BLE001 — one bad tenant must not hide the rest
         return f"Tenant {tenant.slug}: could not be read — {exc}", True
 
@@ -72,12 +67,20 @@ def _price_usage(config: Config, rows: list[ModelUsage]) -> tuple[list[PricedUsa
 
 
 def _row_cost(row: ModelUsage, entry: object) -> Decimal | None:
+    if row.provider in {"recorded", "hashed"}:
+        return Decimal(0)
     if not isinstance(entry, dict):
         return None
     # Provider/model identifiers are durable billing provenance. Match them
     # exactly: Wingman has no authoritative alias table, so normalization
     # would risk pricing an old model with a different model's current rate.
-    if entry.get("provider") != row.provider or entry.get("model") != row.model:
+    aliases = entry.get("pricing_models", [])
+    allowed = (
+        aliases
+        if isinstance(aliases, list) and all(isinstance(item, str) for item in aliases)
+        else []
+    )
+    if entry.get("provider") != row.provider or row.model not in [entry.get("model"), *allowed]:
         return None
     units = (
         (row.input_tokens, "input_usd_per_million", Decimal(1_000_000)),
@@ -107,34 +110,102 @@ def _row_cost(row: ModelUsage, entry: object) -> Decimal | None:
     return total
 
 
-def render_usage(config: Config, rows: list[ModelUsage], *, heading: str = "Model usage") -> str:
-    priced, pricing_diagnostic = _price_usage(config, rows)
-    if not priced:
-        return f"{heading}: no successful model calls recorded."
-    totals: dict[tuple[str, str, str, str], list[Decimal | int]] = {}
-    unpriced = 0
+COUNTERS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "search_result_count",
+)
+
+
+def render_usage(
+    config: Config,
+    rows: list[ModelUsage],
+    *,
+    heading: str = "Model usage",
+    total_count: int | None = None,
+) -> str:
+    priced, diagnostic = _price_usage(config, rows)
+    total = len(rows) if total_count is None else total_count
+    scope = f"; newest {len(rows)} of {total} (truncated)" if total > len(rows) else ""
+    lines = [f"{heading}: {len(rows)} successful call(s){scope}"]
+    if not rows:
+        lines = [f"{heading}: no successful model calls recorded."]
+    groups: dict[tuple[str, str, str, str, str], list[PricedUsage]] = {}
     for item in priced:
-        row = item.usage
-        key = (row.payer.value, row.capability, row.provider, row.model)
-        bucket = totals.setdefault(key, [0, 0, Decimal(0)])
-        bucket[0] = int(bucket[0]) + 1
-        if item.cost_usd is None:
-            unpriced += 1
-            bucket[1] = int(bucket[1]) + 1
-        else:
-            bucket[2] = Decimal(bucket[2]) + item.cost_usd
-    lines = [f"{heading}: {len(rows)} successful call(s)"]
-    for (payer, capability, provider, model), (calls, missing, cost) in sorted(totals.items()):
-        price = "unpriced" if missing else f"${Decimal(cost):.6f}"
-        lines.append(f"- {payer} | {capability} | {provider}/{model}: {calls} call(s), {price}")
-    if pricing_diagnostic:
-        lines.append(
-            f"Pricing unavailable: {pricing_diagnostic}. Raw usage remains available; "
-            "these calls are unpriced, not zero-cost."
+        r = item.usage
+        groups.setdefault(
+            (r.recorded_at.date().isoformat(), r.payer.value, r.capability, r.provider, r.model), []
+        ).append(item)
+    for (day, payer, capability, provider, model), items in sorted(groups.items()):
+        costs = [item.cost_usd for item in items]
+        known = sum((cost for cost in costs if cost is not None), Decimal(0))
+        price = (
+            f"${known:.6f}"
+            if all(cost is not None for cost in costs)
+            else f"unpriced (priced subtotal ${known:.6f})"
         )
-    elif unpriced:
+        units = []
+        for name in COUNTERS:
+            values = [getattr(item.usage, name) for item in items]
+            subtotal = sum(value for value in values if value is not None)
+            value_text = (
+                str(subtotal)
+                if all(value is not None for value in values)
+                else f"unknown (known subtotal {subtotal})"
+            )
+            units.append(f"{name}={value_text}")
+        offline = " [offline/non-billable]" if provider in {"recorded", "hashed"} else ""
         lines.append(
-            f"{unpriced} call(s) are unpriced because models.toml lacks a required current "
-            "unit price; they are not counted as zero-cost."
+            f"- {day} | {payer} | {capability} | {provider}/{model}: {len(items)} call(s), {price}{offline}; "
+            + ", ".join(units)
         )
+    if diagnostic:
+        lines.append(
+            f"Pricing unavailable: {diagnostic}. Raw usage remains available; these calls are unpriced, not zero-cost."
+        )
+    if any(item.cost_usd is None for item in priced):
+        lines.append(
+            "Unpriced calls: no matching provider/model price (use explicit pricing_models for returned IDs), counter not reported, missing rate, or invalid rate; not counted as zero-cost."
+        )
+    lines.append(
+        "Accounting is best-effort: failed ledger writes can leave totals a lower bound. These estimates cannot enforce a budget."
+    )
+    return "\n".join(lines)
+
+
+def render_workspace_usage(config: Config, limit: int) -> str:
+    rows, total, present = read_usage(config.db_path, limit)
+    if not present:
+        return "Model usage: no usage recorded (ledger not yet created)."
+    return render_usage(config, rows, total_count=total)
+
+
+def funded_ranking(tenants: list[Tenant], limit: int) -> str:
+    """Rank known funded spend in the selected rows; never call it a complete bill."""
+    ranked: list[tuple[Decimal, str, bool]] = []
+    for tenant in tenants:
+        try:
+            config = tenant.config()
+            rows, total, _present = read_usage(config.db_path, limit)
+            funded = [
+                item
+                for item in price_usage(config, rows)
+                if item.usage.payer.value == "funded"
+                and item.usage.provider not in {"recorded", "hashed"}
+            ]
+            cost = sum((item.cost_usd for item in funded if item.cost_usd is not None), Decimal(0))
+            ranked.append(
+                (
+                    cost,
+                    tenant.slug,
+                    total > len(rows) or any(item.cost_usd is None for item in funded),
+                )
+            )
+        except Exception:  # noqa: BLE001, S112 — errors are reported by the detail reader
+            continue
+    lines = ["Funded spend ranking (known priced subtotal in selected rows; lower bound):"]
+    for cost, slug, incomplete in sorted(ranked, key=lambda item: (-item[0], item[1])):
+        lines.append(f"- {slug}: ${cost:.6f}" + (" [incomplete]" if incomplete else ""))
     return "\n".join(lines)

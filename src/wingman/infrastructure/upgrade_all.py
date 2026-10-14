@@ -61,6 +61,10 @@ from pathlib import Path
 from wingman.version import wingman_version
 
 SYSTEMD_UNIT = "wingman-mcp.service"
+# The RFC-048 shared multi-tenant account. Same variable and default as
+# scripts/wingman-redeploy-shared.sh, so the two cannot disagree about it.
+SHARED_USER_ENV = "WINGMAN_SHARED_USER"
+DEFAULT_SHARED_USER = "wingman-shared"
 REPO_SUBPATH = "src/wingman"
 # What an account should be tracking. A checkout parked anywhere else
 # receives that branch's code on every nightly run (#301).
@@ -420,6 +424,22 @@ def main(argv: list[str] | None = None) -> None:
         f"wingman-upgrade-all {wingman_version()} (this orchestrator's own build)",
         flush=True,
     )
+
+    # Never the shared multi-tenant account, even when listed (#577). That
+    # process belongs to wingman-redeploy-shared.sh, which stops it, waits
+    # for the port to free, then starts it (#415). A bare restart here as
+    # well raced that redeploy during 'wg upgrade-all': a reinstall under
+    # the running process (ImportError) and an address-in-use restart loop
+    # that took every tenant down. Skipped, said so, and not a failure.
+    shared_user = os.environ.get(SHARED_USER_ENV, "").strip() or DEFAULT_SHARED_USER
+    if shared_user in usernames:
+        usernames = [name for name in usernames if name != shared_user]
+        print(
+            f"[skipped] {shared_user}: the shared multi-tenant process is upgraded only by "
+            "'wg redeploy-shared' (wingman-redeploy-shared.sh), which 'wg upgrade-all' runs "
+            "next — remove it from WINGMAN_UPGRADE_USERS (#577)",
+            file=sys.stderr,
+        )
 
     targets: list[UpgradeTarget] = []
     unresolved: list[str] = []

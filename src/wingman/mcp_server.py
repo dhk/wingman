@@ -10,8 +10,10 @@ fetch/sync/discover tools do the same explicit, read-only public-feed reads
 as their CLI counterparts (RFC-009/011), and embedding tools carry the same
 RFC-010 egress semantics.
 
-Parity rule (RFC-008): the MCP surface tracks the CLI — every user-facing
-capability ships on both. The one adaptation: the CLI's interactive
+Parity decisions (RFC-008) are recorded in docs/SURFACE-PARITY.md.
+The surfaces share application code but retain documented gaps and local-only
+controls; a live inventory contract test requires a decision for each entry.
+One adaptation: the CLI's interactive
 confirm-before-attach for feeds becomes a two-tool pair here
 (feed_discover, then feed_attach only after the user says yes in
 conversation).
@@ -80,6 +82,7 @@ from wingman.application.feature_request import (
 )
 from wingman.application.focus import (
     follow_company,
+    json_digest,
     latest_digest,
     overnight_run,
     render_follow_report,
@@ -87,7 +90,11 @@ from wingman.application.focus import (
 )
 from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
-from wingman.application.model_usage import render_tenant_usage, render_usage
+from wingman.application.model_usage import (
+    funded_ranking,
+    render_tenant_usage,
+    render_workspace_usage,
+)
 from wingman.application.opportunities import list_opportunity_summaries, render_opportunity_listing
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pack import build_application_pack
@@ -131,10 +138,12 @@ from wingman.application.research import (
     add_company_source,
     delete_company,
     list_company_sources,
+    pause_company_source,
     remove_company_source,
     rename_company,
     render_research_report,
     research_company,
+    source_duplicates,
 )
 from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import (
@@ -156,8 +165,11 @@ from wingman.application.telemetry_summary import (
     summarize as summarize_telemetry,
 )
 from wingman.application.triage import (
+    current_digest,
+    done_action,
     mute_action,
     render_verdicts,
+    require_action,
     snooze_action,
     unmute_action,
 )
@@ -261,6 +273,24 @@ def my_urls() -> str:
             "a shared process, ask whoever runs the machine."
         )
     prefix = resolve_prefix(origin)
+    if origin.token is None:
+        if prefix is None:
+            address = f"{origin.scheme}://{origin.authority}"
+            connector = (
+                f"This OAuth-authenticated HTTP session reached {address}, but Wingman cannot "
+                "determine the public mount prefix, so it will not guess a connector URL."
+            )
+        else:
+            connector = (
+                "This OAuth-authenticated HTTP session uses:\n"
+                f"  MCP connector: {origin.mcp_url(prefix)}"
+            )
+        return (
+            connector + "\n\nOAuth sessions do not carry a capability-token URL. The authenticated "
+            "browser UI is not included in this release, so there is no Manage → Keys or "
+            "upload URL to provide here; ask whoever runs this Wingman for those operator-"
+            "assisted steps."
+        )
     if prefix is None:
         # A stripping front removed the mount path and the live funnel could
         # not be read, so the public prefix is genuinely unknown (#417).
@@ -359,8 +389,7 @@ def usage(limit: int = 100) -> str:
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
-    with Storage(config.db_path) as storage:
-        return render_usage(config, storage.list_model_usage(limit=max(1, limit)))
+    return render_workspace_usage(config, max(1, limit))
 
 
 @server.tool()
@@ -374,6 +403,7 @@ def usage_all_tenants(limit_per_tenant: int = 100) -> str:
         return refusal
     from wingman.infrastructure.tenants import (
         TenantRegistryError,
+        TenantRegistryUnreadable,
         load_registry,
         tenant_registry_path,
     )
@@ -381,15 +411,26 @@ def usage_all_tenants(limit_per_tenant: int = 100) -> str:
     registry_path = tenant_registry_path()
     try:
         tenants = load_registry(registry_path)
+    except TenantRegistryUnreadable as exc:
+        return f"Could not read the tenant registry ({registry_path}): {exc}. No tenant workspaces were read or changed. Fix permissions and retry."
     except TenantRegistryError as exc:
         return (
-            f"Could not read the tenant registry ({registry_path}): {exc}. "
+            f"Malformed tenant registry ({registry_path}): {exc}. "
             "No tenant workspaces were read or changed. Repair the registry contents or "
             "permissions, then try again."
         )
     if not tenants:
-        return "All-tenant model usage: no tenants are registered."
-    reports: list[str] = []
+        try:
+            state = "empty" if registry_path.is_file() else "file absent"
+        except OSError as exc:
+            from wingman.infrastructure.broadcast import permission_problem
+
+            return (
+                permission_problem(registry_path)
+                or f"Registry status could not be checked at {registry_path}: {exc}. No tenant workspaces were read or changed."
+            )
+        return f"All-tenant model usage: no tenants are registered in {registry_path} ({state})."
+    reports: list[str] = [funded_ranking(tenants, max(1, limit_per_tenant))]
     for tenant in tenants:
         report, _failed = render_tenant_usage(tenant, max(1, limit_per_tenant))
         reports.append(report)
@@ -476,6 +517,15 @@ def completeness(as_html: bool = False) -> str:
     relationship_log entries?), and Companies (people watched, documents,
     POV cards built vs. missing) — recomputed fresh on every call, no
     caching, no model call.
+
+    People and Companies cover CURATED people only: added by hand, given a
+    feed, logged with, given a relationship objective, put on a watchlist,
+    or given a saved deep-dive dossier. Contacts that arrived from a
+    LinkedIn import and have none of those are reported as one count ("N
+    imported contacts") and never counted as gaps, so a large import cannot
+    bury 'Things to do'. Do not tell the user to build POV cards for, or log
+    interactions with, those contacts in bulk. Each list names at most 50
+    entries, neediest first, then says how many more there are.
 
     Interview Bootstrap and Applications are NOT included: there is no
     tool yet that reads back interview_react captures (#311) or lists
@@ -625,10 +675,11 @@ def rubrics() -> str:
 
 
 @server.tool()
-def action_triage(action: str, key: str = "", days: int = 7) -> str:
+def action_triage(action: str, key: str = "", days: int = 7, fingerprint: str = "") -> str:
     """Triage the morning digest's action list: the user's verdicts persist (RFC-031).
 
-    action is 'mute' (never show this action key again), 'snooze' (hide it
+    For done, echo the fingerprint from the digest reviewed; stale evidence is rejected.
+    action is 'done' (complete this evidence only), 'mute' (never show this action key again), 'snooze' (hide it
     for `days` days), 'unmute' (clear a verdict), or 'list' (standing
     verdicts). Every digest action carries its key on a 'key:' line.
 
@@ -644,6 +695,11 @@ def action_triage(action: str, key: str = "", days: int = 7) -> str:
         return _NOT_INITIALIZED
     try:
         with Storage(config.db_path) as storage:
+            if action in {"mute", "snooze", "done"}:
+                require_action(key, storage)
+            if action == "done":
+                done_action(key, storage, fingerprint=fingerprint)
+                return f"Done {key} — new evidence can appear again."
             if action == "mute":
                 mute_action(key, storage)
                 return f"Muted {key} — it will not appear in future digests."
@@ -658,7 +714,7 @@ def action_triage(action: str, key: str = "", days: int = 7) -> str:
                 return render_verdicts(storage)
     except IngestError as exc:
         return f"action triage {action} failed: {exc}"
-    return f"unknown action {action!r}; use mute, snooze, unmute, or list."
+    return f"unknown action {action!r}; use done, mute, snooze, unmute, or list."
 
 
 @server.tool()
@@ -2658,7 +2714,8 @@ def artifacts(action: str = "list", kind: str = "", url: str = "", title: str = 
     action is 'list', 'remember' (store `kind` + `url`, replacing any
     earlier record for that kind), 'show' (`kind`), 'forget' (`kind`), or
     'stale'. kind is one of: values_radar, values_radar_work, completeness,
-    profile.
+    profile, or custom:<slug> (lowercase letters/digits, underscores and hyphens).
+    Custom views round-trip but freshness is unknown; their recording timestamp is shown.
 
     Protocol: after you publish or update one of these views, call
     action='remember' with the url the client gave you. Before publishing
@@ -3078,13 +3135,12 @@ def people_add(
     linkedin_url: str = "",
     email: str = "",
 ) -> str:
-    """Add a person to the watchlist (or update them), optionally with their Substack URL,
-    LinkedIn URL, and email (manual entry only — imports never read emails).
+    """Add a person to the watchlist (or update them), optionally with their public writing URL,
+    LinkedIn URL, and email (private address-book field; also imported from Connections.csv).
 
-    substack_url is for a Substack blog specifically — its feed is verified at
-    <url>/feed before being stored, and the call fails loudly (nothing is written) if
-    that isn't a real, fetchable feed. For any other blog, use feed_attach (or
-    feed_discover first to find its real feed URL) instead of guessing here."""
+    substack_url is a legacy name for a public writing URL. Bounded discovery
+    finds and verifies its RSS/Atom endpoint before storing. If no feed exists,
+    use feed_attach with kind="index_page" for the approved blog index instead."""
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
@@ -3862,8 +3918,15 @@ def values_chart(out_dir: str = "", view: str = "character") -> str:
     radar/spider chart (v3 of issue #240 — presentation only: no model call,
     nothing recomputed, just a picture of the already-computed ValueProfile).
 
-    Writes under reports/charts/ (or out_dir, if given) and returns the
-    written path. Requires a stored profile — call my_values(refresh=True)
+    Writes under reports/charts/ and returns the SVG
+    inline, without a server filesystem path. Clients can render the SVG
+    payload directly. Use the client's SVG/artifact renderer to display the
+    exact returned payload; do not regenerate it or publish it unless asked.
+    Returning SVG does not guarantee that a client displays it automatically.
+    out_dir is retained for compatibility but ignored; only the local CLI
+    accepts custom output directories. Inline delivery stops above 100,000
+    UTF-8 bytes rather than truncating the chart.
+    Requires a stored profile — call my_values(refresh=True)
     first if none exists yet; this tool never builds or rebuilds one itself.
     A stale stored profile (new captures since it was built) still renders,
     with the same "N new captures" note my_values already shows, printed on
@@ -3892,14 +3955,18 @@ def values_chart(out_dir: str = "", view: str = "character") -> str:
         value_view = parse_value_view(view)
     except IngestError as exc:
         return f"values-chart failed: {exc}"
-    destination = Path(out_dir).expanduser() if out_dir.strip() else None
     with Storage(config.db_path) as storage:
         active_persona = get_active_persona(storage, config)
         try:
-            export = export_value_radar(
-                config, storage, persona=active_persona, out_dir=destination, view=value_view
-            )
-        except IngestError as exc:
+            export = export_value_radar(config, storage, persona=active_persona, view=value_view)
+        except (IngestError, OSError) as exc:
+            if isinstance(exc, OSError) or isinstance(exc.__cause__, OSError):
+                get_logger("mcp").warning("values-chart file operation failed")
+                return (
+                    "values-chart failed: Could not save the chart; existing reports were "
+                    "preserved. Ask your workspace operator to check report-directory "
+                    "permissions and available disk space, then retry."
+                )
             return f"values-chart failed: {exc}"
         acting_as = render_acting_as(active_persona)
     warnings = ""
@@ -3915,10 +3982,16 @@ def values_chart(out_dir: str = "", view: str = "character") -> str:
             f"\n{export.stale_new_captures} new {noun} since this profile was built — "
             f"{refresh_tool(value_view)} to include them."
         )
-    return (
-        f"{acting_as}\nWrote {export.path}{warnings}\n"
-        "Open it in a browser, or embed it (it's self-contained SVG)."
-    )
+    svg = export.svg
+    if len(svg.encode("utf-8")) > 100_000:
+        return (
+            f"{acting_as}{warnings}\nChart exceeds the 100 KB inline limit. "
+            "Inline delivery stopped; ask your workspace operator for help viewing "
+            "this chart. No partial chart was returned."
+        )
+    longest_run = max((len(run) for run in re.findall(r"`+", svg)), default=0)
+    fence = "`" * max(3, longest_run + 1)
+    return f"{acting_as}{warnings}\nSVG for your client to render:\n\n{fence}svg\n{svg}\n{fence}"
 
 
 def _miso_lines(report: MisoReport) -> str:
@@ -4191,10 +4264,14 @@ def feature_request(title: str = "", body: str = "", confirmed: bool = False) ->
 
 
 @server.tool()
-def digest(as_html: bool = False) -> str:
+def digest(as_html: bool = False, as_json: bool = False) -> str:
     """The newest overnight digest — what changed, what failed, and the action
     list (what/why/who/evidence). The morning starting point after a scheduled
     'wingman overnight' run; pair with 'search' to dig into anything it raises.
+
+    as_json=True returns action records, target step results and the exact budget
+    drop list (company, URL, fetch/judge stage and budget). Older runs without
+    a JSON sidecar cannot recover missing drop URLs; re-run overnight.
 
     Every overnight run already writes a styled HTML twin alongside the
     Markdown (same design tokens as every other wingman export, action list
@@ -4206,6 +4283,14 @@ def digest(as_html: bool = False) -> str:
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
+    if as_json:
+        if as_html:
+            return "Choose as_json or as_html, not both."
+        try:
+            with Storage(config.db_path) as storage:
+                return json_digest(config, storage)
+        except IngestError as exc:
+            return str(exc)
     newest = latest_digest(config)
     if newest is None:
         return (
@@ -4221,7 +4306,8 @@ def digest(as_html: bool = False) -> str:
             "overnight' runs from this version onward. Re-run overnight to "
             "generate one, or call digest() without as_html for the Markdown."
         )
-    return newest.read_text(encoding="utf-8")
+    with Storage(config.db_path) as storage:
+        return current_digest(newest.read_text(encoding="utf-8"), storage)
 
 
 @server.tool()
@@ -4282,7 +4368,7 @@ def company_feed(action: str, name: str, url: str = "", index_page: bool = False
 def company_source(
     action: str, name: str, url: str = "", label: str = "", retain: bool | None = None
 ) -> str:
-    """Manage approved research URLs for a company: action is add, remove, or list.
+    """Manage approved research URLs for a company: action is add, remove, pause, unpause, or list.
 
     Adding a source IS the approval (RFC-015): 'company_research' will fetch
     exactly the pages approved here, nothing else. https:// only.
@@ -4290,8 +4376,8 @@ def company_source(
     retain=True (RFC-060) additionally keeps that page's prose as a document
     attributed to the company, so 'company_pov', 'search' and 'evidence' can
     quote it — a values or about page becomes citable instead of only a hash
-    that says it changed. The fetch is identical either way. Off by default;
-    suits pages that change rarely, not a careers page. Pass it on an
+    that says it changed. The fetch is identical either way. On by default for
+    new sources labelled about; off for other labels. False opts out. Pass it on an
     already-approved source to change your mind (None leaves it alone).
     """
     config = _ready_config()
@@ -4308,6 +4394,10 @@ def company_source(
                 state = "Approved" if created else "Already approved"
                 kept = " (text retained as a document)" if source.retain else ""
                 return f"{state} for {source.company_name}: {source.url}{kept}"
+            if action in {"pause", "unpause"}:
+                source = pause_company_source(name, url, storage, paused=action == "pause")
+                state = "Paused" if source.paused else "Resumed"
+                return f"{state}: {source.url}. Existing research preserved."
             if action == "remove":
                 removed = remove_company_source(name, url, storage)
                 return (
@@ -4322,6 +4412,7 @@ def company_source(
                         f"No approved research sources for {name!r}. "
                         "Approve one with company_source(action='add', ...)."
                     )
+                duplicates = source_duplicates(sources, storage)
                 lines = []
                 for entry in sources:
                     snapshot = storage.get_research_snapshot(entry.company_key, entry.url)
@@ -4331,13 +4422,16 @@ def company_source(
                         if snapshot
                         else "no snapshot yet"
                     )
+                    if entry.url in duplicates:
+                        state += f", duplicate of {duplicates[entry.url]}"
                     tag = f" ({entry.label})" if entry.label else ""
+                    state += ", paused" if entry.paused else ""
                     kept = ", text retained" if entry.retain else ""
                     lines.append(f"- {entry.url}{tag} — {state}{kept}")
                 return "\n".join(lines)
     except IngestError as exc:
         return f"company_source failed: {exc}"
-    return f"unknown action {action!r}; use add, remove, or list."
+    return f"unknown action {action!r}; use add, remove, pause, unpause, or list."
 
 
 @server.tool()
@@ -4660,17 +4754,26 @@ def feed_attach(person_name: str, url: str, kind: str = "rss", organization: str
 
 @server.tool()
 def people_import_connections(export_path: str) -> str:
-    """Seed the watchlist from a LinkedIn export zip's Connections.csv (names/roles only, never emails)."""
+    """Seed the watchlist from a LinkedIn export zip's Connections.csv (private contact identifiers, including emails)."""
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
     try:
+        path = Path(export_path).expanduser()
+        if not config.privileged:
+            try:
+                path = path.resolve()
+                if not path.is_relative_to(config.inbox_dir.resolve()):
+                    raise IngestError("shared imports require a zip in this tenant's private inbox")
+            except OSError as exc:
+                raise IngestError("could not resolve the tenant inbox import path") from exc
         with Storage(config.db_path) as storage:
-            report = seed_from_connections(Path(export_path).expanduser(), storage)
+            report = seed_from_connections(path, storage)
     except IngestError as exc:
         return f"import failed: {exc}"
     return (
-        f"Created: {report.created}  Already known: {report.skipped_existing}  "
+        f"Created: {report.created}  Updated: {report.updated}  Unchanged: {report.skipped_existing}  "
+        f"Conflicts (preserved; review identity/values): {report.conflicts}  "
         f"Incomplete rows skipped: {report.skipped_incomplete}"
     )
 
@@ -5332,6 +5435,51 @@ def main(argv: list[str] | None = None) -> None:
         "--rotate-token does not — each tenant's own token lives in their own data_dir; rotate "
         "one via 'wingman tenant rotate-token <slug>'.",
     )
+    parser.add_argument(
+        "--oauth-issuer",
+        metavar="URL",
+        help="RFC-081: also accept OAuth 2.1 bearer tokens from this "
+        "authorization server on <prefix>/mcp. Needs --tenant-registry and all four "
+        "--oauth-* flags. Off by default; the capability-token route is unchanged.",
+    )
+    parser.add_argument(
+        "--oauth-audience",
+        metavar="URL",
+        help="This server's canonical public MCP URL (RFC 8707). Tokens minted for "
+        "any other resource are refused.",
+    )
+    parser.add_argument(
+        "--oauth-jwks-uri",
+        metavar="URL",
+        help="The authorization server's JWKS endpoint, used to verify signatures.",
+    )
+    parser.add_argument(
+        "--oauth-identities",
+        metavar="PATH",
+        help="TOML file of [[identity]] entries (iss, sub, slug) mapping a verified "
+        "identity to a tenant slug in the registry.",
+    )
+    parser.add_argument(
+        "--oauth-web-client-id",
+        metavar="ID",
+        help="WorkOS client ID for the browser setup login. Requires all --oauth-web-* "
+        "flags and WINGMAN_OAUTH_WEB_CLIENT_SECRET in the service environment.",
+    )
+    parser.add_argument(
+        "--oauth-web-authorize-url",
+        metavar="URL",
+        help="Exact WorkOS authorization endpoint for browser setup login.",
+    )
+    parser.add_argument(
+        "--oauth-web-token-url",
+        metavar="URL",
+        help="Exact WorkOS token endpoint for server-side code exchange.",
+    )
+    parser.add_argument(
+        "--oauth-web-redirect-uri",
+        metavar="URL",
+        help="Exact registered callback URL (usually <public-mount>/oauth/callback).",
+    )
     args = parser.parse_args(argv)
     configure_logging()
     get_logger("mcp").info("wingman-mcp %s starting", wingman_version())
@@ -5342,6 +5490,35 @@ def main(argv: list[str] | None = None) -> None:
             "--rotate-token doesn't apply with --tenant-registry — each tenant's own token "
             "lives in their own data_dir; rotate one via 'wingman tenant rotate-token <slug>'"
         )
+    oauth_flags = (
+        args.oauth_issuer,
+        args.oauth_audience,
+        args.oauth_jwks_uri,
+        args.oauth_identities,
+    )
+    if any(value is not None for value in oauth_flags):
+        if not all(isinstance(value, str) and value for value in oauth_flags):
+            parser.error(
+                "the --oauth-* flags work only together: --oauth-issuer, --oauth-audience, "
+                "--oauth-jwks-uri and --oauth-identities"
+            )
+        if not args.tenant_registry:
+            parser.error("--oauth-* only makes sense with --tenant-registry")
+    oauth_web_flags = (
+        args.oauth_web_client_id,
+        args.oauth_web_authorize_url,
+        args.oauth_web_token_url,
+        args.oauth_web_redirect_uri,
+    )
+    if any(value is not None for value in oauth_web_flags):
+        if not all(isinstance(value, str) and value for value in oauth_web_flags):
+            parser.error(
+                "the --oauth-web-* flags work only together: --oauth-web-client-id, "
+                "--oauth-web-authorize-url, --oauth-web-token-url and "
+                "--oauth-web-redirect-uri"
+            )
+        if not all(isinstance(value, str) and value for value in oauth_flags):
+            parser.error("--oauth-web-* requires the complete --oauth-* resource-server setup")
     # One-time move off the legacy flat '~/.config/keys.env' (RFC-046) —
     # idempotent, so this logs nothing on every subsequent start; called
     # here (not just inside 'ensure_env') so a migration on someone's
@@ -5473,6 +5650,107 @@ def _probe_bind(host: str, port: int) -> None:
             sys.exit(1)
 
 
+def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> tuple[Any, Path]:
+    """Add the bearer-authenticated route beside the capability-token one
+    (RFC-081). Any misconfiguration refuses to start: a server
+    that looks OAuth-enabled and is not is worse than one that says so."""
+    from wingman.infrastructure.oauth_bearer import (
+        IdentityMap,
+        IdentityMapError,
+        OAuthConfigError,
+        bind_oauth_routing,
+        build_oauth_settings,
+        jwks_key_resolver,
+    )
+    from wingman.infrastructure.oauth_invite_claim import EmailInviteClaimer
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingStore,
+        onboarding_path_for,
+        pending_recorder,
+    )
+    from wingman.infrastructure.operator_notify import notifier_from_env
+
+    try:
+        settings = build_oauth_settings(args.oauth_issuer, args.oauth_audience, args.oauth_jwks_uri)
+        identity_path = Path(args.oauth_identities).expanduser()
+        identities = IdentityMap.from_toml(identity_path)
+    except (OAuthConfigError, IdentityMapError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+    unknown = sorted({slug for slug in identities.slugs() if index.by_slug(slug) is None})
+    if unknown:
+        print(
+            "ERROR: the identity map names tenant(s) missing from the registry: "
+            + ", ".join(unknown),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    resolve_key = jwks_key_resolver(settings.jwks_uri)
+    onboarding_store = OAuthOnboardingStore(onboarding_path_for(identity_path))
+    notifier = notifier_from_env(os.environ, identity_path)
+    record_pending = pending_recorder(identity_path, onboarding_store, notifier)
+    oauth_web_client_id = getattr(args, "oauth_web_client_id", None)
+    browser_settings = None
+    if oauth_web_client_id:
+        from wingman.infrastructure.oauth_browser import build_oauth_browser_settings
+
+        try:
+            browser_settings = build_oauth_browser_settings(
+                oauth_web_client_id,
+                args.oauth_web_authorize_url,
+                args.oauth_web_token_url,
+                args.oauth_web_redirect_uri,
+            )
+        except OAuthConfigError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+    # Email-bound invites (#585): the two issuers this process trusts are the
+    # only ones a claim binds under — one WorkOS user, one subject, both surfaces.
+    invite_claimer = EmailInviteClaimer(
+        identity_path,
+        onboarding_store,
+        index,
+        identities,
+        [settings.issuer] + ([browser_settings.session_issuer] if browser_settings else []),
+    )
+    bind_oauth_routing(
+        app,
+        f"{prefix}/mcp/{{token}}",
+        f"{prefix}/mcp",
+        index,
+        identities,
+        settings,
+        resolve_key,
+        record_pending,
+        invite_claimer=invite_claimer,
+    )
+    if browser_settings is not None:
+        from wingman.infrastructure.oauth_browser import OAuthBrowserSessions, bind_oauth_browser
+
+        bind_oauth_browser(
+            app,
+            prefix,
+            OAuthBrowserSessions(
+                browser_settings,
+                settings,
+                identities,
+                index,
+                jwks_key_resolver(browser_settings.session_jwks_uri),
+                record_pending=record_pending,
+                invite_claimer=invite_claimer,
+            ),
+        )
+    if notifier is not None:
+        print("Operator notification: a Todoist task for each newly queued sign-in")
+    print(
+        f"OAuth bearer (RFC-081): {settings.audience}, "
+        f"{len(identities)} identity mapping(s), issuer {settings.issuer}"
+    )
+    if oauth_web_client_id:
+        print(f"OAuth browser setup: {args.oauth_web_redirect_uri} -> {prefix or '/'}setup/")
+    return identities, identity_path
+
+
 def _run_tenant_server(args: argparse.Namespace, prefix: str) -> None:
     """The shared multi-tenant process (RFC-048): one OS process, share-
     nothing per-tenant data, capability tokens per tenant. Bypasses
@@ -5556,7 +5834,8 @@ def _run_tenant_server(args: argparse.Namespace, prefix: str) -> None:
 
     app = server.streamable_http_app()
     bind_tenant_routing(app, f"{prefix}/mcp/{{token}}", index)
-    register_reload_handler(index, registry_path)
+    oauth_reload = _bind_oauth(app, args, prefix, index) if args.oauth_issuer else (None, None)
+    register_reload_handler(index, registry_path, *oauth_reload)
 
     print(f"Shared multi-tenant server (RFC-048) — {len(index)} tenant(s) from {registry_path}")
     for tenant in sorted(index.tenants, key=lambda t: t.slug):
@@ -5565,11 +5844,19 @@ def _run_tenant_server(args: argparse.Namespace, prefix: str) -> None:
     print("Reload after editing the registry by hand: kill -HUP " + str(os.getpid()))
     print(f"Reach it from elsewhere via your own tunnel, e.g.: tailscale serve {args.port}")
     sys.stdout.flush()
+    # uvicorn's access log stays off (capability tokens are in the path);
+    # wingman.access logs the same requests with the path allowlisted.
     logging.getLogger("uvicorn.access").disabled = True
+    from wingman.infrastructure.access_log import AccessLogMiddleware
 
     write_tenant_pidfile(registry_path)
     atexit.register(clear_tenant_pidfile, registry_path)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    uvicorn.run(
+        AccessLogMiddleware(app, mounts=[prefix] if prefix else []),
+        host=args.host,
+        port=args.port,
+        log_level="warning",
+    )
 
 
 if __name__ == "__main__":

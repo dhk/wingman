@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from wingman.infrastructure import broadcast, keys, tenants
+from wingman.infrastructure import broadcast, keys, oauth_service_issuers, tenants
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +72,13 @@ def _isolated_box_wide_state(
     monkeypatch.setattr(broadcast, "OPERATOR_MESSAGE_PATH", absent / "motd.json")
     monkeypatch.setattr(broadcast, "OPERATOR_QUESTION_PATH", absent / "qotd.json")
     monkeypatch.setattr(tenants, "DEFAULT_REGISTRY_PATH", absent / "tenants.toml")
+    # The shared service's OAuth env files (#618): the operator bind/approve
+    # commands read the trusted issuers from them.
+    monkeypatch.setattr(oauth_service_issuers, "OAUTH_CONFIG_POINTER", absent / "oauth-config-path")
+    monkeypatch.setattr(oauth_service_issuers, "DEFAULT_OAUTH_CONFIG_PATH", absent / "oauth.env")
+    monkeypatch.setattr(
+        oauth_service_issuers, "DEFAULT_OAUTH_WEB_CONFIG_PATH", absent / "oauth-web.env"
+    )
 
 
 @pytest.fixture(scope="session")

@@ -138,7 +138,9 @@ def build_company_dossier(name: str, config: Config, storage: Storage) -> Dossie
     if research_sources:
         lines.extend(["", "## Research (approved sources)", ""])
         for source in research_sources:
-            label = f" ({source.label})" if source.label else ""
+            label = (f" ({source.label})" if source.label else "") + (
+                " (paused)" if source.paused else ""
+            )
             snapshot = storage.get_research_snapshot(key, source.url)
             if snapshot is None:
                 lines.append(

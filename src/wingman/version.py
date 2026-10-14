@@ -14,5 +14,5 @@ from importlib.metadata import PackageNotFoundError, version
 def wingman_version() -> str:
     try:
         return version("wingman")
-    except PackageNotFoundError:  # pragma: no cover — running from raw sources
+    except PackageNotFoundError:
         return "unknown (not installed)"

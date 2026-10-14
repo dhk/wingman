@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from array import array
 from collections.abc import Iterable
@@ -114,6 +115,10 @@ CREATE TABLE IF NOT EXISTS answers (
     created_at TEXT NOT NULL
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS answers_fts USING fts5(answer_id UNINDEXED, question, answer);
+CREATE TABLE IF NOT EXISTS digest_actions (
+    action_key TEXT PRIMARY KEY,
+    payload TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS action_verdicts (
     action_key TEXT PRIMARY KEY,
     verdict TEXT NOT NULL,
@@ -312,7 +317,39 @@ class Storage:
         self._conn.executescript(_SCHEMA)
         self._migrate_document_key()
         self._migrate_value_profile_view()
+        self._migrate_about_retention()
         self._conn.commit()
+
+    def _migrate_about_retention(self) -> None:
+        """Enable existing about sources once (#463), preserving future opt-outs.
+
+        Legacy False cannot distinguish a default from a deliberate opt-out;
+        this one-time change is the approved product migration. Update raw
+        payloads to preserve fields from other releases and leave snapshots
+        untouched. The marker and updates commit together; the marker insert
+        serializes concurrent openers before either reads source payloads.
+        """
+        self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)")
+        inserted = self._conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (name) VALUES (?)",
+            ("463_about_retention",),
+        )
+        if not inserted.rowcount:
+            return
+        rows = self._conn.execute(
+            "SELECT company_key, url, payload FROM company_sources"
+        ).fetchall()
+        for key, url, raw in rows:
+            payload = json.loads(raw)
+            if (payload.get("label") or "").strip().casefold() != "about":
+                continue
+            if payload.get("retain") is True:
+                continue
+            payload["retain"] = True
+            self._conn.execute(
+                "UPDATE company_sources SET payload = ? WHERE company_key = ? AND url = ?",
+                (json.dumps(payload), key, url),
+            )
 
     def _migrate_document_key(self) -> None:
         """Pre-RFC-028 databases lack source_records.document_key: add and backfill.
@@ -455,6 +492,11 @@ class Storage:
         cursor = self._conn.execute("SELECT COUNT(*) FROM source_records")
         count: int = cursor.fetchone()[0]
         return count
+
+    def latest_ingested_at(self) -> datetime | None:
+        cursor = self._conn.execute("SELECT MAX(ingested_at) FROM source_records")
+        value: str | None = cursor.fetchone()[0]
+        return datetime.fromisoformat(value) if value else None
 
     def add_profile_item(self, item: ProfileItem) -> None:
         try:
@@ -730,6 +772,19 @@ class Storage:
         self.watchlist_delete_member("person", person.name)
         return True
 
+    def save_digest_action(self, key: str, payload: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO digest_actions (action_key, payload) VALUES (?, ?)",
+            (key, payload),
+        )
+        self._conn.commit()
+
+    def get_digest_action(self, key: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT payload FROM digest_actions WHERE action_key = ?", (key,)
+        ).fetchone()
+        return str(row[0]) if row else None
+
     def set_action_verdict(self, action_key: str, verdict: str, until: str | None = None) -> None:
         """Record a triage verdict for a digest action key (RFC-031)."""
         self._conn.execute(
@@ -836,6 +891,10 @@ class Storage:
             filled["origin"] = absorb.origin
         if not keep.connected_on and absorb.connected_on:
             filled["connected_on"] = absorb.connected_on
+        filled["connection_fields"] = {**absorb.connection_fields, **keep.connection_fields}
+        filled["connection_imports"] = keep.connection_imports + [
+            item for item in absorb.connection_imports if item not in keep.connection_imports
+        ]
         merged = keep.model_copy(update=filled) if filled else keep
         if filled:
             self.update_person(merged)
@@ -1036,6 +1095,11 @@ class Storage:
         )
         row: tuple[str] | None = cursor.fetchone()
         return PersonDossier.model_validate_json(row[0]) if row else None
+
+    def person_dossier_ids(self) -> set[str]:
+        """Every person_id with a saved dossier, in one query (no payloads)."""
+        cursor = self._conn.execute("SELECT person_id FROM person_dossiers")
+        return {row[0] for row in cursor.fetchall()}
 
     def save_company_dossier(self, dossier: CompanyDossier) -> None:
         """Insert or replace a company's deep dive (rebuilt, not versioned — #350)."""
@@ -1340,6 +1404,20 @@ class Storage:
             return False
         self._conn.commit()
         return True
+
+    def set_company_source_paused(self, company_key: str, url: str, paused: bool) -> None:
+        row = self._conn.execute(
+            "SELECT payload FROM company_sources WHERE company_key = ? AND url = ?",
+            (company_key, url),
+        ).fetchone()
+        if row is None:
+            raise ValueError("unknown approved source")
+        source = CompanySource.model_validate_json(row[0]).model_copy(update={"paused": paused})
+        self._conn.execute(
+            "UPDATE company_sources SET payload = ? WHERE company_key = ? AND url = ?",
+            (source.model_dump_json(), company_key, url),
+        )
+        self._conn.commit()
 
     def set_company_source_retention(self, company_key: str, url: str, retain: bool) -> bool:
         """Flip the retain flag on an already-approved source; False if unknown.

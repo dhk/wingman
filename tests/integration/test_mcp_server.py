@@ -153,7 +153,7 @@ def test_usage_all_tenants_reports_registry_failure_without_tool_exception(
 
     result = usage_all_tenants()
 
-    assert f"Could not read the tenant registry ({registry_path})" in result
+    assert f"Malformed tenant registry ({registry_path})" in result
     assert "registry is malformed" in result
     assert "No tenant workspaces were read or changed" in result
     assert "contents or permissions" in result

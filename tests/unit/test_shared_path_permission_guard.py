@@ -35,11 +35,14 @@ SHARED_PATHS = {
     "OPERATOR_QUESTION_PATH",
     "DEFAULT_REGISTRY_PATH",
     "registry_path",
+    "OAUTH_CONFIG_POINTER",
+    "DEFAULT_OAUTH_CONFIG_PATH",
+    "DEFAULT_OAUTH_WEB_CONFIG_PATH",
 }
 
 #: Modules that own or resolve those paths, where any bare check is suspect
 #: regardless of the receiver's name.
-SHARED_PATH_MODULES = {"broadcast.py", "tenants.py"}
+SHARED_PATH_MODULES = {"broadcast.py", "tenants.py", "oauth_service_issuers.py"}
 
 BARE_CHECKS = {"exists", "is_file", "is_dir"}
 

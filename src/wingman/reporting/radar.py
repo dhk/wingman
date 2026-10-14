@@ -95,6 +95,8 @@ from __future__ import annotations
 
 import html
 import math
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -670,24 +672,37 @@ class RadarExport:
     """
 
     path: Path
+    # This call's complete payload, independent of concurrent file replacements.
+    svg: str
     stale_new_captures: int
     scoring_superseded: bool = False
     fingerprint: str = ""
 
 
 def _write_svg(directory: Path, filename: str, svg: str) -> Path:
+    temporary: Path | None = None
     try:
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / filename
-        path.write_text(svg, encoding="utf-8")
+        # Close/flush a complete file in the same directory before the atomic
+        # replacement. Concurrent readers see either complete version.
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=directory, prefix=".radar-", suffix=".tmp", delete=False
+        ) as output:
+            temporary = Path(output.name)
+            output.write(svg)
+        os.replace(temporary, path)
     except OSError as exc:
-        # Both callers handle IngestError and print an actionable refusal.
-        # Letting OSError through instead gave them a traceback for the
-        # ordinary cases: a read-only --out, a full disk, no permission.
         raise IngestError(
-            f"could not write the chart to {directory}: {exc}. Check the directory exists "
-            "and is writable, or pass a different --out."
+            f"could not write the chart to {directory}: {exc}. Existing charts were preserved. "
+            "Check the directory exists and is writable, or pass a different --out."
         ) from exc
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                _logger.warning("could not remove temporary chart file")
     _logger.info("radar export path=%s", path)
     return path
 
@@ -752,6 +767,7 @@ def export_value_radar(
     )
     return RadarExport(
         path=_write_svg(directory, filename, svg),
+        svg=svg,
         stale_new_captures=stale,
         scoring_superseded=not scoring_is_current(profile),
         fingerprint=values_radar_fingerprint(profile),

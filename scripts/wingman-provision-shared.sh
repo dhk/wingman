@@ -21,6 +21,17 @@
 #                WINGMAN_SHARED_TAILSCALE_PATHS (default "/shared"; space- or
 #                  comma-separated for a service fronting more than one path),
 #                WINGMAN_SHARED_TAILSCALE_PATH (deprecated single-path alias)
+# OAuth (all four together, or none):
+#                WINGMAN_SHARED_OAUTH_ISSUER
+#                WINGMAN_SHARED_OAUTH_AUDIENCE
+#                WINGMAN_SHARED_OAUTH_JWKS_URI
+#                WINGMAN_SHARED_OAUTH_IDENTITIES
+# OAuth browser setup (all five together, or none):
+#                WINGMAN_SHARED_OAUTH_WEB_CLIENT_ID
+#                WINGMAN_SHARED_OAUTH_WEB_CLIENT_SECRET
+#                WINGMAN_SHARED_OAUTH_WEB_AUTHORIZE_URL
+#                WINGMAN_SHARED_OAUTH_WEB_TOKEN_URL
+#                WINGMAN_SHARED_OAUTH_WEB_REDIRECT_URI
 #
 # What this does NOT do: create per-tenant workspaces or tokens — run
 # 'wingman-add-tenant.sh <slug>' once per tenant afterward. Nor does it
@@ -41,8 +52,103 @@ read -r -a TAILSCALE_PATH_LIST <<<"${TAILSCALE_PATHS//,/ }"
 TAILSCALE_PATH="${TAILSCALE_PATH_LIST[0]}"   # the prefix tenant URLs are printed with
 REPO_URL="git@github.com:dhk/wingman.git"
 REGISTRY_PATH="/etc/wingman/tenants.toml"
+OAUTH_CONFIG_POINTER="${WINGMAN_SHARED_OAUTH_CONFIG_POINTER:-/etc/wingman/oauth-config-path}"
+if [ -n "${WINGMAN_SHARED_OAUTH_CONFIG:-}" ]; then
+  OAUTH_CONFIG_PATH="$WINGMAN_SHARED_OAUTH_CONFIG"
+elif [ -e "$OAUTH_CONFIG_POINTER" ]; then
+  if [ ! -f "$OAUTH_CONFIG_POINTER" ] || [ ! -r "$OAUTH_CONFIG_POINTER" ]; then
+    echo "saved OAuth config pointer is not a readable regular file: $OAUTH_CONFIG_POINTER" >&2
+    exit 1
+  fi
+  oauth_config_pointer_lines="$(awk 'END { print NR }' "$OAUTH_CONFIG_POINTER")"
+  OAUTH_CONFIG_PATH="$(sed -n '1p' "$OAUTH_CONFIG_POINTER")"
+  if [ "$oauth_config_pointer_lines" -ne 1 ] || [ -z "$OAUTH_CONFIG_PATH" ]; then
+    echo "saved OAuth config pointer must contain exactly one non-empty path: $OAUTH_CONFIG_POINTER" >&2
+    exit 1
+  fi
+else
+  OAUTH_CONFIG_PATH="/etc/wingman/oauth.env"
+fi
+case "$OAUTH_CONFIG_PATH" in
+  /*) ;;
+  *) echo "shared OAuth config path must be absolute: $OAUTH_CONFIG_PATH" >&2; exit 2 ;;
+esac
+OAUTH_ISSUER="${WINGMAN_SHARED_OAUTH_ISSUER:-}"
+OAUTH_AUDIENCE="${WINGMAN_SHARED_OAUTH_AUDIENCE:-}"
+OAUTH_JWKS_URI="${WINGMAN_SHARED_OAUTH_JWKS_URI:-}"
+OAUTH_IDENTITIES="${WINGMAN_SHARED_OAUTH_IDENTITIES:-}"
+OAUTH_WEB_CONFIG_PATH="${WINGMAN_SHARED_OAUTH_WEB_CONFIG:-/etc/wingman/oauth-web.env}"
+OAUTH_WEB_CLIENT_ID="${WINGMAN_SHARED_OAUTH_WEB_CLIENT_ID:-}"
+OAUTH_WEB_CLIENT_SECRET="${WINGMAN_SHARED_OAUTH_WEB_CLIENT_SECRET:-}"
+OAUTH_WEB_AUTHORIZE_URL="${WINGMAN_SHARED_OAUTH_WEB_AUTHORIZE_URL:-}"
+OAUTH_WEB_TOKEN_URL="${WINGMAN_SHARED_OAUTH_WEB_TOKEN_URL:-}"
+OAUTH_WEB_REDIRECT_URI="${WINGMAN_SHARED_OAUTH_WEB_REDIRECT_URI:-}"
+oauth_fields=0
+[ -n "$OAUTH_ISSUER" ] && oauth_fields=$((oauth_fields + 1))
+[ -n "$OAUTH_AUDIENCE" ] && oauth_fields=$((oauth_fields + 1))
+[ -n "$OAUTH_JWKS_URI" ] && oauth_fields=$((oauth_fields + 1))
+[ -n "$OAUTH_IDENTITIES" ] && oauth_fields=$((oauth_fields + 1))
+if [ "$oauth_fields" -ne 0 ] && [ "$oauth_fields" -ne 4 ]; then
+  echo "Shared OAuth needs all four WINGMAN_SHARED_OAUTH_* settings together." >&2
+  exit 2
+fi
+EFFECTIVE_OAUTH_ENABLED=0
+if [ "$oauth_fields" -eq 4 ] || [ -f "$OAUTH_CONFIG_PATH" ]; then
+  EFFECTIVE_OAUTH_ENABLED=1
+elif [ -e "$OAUTH_CONFIG_POINTER" ]; then
+  echo "saved OAuth config is missing or not a regular file: $OAUTH_CONFIG_PATH" >&2
+  echo "The shared service was not changed; restore the config or supply all four OAuth settings." >&2
+  exit 1
+fi
+oauth_web_fields=0
+[ -n "$OAUTH_WEB_CLIENT_ID" ] && oauth_web_fields=$((oauth_web_fields + 1))
+[ -n "$OAUTH_WEB_CLIENT_SECRET" ] && oauth_web_fields=$((oauth_web_fields + 1))
+[ -n "$OAUTH_WEB_AUTHORIZE_URL" ] && oauth_web_fields=$((oauth_web_fields + 1))
+[ -n "$OAUTH_WEB_TOKEN_URL" ] && oauth_web_fields=$((oauth_web_fields + 1))
+[ -n "$OAUTH_WEB_REDIRECT_URI" ] && oauth_web_fields=$((oauth_web_fields + 1))
+if [ "$oauth_web_fields" -ne 0 ] && [ "$oauth_web_fields" -ne 5 ]; then
+  echo "OAuth browser setup needs all five WINGMAN_SHARED_OAUTH_WEB_* settings together." >&2
+  exit 2
+fi
+if [ "$oauth_web_fields" -eq 5 ] && [ "$oauth_fields" -ne 4 ]; then
+  echo "OAuth browser setup also requires the complete shared OAuth resource-server settings." >&2
+  exit 2
+fi
+if [ "$oauth_web_fields" -eq 5 ]; then
+  for value in "$OAUTH_WEB_CLIENT_ID" "$OAUTH_WEB_CLIENT_SECRET" "$OAUTH_WEB_AUTHORIZE_URL" "$OAUTH_WEB_TOKEN_URL" "$OAUTH_WEB_REDIRECT_URI"; do
+    case "$value" in
+      *[[:space:]]*) echo "OAuth browser settings must not contain whitespace." >&2; exit 2 ;;
+    esac
+  done
+fi
+if [ "$oauth_fields" -eq 4 ]; then
+  for value in "$OAUTH_ISSUER" "$OAUTH_AUDIENCE" "$OAUTH_JWKS_URI" "$OAUTH_IDENTITIES"; do
+    case "$value" in
+      *[[:space:]]*) echo "Shared OAuth settings must not contain whitespace: $value" >&2; exit 2 ;;
+    esac
+  done
+  case "$OAUTH_IDENTITIES" in
+    /*) ;;
+    *) echo "WINGMAN_SHARED_OAUTH_IDENTITIES must be an absolute path." >&2; exit 2 ;;
+  esac
+fi
 
 say() { printf '==> %s\n' "$*"; }
+
+# The RFC 9728 host-root well-known path for an OAuth resource URL:
+# https://host/shared/mcp -> /.well-known/oauth-protected-resource/shared/mcp.
+# Prints nothing for a resource at the host root (or an empty audience).
+oauth_metadata_route() {
+  local rest="${1#*://}" path=""
+  case "$rest" in
+    */*) path="/${rest#*/}" ;;
+  esac
+  path="${path%%[?#]*}"
+  path="${path%/}"
+  if [ -n "$path" ]; then
+    printf '/.well-known/oauth-protected-resource%s\n' "$path"
+  fi
+}
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "run as root: sudo $0" >&2
@@ -68,6 +174,67 @@ systemctl start "user@${SERVICE_UID}.service" 2>/dev/null || true
 say "3/7 registry directory + file (root-owned, group-readable, no secrets in it)"
 install -d -m 750 -o root -g wingman /etc/wingman
 [ -f "$REGISTRY_PATH" ] || install -m 644 /dev/null "$REGISTRY_PATH"
+OAUTH_CONFIG_CHANGED=0
+OAUTH_WEB_CONFIG_CHANGED=0
+if [ "$oauth_fields" -eq 4 ]; then
+  OAUTH_IDENTITIES_PARENT="$(dirname "$OAUTH_IDENTITIES")"
+  if [ ! -d "$OAUTH_IDENTITIES_PARENT" ]; then
+    install -d -m 700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$OAUTH_IDENTITIES_PARENT"
+  elif ! sudo -u "$SERVICE_USER" test -w "$OAUTH_IDENTITIES_PARENT" \
+    || ! sudo -u "$SERVICE_USER" test -x "$OAUTH_IDENTITIES_PARENT"; then
+    echo "existing OAuth identity-map parent is not writable and traversable by $SERVICE_USER: $OAUTH_IDENTITIES_PARENT" >&2
+    exit 1
+  fi
+  if [ -e "$OAUTH_IDENTITIES" ]; then
+    if [ ! -f "$OAUTH_IDENTITIES" ] \
+      || ! sudo -u "$SERVICE_USER" test -r "$OAUTH_IDENTITIES" \
+      || ! sudo -u "$SERVICE_USER" test -w "$OAUTH_IDENTITIES"; then
+      echo "existing OAuth identity map is not a readable, writable regular file for $SERVICE_USER: $OAUTH_IDENTITIES" >&2
+      exit 1
+    fi
+  else
+    install -m 600 -o "$SERVICE_USER" -g "$SERVICE_USER" /dev/null "$OAUTH_IDENTITIES"
+  fi
+  OAUTH_CONFIG_TEMP="$(mktemp)"
+  cat > "$OAUTH_CONFIG_TEMP" <<EOF
+WINGMAN_OAUTH_ISSUER=$OAUTH_ISSUER
+WINGMAN_OAUTH_AUDIENCE=$OAUTH_AUDIENCE
+WINGMAN_OAUTH_JWKS_URI=$OAUTH_JWKS_URI
+WINGMAN_OAUTH_IDENTITIES=$OAUTH_IDENTITIES
+WINGMAN_OAUTH_ARGS=--oauth-issuer $OAUTH_ISSUER --oauth-audience $OAUTH_AUDIENCE --oauth-jwks-uri $OAUTH_JWKS_URI --oauth-identities $OAUTH_IDENTITIES
+EOF
+  if [ ! -f "$OAUTH_CONFIG_PATH" ] || ! cmp -s "$OAUTH_CONFIG_TEMP" "$OAUTH_CONFIG_PATH"; then
+    OAUTH_CONFIG_CHANGED=1
+    install -D -m 644 -o root -g wingman "$OAUTH_CONFIG_TEMP" "$OAUTH_CONFIG_PATH"
+  fi
+  rm -f "$OAUTH_CONFIG_TEMP"
+fi
+if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ] \
+  && ! sudo -u "$SERVICE_USER" test -r "$OAUTH_CONFIG_PATH"; then
+  echo "saved OAuth config is not readable by $SERVICE_USER: $OAUTH_CONFIG_PATH" >&2
+  echo "The service unit was not replaced or restarted; fix path permissions before retrying." >&2
+  exit 1
+fi
+if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ]; then
+  OAUTH_POINTER_TEMP="$(mktemp)"
+  printf '%s\n' "$OAUTH_CONFIG_PATH" > "$OAUTH_POINTER_TEMP"
+  if [ ! -f "$OAUTH_CONFIG_POINTER" ] || ! cmp -s "$OAUTH_POINTER_TEMP" "$OAUTH_CONFIG_POINTER"; then
+    install -D -m 644 -o root -g wingman "$OAUTH_POINTER_TEMP" "$OAUTH_CONFIG_POINTER"
+  fi
+  rm -f "$OAUTH_POINTER_TEMP"
+fi
+if [ "$oauth_web_fields" -eq 5 ]; then
+  OAUTH_WEB_CONFIG_TEMP="$(mktemp)"
+  cat > "$OAUTH_WEB_CONFIG_TEMP" <<EOF
+WINGMAN_OAUTH_WEB_CLIENT_SECRET=$OAUTH_WEB_CLIENT_SECRET
+WINGMAN_OAUTH_WEB_ARGS=--oauth-web-client-id $OAUTH_WEB_CLIENT_ID --oauth-web-authorize-url $OAUTH_WEB_AUTHORIZE_URL --oauth-web-token-url $OAUTH_WEB_TOKEN_URL --oauth-web-redirect-uri $OAUTH_WEB_REDIRECT_URI
+EOF
+  if [ ! -f "$OAUTH_WEB_CONFIG_PATH" ] || ! cmp -s "$OAUTH_WEB_CONFIG_TEMP" "$OAUTH_WEB_CONFIG_PATH"; then
+    OAUTH_WEB_CONFIG_CHANGED=1
+    install -D -m 600 -o "$SERVICE_USER" -g "$SERVICE_USER" "$OAUTH_WEB_CONFIG_TEMP" "$OAUTH_WEB_CONFIG_PATH"
+  fi
+  rm -f "$OAUTH_WEB_CONFIG_TEMP"
+fi
 
 say "4/7 SSH deploy key — this account has no GitHub identity of its own"
 SSH_DIR="/home/$SERVICE_USER/.ssh"
@@ -95,7 +262,9 @@ sudo -iu "$SERVICE_USER" bash -c "~/src/wingman/scripts/wingman-tool-install.sh 
 say "6/7 systemd unit"
 UNIT_DIR="/home/$SERVICE_USER/.config/systemd/user"
 sudo -iu "$SERVICE_USER" mkdir -p "$UNIT_DIR"
-cat > "$UNIT_DIR/wingman-mcp.service" <<EOF
+UNIT_PATH="$UNIT_DIR/wingman-mcp.service"
+UNIT_TEMP="$(mktemp)"
+cat > "$UNIT_TEMP" <<EOF
 [Unit]
 Description=Wingman shared multi-tenant MCP server (RFC-048)
 After=network.target
@@ -103,7 +272,9 @@ After=network.target
 [Service]
 EnvironmentFile=-%h/.config/wingman/wingman.env
 EnvironmentFile=-%h/.config/wingman/secrets.env
-ExecStart=%h/.local/bin/wingman-mcp --http --port $PORT --tenant-registry $REGISTRY_PATH
+EnvironmentFile=-$OAUTH_CONFIG_PATH
+EnvironmentFile=-$OAUTH_WEB_CONFIG_PATH
+ExecStart=%h/.local/bin/wingman-mcp --http --port $PORT --tenant-registry $REGISTRY_PATH \$WINGMAN_OAUTH_ARGS \$WINGMAN_OAUTH_WEB_ARGS
 Restart=on-failure
 RestartSec=2
 # A slow port release must never become a PERMANENT outage (#415).
@@ -124,7 +295,12 @@ StartLimitBurst=0
 [Install]
 WantedBy=default.target
 EOF
-chown "$SERVICE_USER:$SERVICE_USER" "$UNIT_DIR/wingman-mcp.service"
+UNIT_CHANGED=0
+if [ ! -f "$UNIT_PATH" ] || ! cmp -s "$UNIT_TEMP" "$UNIT_PATH"; then
+  UNIT_CHANGED=1
+  install -m 644 -o "$SERVICE_USER" -g "$SERVICE_USER" "$UNIT_TEMP" "$UNIT_PATH"
+fi
+rm -f "$UNIT_TEMP"
 # 'systemctl --user' needs XDG_RUNTIME_DIR pointed at this account's own
 # runtime dir to reach its session bus at all when invoked via sudo from
 # root — 'sudo -iu' alone isn't enough (this is the exact fix
@@ -132,8 +308,18 @@ chown "$SERVICE_USER:$SERVICE_USER" "$UNIT_DIR/wingman-mcp.service"
 # this fails with "Failed to connect to bus: No medium found".
 sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
   systemctl --user daemon-reload
+SERVICE_WAS_ACTIVE=0
+if sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
+  systemctl --user is-active --quiet wingman-mcp.service; then
+  SERVICE_WAS_ACTIVE=1
+fi
 sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
   systemctl --user enable --now wingman-mcp.service
+if [ "$SERVICE_WAS_ACTIVE" -eq 1 ] && { [ "$OAUTH_CONFIG_CHANGED" -eq 1 ] || [ "$OAUTH_WEB_CONFIG_CHANGED" -eq 1 ] || [ "$UNIT_CHANGED" -eq 1 ]; }; then
+  say "  service configuration changed — restarting the shared service"
+  sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
+    systemctl --user restart wingman-mcp.service
+fi
 
 say "7/8 tailscale mount (stripping proxy — the shared process itself runs with no --prefix)"
 # 'funnel', never plain 'serve': funnel is a per-HOSTNAME toggle, not a
@@ -145,16 +331,48 @@ say "7/8 tailscale mount (stripping proxy — the shared process itself runs wit
 # when this script was first written, and a later re-run of the
 # (idempotent) provisioning script replayed the same mistake against
 # production.
+#
+# With OAuth, also publish the RFC 9728 metadata at the host-ROOT well-known
+# path for the resource (https://host/shared/mcp ->
+# /.well-known/oauth-protected-resource/shared/mcp). A client that computes
+# that path instead of following the 401's resource_metadata URL never
+# reaches a mount under /shared. The app serves the path itself
+# (_metadata_paths in oauth_bearer.py); the target carries the path because
+# --set-path strips the matched prefix before proxying. It was added by hand
+# on lobster during the 2026-10-08 connector debugging and would have been
+# lost on the next rebuild.
+OAUTH_METADATA_ROUTE=""
+if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ]; then
+  metadata_audience="$OAUTH_AUDIENCE"
+  if [ -z "$metadata_audience" ] && [ -r "$OAUTH_CONFIG_PATH" ]; then
+    metadata_audience="$(sed -n 's/^WINGMAN_OAUTH_AUDIENCE=//p' "$OAUTH_CONFIG_PATH" | head -n 1)"
+  fi
+  OAUTH_METADATA_ROUTE="$(oauth_metadata_route "$metadata_audience")"
+  for mount_path in "${TAILSCALE_PATH_LIST[@]}"; do
+    # A root mount already proxies the well-known path through unchanged.
+    if [ "$mount_path" = "/" ]; then
+      OAUTH_METADATA_ROUTE=""
+    fi
+  done
+fi
 if command -v tailscale >/dev/null 2>&1; then
   for mount_path in "${TAILSCALE_PATH_LIST[@]}"; do
     say "  mounting $mount_path"
     tailscale funnel --bg --set-path "$mount_path" "http://127.0.0.1:$PORT"
   done
+  if [ -n "$OAUTH_METADATA_ROUTE" ]; then
+    say "  mounting $OAUTH_METADATA_ROUTE (OAuth protected-resource metadata)"
+    tailscale funnel --bg --set-path "$OAUTH_METADATA_ROUTE" \
+      "http://127.0.0.1:$PORT$OAUTH_METADATA_ROUTE"
+  fi
 else
   say "tailscale not found — skipping. Run manually later:"
   for mount_path in "${TAILSCALE_PATH_LIST[@]}"; do
     say "  tailscale funnel --bg --set-path $mount_path http://127.0.0.1:$PORT"
   done
+  if [ -n "$OAUTH_METADATA_ROUTE" ]; then
+    say "  tailscale funnel --bg --set-path $OAUTH_METADATA_ROUTE http://127.0.0.1:$PORT$OAUTH_METADATA_ROUTE"
+  fi
 fi
 
 say "8/8 host service registry"
@@ -164,11 +382,21 @@ say "8/8 host service registry"
 "$(dirname "$0")/wingman-register-service.sh"
 
 echo
-say "Done. Add tenants with: sudo ./wingman-add-tenant.sh <slug>"
-say "Check status with:      sudo -iu $SERVICE_USER bash -c 'export PATH=\"\$HOME/.local/bin:\$PATH\"; wingman tenant url <slug> --port $PORT --tunnel-prefix $TAILSCALE_PATH'"
-say "                        ('wingman' directly, not the 'wg' alias — that only"
-say "                        exists in an interactive shell that's sourced its own"
-say "                        .bashrc, which $SERVICE_USER was never given)"
-say "One more step, by hand: add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS in"
-say "root's wingman-upgrade-all.service (docs/SERVER.md §7/§9), so this account's"
-say "checkout gets swept into the same nightly automated upgrade as everyone else."
+if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ]; then
+  say "Done. OAuth is enabled: new tenants require a verified invite identity."
+  say "Use the invite/approval flow, or the explicit --oauth-* form documented"
+  say "in docs/SERVER.md. Neither path mints a permanent capability URL."
+  say "Existing capability tenants remain available during the migration window;"
+  say "do not run 'wingman tenant url' for a new OAuth invitee."
+else
+  say "Done. Add tenants with: sudo ./wingman-add-tenant.sh <slug>"
+  say "Check status with:      sudo -iu $SERVICE_USER bash -c 'export PATH=\"\$HOME/.local/bin:\$PATH\"; wingman tenant url <slug> --port $PORT --tunnel-prefix $TAILSCALE_PATH'"
+  say "                        ('wingman' directly, not the 'wg' alias — that only"
+  say "                        exists in an interactive shell that's sourced its own"
+  say "                        .bashrc, which $SERVICE_USER was never given)"
+fi
+# Not WINGMAN_UPGRADE_USERS (#577): that sweep bare-restarts each account's
+# service, which races wingman-redeploy-shared.sh's stop/wait/start (#415).
+say "Upgrade this process with 'wg redeploy-shared' (or 'wg upgrade-all')."
+say "Do NOT add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS — that sweep would restart"
+say "it a second time, racing the redeploy (docs/SERVER.md §7, #577)."

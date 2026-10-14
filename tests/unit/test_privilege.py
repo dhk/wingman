@@ -196,7 +196,7 @@ def test_carve_off_persona_runs_on_a_solo_install(solo_workspace: Config, tmp_pa
 
 
 def test_no_other_tool_gained_a_gate() -> None:
-    """Cheap and specific: only deliberately operator-wide tools are gated."""
+    """New operator-wide gates require a behavioral test and an RFC-068 update."""
     from wingman import mcp_server
 
     source = Path(mcp_server.__file__).read_text(encoding="utf-8")

@@ -8,12 +8,14 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 import click
 import typer
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from wingman.infrastructure.tenants import Tenant
 
 from wingman.agents.profile_curator import ProposalParseError
@@ -59,6 +61,7 @@ from wingman.application.feature_request import (
 from wingman.application.focus import (
     OvernightReport,
     follow_company,
+    json_digest,
     latest_digest,
     overnight_run,
     render_follow_report,
@@ -67,7 +70,11 @@ from wingman.application.focus import (
 from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
-from wingman.application.model_usage import render_tenant_usage, render_usage
+from wingman.application.model_usage import (
+    funded_ranking,
+    render_tenant_usage,
+    render_workspace_usage,
+)
 from wingman.application.news import STALE_AFTER_DAYS, fetch_person_news
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pack import build_application_pack
@@ -110,10 +117,12 @@ from wingman.application.research import (
     add_company_source,
     delete_company,
     list_company_sources,
+    pause_company_source,
     remove_company_source,
     rename_company,
     render_research_report,
     research_company,
+    source_duplicates,
 )
 from wingman.application.search import render_search_report, search_workspace
 from wingman.application.similarity import (
@@ -134,8 +143,11 @@ from wingman.application.telemetry_summary import (
     summarize as summarize_telemetry,
 )
 from wingman.application.triage import (
+    current_digest,
+    done_action,
     mute_action,
     render_verdicts,
+    require_action,
     snooze_action,
     unmute_action,
 )
@@ -730,7 +742,7 @@ def artifacts_list() -> None:
 @artifacts_app.command("show")
 def artifacts_show(
     kind: str = typer.Argument(
-        ..., help="values_radar, values_radar_work, completeness, or profile."
+        ..., help="values_radar, values_radar_work, completeness, profile, or custom:<slug>."
     ),
 ) -> None:
     """The recorded url for ONE view, or nothing — the question asked before
@@ -769,7 +781,7 @@ def artifacts_show(
 @artifacts_app.command("remember")
 def artifacts_remember(
     kind: str = typer.Argument(
-        ..., help="values_radar, values_radar_work, completeness, or profile."
+        ..., help="values_radar, values_radar_work, completeness, profile, or custom:<slug>."
     ),
     url: str = typer.Argument(..., help="The https:// url the client published it at."),
     title: str = typer.Option("", "--title", help="Optional label for listings."),
@@ -824,7 +836,7 @@ def artifacts_stale() -> None:
 @artifacts_app.command("forget")
 def artifacts_forget(
     kind: str = typer.Argument(
-        ..., help="values_radar, values_radar_work, completeness, or profile."
+        ..., help="values_radar, values_radar_work, completeness, profile, or custom:<slug>."
     ),
 ) -> None:
     """Drop a recorded url (the published page itself is untouched)."""
@@ -1421,19 +1433,30 @@ def usage(
     config = load_config()
     if not all_tenants:
         _require_workspace(config, "reported")
-        with Storage(config.db_path) as storage:
-            typer.echo(render_usage(config, storage.list_model_usage(limit=limit)))
+        typer.echo(render_workspace_usage(config, limit))
         return
     refusal = operator_only_refusal(config, "usage --all-tenants")
     if refusal:
         typer.echo(refusal, err=True)
         raise typer.Exit(code=1)
-    from wingman.infrastructure.tenants import load_registry, tenant_registry_path
-
-    tenants = load_registry(tenant_registry_path())
+    tenants, registry_path = _load_registry_or_exit(None)
     if not tenants:
-        typer.echo("All-tenant model usage: no tenants are registered.")
+        try:
+            state = "empty" if registry_path.is_file() else "file absent"
+        except OSError as exc:
+            from wingman.infrastructure.broadcast import permission_problem
+
+            typer.echo(
+                permission_problem(registry_path)
+                or f"Registry status could not be checked at {registry_path}: {exc}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        typer.echo(
+            f"All-tenant model usage: no tenants are registered in {registry_path} ({state})."
+        )
         return
+    typer.echo(funded_ranking(tenants, limit))
     failures = 0
     for tenant in tenants:
         report, failed = render_tenant_usage(tenant, limit)
@@ -1871,14 +1894,16 @@ def people_add(
     substack: str | None = typer.Option(
         None,
         "--substack",
-        help="Their Substack URL, e.g. https://example.substack.com — verified against "
-        "<url>/feed before it's stored. For any other blog, use 'people add-feed' instead.",
+        help="Public writing URL; bounded discovery verifies its RSS/Atom feed before storing. "
+        "For a blog without a feed, use people add-feed --index.",
     ),
     company: str | None = typer.Option(None, "--company", help="Where they work."),
     position: str | None = typer.Option(None, "--position", help="What they do."),
     linkedin: str | None = typer.Option(None, "--linkedin", help="Their LinkedIn profile URL."),
     email: str | None = typer.Option(
-        None, "--email", help="Their email (manual entry only — imports never read emails)."
+        None,
+        "--email",
+        help="Their email (private address-book field; also imported from Connections.csv).",
     ),
 ) -> None:
     """Add a person to the watchlist (or update them if already known)."""
@@ -2063,7 +2088,7 @@ def people_add_feed(
 def people_import_connections(
     export: Path = typer.Argument(..., help="Path to a LinkedIn data-export zip."),
 ) -> None:
-    """Seed Person records from Connections.csv (names and roles only — never emails)."""
+    """Seed Person records from Connections.csv (private address-book fields, including emails)."""
     configure_logging()
     config = load_config()
     _require_workspace(config, "seeded")
@@ -2074,7 +2099,8 @@ def people_import_connections(
         typer.echo(f"import-connections failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(
-        f"Created: {report.created}  Already known: {report.skipped_existing}  "
+        f"Created: {report.created}  Updated: {report.updated}  Unchanged: {report.skipped_existing}  "
+        f"Conflicts (preserved; review identity/values): {report.conflicts}  "
         f"Incomplete rows skipped: {report.skipped_incomplete}"
     )
 
@@ -2130,6 +2156,8 @@ def people_fetch(
             )
             for title in report.titles:
                 typer.echo(f"  + {title}")
+            for correction in report.corrected_sources:
+                typer.echo(f"  corrected source: {correction}")
             for failure in report.failed_sources:
                 typer.echo(f"  ! {failure}", err=True)
     if failures:
@@ -3835,12 +3863,25 @@ def overnight(
 
 @app.command()
 def digest(
+    as_json: bool = typer.Option(
+        False, "--json", help="Structured actions, steps and budget drops."
+    ),
     path_only: bool = typer.Option(False, "--path", help="Print only the path."),
     open_it: bool = typer.Option(False, "--open", help="Open it with the system viewer."),
 ) -> None:
     """Show the newest overnight digest — the morning read, one word away."""
     configure_logging()
     config = load_config()
+    if as_json and (path_only or open_it):
+        raise typer.BadParameter("--json cannot be combined with --path or --open")
+    if as_json:
+        try:
+            with Storage(config.db_path) as storage:
+                typer.echo(json_digest(config, storage))
+        except IngestError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        return
     newest = latest_digest(config)
     if newest is None:
         typer.echo(
@@ -3860,7 +3901,8 @@ def digest(
         typer.launch(str(target))
         typer.echo(f"Opened {target}")
         return
-    typer.echo(newest.read_text(encoding="utf-8"))
+    with Storage(config.db_path) as storage:
+        typer.echo(current_digest(newest.read_text(encoding="utf-8"), storage))
 
 
 @app.command()
@@ -3959,7 +4001,7 @@ def company_add_source(
     retain: bool | None = typer.Option(
         None,
         "--retain/--no-retain",
-        help="Also keep the page's text as a citable document for this company (RFC-060).",
+        help="Keep citable prose; defaults on for new about-labelled sources (RFC-060).",
     ),
 ) -> None:
     """Approve one research URL for a company — adding it IS the approval (RFC-015).
@@ -3969,8 +4011,9 @@ def company_add_source(
 
     --retain additionally KEEPS the fetched page's prose as a document
     attributed to the company, so 'company pov' and 'evidence' can quote it.
-    Off by default: it suits a values or about page that changes twice a
-    year, not a careers page that would re-store on every run. It changes
+    On by default for new sources labelled about; off for other labels.
+    Use --no-retain to opt out. Retention suits durable prose rather than
+    careers indexes that change on every run. It changes
     nothing about the fetch — same page, same one GET. Re-run with
     --retain/--no-retain on an already-approved source to change your mind.
     """
@@ -3991,6 +4034,31 @@ def company_add_source(
         typer.echo(f'Fetch it with: wingman company research "{source.company_name}"')
     else:
         typer.echo(f"Already approved for {source.company_name}: {source.url}{kept}")
+
+
+def _pause_source(name: str, url: str, paused: bool) -> None:
+    config = load_config()
+    _require_workspace(config, "updated")
+    try:
+        with Storage(config.db_path) as storage:
+            source = pause_company_source(name, url, storage, paused=paused)
+    except IngestError as exc:
+        typer.echo(f"source pause failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    state = "Paused" if source.paused else "Resumed"
+    typer.echo(f"{state}: {source.url}. Existing research preserved.")
+
+
+@company_app.command("pause-source")
+def company_pause_source(name: str, url: str) -> None:
+    """Pause one approved URL without deleting its research history."""
+    _pause_source(name, url, True)
+
+
+@company_app.command("unpause-source")
+def company_unpause_source(name: str, url: str) -> None:
+    """Resume fetching a paused approved research URL."""
+    _pause_source(name, url, False)
 
 
 @company_app.command("remove-source")
@@ -4025,6 +4093,7 @@ def company_sources_cmd(
     try:
         with Storage(config.db_path) as storage:
             sources = list_company_sources(name, storage)
+            duplicates = source_duplicates(sources, storage)
             snapshots = {
                 source.url: storage.get_research_snapshot(source.company_key, source.url)
                 for source in sources
@@ -4047,6 +4116,9 @@ def company_sources_cmd(
             if snapshot
             else "no snapshot yet"
         )
+        if source.url in duplicates:
+            state += f", duplicate of {duplicates[source.url]}"
+        state += ", paused" if source.paused else ""
         kept = ", text retained" if source.retain else ""
         typer.echo(f"- {source.url}{label} — {state}{kept}")
 
@@ -4134,6 +4206,8 @@ def company_fetch(
     )
     for title in report.titles:
         typer.echo(f"  + {title}")
+    for correction in report.corrected_sources:
+        typer.echo(f"  corrected source: {correction}")
     for failure in report.failed_sources:
         typer.echo(f"  ! {failure}", err=True)
 
@@ -4647,6 +4721,594 @@ def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path
         typer.echo(f"No tenant {slug!r} in the registry ({registry_path}).", err=True)
         raise typer.Exit(code=1)
     return tenant, registry_path
+
+
+_OAUTH_CONFIG_HELP = (
+    "The shared service's OAuth env file, when it is not where the saved "
+    "/etc/wingman/oauth-config-path pointer (or the default /etc/wingman/oauth.env) "
+    "says. A file path, never an issuer: the trusted issuers are read from it."
+)
+_OAUTH_WEB_CONFIG_HELP = (
+    "The shared service's browser-login env file, when it is not the default "
+    "/etc/wingman/oauth-web.env. Read for --oauth-web-client-id only."
+)
+
+
+def _issuers_for_binding_or_exit(
+    issuer: str, oauth_config: Path | None, oauth_web_config: Path | None
+) -> tuple[str, ...]:
+    """The given issuer, then every other issuer the shared service trusts (#618).
+
+    Read from the service's own OAuth env files, never from a flag, and
+    refused (exit 1, nothing bound) when they cannot be read or the given
+    issuer is not one of them.
+    """
+    from wingman.infrastructure.oauth_service_issuers import (
+        ServiceIssuersError,
+        read_service_issuers,
+    )
+
+    try:
+        return read_service_issuers(
+            oauth_config.expanduser() if oauth_config is not None else None,
+            oauth_web_config.expanduser() if oauth_web_config is not None else None,
+        ).for_binding(issuer)
+    except ServiceIssuersError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@tenant_app.command("oauth-bind")
+def tenant_oauth_bind_cmd(
+    slug: str = typer.Argument(..., help="Existing tenant slug to receive this identity."),
+    issuer: str = typer.Option(..., "--issuer", help="Exact verified token issuer (`iss`)."),
+    subject: str = typer.Option(..., "--subject", help="Exact verified WorkOS subject (`sub`)."),
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+    registry: Path | None = typer.Option(
+        None, "--registry", help="Tenant registry path (default: host setting)."
+    ),
+    preflight: bool = typer.Option(
+        False,
+        "--preflight",
+        help="Validate identity-map availability without changing tenant or identity state.",
+    ),
+    reserve: bool = typer.Option(
+        False,
+        "--reserve",
+        help="Reserve this identity while a new tenant is provisioned; prints a claim token.",
+    ),
+    reservation: str | None = typer.Option(
+        None,
+        "--reservation",
+        help="Claim token returned by --reserve for the final provisioning bind.",
+    ),
+    release_reservation: str | None = typer.Option(
+        None,
+        "--release-reservation",
+        help="Release a failed provisioning attempt's claim token without binding.",
+    ),
+    renew_reservation: str | None = typer.Option(
+        None,
+        "--renew-reservation",
+        help="Extend an active provisioning claim immediately before registry mutation.",
+    ),
+    oauth_config: Path | None = typer.Option(None, "--oauth-config", help=_OAUTH_CONFIG_HELP),
+    oauth_web_config: Path | None = typer.Option(
+        None, "--oauth-web-config", help=_OAUTH_WEB_CONFIG_HELP
+    ),
+) -> None:
+    """Bind one operator-trusted OAuth identity to an existing tenant.
+
+    For a newly trusted person, first create their isolated tenant with
+    wingman-add-tenant.sh, then run this command. Login alone never creates
+    a workspace, and no email, privilege, or funded access is inferred.
+    A bound identity is removed from the pending approval queue.
+
+    The subject is bound under --issuer AND under every other issuer the
+    shared service trusts (the browser login and the MCP connector), read
+    from the service's own OAuth env files: one WorkOS user has the same
+    subject on both. Refused, with nothing bound, if those files cannot be
+    read, --issuer is not one of them, or the other surface already belongs
+    to a different tenant.
+    """
+    configure_logging()
+    from wingman.infrastructure.oauth_bearer import (
+        IdentityMapError,
+        bind_trusted_identity,
+        preflight_trusted_identity,
+        release_trusted_identity_reservation,
+        renew_trusted_identity_reservation,
+        reserve_trusted_identity,
+    )
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        OAuthOnboardingStore,
+        onboarding_path_for,
+    )
+    from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
+
+    identity_path = identities.expanduser()
+    selected_modes = sum(
+        (preflight, reserve, release_reservation is not None, renew_reservation is not None)
+    )
+    if selected_modes > 1 or (reservation is not None and selected_modes):
+        typer.echo(
+            "Choose only one of --preflight, --reserve, --release-reservation, "
+            "--renew-reservation, or --reservation.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    issuers = _issuers_for_binding_or_exit(issuer, oauth_config, oauth_web_config)
+    also = issuers[1:]
+
+    if reserve:
+        try:
+            token = reserve_trusted_identity(
+                identity_path, issuer, subject, slug, also_issuers=also
+            )
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo(token)
+        return
+
+    if renew_reservation is not None:
+        try:
+            renewed = renew_trusted_identity_reservation(
+                identity_path, issuer, subject, renew_reservation, also_issuers=also
+            )
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        if not renewed:
+            typer.echo("OAuth provisioning reservation is absent, expired, or owned elsewhere.")
+            raise typer.Exit(code=1)
+        typer.echo(f"Renewed OAuth provisioning reservation for {slug!r}.")
+        return
+
+    if release_reservation is not None:
+        try:
+            released = release_trusted_identity_reservation(
+                identity_path, issuer, subject, release_reservation, also_issuers=also
+            )
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        if released:
+            typer.echo(f"Released OAuth provisioning reservation for {slug!r}.")
+        else:
+            typer.echo("No matching OAuth provisioning reservation was active.")
+        return
+
+    if preflight:
+        try:
+            available = preflight_trusted_identity(
+                identity_path, issuer, subject, slug, also_issuers=also
+            )
+        except IdentityMapError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        if available:
+            typer.echo(f"Trusted OAuth identity is available to bind to {slug!r}.")
+        else:
+            typer.echo(f"That trusted OAuth identity is already bound to {slug!r}.")
+        for key_issuer in issuers:
+            state = "would bind" if key_issuer in available else "already bound"
+            typer.echo(f"  {state} under {key_issuer}")
+        return
+
+    _tenant, registry_path = _load_tenant_or_exit(slug, registry)
+    try:
+        written = bind_trusted_identity(
+            identity_path, issuer, subject, slug, reservation=reservation, also_issuers=also
+        )
+    except IdentityMapError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if written:
+        binding_status = f"Bound trusted OAuth identity to tenant {slug!r} in {identity_path}."
+    else:
+        binding_status = (
+            f"Trusted OAuth binding for tenant {slug!r} already existed in {identity_path}."
+        )
+    binding_status += "".join(
+        f"\n  {'bound' if key_issuer in written else 'already bound'} under {key_issuer}"
+        for key_issuer in issuers
+    )
+    # After the bind, not before: a bound identity is never re-queued (the
+    # server checks the on-disk map first), so this cannot race a sign-in.
+    # Identity map first, then onboarding, as everywhere else.
+    pending_problem: str | None = None
+    try:
+        store = OAuthOnboardingStore(onboarding_path_for(identity_path))
+        removed = [store.discard_pending(key_issuer, subject) for key_issuer in issuers]
+        if any(removed):
+            binding_status += "\nRemoved it from the pending approval queue."
+    except OAuthOnboardingError as exc:
+        pending_problem = (
+            "The binding was written, but the identity is still listed as pending "
+            f"(re-run this command to clear it): {exc}"
+        )
+    typer.echo(binding_status)
+    if pending_problem is not None:
+        typer.echo(pending_problem, err=True)
+    try:
+        signaled_pid = signal_reload(registry_path)
+    except TenantProcessSignalError as exc:
+        typer.echo(
+            "Binding is on disk, but the running process still uses the previous identity map: "
+            f"{exc}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    if signaled_pid is not None:
+        typer.echo(f"Signaled the running shared process (pid {signaled_pid}) to reload.")
+    else:
+        typer.echo(
+            "No running shared process found; the binding will take effect when it starts "
+            "or is reloaded.",
+            err=True,
+        )
+    if pending_problem is not None:
+        # The binding and reload stand; the stale row is the unfinished part.
+        raise typer.Exit(code=1)
+
+
+@tenant_app.command("oauth-invite")
+def tenant_oauth_invite_cmd(
+    slug_arg: str | None = typer.Argument(
+        None, metavar="[SLUG]", help="Slug reserved for one trusted invitee."
+    ),
+    slug_opt: str | None = typer.Option(
+        None, "--slug", help="Slug to reserve (same as the positional SLUG; use one)."
+    ),
+    email: str | None = typer.Option(
+        None,
+        "--email",
+        help="Bind the invite to this address. Stored only as a keyed hash; "
+        "it lands in shell history, so prefer --from-csv for more than one.",
+    ),
+    from_csv: Path | None = typer.Option(
+        None,
+        "--from-csv",
+        help="CSV with header 'email,slug'; every row is checked before any is saved.",
+    ),
+    expires_days: int = typer.Option(
+        30, "--expires-days", min=1, help="Days an email invite can be matched."
+    ),
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+    registry: Path | None = typer.Option(
+        None, "--registry", help="Tenant registry path (default: host setting)."
+    ),
+    data_root: Path | None = typer.Option(
+        None,
+        "--data-root",
+        help="Email invites: parent directory for the prepared tenant workspaces "
+        "(for example, /home/wingman-shared/tenants).",
+    ),
+    service_user: str = typer.Option(
+        "wingman-shared",
+        "--service-user",
+        help="Email invites: OS account that owns OAuth state and tenant workspaces.",
+    ),
+) -> None:
+    """Reserve a tenant slug before a trusted invitee signs in.
+
+    With --email (or --from-csv) the invite is bound to an address and its
+    empty, unbound tenant is prepared now (run with sudo: the registry is
+    root-owned). When that person signs in on either surface with the same
+    WorkOS-verified address, they are let in with no further operator step.
+    """
+    configure_logging()
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        OAuthOnboardingStore,
+        onboarding_path_for,
+        prepare_email_invites,
+    )
+    from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
+
+    def fail(message: str) -> NoReturn:
+        typer.echo(message, err=True)
+        raise typer.Exit(code=1)
+
+    if slug_arg is not None and slug_opt is not None:
+        fail("Give the slug either as SLUG or as --slug, not both.")
+    slug = slug_arg if slug_arg is not None else slug_opt
+    if from_csv is not None and (slug is not None or email is not None):
+        fail("--from-csv reads email and slug from the file; do not combine it with them.")
+    if from_csv is None and slug is None:
+        fail("Give a slug to reserve (SLUG or --slug), or --from-csv.")
+    if email is not None and slug is None:
+        fail("--email needs --slug: which workspace name to reserve for that address.")
+    if (email is not None or from_csv is not None) and data_root is None:
+        fail("Email invites prepare the tenant now: give --data-root (and run with sudo).")
+
+    tenants, registry_path = _load_registry_or_exit(registry)
+    existing = {tenant.slug for tenant in tenants}
+    store = OAuthOnboardingStore(onboarding_path_for(identities.expanduser()))
+    pending_hint = (
+        f"After sign-in, inspect it with `wingman tenant oauth-pending --identities "
+        f"{identities}` (registry: {registry_path})."
+    )
+    if email is None and from_csv is None:
+        assert slug is not None
+        try:
+            store.reserve_invite(slug, existing_slugs=existing)
+        except OAuthOnboardingError as exc:
+            fail(str(exc))
+        typer.echo(
+            f"Reserved invite slug {slug!r}. No workspace or access was created. {pending_hint}"
+        )
+        return
+
+    assert data_root is not None
+    if from_csv is not None:
+        rows = _read_invite_csv(from_csv, fail)
+        first_line: int | None = 2
+        where = f"{from_csv}: "
+    else:
+        assert slug is not None and email is not None
+        rows = [(email, slug)]
+        first_line = None
+        where = ""
+    try:
+        prepare_email_invites(
+            identity_path=identities.expanduser(),
+            registry_path=registry_path,
+            data_root=data_root.expanduser(),
+            rows=rows,
+            existing_slugs=existing,
+            service_user=service_user,
+            expires_days=expires_days,
+            first_line=first_line,
+        )
+    except OAuthOnboardingError as exc:
+        fail(f"{where}{exc}. No invite was left reserved for a tenant that was not prepared.")
+    slugs = ", ".join(row_slug for _email, row_slug in rows)
+    noun = "email invite" if len(rows) == 1 else "email invites"
+    typer.echo(
+        f"Reserved {len(rows)} {noun}: {slugs}. Addresses are stored only as keyed hashes; "
+        f"matching expires in {expires_days} days. Each empty workspace is prepared "
+        "(privileged=false; funded=false) and unreachable until that person signs in with "
+        "the same WorkOS-verified address, on either surface, which lets them in with no "
+        "further step."
+    )
+    try:
+        signaled_pid = signal_reload(registry_path)
+    except TenantProcessSignalError as exc:
+        fail(
+            f"The invites are prepared on disk, but the running service still has its "
+            f"previous tenant map, so a sign-in cannot claim them yet: {exc}"
+        )
+    if signaled_pid is not None:
+        typer.echo(f"Signaled the running shared service (pid {signaled_pid}) to reload.")
+    else:
+        typer.echo("No running shared service was found; the invites load at next start.")
+
+
+def _read_invite_csv(path: Path, fail: Callable[[str], NoReturn]) -> list[tuple[str, str]]:
+    """Rows of an 'email,slug' CSV. Errors name lines, never addresses."""
+    import csv
+
+    try:
+        text = path.expanduser().read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        fail(f"{path} could not be read: {exc.strerror or exc}. Nothing was reserved.")
+    reader = csv.reader(text.splitlines())
+    header = [cell.strip().lower() for cell in next(reader, [])]
+    if header != ["email", "slug"]:
+        fail(f"{path}: the first line must be the header 'email,slug'. Nothing was reserved.")
+    rows: list[tuple[str, str]] = []
+    for line, cells in enumerate(reader, start=2):
+        if not cells or all(not cell.strip() for cell in cells):
+            fail(f"{path}: line {line} is blank. Nothing was reserved.")
+        if len(cells) != 2:
+            fail(f"{path}: line {line} needs exactly two fields. Nothing was reserved.")
+        rows.append((cells[0], cells[1].strip()))
+    if not rows:
+        fail(f"{path}: no invites after the header. Nothing was reserved.")
+    return rows
+
+
+@tenant_app.command("oauth-invites")
+def tenant_oauth_invites_cmd(
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+) -> None:
+    """List reserved invites: slug, kind, created, expiry and status — no addresses."""
+    configure_logging()
+    from datetime import UTC, datetime
+
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        OAuthOnboardingStore,
+        onboarding_path_for,
+    )
+
+    try:
+        invites = OAuthOnboardingStore(onboarding_path_for(identities.expanduser())).invites()
+    except OAuthOnboardingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if not invites:
+        typer.echo("No reserved invites.")
+        return
+
+    def day(stamp: float) -> str:
+        return datetime.fromtimestamp(stamp, tz=UTC).strftime("%Y-%m-%d")
+
+    for invite in invites:
+        kind = "email" if invite.email_bound else "slug"
+        expires = day(invite.expires_at) if invite.expires_at is not None else "-"
+        typer.echo(
+            f"  {invite.slug}  kind={kind} created={day(invite.created_at)} "
+            f"expires={expires} status={invite.status()}"
+        )
+
+
+@tenant_app.command("oauth-invite-revoke")
+def tenant_oauth_invite_revoke_cmd(
+    slug: str = typer.Argument(..., help="Reserved invite slug to withdraw."),
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+) -> None:
+    """Withdraw an unclaimed invite, deleting any email hash with it."""
+    configure_logging()
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        OAuthOnboardingStore,
+        onboarding_path_for,
+    )
+
+    try:
+        removed = OAuthOnboardingStore(onboarding_path_for(identities.expanduser())).revoke_invite(
+            slug
+        )
+    except OAuthOnboardingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if not removed:
+        typer.echo(f"No reserved invite {slug!r}; nothing changed.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(
+        f"Revoked invite {slug!r}; any email hash was deleted. If it was an email invite, its "
+        "prepared workspace stays registered but unbound (no one can reach it); remove its "
+        "registry entry and directory by hand if you do not want to reuse the slug."
+    )
+
+
+@tenant_app.command("oauth-pending")
+def tenant_oauth_pending_cmd(
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+) -> None:
+    """List reserved slugs and verified identities awaiting approval."""
+    configure_logging()
+    from datetime import UTC, datetime
+
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        OAuthOnboardingStore,
+        onboarding_path_for,
+        pending_reference,
+    )
+
+    store = OAuthOnboardingStore(onboarding_path_for(identities.expanduser()))
+    try:
+        invites = store.invites()
+        pending = store.pending()
+    except OAuthOnboardingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo("Reserved invite slugs:")
+    if invites:
+        for invite in invites:
+            typer.echo(f"  {invite.slug}")
+    else:
+        typer.echo("  none")
+    typer.echo("Verified identities awaiting approval:")
+    if pending:
+        for identity in pending:
+            first = datetime.fromtimestamp(identity.first_seen, tz=UTC).isoformat()
+            seen = datetime.fromtimestamp(identity.last_seen, tz=UTC).isoformat()
+            ref = pending_reference(identity.issuer, identity.subject)
+            typer.echo(
+                f"  issuer={identity.issuer} subject={identity.subject} "
+                f"first_seen={first} last_seen={seen} sign_ins={identity.sign_in_count} "
+                f"ref={ref}"
+            )
+    else:
+        typer.echo("  none")
+
+
+@tenant_app.command("oauth-approve")
+def tenant_oauth_approve_cmd(
+    slug: str = typer.Argument(..., help="Previously reserved invite slug."),
+    issuer: str = typer.Option(..., "--issuer", help="Exact pending token issuer (`iss`)."),
+    subject: str = typer.Option(..., "--subject", help="Exact pending WorkOS subject (`sub`)."),
+    identities: Path = typer.Option(
+        ..., "--identities", help="OAuth identity-map TOML used by wingman-mcp."
+    ),
+    registry: Path | None = typer.Option(
+        None, "--registry", help="Tenant registry path (default: host setting)."
+    ),
+    data_root: Path = typer.Option(
+        ...,
+        "--data-root",
+        help="Parent directory for isolated tenant workspaces (for example, "
+        "/home/wingman-shared/tenants).",
+    ),
+    service_user: str = typer.Option(
+        "wingman-shared",
+        "--service-user",
+        help="OS account that owns OAuth state and tenant workspaces.",
+    ),
+    oauth_config: Path | None = typer.Option(None, "--oauth-config", help=_OAUTH_CONFIG_HELP),
+    oauth_web_config: Path | None = typer.Option(
+        None, "--oauth-web-config", help=_OAUTH_WEB_CONFIG_HELP
+    ),
+) -> None:
+    """Approve one verified pending identity into its reserved tenant.
+
+    The subject is bound under --issuer and under every other issuer the
+    shared service trusts, read from the service's own OAuth env files
+    (this command runs as root, whose environment does not load them), so
+    the person is let in on both the browser and the connector. Refused,
+    with nothing created, if those files cannot be read, --issuer is not one
+    of them, or the other surface already belongs to a different tenant.
+    """
+    configure_logging()
+    from wingman.infrastructure.oauth_onboarding import (
+        OAuthOnboardingError,
+        approve_pending_tenant,
+    )
+    from wingman.infrastructure.tenant_process import TenantProcessSignalError, signal_reload
+    from wingman.infrastructure.tenants import tenant_registry_path
+
+    registry_path = (registry or tenant_registry_path()).expanduser()
+    issuers = _issuers_for_binding_or_exit(issuer, oauth_config, oauth_web_config)
+    try:
+        data_dir = approve_pending_tenant(
+            identity_path=identities.expanduser(),
+            registry_path=registry_path,
+            data_root=data_root.expanduser(),
+            slug=slug,
+            issuer=issuer,
+            subject=subject,
+            service_user=service_user,
+            trusted_issuers=issuers,
+        )
+    except OAuthOnboardingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        signaled_pid = signal_reload(registry_path)
+    except TenantProcessSignalError as exc:
+        typer.echo(
+            f"Approved {slug!r} on disk at {data_dir}, but the running service still has "
+            f"its previous tenant and identity maps: {exc}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Approved {slug!r}: isolated workspace {data_dir}; privileged=false; funded=false.")
+    typer.echo("Bound under: " + ", ".join(issuers))
+    if signaled_pid is not None:
+        typer.echo(
+            f"Signaled the running shared service (pid {signaled_pid}) to reload. "
+            "The signal was delivered; this command does not claim the asynchronous "
+            "reload has completed."
+        )
+    else:
+        typer.echo("No running shared service was found; the approval loads at next start.")
 
 
 @tenant_app.command("url")
@@ -6187,6 +6849,25 @@ def commentary_remove(
     typer.echo(f"Removed commentary [{removed.entry_id[:8]}].")
 
 
+@actions_app.command("done")
+def actions_done(
+    key: str = typer.Argument(..., help="Action key from a digest."),
+    fingerprint: str = typer.Option(
+        ..., "--fingerprint", help="Evidence fingerprint from the digest reviewed."
+    ),
+) -> None:
+    """Complete this action's evidence; future changes can recur."""
+    config = load_config()
+    _require_workspace(config, "completed")
+    try:
+        with Storage(config.db_path) as storage:
+            done_action(key, storage, fingerprint=fingerprint)
+    except IngestError as exc:
+        typer.echo(f"done failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Done {key} — new evidence can appear again.")
+
+
 @actions_app.command("mute")
 def actions_mute(
     key: str = typer.Argument(..., help="Action key (shown under each digest action)."),
@@ -6197,6 +6878,7 @@ def actions_mute(
     _require_workspace(config, "muted")
     try:
         with Storage(config.db_path) as storage:
+            require_action(key, storage)
             mute_action(key, storage)
     except IngestError as exc:
         typer.echo(f"mute failed: {exc}", err=True)
@@ -6215,6 +6897,7 @@ def actions_snooze(
     _require_workspace(config, "snoozed")
     try:
         with Storage(config.db_path) as storage:
+            require_action(key, storage)
             until = snooze_action(key, storage, days=days)
     except IngestError as exc:
         typer.echo(f"snooze failed: {exc}", err=True)

@@ -108,9 +108,13 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 
 **Rationale.** The primary way this product is actually used is through a Claude conversation. An MCP server turns that from copy-paste into typed tool calls while keeping Wingman's guarantees in Wingman's code. Stdio-local is the smallest server that delivers this, and adds no credentials, ports, or tenancy.
 
-**Parity principle (added 2026-07).** The MCP surface tracks the CLI: every user-facing capability ships on both surfaces in the same change, as thin wrappers over the same application-layer functions. Adaptations are allowed only where the medium demands them — the CLI's interactive confirm-before-attach for feeds (RFC-011) becomes a two-tool pair over MCP (`feed_discover` reports; `feed_attach` runs only after the user's explicit yes in conversation), and file inputs are accepted as local paths. A CLI command without its MCP counterpart is a review finding, not a style choice.
+**Parity principle (amended #598).** CLI and MCP share application-layer operations where counterparts exist. Every command and tool requires an explicit decision in the [surface ledger](SURFACE-PARITY.md): counterpart, deliberate exception, or deferred gap with a stated reason and open tracker. Unrecorded asymmetry is a review finding; recording a gap does not implement it. The CLI's interactive discover/confirm/attach flow for people feeds becomes `feed_discover` plus `feed_attach` over MCP, with attachment only after the user's explicit approval. Operator broadcast configuration and local diagnostics remain CLI-only. Hosted file access needs its own design rather than an assumption that server paths are user-local paths.
 
 **Revisit if.** A non-MCP consumer appears (REST/web UI), or remote access from claude.ai web/mobile is wanted (remote MCP with auth — a separate durable decision).
+
+### Parity decision ledger (#598) — Durable decision
+
+The exhaustive [CLI/MCP ledger](SURFACE-PARITY.md) records existing counterparts, deliberate exceptions, and deferred gaps. A contract test enumerates registered tools and all CLI leaf commands (including aliases), checks exact inventory coverage and reciprocal mappings, and rejects unmatched entries without a reason. Adding a row does not implement a gap. New tools, especially hosted ingestion, require a separate design; this change adds none.
 
 ## RFC-009: Read-only public-feed fetching, explicitly invoked
 
@@ -129,6 +133,12 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 **Rationale.** Relationship intelligence needs other people's public writing, and an RSS feed is that writing in its author-published, terms-of-service-clean form. Confining network access to one function with hard invariants keeps the local-first promise auditable: the workspace never talks to the network unless the user just asked it to, and everything fetched is traceable to the command that fetched it.
 
 **Revisit if.** Feed refresh becomes tedious enough that the user wants scheduled sync — that is Phase 8's connector architecture decision, not a quiet relaxation of this entry.
+
+### RFC-009 addendum (#422, #478) — Durable decision
+
+Explicit Connections.csv import keeps the owner's address book, including Email Address and other non-empty identifying columns. Repository owner dhk explicitly requested email import/backfill in #422 plus #478 in the 2026-10-09 implementation request; this supersedes the earlier email minimization decision. These addresses stay local during import and are omitted, together with private import metadata, from published person reports. Whole-workspace backups contain them. An already-authorized Drive backup upload transmits the archive, including contact identifiers; use CLI `backup --no-drive` or MCP `backup(drive=False)` for a local-only backup. Email possession contributes no relationship warmth.
+
+Names locate candidates but do not authorize identity merges. Matching email or LinkedIn URL corroborates a merge; contradictory identifiers or uncorroborated same-name rows are reported as conflicts without modifying the existing person. A legacy imported contact can be backfilled from the same original export only when its known company/role also matches. Ambiguous names without that evidence need explicit identity resolution. Existing non-empty canonical values and extra fields win; contradictory role values are reported and kept in private import history for a corroborated identity. Blank values do not erase, absent people are never deleted, and IDs and writing sources remain intact. Source locator and exact CSV-byte hash identify each import; identical per-person field snapshots are not duplicated merely because export-file hashes differ. Reports name counts only, not private identifiers. Shared MCP imports require a path resolving inside that tenant's private inbox, including symlink checks; privileged local CLI imports retain operator-selected paths.
 
 ## RFC-010: Semantic similarity via embeddings, stored in SQLite
 
@@ -161,6 +171,19 @@ Everything else RFC-009 established holds unchanged: explicit invocation only, r
 **Rationale.** Public writing is the raw material of relationship intelligence, and it lives behind exactly two shapes: feeds (near-universal on personal-blog platforms) and feed-less marketing sites. Covering both with one confirm-gated command keeps the watchlist honest about attribution and keeps every fetched byte inside the existing provenance rules.
 
 **Revisit if.** Index-page extraction proves too brittle against redesigns (then sitemap.xml `lastmod`-driven fetching becomes the refinement, still within these invariants), or per-author attribution on company blogs is wanted (post-page metadata reading — a further widening that gets its own look).
+
+### RFC-011 addendum (#474) — Durable decision
+
+The legacy `substack_url` field and `--substack` option now accept a writing URL without assuming a `/feed` endpoint. Add and fetch use bounded discovery: direct RSS/Atom, declared feeds, feed-shaped links, then conventional candidates. A verified endpoint is stored separately as `writing_feed_url`; old records are resolved when fetched. Errors identify the entered writing URL and distinguish no discoverable feed from an unreachable configured URL, suggesting explicit index-page attachment when appropriate. The existing field name remains for compatibility.
+
+Legacy Substack-hosted sources keep their known /feed endpoint (including duplicate checks and source attribution) without fetching the homepage. Generic legacy URLs are discovered once and the successful endpoint is saved. Discovery shares a per-run response cache with ingestion. Entered URLs are quoted in failures; whitespace/control characters are rejected before fetching. A non-strict unsuccessful update preserves a previously resolved endpoint.
+
+Unattended legacy discovery permits at most four GET attempts; broader discovery remains an explicit operation. The runtime cache keeps only the latest response, bounding retained response memory while reusing a successfully discovered feed body.
+
+### RFC-011 addendum (#546) — Durable decision
+
+On an HTTP 404 or a response that is not RSS/Atom, source fetch performs bounded discovery at the configured page (or the parent of a conventional feed path such as `/blog/feed`). A verified replacement feed is used; otherwise a specific HTML index with at least one same-site post link beneath its path can be used. An origin root is never inferred as an index, and HTML challenge/maintenance pages with no post links fail without changing the stored source. Recovery is capped at four GET attempts and caches at most the latest candidate plus the index body. Successful correction is persisted, preserving attribution and the original writing URL. Later runs use the corrected format. Other HTTP failures do not trigger fallback. Index fetching remains same-site, beneath the approved index, and bounded to ten new posts. This format correction is automatic; it does not change the publication being watched.
+
 
 ## RFC-012: Company dossiers as deterministic composition (Phase 3, slice ii)
 
@@ -205,6 +228,12 @@ Two deferrals, on the demonstrated-need rule:
 
 **Amended by RFC-060** (issue #349): "reduces each page deterministically to a snapshot" is no longer *all* a fetch keeps. A source may be marked `retain`, in which case the page's prose is ALSO kept as a company-attributed document, so a values page becomes something a stance can quote instead of only a hash saying it changed. Default OFF, per source; the fetch, the snapshot, the diff and the egress below are unchanged — only what survives the fetch differs. Everything else here stands.
 
+### RFC-015 addendum (#464) — Durable decision
+
+Research keeps each approved URL's baseline, but identical visible-text hashes and absolute link sets within one company's current fetch are diffed once. The later source is reported as `duplicate of <url>` in research and source listings. Comparing links as well as text prevents unrelated link-only pages from collapsing. Duplicate pages do not repeat scoring or consume action slots. Existing action-level deduplication additionally coalesces overlapping evidence for the same action kind and company before the ten-action cap. Distinct kinds of action remain distinct.
+
+Listing and run-time duplicate detection share the same company/text/link identity. Overnight coverage verifies that matching sources score their combined pending evidence once.
+
 **Decision.** Per-company research sources, added explicitly by the user and fetched only on explicit command — the network-scope decision RFC-012 deferred, now resolved. `wingman company add-source "X" <url> [--label]` records an approved HTTPS source for a company; **the act of adding is the approval** — no confirmation theater at fetch time. `wingman company sources "X"` lists them (`remove-source` withdraws one, snapshot included); `wingman company research "X"` makes one read-only GET per approved source (RFC-009 shape: explicit invocation, https-only, visible failures, one page per URL — no crawling), reduces each page deterministically to a snapshot (SHA-256 of visible text + the page's set of https links), stores it replace-on-refresh keyed `(company_key, url)`, and reports the diff against the previous snapshot: **new links are the hiring/announcement signal**, a changed text hash the weaker "page changed" signal, and "unchanged since \<date\>" an honest answer. A failed source keeps its previous snapshot and is reported, never fatal. The dossier gains a "Research (approved sources)" section rendering stored snapshots with a 30-day staleness flag — no fetch at dossier time, preserving RFC-012's determinism. MCP parity (RFC-008): `company_source(action=add|remove|list, ...)` following the watchlist single-tool convention, plus `company_research`.
 
 **Alternatives.** Fetching at dossier time (couples an artifact to the network and breaks dossier determinism); crawling beyond the approved page (scope creep — the user approved one URL, one GET honors exactly that); a model summarizing the fetched page (unauditable claims where a link-set diff is deterministic and explainable); a first-class Organization entity (still deferred — a `(company_key, url)` table is the metadata that actually arrived; aliases/notes remain the demonstrated-need trigger).
@@ -212,6 +241,12 @@ Two deferrals, on the demonstrated-need rule:
 **Rationale.** Careers pages and newsrooms are where hiring signals appear first, and which pages to trust is a judgment only the user can make. Naming the exact URLs turns "did anything change at X" into a deterministic diff of user-chosen pages instead of a crawl, keeping the egress surface enumerable: every URL Wingman will ever fetch for a company is visible in `company sources`.
 
 **Revisit if.** Users want research inside `sync`/`make-it-so` (the fetch consent and cost move with it — an explicit flag, not a default), or want change history rather than a latest-snapshot diff (snapshot generations become a real archive), or want alerting (that is RFC-006 territory: Wingman still never sends anything).
+
+### RFC-015 addendum (#434, #548) — Durable decision
+
+`wingman company pause-source "Company" <url>` suspends one approved URL; `unpause-source` resumes it. MCP uses `company_source(action="pause"|"unpause", name=..., url=...)`. Source listings show paused status. Pausing preserves snapshots, retained prose, queued links, company records, POV and watchlist membership. Explicit research and overnight skip the paused URL and its queued scoring work, producing no fetch-failure action. Unpause resumes against the preserved baseline. Removing a source remains withdrawal of its evidence.
+
+Paused sources also exclude saved snapshot links from explicit full-board scoring. Pending overnight links remain queued until resumed, and dossier/pack source lists mark paused pages.
 
 ## RFC-016: Model-synthesized company themes (resolves an RFC-012 deferral)
 
@@ -224,6 +259,12 @@ Two deferrals, on the demonstrated-need rule:
 **Revisit if.** Company pools outgrow the 20-document prompt budget (then selection within the pool — per-author quotas, recency windows — becomes its own decision), or themes need to diff over time (cards would need versioning, which `pov_cards`' replace-on-save deliberately avoids).
 
 ## RFC-017: Remote MCP — a local HTTP listener behind a user-managed tunnel
+
+**Amended by RFC-081.** Capability-path access remains supported for existing
+and operator-provisioned tenants. A shared service may now also expose the
+plain `/mcp` resource to deliberately trusted tenants through externally
+issued OAuth bearer tokens. RFC-081, not this entry's rejected alternative,
+defines that parallel path and its narrower invite-only trust model.
 
 **Decision.** `wingman-mcp --http [--port N]` serves the existing MCP tool surface over streamable HTTP, **bound to 127.0.0.1 by default**, at a capability path `/mcp/<token>` where the token is generated once into the workspace (`mcp-http-token`, mode 0600) and rotated on demand with `--rotate-token` — rotation is revocation. Reaching it from claude.ai web/mobile is the user's tunnel choice, documented but not embedded: `tailscale serve` for tailnet-only access from their own devices, `tailscale funnel` (or an equivalent authenticated tunnel) when claude.ai's connector infrastructure must reach it. Wingman itself never opens a public listener: binding a non-loopback address requires an explicit `--host` and prints a warning naming what is being exposed. The stdio transport and the tool surface are unchanged — one server, two transports, zero new tools.
 
@@ -246,6 +287,10 @@ Two deferrals, on the demonstrated-need rule:
 **Rationale.** The user's stated loop is: name a company, wake up to answers. Everything the deep pipeline runs already existed as consented single commands; this RFC adds only assembly (follow) and sequencing plus a digest (overnight), so the cheapest new surface delivers the loop while every invariant keeps its existing enforcement point. Answers-on-demand then falls to the search improvement already queued ahead of this work.
 
 **Revisit if.** Users want per-target depth control (research-only vs full model refresh — a per-member flag on the enrollment record), or digests need trend memory across runs (digest diffing becomes its own store), or the suggestion surface should reach beyond the workspace (that is a new egress decision, not an extension of this one).
+
+### RFC-018 addendum (#502) — Durable decision
+
+Each overnight run writes a versioned JSON sidecar and latest.json alongside canonical Markdown and HTML. `digest(as_json=True)` or `wingman digest --json` returns structured actions with their triage keys, per-target step statuses/details, and a first-class drop_list. Each budget drop names company, exact URL, stage (fetch or judge), budget and reason; records are captured where the budget is applied, never parsed from prose. Budget-skipped links remain queued for later runs (#481). Current JSON action reads honor triage; archived artifacts remain unchanged. Runs predating sidecars have no recoverable exact drop list and report that limitation instead of inventing history.
 
 ## RFC-019a / RFC-034a: bring-your-own-key wins over the environment
 
@@ -445,6 +490,12 @@ restoring env-wins.
 
 ## RFC-033: The read surface — a small web UI for glancing and files
 
+**Amended by RFC-081.** This capability-token UI remains the implemented
+browser surface. OAuth for MCP does not make `/ui/<token>/` safe to hand to an
+OAuth-only tenant, and this entry's rejection of a home-grown account/session
+system still stands. An OAuth-authenticated browser setup surface is a
+separate, not-yet-implemented launch slice described by RFC-081.
+
 **Decision.** `wingman-mcp --http` now also serves `/ui/<token>` — the first surface that is neither CLI nor MCP, scoped by one sentence: conversation is for thinking; the web page is for what conversation is bad at, glancing and files. It serves what the workspace already renders — today's digest (the styled HTML twin) as the landing link, then every digest, pack, dossier, and export under `reports/`, grouped and dated — plus a single upload form for the two artifacts that cannot travel through a chat: a LinkedIn export zip and a resume file. Uploads are size-capped, land in the inbox with an archive stamp like any other ingested artifact, and flow through the ordinary pipelines (`import_linkedin`, `ingest_resume` — lineage, supersede, and evidence rules all apply); the result page is the ingest report. The security shape is RFC-017's, reused rather than invented: the same capability-path token (constant-time compared; wrong token and wrong path return the same plain 404, so there is no token oracle), loopback bind, the user's own tunnel for reach. File serving is confined to `reports/` by resolved-path check with an allow-listed suffix set — the database, inbox, and token file next door are structurally unreachable. This is a deliberate RFC-008 parity exception in the third direction: the UI must never grow write surfaces beyond the upload form (no search, no triage buttons, no graph browsing) — the conversational client is that interface, and duplicating it here is the road to the hosted-product pivot that stays parked.
 
 **Alternatives.** A separate web app with accounts and sessions (a security surface wingman deliberately doesn't have; the capability token is already the session, and a second auth system would be the most dangerous code in the repo); serving raw markdown only (the styled twins exist precisely to be read; a UI that ignores them re-creates the problem); pushing uploads through MCP (a zip cannot be pasted into a chat, and a resume traveling through model context to reach the ingest pipeline is a needless detour for a file the pipeline reads directly); building nothing (the second-user onboarding then requires SSH for every artifact, which is exactly the friction this removes).
@@ -623,6 +674,13 @@ Resolution is now BYOK first, then the operator's **declared files** (host, then
 
 ## RFC-048: One shared multi-tenant process — share-nothing data, capability tokens per tenant
 
+**Auth amended by RFC-081.** The shared-process and share-nothing database
+decisions below remain binding. Capability tokens remain supported, but are no
+longer the only authentication path: trusted OAuth identities may be mapped to
+the same tenant registry and request-scoped `Config`. RFC-081 partially
+supersedes the statements below that say “no OAuth”; it does not replace the
+tenant data model or weaken its isolation rules.
+
 **Durable decision, explicitly supersedes `docs/OAUTH-MULTITENANCY-CONSIDERATION.md`'s "not yet."** That document's core argument — OS-level UID isolation between `dhk` and `trent` is currently free, and multi-tenancy would make wingman's own code the trust boundary instead of the kernel — was correct at n=2, and is not being re-derived or overturned here. What changed is the number: onboarding two more people (`jason`, a real second tenant; `bob`, an owner-controlled test/staging tenant) under shape B's one-Unix-account-per-person model means two more accounts, ports, systemd units, and an ever-growing `WINGMAN_UPGRADE_USERS` list — precisely the trigger `docs/MULTI-INSTANCE-DESIGN.md` and the OAuth document both named in their own "Revisit if" clauses: *"A third user appears… three friends is a product; the hosted-tiers assessment stops being parked."* At four tenants, the owner made the call explicitly, in daylight, as its own decision — not inferred from operational pain, matching exactly what the OAuth document asked for before this calculus should be redone.
 
 **Decision.** One shared OS process serves every tenant. Data stays share-nothing: one SQLite DB per tenant, unchanged in shape from today, just relocated under a per-tenant `data_dir`. Auth stays capability tokens, one per tenant — no OAuth, no new login/session system (RFC-033's own reasoning, "the capability token is already the session, and a second auth system would be the most dangerous code in the repo," was re-affirmed rather than revisited). Concretely:
@@ -715,6 +773,10 @@ Storage: a new `value_profiles` table (`subject_id` unique, `payload` JSON, inse
 **Alternatives (amendment).** Truncating a long name with an ellipsis — rejected outright: an axis name IS the meaning of its spoke, and a cut one is worse than a wrapped one because the reader cannot tell that anything was lost. Numbering the spokes and moving the names to the legend, which already lists every axis — rejected for trading away the one thing a radar chart is for, reading the shape at a glance. Widening the viewBox (or shrinking `_MAX_RADIUS`) as the whole fix — rejected as the issue itself argues: it buys a fixed amount of room and the next longer name exceeds it again; it is kept only as a legibility measure ON TOP of wrapping, which is what makes the guarantee. Wrapping the legend's name column too — deliberately not done here: the legend is one fixed-height row per axis and both the notice rows and the viewBox height are computed from that, so variable-height rows are a larger change than this bug justifies; the columns move with the wider canvas instead, and the chart itself now spells the full name out.
 
 **Revisit if.** Axis count ever exceeds `MAX_AXES = 6` (a v2 constant change) — the fixed label-radius/legend-row geometry here was tuned for 3-6 spokes; a larger bound would need the layout constants revisited, not just axis count. Real usage wants the chart to visually distinguish *evidence volume* per axis (RFC-051's own "Revisit if" flags this as a `score` contract gap first) — once `ValueAxis` grows a confidence/spread field, this module should render it (e.g. vertex size or a shaded band) rather than ignoring it. The webui "linked file, not inline" choice reverses if a later redesign makes inline previews the norm for every report type, not just an exception carved out for charts. `<title>`-tooltip evidence excerpts prove too terse to be useful in practice — extend the excerpt or the tooltip content, not the underlying geometry. Axis names routinely run past ~55 characters and crowd the legend's name column (issue #354 left the legend as fixed-height rows) — that is the trigger for variable-height legend rows, and it should reuse `_wrap_to_budget` rather than grow a second wrapper.
+### Inline MCP chart delivery (#547) — Durable decision
+
+`values_chart` returns the generated SVG as an inline `svg` text block, with persona and freshness warnings, instead of a host path and a suggestion to open it. A chat client can render the supplied SVG without host filesystem access. The existing local report and CLI path output remain available. This neither publishes a URL nor registers a published artifact. Inline delivery uses this call's in-memory SVG and stops above 100,000 UTF-8 bytes with a message asking the user to seek operator help; no chart is truncated. The local chart is saved by atomic replacement so concurrent readers see a complete old or new file. Markdown fences exceed every backtick run in the payload. MCP file-operation errors omit host paths, and MCP ignores the legacy out_dir argument; CLI --out remains supported. A client must render the exact supplied SVG itself: returning SVG is sufficient by owner decision, not a guarantee of automatic display or authority to publish.
+
 ## RFC-054: Persona carve-off, Phase 2 — merging into an already-populated target, no new flag
 
 **Decision.** `wingman carve-off-persona <persona> <target>` (MCP: `carve_off_persona(persona, target_dir)`) now writes into a TARGET workspace that already has its own profile items, closing out #235: `seed_new_workspace`'s Phase-1 refusal (`IngestError` if `target_storage.count_profile_items() > 0`) is removed outright, with no replacement flag or confirmation gate. The command's whole body is now just: export the persona's items (`export_persona`, unchanged), then call `profile_store.persist_items` — the exact same RFC-028 dedup/supersede/conflict call every other ingestion path in this codebase (`ingest`, `linkedin` import, `interview` capture) already uses for "a new item that might collide with something already there." An item matching nothing existing is `accepted`; one matching an existing item's stored value merges new evidence in (`evidence_merged`) or is a no-op duplicate (`skipped_duplicates`); one that genuinely disagrees — same `name_key`, different `detail`/`classification`/`intensity`/`company_reason` — is never silently overwritten: it's stored as a side-by-side `ItemStatus.CONFLICT` row (`conflicts`), exactly like a second document or a LinkedIn re-import disagreeing with the profile today, visible via `wingman profile list` and settled via `wingman profile resolve <id>` (RFC-027) — no carve-off-specific resolution path, because none is needed. `render_carveoff_report` now prints every `ItemCounts` bucket that fired (added / evidence-merged / already-present / superseded / conflicts) instead of Phase 1's single "N item(s) seeded," and — only when `conflicts > 0` — an explicit line naming the count and pointing at `wingman profile list`/`resolve` against the target workspace, so a partial/contentious merge is never a quietly-successful-looking report. The CLI argument help and both docstrings (CLI, MCP) drop the "must be brand-new/empty" language and describe the merge behavior instead. One consequence of lifting the refusal needed its own fix: RFC-049's placeholder `SourceRecord`s deliberately reuse the same `record_id` on every export of the same persona, so re-carving the same persona into a target that already received an earlier carve-off of them would hit a `DuplicateRecordError` on the second placeholder insert even though nothing about the content changed; `seed_new_workspace` now skips inserting a placeholder whose id is already present in the target rather than propagating that as an unhandled exception at the CLI/MCP boundary.
@@ -844,6 +906,14 @@ One thing HAS changed since this entry was first drafted, and it changes the rea
 **Trade-offs.** Undated documents sort last in the 20-document POV budget, so at a company with twenty-plus recent feed posts a retained values page may not reach the prompt — the companies this feature exists for are precisely the ones with no feed, and inventing a date to fix ordering is not a trade worth making. Retained pages also enter `search` and `evidence`, so a marketing page's language becomes quotable material; the quote is always attributed to the company's own page, which is what it is.
 
 **Revisit if.** `company follow`'s conventional-path probe should default `/about` to retained (it is the one probed path whose content is durable — deliberately left OFF here so following a company never silently starts storing pages). Retained pages need selection within the POV budget rather than pure recency (per-source quotas — the same pressure RFC-016 already flagged). Users want the older versions of a retained page readable rather than only superseded (that is a real archive, and RFC-015's revisit trigger, not this one).
+
+### RFC-060 addendum (#463) — Durable decision
+
+New sources labelled `about` retain prose by default (case-insensitive, ignoring surrounding whitespace); all other labels remain opt-in. This supersedes RFC-060's default-off policy for about pages. `company follow` already labels its approved `/about` page this way. Explicit `--retain/--no-retain` (MCP `retain=True/False`) still overrides the default; repeat adds without a flag preserve the current setting.
+
+Existing approved about-labelled sources are enabled once when the upgraded application opens their workspace. Repository owner dhk explicitly approved this one-time migration in the implementation conversation on 2026-10-10 ("enable"): old records cannot distinguish default False from deliberate False, so both are enabled. A transactional migration marker prevents subsequent opens from overriding later opt-outs. Other labels, source timestamps, snapshots, and unknown payload fields are preserved. The next normal research fetch keeps prose even when the existing snapshot's hash is unchanged; there is no extra GET, new approved URL, crawl, or model call. Companies without an approved prose source still need one approved; the migration does not invent sources or guarantee usable prose on every about page.
+
+Theme synthesis with approved sources but no documents explains `--retain` (or MCP `retain=True`) and the required research refresh. If retention is already enabled it points at fetching/checking extraction instead of claiming retention is absent. Tests cover default-retained company themes without watched people, existing-source migration, unchanged snapshots, and durable explicit opt-outs.
 
 ## RFC-061: Wingman records where an artifact was published; it never publishes one
 
@@ -1182,6 +1252,8 @@ instead, and the gap is stated rather than papered over.
 
 **Revisit if.** Callers start wanting facts without opinions — then `readings` splits into a sibling tool, which is easy to do later and hard to undo now. Or `capabilities` grows past a handful of entries, at which point "what is switched on" is its own question and deserves its own tool. Or the thresholds (45 days quiet, 21 recent, 14 cooling) stop being constants in `focus.py` and become user settings — then they belong in config and in the payload, so a surface can show its own workings rather than restating numbers it cannot see.
 
+**Addendum — the curated population (#601, #465, #545). Durable decision.** `completeness` now measures *curated* people only, derived on every call rather than stored: a person is curated if they were added by hand (`origin` is not a LinkedIn import), or have a feed, a relationship-log entry, a relationship objective, a watchlist entry, or a saved deep-dive dossier (`people_deep_dive_save` is the approval gate). A POV card is deliberately not a signal, because it is one of the gaps being measured. Untouched imports are one count, never gaps, and never create company rows; the People and Companies lists name at most 50 entries each, neediest first. This is derived, not carried: it does not by itself meet the "until people carry a curated-vs-imported distinction" condition above. Known limits: `people add` on an existing import does not curate it (no stored "touched" signal), and every new per-person store has to add itself to `_split_people` in `application/completeness.py`, and nothing fails when it forgets. **Revisit if** a third signal is missed that way, or #424 needs the distinction outside completeness: then store an explicit flag, backfilled from this rule.
+
 ## RFC-077: A clutter — wingman declares whose pooled Woven graph it may reason about (extends RFC-043)
 
 **Decision.** A new non-secret host setting, `WINGMAN_WOVEN_CLUTTERS`, joins `host_config.HOST_SETTINGS`: a comma-separated list of the named clutters this box may reason about, read by `host_config.woven_clutters()` (order preserved, blanks dropped, duplicates removed, empty tuple when unset). A **clutter** — the collective noun for spiders, Woven being a web — is a working group whose members pooled their LinkedIn exports into one Woven graph. `host_config.woven_attribution()` returns the single declared name, or `None` when wingman cannot name the source on its own — deliberately the same answer for "none declared" and "several declared", because both mean the caller has to say. The rule the setting exists to make possible: with **no** clutters declared, warm-path material is unattributed and nothing may record it as evidence; with **exactly one**, attribution is unambiguous and automatic (today's state, nothing changes); with **two or more**, an answer must name its clutter. This is **not** connection configuration — RFC-043's server-to-server bridge is retired and the agent is the integration point — it is a provenance and consent declaration. `wingman.env`'s parser is shlex-strict, so `personal,sanderson` and `"personal, sanderson"` both work and a stray unquoted space gets the usual `file:line` error.
@@ -1237,12 +1309,297 @@ instead, and the gap is stated rather than papered over.
 
 **Revisit if.** A second funder appears — one tenant paying for another, a team-level key — at which point `funded` becomes a pointer to whose key rather than a boolean, and the interesting question is attribution rather than access. Or a tenant needs to be funded for inference and not embeddings, which is the per-provider split rejected above and should arrive with the actual bill that motivated it. Or `ensure_env` grows a way to keep tier provenance through the flattening, which would let the declared-versus-ambient distinction be expressed once in `keys` instead of by every caller that cares — two callers now, and a third would be the trigger. Or spend becomes visible enough to cap, at which point this flag is the natural place to hang a limit.
 
-## RFC-081: Raw model units are durable; prices are a read-time interpretation (#554)
+## RFC-081: Invite-only OAuth for the shared service — verified identity selects an isolated tenant
 
-**Decision.** Every provider returned by the capability router is wrapped at one boundary that records exactly one content-free row after a successful call in the current workspace database. The row keeps provider, model, capability, payer provenance, raw token/cache/search units, latency, and an optional caller — never prompts, responses, arguments, or retrieved text. Provider failure writes nothing; ledger failure is logged but cannot alter a successful result. Credential resolution now returns the key and its payer together, before the secret is discarded: workspace keys are `byok`, a strict explicitly funded fallback is `funded`, and the solo-process historical ladder is `ambient`.
+**Durable decision (2026-10-07; partially supersedes the auth portions of
+RFC-017, RFC-033 and RFC-048).** Wingman's hosted launch is for existing and
+newly invited trusted users, not the public at large. The shared process may
+accept OAuth 2.1 bearer tokens at `/mcp` alongside the existing per-tenant
+capability paths. One SQLite workspace per tenant, request-scoped `Config`,
+strict key isolation and every external-action boundary remain unchanged.
+
+**What is implemented.** Wingman is a resource server, never an authorization
+server. An external issuer authenticates the person and issues the token;
+Wingman requires one `Authorization: Bearer` header, an RS256 or ES256
+signature from the configured JWKS, and valid `iss`, `aud`, `exp` and `sub`
+claims. The audience is this MCP resource. Query-string tokens, malformed or
+duplicate headers, unsupported algorithms and unverifiable tokens are refused
+before a tool runs. RFC 9728 protected-resource metadata tells a compliant
+client where to authenticate. The implementation is issuer-neutral at this
+boundary; WorkOS AuthKit is the configured launch issuer, not a domain type in
+Wingman.
+
+Authentication and tenancy are two distinct gates. A verified `(iss, sub)`
+must appear in an operator-controlled identity map and point to a slug already
+in the tenant registry. Email is never an identity key (narrowed by the
+2026-10-09 email-invite amendment below: an email may choose which reserved
+slug a verified identity is approved into, never key the map). A verified but unmapped
+identity gets no workspace, and its refusal does not reveal whether a named
+tenant exists. The map reloads without restarting the shared process and is
+replaced atomically. Provisioning reserves an identity before workspace or
+registry mutation, renews the reservation before the registry write and
+consumes it in the final bind; competing or stale attempts fail closed.
+
+Bearer-token checks do not replace MCP session isolation. The session id
+issued after initialization is bound to the tenant that authenticated it, in
+the same bounded table used by capability-path requests. A credential for one
+tenant cannot resume another tenant's session. Bindings expire after 30 idle
+minutes, are released after successful termination and are capped at 4,096;
+unknown or expired session ids are refused with HTTP 404 before FastMCP. The
+client recovers by sending a fresh initialize request without the stale session
+id. A full table refuses new work rather than growing without bound. JWKS keys
+have a five-minute hard lifetime;
+refresh is single-flight with a short failure cooldown, and expiry plus an
+issuer outage fails closed.
+
+**The launch trust gate.** OAuth proves who presented the token; it does not
+decide who receives Wingman. At launch, an operator deliberately approves each
+existing or invited identity. A newly approved tenant starts unprivileged and
+unfunded, and the OAuth provisioning path mints no permanent capability URL.
+The invite flow captures an invited person's first verified sign-in as
+pending, still refuses access, and lets the operator match that exact identity
+to a reserved tenant slug. Approval—not authentication—is the step that
+creates the workspace and binding. Public self-service signup and automatic
+approval are explicitly deferred.
+
+**BYOK and browser setup.** RFC-019a/RFC-034a remain the key policy: a
+workspace's own validated provider key wins over every operator tier. The
+launch decision is therefore bring-your-own-key by default; operator funding
+remains an explicit per-tenant exception under RFC-080, never a signup
+default. The OAuth browser setup surface uses the same operator-controlled
+identity map, confines reads and writes to the mapped tenant, validates a
+provider key before storing it through the existing RFC-034 path, and never
+sends that key through MCP or model context. It does not authorize
+`/ui/<token>/`, and `my_urls` never invents a capability URL.
+
+**Browser-session amendment (2026-10-08; Durable decision).** The browser
+setup slice is now implemented, including verified pending-identity capture.
+WorkOS User Management returns a session token from the authorization-code
+exchange, not the audience-bound resource token accepted at `/mcp`. The two
+validators therefore remain deliberately separate. Browser sessions require
+an asymmetric WorkOS session-JWKS signature, the exact
+`https://api.workos.com/user_management/<client_id>` issuer, expiry, subject,
+and exact `client_id`; the production token has no audience, so browser
+validation does not require one. MCP resource tokens continue to require the
+configured issuer and exact resource audience. A verified, unmapped browser
+identity is recorded in the bounded pending queue and still receives 403; only
+operator approval creates a workspace or grants access.
+
+**Migration and coexistence.** Existing capability tenants continue to work;
+turning OAuth on requires all issuer, audience, JWKS and identity-map settings
+together and otherwise refuses startup rather than silently weakening auth.
+An existing tenant may gain an OAuth identity binding without moving or
+rewriting its workspace. Newly approved OAuth-only tenants receive no legacy
+token. Retiring existing capability URLs is a later, explicit migration step
+after the invite, browser-setup and production-canary slices are proven. There
+is no calendar-based forced cutover in this decision and no claim that current
+capability tenants have already migrated.
+
+**Explicitly deferred.** Scope claims are normalized but not authorization
+policy; no tool-level scope enforcement is claimed. Token introspection and
+instant issuer-side revocation are not implemented; issuer-set token expiry and
+the bounded JWKS lifetime are the current revocation envelope. Also deferred are
+public signup, automatic tenant approval, account linking, additional login
+methods (including Apple), a Wingman-run authorization server, public-stranger
+scale, a free operator-funded tier, spend caps, encrypted custody for unknown
+users' keys and row-level multi-tenancy. The implemented invite and browser
+setup slices are not reasons to expose the service publicly: operator approval
+remains mandatory.
+
+**Alternatives.** Keeping capability URLs for every new tenant was rejected
+for the launch path: a bearer token gives the connector an expiring,
+audience-bound credential without placing it in a URL, while identity approval
+remains independently operator-controlled. Running Wingman's own authorization
+server was rejected because token issuance, recovery and login security are
+not career-intelligence capabilities. Public self-service provisioning was
+rejected for now because authentication alone supplies neither an invitation
+decision nor safe cost control. Replacing per-tenant databases with one shared
+schema was rejected again for RFC-048's reason: share-nothing storage removes
+an entire class of query-scoping failures.
+
+**Rationale.** The old documents correctly rejected OAuth when four known
+people already had working capability URLs. The new need is narrower than the
+abandoned public-product draft and stronger than a cosmetic login page: let a
+known or invited person reconnect through a standard identity without holding
+a permanent secret URL, while preserving the operator's approval decision and
+the tenant boundary already proven by RFC-048. Adding one bearer-validation
+choke point beside the legacy route achieves that without moving data,
+inventing accounts, or treating a successful Google sign-in as permission to
+create a workspace or spend money.
+
+**Revisit if.** Public signup becomes an actual product decision; then abuse,
+cost limits, encrypted secret custody, asynchronous/noisy-neighbour isolation
+and self-service lifecycle management need a separate decision before the
+trust gate opens. Revisit scope enforcement when two materially different
+OAuth grants exist, account linking before a second sign-in method ships, and
+the legacy route only after observed migration and the launch canary show that
+every existing tenant can reconnect without it.
+
+**Amendment (2026-10-08): a refusal names its next step, and the operator is
+told.** On 2026-10-08 a verified identity sat unnoticed in the pending queue
+while the person saw only "couldn't connect". Two additions, neither of which
+loosens either gate:
+
+- Both refusals (MCP 403 and the browser callback) tell the person they are
+  signed in but not approved, and give a reference: the first eight base32
+  characters of SHA-256(`iss` + newline + `sub`), formatted `XXXX-XXXX`. It is
+  derived from the caller's own identity, so it reveals nothing to them and
+  cannot be reversed to the subject; the wording is otherwise the same for an
+  unknown identity and for one whose tenant left the registry, so the
+  no-tenant-oracle property holds. `oauth-pending` shows the same `ref=`.
+- **Durable decision:** the shared service may create one Todoist task in the
+  *operator's own* account when an identity is first queued. Owner-approved on
+  2026-10-08; off unless `WINGMAN_OPERATOR_TODOIST_TOKEN` is configured. The
+  task carries the issuer host, the reference and the first-seen time — never
+  a subject, email address or token. It is sent off the request path with a
+  five-second timeout; failure is one WARNING and changes neither the queue nor
+  the refusal. Repeat sign-ins and restarts do not re-notify. This is an
+  operator alert, not telemetry: nothing about tenants' use is sent anywhere.
+
+**Amendment (2026-10-09): email-bound invites (#570, #583; Durable
+decision).** Owner-approved on 2026-10-08 so that 5–10 new people a week do
+not each need a pending row, a reference and an operator approval. It
+supersedes, narrowly, two rules above and in the runbooks: "email is never an
+identity key" and "do not obtain `sub` from email".
+
+- **What may match.** Only an address the issuer marks *verified*, compared
+  exactly after lowercase and trim. No provider-specific folding (Gmail dots or
+  `+tags`), no domain rules. Only an unexpired invite the operator created.
+- **What it decides.** Which reserved slug a verified `(iss, sub)` is approved
+  into — nothing more. The identity map stays keyed on `(iss, sub)`; an email
+  never becomes a map key, and a later change of address does not move an
+  identity. A new tenant created this way is unprivileged and unfunded, as an
+  `oauth-approve` tenant is.
+- **What is stored.** HMAC-SHA256 of the normalised address under a
+  per-install 32-byte key kept owner-only beside the onboarding state
+  (`oauth-identities-onboarding.key`), plus the key's id, the slug, created and
+  expiry (default 30 days) — never the address. A plain or per-row-salted hash
+  was rejected: the plausible addresses for one invitee are few enough to
+  confirm offline from a copied state file. The invite, hash included, is
+  deleted when it is claimed, approved or revoked. Expiry ends automatic
+  matching; the slug stays reserved until approved or revoked.
+- **What is unchanged.** No match, an unverified address or a failed lookup
+  falls back to today's path: a pending row, the reference, a 403. Manual
+  `oauth-approve` and `oauth-bind` remain.
+- **Where the verified address comes from (#582, live 2026-10-10).** Neither
+  token carries an email. The browser's code exchange returns a `user` object
+  (`id`, `email`, `email_verified`); the address counts only if `user.id` is
+  the verified session-token subject and `email_verified` is literally `true`.
+  For MCP, the AuthKit issuer's own `/oauth2/userinfo`, called with the bearer
+  token that already passed validation, returns `sub`, `email` and
+  `email_verified`, with the same checks. **No WorkOS API key and no JWT
+  template are needed**: the API-key allowance above went unused, and WorkOS
+  keys are environment-wide anyway. The lookup runs only for an unbound
+  verified identity, off the event loop, with a 5-second timeout and at most
+  one lookup per identity per minute, reserved before the call so concurrent
+  requests cannot multiply it; it is sent only to the configured https issuer,
+  and a redirect is never followed (urllib would carry the token along).
+- **One person, both surfaces.** #582 also showed one WorkOS user has the same
+  full `sub` on the browser session token and the MCP token. A claim therefore
+  binds that `sub` under both issuers this process is configured with (never
+  an issuer taken from a token), so the second surface works with no second
+  step. Each binding is still an `(iss, sub)` key.
+- **Who creates the tenant.** The registry is root-owned and the service does
+  not run as root, so `oauth-invite --email/--from-csv` (run with sudo, like
+  `oauth-approve`) prepares the empty, unprivileged, unfunded tenant when
+  inviting, marked with `.oauth-invite.json`. A sign-in only binds to a tenant
+  that is registered, carries that marker, is not privileged or funded and has
+  no identity bound yet. Revoking an email invite leaves its prepared tenant
+  registered and unreachable.
+- **Staging.** #584 recorded invites; #585 claims them at sign-in. The
+  superseded rules above now describe only the manual path.
+
+**Amendment (2026-10-12): manual binding covers both surfaces (#618; Durable
+decision).** The 2026-10-09 amendment bound a *claimed* email invite under both
+trusted issuers but left manual `oauth-approve` binding only the issuer it was
+given, so the operator ran a second `oauth-bind` and the person was refused a
+second time on the other surface. Now `oauth-approve` and `oauth-bind` bind the
+given `sub` under `--issuer` and under every other issuer the shared service
+trusts, on the same #582 evidence (one WorkOS user, one `sub`, both issuers).
+
+- **Where the trusted set comes from.** The service's own configuration, never
+  a command-line value: `--oauth-issuer` inside `WINGMAN_OAUTH_ARGS` in the
+  OAuth env file (`/etc/wingman/oauth.env`, or the path saved in
+  `/etc/wingman/oauth-config-path`), and the WorkOS session issuer derived from
+  `--oauth-web-client-id` inside `WINGMAN_OAUTH_WEB_ARGS` in
+  `/etc/wingman/oauth-web.env` — the same `EnvironmentFile=`s, the same
+  values the unit's `ExecStart=` expands. `oauth-approve` runs as root through
+  plain `sudo`, whose environment never loads them, so they are parsed as
+  data: never sourced, only those keys kept, and nothing else in them (the
+  browser client secret included) printed, logged or put in an exception.
+  The args are split as systemd expands an unquoted `$VAR`: whitespace
+  words, single and double quotes honoured and removed. A backslash or an
+  unbalanced quote is refused, since that is where the two parsers could
+  disagree and bind an issuer the service never checks.
+  `--oauth-config` / `--oauth-web-config` may name the files on an unusual
+  install; they cannot name an issuer.
+- **Fail closed.** Absent or unreadable configuration (reported distinctly),
+  an `--issuer` outside the trusted set, or the subject already bound to — or
+  reserved for — a different tenant under any trusted issuer: nothing is bound
+  and nothing is created. There is no single-surface opt-out: the only case it
+  would serve is a subject that differs between surfaces, which #582 showed
+  does not happen for one WorkOS user, and binding one surface of a person
+  whose other surface belongs to someone else is exactly what must not happen.
+- **Atomic and idempotent.** All bindings are written in one replacement of
+  the identity map, or none. An exact existing binding is left alone, so a
+  rerun changes nothing, and a tenant bound on one surface by an earlier build
+  gains the other. Provisioning reservations cover every trusted issuer under
+  one token. Pending rows for the subject under every trusted issuer are
+  cleared after the bind, identity map before onboarding state — the lock
+  order used everywhere.
+- **What it does not change.** Each binding is still an `(iss, sub)` key. Two
+  pending rows with *different* subjects are still two people.
+
+## RFC-082: Client-owned artifact kinds (#503) — Durable decision
+
+Published view identities accept `custom:<slug>` alongside built-in kinds. Slugs are 1–64 lowercase ASCII letters/digits/underscores/hyphens, beginning with a letter or digit. Custom views retain the same local one-record-per-kind and HTTPS URL rules. Wingman does not know their rendering inputs: freshness is explicitly unchecked and reports the recording timestamp, never a synthetic current/stale verdict. This extends RFC-061’s closed built-in set without adding any publishing action.
+
+Custom artifact freshness is explicitly unknown/unchecked. Free-text titles are whitespace-collapsed when recorded and rendered, including legacy titles, so a title cannot forge another report line.
+
+### RFC-031 addendum (#501) — Durable decision
+
+`actions done <key>` and `action_triage(action="done", key=...)` complete the recorded action content and evidence, without standing suppression. Matching evidence remains completed; new evidence or changed action content can recur. Done verdicts appear separately in the verdict list and can be cleared with unmute. Overnight records generated actions before filtering, preserving the evidence available when completed. MCP and CLI mute/snooze/done reject unknown keys; legacy digests need one overnight refresh before triage. Digest files remain immutable historical snapshots.
+
+
+Done fingerprints use the stable action key and evidence, with Markdown link titles normalized to URLs; rolling age/explanation text is excluded. Digest actions include an evidence fingerprint. `actions done <key> --fingerprint <value>` / MCP `action_triage(action='done', key=…, fingerprint=…)` must echo the reviewed fingerprint; a newer evidence set is rejected rather than completed unseen. A permanent mute must be explicitly undone before completion. Markdown current reads apply verdicts; dated HTML and direct latest.html links remain snapshots until the next overnight run.
+
+## RFC-083: A bounded author / reviewer / repair PR loop (pilot)
+
+**Decision (pilot, not durable).** An issue labelled `agent:codex` or `agent:claude` by an allowlisted actor starts one workflow run in which that agent implements the issue and opens a draft PR. A different agent reviews it, and the author repairs blocking findings. There are at most three reviews and two repairs. The run ends with `ready-for-merge` or `needs-human`, and a human merges. Reviewers are tried in a fixed order, Copilot → Codex → Claude, never including the author, and the first valid verdict wins. Copilot is a reviewer only, by owner decision (2026-10-12): it never authors, and the gate refuses any author other than `codex` or `claude`. The design and setup are in [`AGENT-LOOP.md`](AGENT-LOOP.md).
+
+**Why one run rather than event chaining.** Events created with `GITHUB_TOKEN` start no new workflow run, so a loop chained through PR events stalls silently unless every hop uses a separate credential. Chaining rounds as jobs in one run removes the hop. It also makes the round cap the shape of the job graph rather than a counter, which is the governance property the loop exists to have.
+
+**Why Copilot first, as a fall-through rather than a quota check.** Copilot's monthly AI-credit allowance is prepaid and does not roll over. With no additional-usage budget, an exhausted allowance makes Copilot's requests fail, and a failed or invalid answer hands the round to the next reviewer. That spends the prepaid allowance before any metered API key, with no quota API and no state. The Copilot CLI runs inside the review job, billed to the owner's seat through the workflow token, rather than Copilot's native PR review. That review is comment-only by default, has no severity, runs outside the run, and may repeat earlier comments.
+
+**Why the models only propose.** This applies invariant 5. Every reviewer's answer passes one validator into one schema, and deterministic steps decide the rest: a failing check is blocking regardless of the verdict, only blocking findings reach the repair prompt, a patch touching `.github/`, `.agent-loop/`, agent instructions or agent startup config, or exceeding the line cap, is refused, and the terminal label is computed from job outputs. Authors run without a write credential, and a separate runner applies their patch.
+
+**Open until a run proves it.** How the Copilot CLI fails when the allowance is exhausted (the fall-through handles either a non-zero exit or an error message, but neither is documented). Whether `uv run --offline --frozen` works inside Codex's no-network sandbox. Codex has no documented turn or spend cap. The PAT makes the owner the PR author, so the merge is the human gate. Promote this to a durable decision, or remove it, after the pilot.
+
+## RFC-084: Raw model units are durable; prices are a read-time interpretation (#554) — Durable decision
+
+**Decision.** Every provider returned by the capability router is wrapped at one boundary that records exactly one content-free row after a successful call in the current workspace database. The row keeps provider, model, capability, payer provenance, raw token/cache/search units and latency (caller_name is reserved and currently unset by router call sites) — never prompts, responses, arguments, or retrieved text. Provider failure writes nothing; ledger failure is logged but cannot alter a successful result. Credential resolution now returns the key and its payer together, before the secret is discarded: workspace keys are `byok`, a strict explicitly funded fallback is `funded`, and the solo-process historical ladder is `ambient`.
 
 Prices live alongside each capability in `models.toml` and are applied only by readers. A call lacking any price required for the units it used is `unpriced`, not zero. This preserves historical measurements when prices change and avoids inventing old provider prices. Tenant-local reports are ordinary tools; registry-wide reports are operator-only. Budget warnings and enforcement remain a later phase built on this ledger.
 
 **Alternatives.** Recording at every application call site was rejected because retries and new callers would create gaps or duplicates. Storing calculated dollars was rejected because prices change and raw units are the auditable fact. Provider billing APIs were rejected as the primary ledger because they lose Wingman's tenant and capability provenance and may arrive late. Recording content for debugging was rejected because accounting does not require private career data.
 
 **Revisit if.** A provider exposes materially different billable units, a retry occurs below rather than above the wrapper and needs attempt-level accounting, or budget enforcement needs transactional reservations rather than post-success observations.
+
+
+**RFC-084 implementation boundaries.** Reporting opens databases with SQLite mode=ro,
+never workspace migrations; older workspaces with no ledger report that fact.
+Recording uses a ledger-only connection with a 250 ms lock timeout. Accounting
+is best-effort and reports are a lower bound if writes fail; RFC-080 budget
+warnings/enforcement remain deferred until omissions can be reliably accounted
+for. Reports show daily raw units, unknown counters with known subtotals, explicit
+newest-N truncation, and known funded-spend ranking. Offline recorded/hashed calls
+remain inspectable but are separately marked non-billable, priced zero and excluded
+from funded rankings. Voyage response usage.total_tokens is captured per call,
+without mutable shared last-response state. Prices match exact provider/model
+identifiers or an operator-declared pricing_models list; no alias guessing.
+
+**RFC-068 addendum (RFC-084; Durable decision).** usage_all_tenants is an explicit
+privileged read-only accounting exception to local-only cross-tenant administration.
+It checks operator_only_refusal before registry or workspace access, reads no
+prompts, credentials or responses, and cannot migrate or modify another tenant's
+DB. The same CLI --all-tenants gate applies. This grants no provisioning authority.

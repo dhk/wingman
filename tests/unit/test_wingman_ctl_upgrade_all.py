@@ -164,6 +164,21 @@ def test_a_failed_shared_redeploy_is_reported_as_a_possible_outage(rig: dict[str
     assert result.returncode != 0
 
 
+def test_a_registry_only_failure_is_never_reported_as_an_outage(rig: dict[str, Path]) -> None:
+    """2026-10-09: the shared process was healthy and serving, only the host
+    registry declaration failed, and upgrade-all announced NO TENANT IS SERVED.
+    The redeploy script now exits 3 for exactly that outcome."""
+    _exe(rig["redeploy"], "#!/usr/bin/env bash\nexit 3\n")
+
+    result = _run(rig, "upgrade-all")
+
+    assert "NO TENANT IS SERVED" not in result.stdout
+    assert "did not come up cleanly" not in result.stdout
+    assert "registry entry was not updated" in result.stdout
+    assert "Nothing is down" in result.stdout
+    assert result.returncode == 3
+
+
 def test_a_clean_run_says_both_halves_are_current(rig: dict[str, Path]) -> None:
     result = _run(rig, "upgrade-all")
 

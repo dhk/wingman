@@ -1159,6 +1159,7 @@ dependencies = [
     { name = "mcp" },
     { name = "platformdirs" },
     { name = "pydantic" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "pypdf" },
     { name = "typer" },
 ]
@@ -1176,6 +1177,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.2,<2" },
     { name = "platformdirs", specifier = ">=4.0" },
     { name = "pydantic", specifier = ">=2.8" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.8" },
     { name = "pypdf", specifier = ">=5.0" },
     { name = "typer", specifier = ">=0.12" },
 ]

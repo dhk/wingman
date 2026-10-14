@@ -5,6 +5,7 @@ path, the reports/charts/ file-location convention, and the CLI+MCP surface.
 
 from __future__ import annotations
 
+import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -357,7 +358,7 @@ def test_cli_values_chart_without_a_profile_fails_cleanly(
     assert "no value profile built" in result.output
 
 
-def test_mcp_values_chart_writes_and_reports_path(
+def test_mcp_values_chart_returns_inline_svg_without_server_path(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from wingman import mcp_server
@@ -369,8 +370,13 @@ def test_mcp_values_chart_writes_and_reports_path(
 
     result = mcp_server.values_chart()
     assert "Acting as: yourself." in result
-    assert "Wrote" in result
-    assert str(config.reports_dir / "charts") in result
+    assert "```svg\n" in result
+    assert str(config.data_dir) not in result
+    assert "Open it in a browser" not in result
+    svg = result.split("```svg\n", 1)[1].rsplit("```", 1)[0].strip()
+    assert _parse(svg).tag == SVG_NS + "svg"
+    assert len(svg.encode("utf-8")) <= 100_000
+    assert list((config.reports_dir / "charts").glob("*.svg"))
 
 
 def test_mcp_values_chart_without_a_profile_returns_a_message_not_a_traceback(
@@ -394,7 +400,12 @@ def test_mcp_values_chart_reads_active_persona(
     config = load_config()
     with Storage(config.db_path) as storage:
         persona = find_or_create_persona("Mike Chen", storage)
-        axes = [_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]
+        storage.save_value_profile(
+            _profile(
+                [_axis("COACHONLY A", 0.1), _axis("COACHONLY B", 0.2), _axis("COACHONLY C", 0.3)]
+            )
+        )
+        axes = [_axis("MIKEONLY A", 0.1), _axis("MIKEONLY B", 0.2), _axis("MIKEONLY C", 0.3)]
         storage.save_value_profile(
             _profile(axes, subject_id=persona_card_id(persona.persona_id), subject_name="Mike Chen")
         )
@@ -402,9 +413,14 @@ def test_mcp_values_chart_reads_active_persona(
     coach_persona("set", "Mike Chen")
     result = values_chart()
     assert "Acting as: coach for Mike Chen." in result
-    assert "mike-chen" in result
+    assert "Mike Chen" in result
+    assert "MIKEONLY A" in result and "COACHONLY A" not in result
+    assert "```svg\n" in result
+    assert str(config.data_dir) not in result
 
     coach_persona("clear")
+    result = values_chart()
+    assert "COACHONLY A" in result and "MIKEONLY A" not in result
 
 
 # --- what the review caught (#248) --------------------------------------------
@@ -994,3 +1010,172 @@ def test_the_export_stamp_records_which_view_it_drew(workspace: Path) -> None:
 
     _subject, view, _fingerprint = stamp_in(export.path.read_text(encoding="utf-8"))
     assert view is ValueView.WORK
+
+
+def test_mcp_values_chart_delivers_svg_through_registered_tool(workspace: Path) -> None:
+    import asyncio
+
+    from wingman.mcp_server import server
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_profile([_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]))
+    result = asyncio.run(server.call_tool("values_chart", {}))
+    content = result[0] if isinstance(result, tuple) else result
+    text = "\n".join(block.text for block in content if block.type == "text")
+    assert str(config.data_dir) not in text
+    svg = text.split("```svg\n", 1)[1].rsplit("```", 1)[0].strip()
+    assert _parse(svg).tag == SVG_NS + "svg"
+
+
+@pytest.mark.parametrize("size", [100_000, 100_001])
+def test_mcp_values_chart_inline_limit_uses_utf8_bytes(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, size: int
+) -> None:
+    from wingman.mcp_server import values_chart
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_profile([_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]))
+    # Synthetic boundary payload, not the ordinary renderer's small chart.
+    opening = '<svg xmlns="http://www.w3.org/2000/svg"><text>é'
+    closing = "</text></svg>"
+    svg = opening + "x" * (size - len((opening + closing).encode("utf-8"))) + closing
+    monkeypatch.setattr("wingman.reporting.radar.render_value_radar_svg", lambda *a, **kw: svg)
+    result = values_chart()
+    files = list((config.reports_dir / "charts").glob("*.svg"))
+    assert len(files) == 1 and files[0].read_bytes() == svg.encode("utf-8")
+    assert str(config.data_dir) not in result
+    if size == 100_000:
+        assert svg in result
+    else:
+        assert "100 KB" in result and "Inline delivery stopped" in result
+        assert "```svg" not in result
+
+
+def test_review_inline_chart_uses_its_own_rendered_snapshot(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.mcp_server import values_chart
+    from wingman.reporting import radar
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_profile([_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]))
+    write = radar._write_svg
+
+    def concurrent_write(directory: Path, filename: str, svg: str) -> Path:
+        path = write(directory, filename, svg)
+        # Deterministically reproduce another writer truncating the same file
+        # between this call's export and the MCP wrapper's former disk read.
+        path.write_bytes(b"")
+        return path
+
+    monkeypatch.setattr(radar, "_write_svg", concurrent_write)
+    result = values_chart()
+    svg = result.split("```svg\n", 1)[1].rsplit("```", 1)[0].strip()
+    assert _parse(svg).tag == SVG_NS + "svg"
+
+
+def test_review_inline_fence_contains_backticks_in_names_and_evidence(workspace: Path) -> None:
+    import re
+
+    from wingman.mcp_server import values_chart
+
+    config = load_config()
+    axis = _axis("Curiosity ``` boundary", 0.3)
+    axis.evidence[0].quote = "a quote with ````` and ``` boundaries"
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_profile([axis, _axis("B", 0.2), _axis("C", 0.3)]))
+    result = values_chart()
+    match = re.search(r"\n(`{3,})svg\n", result)
+    assert match
+    fence = match[1]
+    svg, close = result[match.end() :].rsplit("\n", 1)
+    assert close == fence
+    assert len(fence) > max(len(run) for run in re.findall(r"`+", svg))
+    assert "`````" in svg
+    assert _parse(svg).tag == SVG_NS + "svg"
+
+
+def test_review_chart_write_failure_has_no_server_path(workspace: Path) -> None:
+    from wingman.mcp_server import values_chart
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_profile([_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]))
+    # A file in place of a directory fails even when the test runner is root.
+    (config.reports_dir / "charts").write_text("blocking file")
+    result = values_chart()
+    assert "failed" in result
+    assert str(config.data_dir) not in result
+    assert "permissions" in result
+
+
+def test_review_chart_replacement_preserves_complete_previous_file_until_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.reporting import radar
+
+    target = tmp_path / "chart.svg"
+    target.write_text("previous complete chart")
+    replace = os.replace
+    replaced = []
+
+    def observe_replace(source: Path, destination: Path) -> None:
+        assert target.read_text() == "previous complete chart"
+        assert Path(source).read_text() == "next complete chart"
+        replaced.append(destination)
+        replace(source, destination)
+
+    monkeypatch.setattr("os.replace", observe_replace)
+    radar._write_svg(tmp_path, target.name, "next complete chart")
+    assert replaced == [target]
+    assert target.read_text() == "next complete chart"
+
+
+def test_review_mcp_chart_stays_in_workspace(workspace: Path, tmp_path: Path) -> None:
+    from wingman.mcp_server import values_chart
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_profile([_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]))
+    outside = tmp_path / "outside"
+    result = values_chart(out_dir=str(outside))
+    assert "```svg" in result
+    assert not outside.exists()
+    assert list((config.reports_dir / "charts").glob("*.svg"))
+
+
+def test_atomic_chart_failure_preserves_old_chart_and_removes_temporary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.reporting.radar import _write_svg
+
+    target = tmp_path / "chart.svg"
+    target.write_text("previous complete chart")
+
+    def fail_replace(*args: object) -> None:
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr("os.replace", fail_replace)
+    with pytest.raises(IngestError, match="Existing charts were preserved"):
+        _write_svg(tmp_path, target.name, "next complete chart")
+    assert target.read_text() == "previous complete chart"
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_mcp_chart_reports_stale_capture_outside_svg(workspace: Path) -> None:
+    from wingman.application.interview import capture_interview_reaction
+    from wingman.mcp_server import values_chart
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        storage.save_value_profile(_profile([_axis("A", 0.1), _axis("B", 0.2), _axis("C", 0.3)]))
+        capture_interview_reaction(
+            "values_pro", "New Person", "A new nomination.", config, storage, intensity="mild"
+        )
+    response = values_chart()
+    header, svg = response.split("```svg\n", 1)
+    assert "1 new capture" in header and "my_values(refresh=True)" in header
+    assert "1 new capture" in svg

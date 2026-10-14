@@ -1,0 +1,542 @@
+from __future__ import annotations
+
+import os
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).parents[2]
+SCRIPT = ROOT / "scripts" / "wingman-add-tenant.sh"
+PROVISION_SCRIPT = ROOT / "scripts" / "wingman-provision-shared.sh"
+RUNBOOK = ROOT / "docs" / "OAUTH-LAUNCH-RUNBOOK.md"
+
+
+def _fake_root_commands(tmp_path: Path) -> Path:
+    commands = tmp_path / "bin"
+    commands.mkdir()
+    id_command = commands / "id"
+    id_command.write_text("#!/bin/sh\necho 0\n", encoding="utf-8")
+    id_command.chmod(0o755)
+    sudo_command = commands / "sudo"
+    sudo_command.write_text('#!/bin/sh\nshift 2\nexec "$@"\n', encoding="utf-8")
+    sudo_command.chmod(0o755)
+    return commands
+
+
+def _oauth_service_fixture(commands: Path, tmp_path: Path, identities: Path) -> Path:
+    config = tmp_path / "oauth.env"
+    config.write_text(
+        "WINGMAN_OAUTH_ISSUER=https://issuer.example\n"
+        "WINGMAN_OAUTH_AUDIENCE=https://wingman.example/mcp\n"
+        "WINGMAN_OAUTH_JWKS_URI=https://issuer.example/jwks\n"
+        f"WINGMAN_OAUTH_IDENTITIES={identities}\n",
+        encoding="utf-8",
+    )
+    curl_command = commands / "curl"
+    curl_command.write_text(
+        "#!/bin/sh\n"
+        'echo \'{"resource":"https://wingman.example/mcp",'
+        '"authorization_servers":["https://issuer.example"]}\'\n',
+        encoding="utf-8",
+    )
+    curl_command.chmod(0o755)
+    return config
+
+
+def test_add_tenant_rejects_an_unusable_oauth_identities_path_early(tmp_path: Path) -> None:
+    commands = _fake_root_commands(tmp_path)
+    identities_directory = tmp_path / "identities"
+    identities_directory.mkdir()
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "taylor",
+            "--no-telemetry",
+            "--oauth-issuer",
+            "https://issuer.example",
+            "--oauth-subject",
+            "user_123",
+            "--oauth-identities",
+            str(identities_directory),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "PATH": f"{commands}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode != 0
+    assert "OAuth identity-map path is not a regular file" in result.stderr
+    assert "unusable by service account" in result.stderr
+    assert "no registry at" not in result.stderr
+    assert "initializing workspace" not in result.stdout
+
+
+def test_add_tenant_reports_permission_denied_without_claiming_the_path_is_missing(
+    tmp_path: Path,
+) -> None:
+    commands = _fake_root_commands(tmp_path)
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    identities = blocked / "oauth-identities.toml"
+    blocked.chmod(0)
+    try:
+        result = subprocess.run(
+            [
+                "bash",
+                str(SCRIPT),
+                "taylor",
+                "--no-telemetry",
+                "--oauth-issuer",
+                "https://issuer.example",
+                "--oauth-subject",
+                "user_123",
+                "--oauth-identities",
+                str(identities),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PATH": f"{commands}:{os.environ['PATH']}"},
+        )
+    finally:
+        blocked.chmod(0o700)
+
+    assert result.returncode != 0
+    assert "permission denied" in result.stderr.lower()
+    assert str(blocked) in result.stderr
+    assert "nothing was created or changed" in result.stderr.lower()
+    assert "Traceback" not in result.stderr
+    assert "does not exist" not in result.stderr
+
+
+def test_add_tenant_preflights_the_binding_before_creating_tenant_state(tmp_path: Path) -> None:
+    commands = _fake_root_commands(tmp_path)
+    wingman_command = commands / "wingman"
+    wingman_command.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" > "$WINGMAN_TEST_CALLS"\n'
+        'echo "identity map is malformed or identity is already bound" >&2\n'
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    wingman_command.chmod(0o755)
+    calls = tmp_path / "calls"
+    identities = tmp_path / "oauth-identities.toml"
+    identities.write_text("", encoding="utf-8")
+    config = _oauth_service_fixture(commands, tmp_path, identities)
+    registry = tmp_path / "tenants.toml"
+    registry.write_text("", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "taylor",
+            "--no-telemetry",
+            "--oauth-issuer",
+            "https://issuer.example",
+            "--oauth-subject",
+            "user_123",
+            "--oauth-identities",
+            str(identities),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{commands}:{os.environ['PATH']}",
+            "WINGMAN_TEST_CALLS": str(calls),
+            "WINGMAN_SHARED_OAUTH_CONFIG": str(config),
+            "WINGMAN_SHARED_REGISTRY": str(registry),
+        },
+    )
+
+    assert result.returncode != 0
+    assert calls.read_text(encoding="utf-8").strip().endswith("--reserve")
+    assert "identity map is malformed or identity is already bound" in result.stderr
+    assert "no registry at" not in result.stderr
+    assert "initializing workspace" not in result.stdout
+    assert "registering" not in result.stdout
+
+
+def test_oauth_tenant_is_refused_when_the_shared_service_has_no_oauth_config(
+    tmp_path: Path,
+) -> None:
+    commands = _fake_root_commands(tmp_path)
+    identities = tmp_path / "oauth-identities.toml"
+    identities.write_text("", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "taylor",
+            "--no-telemetry",
+            "--oauth-issuer",
+            "https://issuer.example",
+            "--oauth-subject",
+            "user_123",
+            "--oauth-identities",
+            str(identities),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{commands}:{os.environ['PATH']}",
+            "WINGMAN_SHARED_OAUTH_CONFIG": str(tmp_path / "missing-oauth.env"),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "shared service is not configured for OAuth" in result.stderr
+    assert "no registry at" not in result.stderr
+    assert "initializing workspace" not in result.stdout
+
+
+def test_oauth_tenant_is_refused_when_live_metadata_does_not_match(tmp_path: Path) -> None:
+    commands = _fake_root_commands(tmp_path)
+    identities = tmp_path / "oauth-identities.toml"
+    identities.write_text("", encoding="utf-8")
+    config = _oauth_service_fixture(commands, tmp_path, identities)
+    curl_command = commands / "curl"
+    curl_command.write_text(
+        "#!/bin/sh\n"
+        'echo \'{"resource":"https://wrong.example/mcp",'
+        '"authorization_servers":["https://issuer.example"]}\'\n',
+        encoding="utf-8",
+    )
+    curl_command.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "taylor",
+            "--no-telemetry",
+            "--oauth-issuer",
+            "https://issuer.example",
+            "--oauth-subject",
+            "user_123",
+            "--oauth-identities",
+            str(identities),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{commands}:{os.environ['PATH']}",
+            "WINGMAN_SHARED_OAUTH_CONFIG": str(config),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "OAuth route is not ready" in result.stderr
+    assert "initializing workspace" not in result.stdout
+
+
+def test_shared_provisioner_wires_saved_oauth_settings_into_the_service() -> None:
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+
+    assert "WINGMAN_SHARED_OAUTH_ISSUER" in body
+    assert "WINGMAN_SHARED_OAUTH_AUDIENCE" in body
+    assert "WINGMAN_SHARED_OAUTH_JWKS_URI" in body
+    assert "WINGMAN_SHARED_OAUTH_IDENTITIES" in body
+    assert "EnvironmentFile=-$OAUTH_CONFIG_PATH" in body
+    assert "\\$WINGMAN_OAUTH_ARGS" in body
+
+
+def test_shared_provisioner_wires_browser_oauth_without_exposing_secret_on_command_line() -> None:
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+    for name in (
+        "WINGMAN_SHARED_OAUTH_WEB_CLIENT_ID",
+        "WINGMAN_SHARED_OAUTH_WEB_CLIENT_SECRET",
+        "WINGMAN_SHARED_OAUTH_WEB_AUTHORIZE_URL",
+        "WINGMAN_SHARED_OAUTH_WEB_TOKEN_URL",
+        "WINGMAN_SHARED_OAUTH_WEB_REDIRECT_URI",
+    ):
+        assert name in body
+    assert "EnvironmentFile=-$OAUTH_WEB_CONFIG_PATH" in body
+    assert "\\$WINGMAN_OAUTH_WEB_ARGS" in body
+    assert 'install -D -m 600 -o "$SERVICE_USER"' in body
+    exec_start = next(line for line in body.splitlines() if line.startswith("ExecStart="))
+    assert "CLIENT_SECRET" not in exec_start
+    assert "systemctl --user restart wingman-mcp.service" in body
+
+
+def test_oauth_enabled_service_refuses_a_new_legacy_tenant_before_creating_state(
+    tmp_path: Path,
+) -> None:
+    commands = _fake_root_commands(tmp_path)
+    wingman_command = commands / "wingman"
+    calls = tmp_path / "calls"
+    wingman_command.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$WINGMAN_TEST_CALLS"\n',
+        encoding="utf-8",
+    )
+    wingman_command.chmod(0o755)
+    registry = tmp_path / "tenants.toml"
+    registry.write_text("", encoding="utf-8")
+    oauth_config = tmp_path / "oauth.env"
+    oauth_config.write_text("oauth is enabled\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "new-person", "--no-telemetry"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{commands}:{os.environ['PATH']}",
+            "WINGMAN_TEST_CALLS": str(calls),
+            "WINGMAN_SHARED_REGISTRY": str(registry),
+            "WINGMAN_SHARED_OAUTH_CONFIG": str(oauth_config),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "OAuth is enabled" in result.stderr
+    assert "no tenant state was created" in result.stderr
+    assert registry.read_text(encoding="utf-8") == ""
+    assert not calls.exists()
+
+
+def test_add_tenant_discovers_a_custom_saved_oauth_config_before_creating_state(
+    tmp_path: Path,
+) -> None:
+    commands = _fake_root_commands(tmp_path)
+    calls = tmp_path / "calls"
+    wingman_command = commands / "wingman"
+    wingman_command.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$WINGMAN_TEST_CALLS"\n',
+        encoding="utf-8",
+    )
+    wingman_command.chmod(0o755)
+    registry = tmp_path / "tenants.toml"
+    registry.write_text("", encoding="utf-8")
+    custom_config = tmp_path / "custom" / "oauth.env"
+    custom_config.parent.mkdir()
+    custom_config.write_text("oauth is enabled\n", encoding="utf-8")
+    pointer = tmp_path / "oauth-config-path"
+    pointer.write_text(f"{custom_config}\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "new-person", "--no-telemetry"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{commands}:{os.environ['PATH']}",
+            "WINGMAN_TEST_CALLS": str(calls),
+            "WINGMAN_SHARED_REGISTRY": str(registry),
+            "WINGMAN_SHARED_OAUTH_CONFIG_POINTER": str(pointer),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "OAuth is enabled" in result.stderr
+    assert "no tenant state was created" in result.stderr
+    assert registry.read_text(encoding="utf-8") == ""
+    assert not calls.exists()
+
+
+def test_explicit_missing_oauth_config_fails_closed_before_legacy_tenant_creation(
+    tmp_path: Path,
+) -> None:
+    commands = _fake_root_commands(tmp_path)
+    calls = tmp_path / "calls"
+    wingman_command = commands / "wingman"
+    wingman_command.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$WINGMAN_TEST_CALLS"\n',
+        encoding="utf-8",
+    )
+    wingman_command.chmod(0o755)
+    registry = tmp_path / "tenants.toml"
+    registry.write_text("", encoding="utf-8")
+    pointer = tmp_path / "oauth-config-path"
+    saved_config = tmp_path / "saved-oauth.env"
+    saved_config.write_text("oauth is enabled\n", encoding="utf-8")
+    pointer.write_text(f"{saved_config}\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "new-person", "--no-telemetry"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{commands}:{os.environ['PATH']}",
+            "WINGMAN_TEST_CALLS": str(calls),
+            "WINGMAN_SHARED_REGISTRY": str(registry),
+            "WINGMAN_SHARED_OAUTH_CONFIG_POINTER": str(pointer),
+            "WINGMAN_SHARED_OAUTH_CONFIG": str(tmp_path / "mistyped-missing.env"),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "OAuth is enabled" in result.stderr
+    assert "no tenant state was created" in result.stderr
+    assert registry.read_text(encoding="utf-8") == ""
+    assert not calls.exists()
+
+
+def test_existing_account_migration_uses_the_explicit_legacy_escape_hatch() -> None:
+    migration = (ROOT / "scripts" / "wingman-migrate-tenant.sh").read_text(encoding="utf-8")
+
+    assert 'run "$ADD_TENANT_SCRIPT" "$SLUG" --existing-capability-migration' in migration
+
+
+def test_shared_provisioner_never_reowns_an_existing_identity_directory() -> None:
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+
+    create_guard = 'if [ ! -d "$OAUTH_IDENTITIES_PARENT" ]; then'
+    create_command = (
+        'install -d -m 700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$OAUTH_IDENTITIES_PARENT"'
+    )
+    assert create_guard in body
+    assert body.index(create_guard) < body.index(create_command)
+    assert "existing OAuth identity-map parent is not writable" in body
+
+
+def test_shared_provisioner_reuses_saved_custom_oauth_config_on_redeploy() -> None:
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+
+    assert "WINGMAN_SHARED_OAUTH_CONFIG_POINTER" in body
+    assert 'OAUTH_CONFIG_PATH="$(sed -n \'1p\' "$OAUTH_CONFIG_POINTER")"' in body
+    assert "EFFECTIVE_OAUTH_ENABLED=1" in body
+    assert 'if [ "$EFFECTIVE_OAUTH_ENABLED" -eq 1 ]; then' in body
+
+
+def test_shared_provisioner_checks_saved_oauth_config_as_the_service_user() -> None:
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'sudo -u "$SERVICE_USER" test -r "$OAUTH_CONFIG_PATH"' in body
+    assert "saved OAuth config is not readable by $SERVICE_USER" in body
+
+
+def test_oauth_runbook_uses_the_installed_service_account_binary() -> None:
+    body = RUNBOOK.read_text(encoding="utf-8")
+
+    assert "sudo -iu wingman-shared wingman " not in body
+    assert "/home/wingman-shared/.local/bin/wingman tenant oauth-invite" in body
+    assert "/home/wingman-shared/.local/bin/wingman tenant oauth-pending" in body
+    assert "sudo /home/wingman-shared/.local/bin/wingman tenant oauth-approve" in body
+
+
+def test_oauth_runbook_requires_browser_oauth_inputs_before_the_login_canary() -> None:
+    body = RUNBOOK.read_text(encoding="utf-8")
+
+    for name in (
+        "WINGMAN_SHARED_OAUTH_WEB_CLIENT_ID",
+        "WINGMAN_SHARED_OAUTH_WEB_CLIENT_SECRET",
+        "WINGMAN_SHARED_OAUTH_WEB_AUTHORIZE_URL",
+        "WINGMAN_SHARED_OAUTH_WEB_TOKEN_URL",
+        "WINGMAN_SHARED_OAUTH_WEB_REDIRECT_URI",
+    ):
+        assert name in body
+
+
+def test_interactive_choice_precedes_reservation_and_reservation_is_renewed_before_registry() -> (
+    None
+):
+    body = SCRIPT.read_text(encoding="utf-8")
+
+    assert body.index("\nresolve_telemetry\n") < body.index("--reserve)")
+    assert body.index("--renew-reservation") < body.index('say "registering')
+
+
+def test_oauth_only_funding_guidance_does_not_claim_a_browser_key_page_exists() -> None:
+    body = SCRIPT.read_text(encoding="utf-8")
+
+    assert "Self-funded browser key entry is not available for OAuth-only tenants yet" in body
+    assert "OAuth-only tenant can make NO model call yet" in body
+
+
+def _metadata_route(audience: str) -> str:
+    """Run the provisioner's own oauth_metadata_route on one audience."""
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+    start = body.index("oauth_metadata_route() {")
+    end = body.index("\n}\n", start) + 3
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'set -euo pipefail\n{body[start:end]}\noauth_metadata_route "$1"',
+            "_",
+            audience,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def test_root_metadata_route_follows_rfc_9728_for_the_resource_path() -> None:
+    assert (
+        _metadata_route("https://box.example.ts.net/shared/mcp")
+        == "/.well-known/oauth-protected-resource/shared/mcp"
+    )
+    assert (
+        _metadata_route("https://box.example.ts.net/shared/mcp/")
+        == "/.well-known/oauth-protected-resource/shared/mcp"
+    )
+    assert _metadata_route("https://box.example.ts.net") == ""
+    assert _metadata_route("https://box.example.ts.net/") == ""
+    assert _metadata_route("") == ""
+
+
+def test_the_app_serves_the_path_the_root_metadata_route_proxies_to() -> None:
+    # The Funnel route proxies to the same path on the local port, so the
+    # app must answer it, or the route publishes a 404.
+    from wingman.infrastructure.oauth_bearer import OAuthSettings, _metadata_paths
+
+    audience = "https://box.example.ts.net/shared/mcp"
+    settings = OAuthSettings("https://issuer.example", audience, "https://issuer.example/jwks")
+
+    assert _metadata_route(audience) in _metadata_paths(settings, "/mcp")
+
+
+def test_shared_provisioner_publishes_the_root_metadata_route_with_oauth() -> None:
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+
+    # Funnel, never plain serve: serve drops Funnel for the whole hostname.
+    assert 'tailscale funnel --bg --set-path "$OAUTH_METADATA_ROUTE"' in body
+    assert '"http://127.0.0.1:$PORT$OAUTH_METADATA_ROUTE"' in body
+    assert "tailscale serve --bg --set-path" not in body
+    # Printed for the operator when tailscale is not on PATH.
+    assert (
+        "tailscale funnel --bg --set-path $OAUTH_METADATA_ROUTE "
+        "http://127.0.0.1:$PORT$OAUTH_METADATA_ROUTE" in body
+    )
+    # A redeploy reads the audience back from the saved config.
+    assert "s/^WINGMAN_OAUTH_AUDIENCE=//p" in body
+
+
+def test_shared_provisioner_never_tells_the_operator_to_add_it_to_the_upgrade_sweep() -> None:
+    """#577: following that advice put the shared account in the per-account
+    sweep, which restarted it a second time during every 'wg upgrade-all'."""
+    body = PROVISION_SCRIPT.read_text(encoding="utf-8")
+    server_doc = (ROOT / "docs" / "SERVER.md").read_text(encoding="utf-8")
+
+    assert "by hand: add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS" not in body
+    assert "Do NOT add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS" in body
+    assert "WINGMAN_UPGRADE_USERS=dhk,trent,wingman-shared" not in server_doc
+
+
+def test_every_oauth_bind_call_reads_the_same_service_config_the_script_resolved() -> None:
+    # #618: oauth-bind binds under every issuer the service trusts, read from
+    # the service's OAuth env file; it must be the file this script checked.
+    body = SCRIPT.read_text(encoding="utf-8")
+    calls = body.split("wingman tenant oauth-bind")[1:]
+
+    assert len(calls) == 4
+    for call in calls:
+        assert '"${OAUTH_BIND_CONFIG_ARGS[@]}"' in call.split("\n\n")[0]
+    assert 'OAUTH_BIND_CONFIG_ARGS=(--oauth-config "$OAUTH_SERVICE_CONFIG")' in body

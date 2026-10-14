@@ -10,7 +10,7 @@ links are the hiring/announcement signal, a changed hash the weaker "page
 changed" signal. No model reads the page; nothing is claimed that a diff
 cannot show.
 
-RFC-060 adds one opt-in per source: `retain` also KEEPS the page's prose as
+RFC-060 adds per-source retention (default on for new about-labelled sources): `retain` also KEEPS the page's prose as
 an org-attributed document, the same shape a company feed post gets, so a
 values page becomes something a stance can quote verbatim instead of only
 a hash that says it changed. Egress is untouched — same approved pages,
@@ -211,9 +211,18 @@ def add_company_source(
         company_name=name.strip(),
         url=url,
         label=(label or "").strip() or None,
-        retain=bool(retain),
+        retain=retain if retain is not None else (label or "").strip().casefold() == "about",
     )
     return source, storage.add_company_source(source)
+
+
+def pause_company_source(name: str, url: str, storage: Storage, *, paused: bool) -> CompanySource:
+    """Stop/resume one source without withdrawing approval or its history."""
+    source = _existing_source(_resolve_company(name), url, storage)
+    if source is None:
+        raise IngestError(f"{url!r} is not an approved source for {name!r}.")
+    storage.set_company_source_paused(source.company_key, source.url, paused)
+    return source.model_copy(update={"paused": paused})
 
 
 def remove_company_source(name: str, url: str, storage: Storage) -> bool:
@@ -239,6 +248,29 @@ def remove_company_source(name: str, url: str, storage: Storage) -> bool:
 
 def list_company_sources(name: str, storage: Storage) -> list[CompanySource]:
     return storage.list_company_sources(_resolve_company(name))
+
+
+def _content_identity(
+    company: str, text_hash: str, links: list[str]
+) -> tuple[str, str, tuple[str, ...]]:
+    """Equal prose is only a duplicate when its absolute link evidence also matches."""
+    return company, text_hash, tuple(sorted(links))
+
+
+def source_duplicates(sources: list[CompanySource], storage: Storage) -> dict[str, str]:
+    """Identify identical latest snapshots within one company's approved sources."""
+    seen: dict[tuple[str, str, tuple[str, ...]], str] = {}
+    duplicates: dict[str, str] = {}
+    for source in sources:
+        snapshot = storage.get_research_snapshot(source.company_key, source.url)
+        if snapshot is None:
+            continue
+        identity = _content_identity(source.company_key, snapshot.text_hash, snapshot.links)
+        if identity in seen:
+            duplicates[source.url] = seen[identity]
+        else:
+            seen[identity] = source.url
+    return duplicates
 
 
 def rename_company(old_name: str, new_name: str, storage: Storage) -> tuple[int, int]:
@@ -395,10 +427,11 @@ def _retain_page(
 class SourceResult(BaseModel):
     url: str
     label: str | None = None
-    status: str  # ok | failed
+    status: str  # ok | failed | paused
     detail: str
     new_links: list[str] = Field(default_factory=list)
     total_links: int = 0
+    duplicate_of: str | None = None
     # '' when the source is not retained; else stored | replaced | unchanged | no text.
     retained: str = ""
 
@@ -436,7 +469,18 @@ def research_company(
     results: list[SourceResult] = []
     failed = 0
     kept = 0
+    seen_content: dict[tuple[str, str, tuple[str, ...]], str] = {}
     for source in sources:
+        if source.paused:
+            results.append(
+                SourceResult(
+                    url=source.url,
+                    label=source.label,
+                    status="paused",
+                    detail="paused; previous research preserved",
+                )
+            )
+            continue
         try:
             data = fetch(source.url)
         except FetchError as exc:
@@ -489,6 +533,19 @@ def research_company(
                 fetched_at=fetched_at,
             )
         )
+        identity = _content_identity(key, text_hash, links)
+        duplicate_of = seen_content.get(identity)
+        if duplicate_of is not None:
+            owner = next(result for result in results if result.url == duplicate_of)
+            additional = [link for link in new_links if link not in owner.new_links]
+            if additional:
+                owner.new_links.extend(additional)
+                owner.detail = f"{len(owner.new_links)} new links across matching source histories"
+                storage.record_new_links(key, owner.url, additional, fetched_at)
+            detail = f"duplicate of {duplicate_of}; diff reported there"
+            new_links = []
+        else:
+            seen_content[identity] = source.url
         storage.record_new_links(key, source.url, new_links, fetched_at)
         retained = ""
         if source.retain:
@@ -509,6 +566,7 @@ def research_company(
                 detail=detail,
                 new_links=new_links,
                 total_links=len(links),
+                duplicate_of=duplicate_of,
                 retained=retained,
             )
         )
@@ -516,7 +574,10 @@ def research_company(
         "research company=%s sources=%d failed=%d retained=%d", name, len(sources), failed, kept
     )
     return ResearchReport(
-        company=name.strip(), results=results, fetched=len(sources) - failed, failed=failed
+        company=name.strip(),
+        results=results,
+        fetched=sum(result.status == "ok" for result in results),
+        failed=failed,
     )
 
 
@@ -532,7 +593,7 @@ def render_research_report(report: ResearchReport) -> str:
     lines = [f"Research: {report.company} — {report.fetched} fetched, {report.failed} failed"]
     for result in report.results:
         label = f" ({result.label})" if result.label else ""
-        marker = "✓" if result.status == "ok" else "✗"
+        marker = {"ok": "✓", "paused": "⏸"}.get(result.status, "✗")
         lines.append(f"{marker} {result.url}{label}")
         lines.append(f"  {result.detail}")
         shown = result.new_links[:MAX_NEW_LINKS_SHOWN]

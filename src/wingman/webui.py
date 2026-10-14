@@ -18,9 +18,12 @@ the ordinary deterministic pipelines.
 
 from __future__ import annotations
 
+import contextvars
 import html
 import re
 import secrets
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -46,6 +49,21 @@ _logger = get_logger("webui")
 # compare exactly — the still-separate shape-B processes (dhk, trent)
 # that stay on that model through the phased migration are unaffected.
 _tenant_index: TenantIndex | None = None
+
+# Set only while an OAuth browser wrapper is handling a verified setup
+# request.  This is request-local; concurrent tenants never share it.
+_browser_setup: contextvars.ContextVar[tuple[Config, str] | None] = contextvars.ContextVar(
+    "wingman_browser_setup", default=None
+)
+
+
+@contextmanager
+def browser_setup_scope(config: Config, csrf_token: str) -> Iterator[None]:
+    marker = _browser_setup.set((config, csrf_token))
+    try:
+        yield
+    finally:
+        _browser_setup.reset(marker)
 
 
 def configure_tenant_index(index: TenantIndex | None) -> None:
@@ -284,6 +302,9 @@ def _authorized(request: Request) -> Config | None:
     straight to its caller). Single-tenant mode (the default, no index
     configured) is the exact single-file 'compare_digest' check unchanged.
     """
+    browser = _browser_setup.get()
+    if browser is not None:
+        return browser[0]
     presented = str(request.path_params.get("token", ""))
     if _tenant_index is not None:
         tenant = _tenant_index.resolve(presented)
@@ -416,12 +437,13 @@ def _group_name(section: str) -> str:
     return _GROUP_NAMES.get(section, section.replace("-", " ").replace("_", " ").title())
 
 
-def _header(config: Config, show_path: bool = True) -> str:
+def _header(config: Config, show_path: bool = True, label: str = "") -> str:
     # show_path=False for anything that leaves the server. The workspace
     # path names the host account ('/home/trent/.local/share/wingman'),
     # which is a disclosure in a file that gets saved to a laptop and
     # sometimes forwarded — the same argument the token check already makes.
-    meta = f'<div class="meta">{_e(str(config.data_dir))}</div>' if show_path else ""
+    text = str(config.data_dir) if show_path else label
+    meta = f'<div class="meta">{_e(text)}</div>' if text else ""
     return (
         '<div class="hdr"><span class="dot"></span>'
         f'<span class="wordmark">Wingman</span>{meta}</div>'
@@ -606,14 +628,16 @@ def _tiers(
     )
 
 
-def _upload_panel(step: str = "") -> str:
+def _upload_panel(step: str = "", *, csrf_token: str = "") -> str:
     lead = f'<span class="stepno">{_e(step)}</span>' if step else ""
+    csrf = f'<input type="hidden" name="_csrf" value="{_e(csrf_token)}">' if csrf_token else ""
     return (
         f'<div class="panel">{lead}'
         "<p>A LinkedIn data-export <b>.zip</b>, or a resume "
         "(<b>.md .txt .pdf .docx .tex</b>). It lands in the inbox and runs the "
         "ordinary ingest pipeline — nothing else is touched.</p>"
         '<form method="post" enctype="multipart/form-data" action="upload" class="field">'
+        f"{csrf}"
         '<label>File</label><input type="file" name="file" required>'
         '<button class="btn">Upload &amp; ingest</button></form></div>'
     )
@@ -757,7 +781,7 @@ def _restart_panel() -> str:
     )
 
 
-def _keys_panel(config: Config, step: str = "") -> str:
+def _keys_panel(config: Config, step: str = "", *, csrf_token: str = "") -> str:
     lead = (
         f'<span class="stepno">{_e(step)}</span>'
         if step
@@ -767,6 +791,7 @@ def _keys_panel(config: Config, step: str = "") -> str:
         _key_field(short, env_var, source)
         for short, env_var, source in key_status_rows(config.data_dir, config)
     )
+    csrf = f'<input type="hidden" name="_csrf" value="{_e(csrf_token)}">' if csrf_token else ""
     return (
         f'<div class="panel">{lead}'
         "<p>Each key is <b>verified against its provider</b> before it is stored "
@@ -779,9 +804,140 @@ def _keys_panel(config: Config, step: str = "") -> str:
             if config.strict_provider_keys
             else "anything set in the service environment is only a fallback.</p>"
         )
-        + f'<form method="post" action="keys" class="field">{fields}'
+        + f'<form method="post" action="keys" class="field">{csrf}{fields}'
         '<button class="btn">Verify &amp; store</button></form></div>'
     )
+
+
+def _has_extraction_key(config: Config) -> bool:
+    """Whether first CV ingestion can run without borrowing an undeclared key."""
+    return any(
+        short == "anthropic" and source in {"workspace file", "global file (funded)"}
+        for short, _env_var, source in key_status_rows(config.data_dir, config)
+    )
+
+
+def oauth_upload_ready(config: Config) -> bool:
+    """Public preflight for the OAuth wrapper, before multipart parsing."""
+    return _has_extraction_key(config)
+
+
+def _oauth_workspace_summary(config: Config, csrf_token: str) -> Response | None:
+    """Where an existing tenant is at, or None when first-run setup applies (#579).
+
+    "Existing" means the workspace holds ingested data, not that the database
+    file exists: 'oauth-approve' creates an empty database, and a migrated
+    tenant ('oauth-bind') arrives with data but was being shown first-run
+    setup. Counts and dates only — never file names, locators, or key material.
+    """
+    from wingman.infrastructure.storage import Storage
+
+    if not config.db_path.exists():
+        return None
+    with Storage(config.db_path) as storage:
+        documents = storage.count_source_records()
+        profile_items = storage.count_profile_items()
+        last_ingest = storage.latest_ingested_at()
+    if documents == 0:
+        return None
+
+    anthropic = next(
+        (
+            source
+            for short, _env, source in key_status_rows(config.data_dir, config)
+            if short == "anthropic"
+        ),
+        "not set",
+    )
+    key_line = {
+        "workspace file": "verified · your own key",
+        "global file (funded)": "using the shared key this workspace is funded with",
+    }.get(anthropic, "not set")
+    plural = "" if documents == 1 else "s"
+    data_line = f"{documents} document{plural} ingested · {profile_items} profile items"
+    if last_ingest is not None:
+        data_line += f" · last on {last_ingest.strftime('%d %b %Y')}"
+    latest = config.reports_dir / "digests" / "latest.html"
+    if latest.exists():
+        stamp = datetime.fromtimestamp(latest.stat().st_mtime, tz=UTC)
+        digest_line = stamp.strftime("%d %b %Y · %H:%M UTC")
+    else:
+        digest_line = "No digest yet — the first overnight run writes one"
+    rows = "".join(
+        f'<div class="field"><label>{_e(label)}</label><span>{_e(value)}</span></div>'
+        for label, value in (
+            ("Anthropic key", key_line),
+            ("Your data", data_line),
+            ("Latest digest", digest_line),
+        )
+    )
+    body = [
+        _header(config, show_path=False, label=config.operator_name or "Your workspace"),
+        "<h1>Your workspace</h1>",
+        '<p class="dim">You are already set up. Here is where things stand.</p>',
+        f'<div class="panel"><span class="stepno">Summary</span>{rows}</div>',
+    ]
+    if _has_extraction_key(config):
+        body.append(
+            '<div class="panel"><span class="stepno">Continue in your client</span>'
+            "<p>Ask your connected client: <b>what’s my status?</b> Wingman will use "
+            "only evidence from your workspace.</p></div>"
+        )
+        body.append(_keys_panel(config, step="Update key", csrf_token=csrf_token))
+        body.append(_upload_panel(step="Add or replace data", csrf_token=csrf_token))
+    else:
+        body.append(
+            '<div class="panel"><span class="stepno">One thing to do: add your Anthropic '
+            "key</span><p>Your data is here, but nothing model-backed can run until a key "
+            "is verified. Uploads are accepted again once it is.</p></div>"
+        )
+        body.append(_keys_panel(config, step="Add an API key", csrf_token=csrf_token))
+    body.append(
+        f'<form method="post" action="logout"><input type="hidden" name="_csrf" '
+        f'value="{_e(csrf_token)}"><button class="btn">Sign out</button></form>'
+    )
+    return _page("Wingman — your workspace", "\n".join(body), shell="ui ui-setup")
+
+
+async def ui_oauth_setup(request: Request) -> Response:
+    """Small OAuth-only setup surface: no capability URLs and no model chat."""
+    config = _authorized(request)
+    browser = _browser_setup.get()
+    if config is None or browser is None:
+        return _not_found()
+    csrf_token = browser[1]
+    summary = _oauth_workspace_summary(config, csrf_token)
+    if summary is not None:
+        return summary
+    body = [
+        _header(config, show_path=False, label=config.operator_name or "Your workspace"),
+        "<h1>Set up your workspace</h1>",
+        (
+            '<p class="dim">Your sign-in opens only this workspace. Add a provider key '
+            "here — it goes directly to the encrypted transport and owner-only workspace "
+            "file, never through a model conversation.</p>"
+        ),
+        _keys_panel(config, step="01 — Add an API key", csrf_token=csrf_token),
+    ]
+    if _has_extraction_key(config):
+        body.append(_upload_panel(step="02 — Upload your CV", csrf_token=csrf_token))
+        body.append(
+            '<div class="panel"><span class="stepno">03 — Continue in your client</span>'
+            "<p>Your key is ready. Upload your CV here, then return to your connected "
+            "client and ask: <b>what’s my status?</b> Wingman will use only evidence "
+            "from your workspace.</p></div>"
+        )
+    else:
+        body.append(
+            '<div class="panel"><span class="stepno">02 — Upload your CV</span>'
+            "<p>Add and verify an Anthropic key first. No model call has been made, "
+            "and no CV upload will be accepted until the extraction key is ready.</p></div>"
+        )
+    body.append(
+        f'<form method="post" action="logout"><input type="hidden" name="_csrf" '
+        f'value="{_e(csrf_token)}"><button class="btn">Sign out</button></form>'
+    )
+    return _page("Wingman — setup", "\n".join(body), shell="ui ui-setup")
 
 
 async def ui_home(request: Request) -> Response:
@@ -935,6 +1091,16 @@ async def ui_upload(request: Request) -> Response:
         return _not_found()
     back = '<p><a href="./">&larr; back</a></p>'
 
+    # OAuth onboarding is BYOK: do not even accept/store the CV until its
+    # extraction provider is ready.  This makes the first-run sequence
+    # deterministic and proves there was no speculative model call.
+    if _browser_setup.get() is not None and not _has_extraction_key(config):
+        return _page(
+            "Upload",
+            f'{back}<div class="report-box err">Add and verify an Anthropic key first. '
+            "No model call was made and no upload was stored.</div>",
+        )
+
     form = await request.form()
     upload = form.get("file")
     if upload is None or isinstance(upload, str):
@@ -995,8 +1161,15 @@ async def ui_upload(request: Request) -> Response:
                     f"Rejected: {len(ingested.rejected)}{rejected}"
                 )
     except (IngestError, ModelConfigError, ProviderError) as exc:
+        detail = (
+            "The upload could not be ingested. The upload was stored; partial successful "
+            "work was preserved. Check the document and ask the operator to check model "
+            "configuration and provider availability before retrying."
+            if _browser_setup.get() is not None
+            else str(exc)
+        )
         return _page(
-            "Upload", f'{back}<div class="report-box err">Ingestion failed: {_e(str(exc))}</div>'
+            "Upload", f'{back}<div class="report-box err">Ingestion failed: {_e(detail)}</div>'
         )
     return _page("Upload", f'{back}<div class="report-box">{_e(summary)}</div>')
 
@@ -1099,7 +1272,12 @@ async def ui_keys(request: Request) -> Response:
         try:
             live = store_workspace_key(config.data_dir, short, value)
         except KeyStoreError as exc:
-            failures.append(f"{short}: {exc}")
+            detail = (
+                "could not store the key. Ask the operator to check workspace permissions."
+                if _browser_setup.get() is not None
+                else str(exc)
+            )
+            failures.append(f"{short}: {detail}")
             continue
         state = (
             "verified and live now"

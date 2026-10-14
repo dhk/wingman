@@ -36,6 +36,7 @@ DEFAULT_MODELS_TOML = """\
 provider = "anthropic"
 model = "claude-haiku-4-5"
 # Optional usage prices are applied when a report is read, never stored in the ledger:
+# pricing_models = ["explicit-returned-model-id"]  # operator-verified aliases only
 # input_usd_per_million = 0.0
 # output_usd_per_million = 0.0
 # cache_read_usd_per_million = 0.0
@@ -100,7 +101,7 @@ def resolve_metered_credential(
     if workspace_key:
         return MeteredCredential(workspace_key, Payer.BYOK)
     if not config.strict_provider_keys:
-        return MeteredCredential(resolve_provider_key(env_var, config.data_dir), Payer.AMBIENT)
+        return MeteredCredential(resolve_provider_key(env_var, None), Payer.AMBIENT)
     if config.funded:
         return MeteredCredential(declared_shared_key(env_var, home, global_path), Payer.FUNDED)
     return MeteredCredential(None, Payer.BYOK)

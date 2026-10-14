@@ -116,11 +116,18 @@ def test_recording_failure_never_changes_provider_result(
     provider = UsageTrackingProvider(
         _SuccessfulProvider(), config, CapabilityClass.EXTRACT_FAST, Payer.AMBIENT
     )
-    monkeypatch.setattr(Storage, "add_model_usage", lambda *args: (_ for _ in ()).throw(OSError()))
+    attempts = []
+
+    def fail_record(*args):
+        attempts.append(1)
+        raise OSError("synthetic recording failure")
+
+    monkeypatch.setattr("wingman.providers.usage.record_usage", fail_record)
 
     response = provider.complete(ModelRequest(system="system", prompt="prompt"))
 
     assert response.text.startswith("private response")
+    assert attempts == [1]
 
 
 def test_successful_embedding_records_one_row_and_preserves_vectors(tmp_path: Path) -> None:
@@ -153,9 +160,16 @@ def test_embedding_recording_failure_preserves_vectors(
 ) -> None:
     config = _config(tmp_path)
     provider = UsageTrackingEmbeddingProvider(_SuccessfulEmbeddingProvider(), config, Payer.AMBIENT)
-    monkeypatch.setattr(Storage, "add_model_usage", lambda *args: (_ for _ in ()).throw(OSError()))
+    attempts = []
+
+    def fail_record(*args):
+        attempts.append(1)
+        raise OSError("synthetic recording failure")
+
+    monkeypatch.setattr("wingman.providers.usage.record_usage", fail_record)
 
     assert provider.embed(["one"], "query") == [[1.0, 0.0]]
+    assert attempts == [1]
 
 
 def test_prices_are_applied_at_read_time_and_missing_prices_are_not_zero(tmp_path: Path) -> None:
@@ -352,6 +366,7 @@ def test_tenant_usage_read_reports_a_corrupt_database(tmp_path: Path) -> None:
     ("config_changes", "credential_source", "expected_payer"),
     [
         ({"anthropic_api_key": "resolved-key"}, "byok", Payer.BYOK),
+        ({"strict_provider_keys": False}, "workspace", Payer.BYOK),
         ({"strict_provider_keys": False}, "ambient", Payer.AMBIENT),
         (
             {"strict_provider_keys": True, "funded": True},
@@ -376,7 +391,9 @@ model = "test-model"
         encoding="utf-8",
     )
     monkeypatch.setattr(router, "AnthropicProvider", _RoutedProvider)
-    if credential_source == "ambient":
+    if credential_source == "workspace":
+        (tmp_path / "keys.env").write_text("ANTHROPIC_API_KEY=resolved-key\n")
+    elif credential_source == "ambient":
         monkeypatch.setattr(router, "resolve_provider_key", lambda *_args: "resolved-key")
     elif credential_source == "funded":
         monkeypatch.setattr(router, "declared_shared_key", lambda *_args: "resolved-key")

@@ -7,17 +7,16 @@ from time import perf_counter
 from wingman.domain.model_usage import ModelUsage, Payer
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
-from wingman.infrastructure.storage import Storage
+from wingman.infrastructure.usage_ledger import record_usage
 from wingman.providers.base import CapabilityClass, ModelProvider, ModelRequest, ModelResponse
-from wingman.providers.embeddings import EmbeddingProvider, InputType
+from wingman.providers.embeddings import EmbeddingProvider, EmbeddingUsageProvider, InputType
 
 _logger = get_logger("model_usage")
 
 
 def _record(config: Config, usage: ModelUsage) -> None:
     try:
-        with Storage(config.db_path) as storage:
-            storage.add_model_usage(usage)
+        record_usage(config.db_path, usage)
     except Exception:  # noqa: BLE001 — accounting must never alter the paid call's result
         _logger.exception(
             "model usage recording failed provider=%s model=%s capability=%s; call result preserved",
@@ -87,11 +86,17 @@ class UsageTrackingEmbeddingProvider:
 
     def embed(self, texts: list[str], input_type: InputType) -> list[list[float]]:
         started = perf_counter()
-        vectors = self._inner.embed(texts, input_type)
+        tokens = None
+        if isinstance(self._inner, EmbeddingUsageProvider):
+            result = self._inner.embed_with_usage(texts, input_type)
+            vectors, tokens = result.vectors, result.input_tokens
+        else:
+            vectors = self._inner.embed(texts, input_type)
         _record(
             self._config,
             ModelUsage(
                 capability="embed_semantic",
+                input_tokens=tokens,
                 provider=self.provider_name,
                 model=self.model,
                 payer=self._payer,

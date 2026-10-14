@@ -153,3 +153,20 @@ def test_the_environment_is_left_untouched(rig: dict[str, Path]) -> None:
     env["PATH"] = f"{rig['bin']}:{env['PATH']}"
 
     assert _calls(rig) == []
+
+
+def test_a_registry_failure_after_a_healthy_restart_is_not_an_outage() -> None:
+    """2026-10-09: the process was up and healthy, only the registry
+    declaration failed, and the run was reported as a possible outage. The
+    declaration is guarded, and its failure exits 3 with wording that says
+    the service is serving."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+
+    assert 'if ! "$(dirname "$0")/wingman-register-service.sh"; then' in code
+    guarded = code[code.index('if ! "$(dirname "$0")/wingman-register-service.sh"') :]
+    branch = guarded[: guarded.index("\nfi\n")]
+    assert "exit 3" in branch
+    assert "Nothing is down" in branch
+    # Only reached after the health check has passed.
+    assert code.index("started_at didn't change") < code.index("wingman-register-service.sh")
