@@ -1509,6 +1509,47 @@ identity key" and "do not obtain `sub` from email".
 - **Staging.** #584 recorded invites; #585 claims them at sign-in. The
   superseded rules above now describe only the manual path.
 
+**Amendment (2026-10-12): manual binding covers both surfaces (#618; Durable
+decision).** The 2026-10-09 amendment bound a *claimed* email invite under both
+trusted issuers but left manual `oauth-approve` binding only the issuer it was
+given, so the operator ran a second `oauth-bind` and the person was refused a
+second time on the other surface. Now `oauth-approve` and `oauth-bind` bind the
+given `sub` under `--issuer` and under every other issuer the shared service
+trusts, on the same #582 evidence (one WorkOS user, one `sub`, both issuers).
+
+- **Where the trusted set comes from.** The service's own configuration, never
+  a command-line value: `--oauth-issuer` inside `WINGMAN_OAUTH_ARGS` in the
+  OAuth env file (`/etc/wingman/oauth.env`, or the path saved in
+  `/etc/wingman/oauth-config-path`), and the WorkOS session issuer derived from
+  `--oauth-web-client-id` inside `WINGMAN_OAUTH_WEB_ARGS` in
+  `/etc/wingman/oauth-web.env` — the same `EnvironmentFile=`s, the same
+  values the unit's `ExecStart=` expands. `oauth-approve` runs as root through
+  plain `sudo`, whose environment never loads them, so they are parsed as
+  data: never sourced, only those keys kept, and nothing else in them (the
+  browser client secret included) printed, logged or put in an exception.
+  The args are split as systemd expands an unquoted `$VAR`: whitespace
+  words, single and double quotes honoured and removed. A backslash or an
+  unbalanced quote is refused, since that is where the two parsers could
+  disagree and bind an issuer the service never checks.
+  `--oauth-config` / `--oauth-web-config` may name the files on an unusual
+  install; they cannot name an issuer.
+- **Fail closed.** Absent or unreadable configuration (reported distinctly),
+  an `--issuer` outside the trusted set, or the subject already bound to — or
+  reserved for — a different tenant under any trusted issuer: nothing is bound
+  and nothing is created. There is no single-surface opt-out: the only case it
+  would serve is a subject that differs between surfaces, which #582 showed
+  does not happen for one WorkOS user, and binding one surface of a person
+  whose other surface belongs to someone else is exactly what must not happen.
+- **Atomic and idempotent.** All bindings are written in one replacement of
+  the identity map, or none. An exact existing binding is left alone, so a
+  rerun changes nothing, and a tenant bound on one surface by an earlier build
+  gains the other. Provisioning reservations cover every trusted issuer under
+  one token. Pending rows for the subject under every trusted issuer are
+  cleared after the bind, identity map before onboarding state — the lock
+  order used everywhere.
+- **What it does not change.** Each binding is still an `(iss, sub)` key. Two
+  pending rows with *different* subjects are still two people.
+
 ## RFC-082: Client-owned artifact kinds (#503) — Durable decision
 
 Published view identities accept `custom:<slug>` alongside built-in kinds. Slugs are 1–64 lowercase ASCII letters/digits/underscores/hyphens, beginning with a letter or digit. Custom views retain the same local one-record-per-kind and HTTPS URL rules. Wingman does not know their rendering inputs: freshness is explicitly unchecked and reports the recording timestamp, never a synthetic current/stale verdict. This extends RFC-061’s closed built-in set without adding any publishing action.

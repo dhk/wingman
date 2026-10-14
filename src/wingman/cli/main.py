@@ -4665,6 +4665,41 @@ def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path
     return tenant, registry_path
 
 
+_OAUTH_CONFIG_HELP = (
+    "The shared service's OAuth env file, when it is not where the saved "
+    "/etc/wingman/oauth-config-path pointer (or the default /etc/wingman/oauth.env) "
+    "says. A file path, never an issuer: the trusted issuers are read from it."
+)
+_OAUTH_WEB_CONFIG_HELP = (
+    "The shared service's browser-login env file, when it is not the default "
+    "/etc/wingman/oauth-web.env. Read for --oauth-web-client-id only."
+)
+
+
+def _issuers_for_binding_or_exit(
+    issuer: str, oauth_config: Path | None, oauth_web_config: Path | None
+) -> tuple[str, ...]:
+    """The given issuer, then every other issuer the shared service trusts (#618).
+
+    Read from the service's own OAuth env files, never from a flag, and
+    refused (exit 1, nothing bound) when they cannot be read or the given
+    issuer is not one of them.
+    """
+    from wingman.infrastructure.oauth_service_issuers import (
+        ServiceIssuersError,
+        read_service_issuers,
+    )
+
+    try:
+        return read_service_issuers(
+            oauth_config.expanduser() if oauth_config is not None else None,
+            oauth_web_config.expanduser() if oauth_web_config is not None else None,
+        ).for_binding(issuer)
+    except ServiceIssuersError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+
 @tenant_app.command("oauth-bind")
 def tenant_oauth_bind_cmd(
     slug: str = typer.Argument(..., help="Existing tenant slug to receive this identity."),
@@ -4701,6 +4736,10 @@ def tenant_oauth_bind_cmd(
         "--renew-reservation",
         help="Extend an active provisioning claim immediately before registry mutation.",
     ),
+    oauth_config: Path | None = typer.Option(None, "--oauth-config", help=_OAUTH_CONFIG_HELP),
+    oauth_web_config: Path | None = typer.Option(
+        None, "--oauth-web-config", help=_OAUTH_WEB_CONFIG_HELP
+    ),
 ) -> None:
     """Bind one operator-trusted OAuth identity to an existing tenant.
 
@@ -4708,6 +4747,13 @@ def tenant_oauth_bind_cmd(
     wingman-add-tenant.sh, then run this command. Login alone never creates
     a workspace, and no email, privilege, or funded access is inferred.
     A bound identity is removed from the pending approval queue.
+
+    The subject is bound under --issuer AND under every other issuer the
+    shared service trusts (the browser login and the MCP connector), read
+    from the service's own OAuth env files: one WorkOS user has the same
+    subject on both. Refused, with nothing bound, if those files cannot be
+    read, --issuer is not one of them, or the other surface already belongs
+    to a different tenant.
     """
     configure_logging()
     from wingman.infrastructure.oauth_bearer import (
@@ -4737,9 +4783,14 @@ def tenant_oauth_bind_cmd(
         )
         raise typer.Exit(code=2)
 
+    issuers = _issuers_for_binding_or_exit(issuer, oauth_config, oauth_web_config)
+    also = issuers[1:]
+
     if reserve:
         try:
-            token = reserve_trusted_identity(identity_path, issuer, subject, slug)
+            token = reserve_trusted_identity(
+                identity_path, issuer, subject, slug, also_issuers=also
+            )
         except IdentityMapError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=1) from exc
@@ -4749,7 +4800,7 @@ def tenant_oauth_bind_cmd(
     if renew_reservation is not None:
         try:
             renewed = renew_trusted_identity_reservation(
-                identity_path, issuer, subject, renew_reservation
+                identity_path, issuer, subject, renew_reservation, also_issuers=also
             )
         except IdentityMapError as exc:
             typer.echo(str(exc), err=True)
@@ -4763,7 +4814,7 @@ def tenant_oauth_bind_cmd(
     if release_reservation is not None:
         try:
             released = release_trusted_identity_reservation(
-                identity_path, issuer, subject, release_reservation
+                identity_path, issuer, subject, release_reservation, also_issuers=also
             )
         except IdentityMapError as exc:
             typer.echo(str(exc), err=True)
@@ -4776,38 +4827,48 @@ def tenant_oauth_bind_cmd(
 
     if preflight:
         try:
-            changed = preflight_trusted_identity(identity_path, issuer, subject, slug)
+            available = preflight_trusted_identity(
+                identity_path, issuer, subject, slug, also_issuers=also
+            )
         except IdentityMapError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=1) from exc
-        if changed:
+        if available:
             typer.echo(f"Trusted OAuth identity is available to bind to {slug!r}.")
         else:
             typer.echo(f"That trusted OAuth identity is already bound to {slug!r}.")
+        for key_issuer in issuers:
+            state = "would bind" if key_issuer in available else "already bound"
+            typer.echo(f"  {state} under {key_issuer}")
         return
 
     _tenant, registry_path = _load_tenant_or_exit(slug, registry)
     try:
-        changed = bind_trusted_identity(
-            identity_path, issuer, subject, slug, reservation=reservation
+        written = bind_trusted_identity(
+            identity_path, issuer, subject, slug, reservation=reservation, also_issuers=also
         )
     except IdentityMapError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    if changed:
+    if written:
         binding_status = f"Bound trusted OAuth identity to tenant {slug!r} in {identity_path}."
     else:
         binding_status = (
             f"Trusted OAuth binding for tenant {slug!r} already existed in {identity_path}."
         )
+    binding_status += "".join(
+        f"\n  {'bound' if key_issuer in written else 'already bound'} under {key_issuer}"
+        for key_issuer in issuers
+    )
     # After the bind, not before: a bound identity is never re-queued (the
     # server checks the on-disk map first), so this cannot race a sign-in.
+    # Identity map first, then onboarding, as everywhere else.
     pending_problem: str | None = None
     try:
-        if OAuthOnboardingStore(onboarding_path_for(identity_path)).discard_pending(
-            issuer, subject
-        ):
-            binding_status += " Removed it from the pending approval queue."
+        store = OAuthOnboardingStore(onboarding_path_for(identity_path))
+        removed = [store.discard_pending(key_issuer, subject) for key_issuer in issuers]
+        if any(removed):
+            binding_status += "\nRemoved it from the pending approval queue."
     except OAuthOnboardingError as exc:
         pending_problem = (
             "The binding was written, but the identity is still listed as pending "
@@ -5133,8 +5194,20 @@ def tenant_oauth_approve_cmd(
         "--service-user",
         help="OS account that owns OAuth state and tenant workspaces.",
     ),
+    oauth_config: Path | None = typer.Option(None, "--oauth-config", help=_OAUTH_CONFIG_HELP),
+    oauth_web_config: Path | None = typer.Option(
+        None, "--oauth-web-config", help=_OAUTH_WEB_CONFIG_HELP
+    ),
 ) -> None:
-    """Approve one verified pending identity into its reserved tenant."""
+    """Approve one verified pending identity into its reserved tenant.
+
+    The subject is bound under --issuer and under every other issuer the
+    shared service trusts, read from the service's own OAuth env files
+    (this command runs as root, whose environment does not load them), so
+    the person is let in on both the browser and the connector. Refused,
+    with nothing created, if those files cannot be read, --issuer is not one
+    of them, or the other surface already belongs to a different tenant.
+    """
     configure_logging()
     from wingman.infrastructure.oauth_onboarding import (
         OAuthOnboardingError,
@@ -5144,6 +5217,7 @@ def tenant_oauth_approve_cmd(
     from wingman.infrastructure.tenants import tenant_registry_path
 
     registry_path = (registry or tenant_registry_path()).expanduser()
+    issuers = _issuers_for_binding_or_exit(issuer, oauth_config, oauth_web_config)
     try:
         data_dir = approve_pending_tenant(
             identity_path=identities.expanduser(),
@@ -5153,6 +5227,7 @@ def tenant_oauth_approve_cmd(
             issuer=issuer,
             subject=subject,
             service_user=service_user,
+            trusted_issuers=issuers,
         )
     except OAuthOnboardingError as exc:
         typer.echo(str(exc), err=True)
@@ -5167,6 +5242,7 @@ def tenant_oauth_approve_cmd(
         )
         raise typer.Exit(code=1) from exc
     typer.echo(f"Approved {slug!r}: isolated workspace {data_dir}; privileged=false; funded=false.")
+    typer.echo("Bound under: " + ", ".join(issuers))
     if signaled_pid is not None:
         typer.echo(
             f"Signaled the running shared service (pid {signaled_pid}) to reload. "
