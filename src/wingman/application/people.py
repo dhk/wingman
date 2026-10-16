@@ -109,7 +109,8 @@ def _resolve_writing_feed(
 
 # The watchlist `people add` enrolls into (#624). Completeness measures the
 # follow set — members of any watchlist — so adding someone by hand is
-# following them, and `watchlist remove` is how to stop.
+# following them. Unfollowing means removing them from every list they are
+# on (`company_follow` also enrolls people on `overnight`).
 FOLLOWING_LIST = "following"
 
 

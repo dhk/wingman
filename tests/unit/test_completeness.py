@@ -515,3 +515,49 @@ def test_setup_guide_still_counts_everyone_as_tracked(workspace: Path) -> None:
         report = compute_completeness(storage, config)
 
     assert "3 people tracked" in _finished_steps(report)
+
+
+def test_pov_action_counts_followed_people_whose_employer_is_not_followed(
+    workspace: Path,
+) -> None:
+    """#625 review: company rows exist only for followed companies, so summing
+    missing POV cards over rows dropped every followed person at an unfollowed
+    employer (and anyone with no company). Count over followed people."""
+    from wingman.domain.pov import PovCard
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _settled(storage)
+        _followed(storage, "Ann", company="Unfollowed Co")
+        _followed(storage, "Bo")
+        carded = _followed(storage, "Cy", company="Unfollowed Co")
+        storage.save_pov_card(
+            PovCard(
+                person_id=carded.person_id,
+                person_name=carded.name,
+                documents_used=0,
+                provider="test",
+                model="test",
+                prompt_version="test",
+            )
+        )
+        report = compute_completeness(storage, config)
+
+    assert report.companies == []
+    assert {p.name: p.has_pov_card for p in report.people} == {
+        "Ann": False,
+        "Bo": False,
+        "Cy": True,
+    }
+    titles = [action.title for action in next_actions(report)]
+    assert "Build POV cards for 2 watched people" in titles
+
+
+def test_an_empty_workspace_says_how_to_follow_someone(workspace: Path) -> None:
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        report = compute_completeness(storage, config)
+    markdown = render_completeness_markdown(report)
+    html = render_completeness_html(report)
+    assert "None yet — people add, or watchlist add, follows someone." in markdown
+    assert "None yet — people add, or watchlist add, follows someone." in html

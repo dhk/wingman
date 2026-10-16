@@ -15,6 +15,7 @@ from wingman.application.completeness import CompletenessReport, PersonCompleten
 from wingman.reporting.completeness import (
     BLOCKED_SECTIONS,
     MAX_PEOPLE_LISTED,
+    NO_FOLLOWED_PEOPLE,
     companies_listed,
     people_heading,
     unfollowed_people_line,
@@ -151,7 +152,7 @@ def render_completeness_html(report: CompletenessReport) -> str:
             body.append(f"<li>…and {len(ordered) - MAX_PEOPLE_LISTED} more</li>")
         body.append("</ul>")
     else:
-        body.append('<p class="dim">None yet.</p>')
+        body.append(f'<p class="dim">{_e(NO_FOLLOWED_PEOPLE)}</p>')
     if report.unfollowed_people:
         body.append(f'<p class="dim">{_e(unfollowed_people_line(report.unfollowed_people))}</p>')
     body.append(
@@ -162,7 +163,7 @@ def render_completeness_html(report: CompletenessReport) -> str:
         shown, more = companies_listed(report)
         for company in shown:
             body.append(f"<h3>{_e(company.name)}</h3>")
-            body.append(_meter("People watched", company.people_watched))
+            body.append(_meter("People followed", company.people_watched))
             body.append(_meter("Documents", company.documents))
             body.append(
                 _meter(

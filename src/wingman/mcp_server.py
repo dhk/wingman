@@ -459,7 +459,9 @@ def completeness(as_html: bool = False) -> str:
 
     People and Companies cover what the user FOLLOWS: people and companies
     on any watchlist. people_add enrolls a person on the 'following' list;
-    company_follow enrolls a company; watchlist(action='remove') unfollows.
+    company_follow enrolls a company. To unfollow, remove the member from
+    every list it is on (watchlist(action='list'), then 'show' each; names
+    match exactly as stored).
     Everyone else (LinkedIn imports, people nobody followed) is one count
     ("N other people you are not following") and never a gap, so a large
     import cannot bury 'Things to do'. Do not tell the user to build POV
@@ -3083,7 +3085,8 @@ def people_add(
     use feed_attach with kind="index_page" for the approved blog index instead.
 
     Following means the person is on the 'following' watchlist, which is what
-    completeness measures; watchlist(action='remove') unfollows."""
+    completeness measures. To unfollow, remove them from every list they are
+    on (watchlist 'list', then 'show'), not only 'following'."""
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED

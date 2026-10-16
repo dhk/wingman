@@ -58,6 +58,7 @@ class PersonCompleteness(BaseModel):
     company: str | None
     linked: bool  # has a LinkedIn URL or at least one feed source
     log_entries: int
+    has_pov_card: bool = False
 
 
 class CompanyCompleteness(BaseModel):
@@ -428,7 +429,10 @@ def next_actions(report: CompletenessReport) -> list[NextAction]:
                 how="paste a recommendation, or import your LinkedIn export",
             )
         )
-    missing_pov = sum(company.missing_pov_cards for company in report.companies)
+    # Counted over followed people, not company rows: since #624 a company row
+    # exists only for a followed company, so summing rows would drop everyone
+    # whose employer nobody followed (and anyone with no company at all).
+    missing_pov = sum(1 for person in report.people if not person.has_pov_card)
     if missing_pov:
         actions.append(
             NextAction(
@@ -543,6 +547,7 @@ def _split_people(storage: Storage) -> tuple[list[Person], int, Counter[str]]:
 
 def _people_completeness(storage: Storage) -> tuple[list[PersonCompleteness], int]:
     people, unfollowed, log_counts = _split_people(storage)
+    pov_person_ids = {card.person_id for card in storage.list_pov_cards()}
     return (
         [
             PersonCompleteness(
@@ -550,6 +555,7 @@ def _people_completeness(storage: Storage) -> tuple[list[PersonCompleteness], in
                 company=person.company,
                 linked=bool(person.linkedin_url) or bool(person.sources),
                 log_entries=log_counts[person.person_id],
+                has_pov_card=person.person_id in pov_person_ids,
             )
             for person in people
         ],

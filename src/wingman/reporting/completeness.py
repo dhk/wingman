@@ -56,6 +56,11 @@ def companies_listed(report: CompletenessReport) -> tuple[list[CompanyCompletene
     return ordered[:MAX_COMPANIES_LISTED], max(0, len(ordered) - MAX_COMPANIES_LISTED)
 
 
+# What an empty People section says, so a workspace that follows nobody yet
+# learns how to start (a new tenant with no import sees no unfollowed line).
+NO_FOLLOWED_PEOPLE = "None yet — people add, or watchlist add, follows someone."
+
+
 def unfollowed_people_line(count: int) -> str:
     """The one line that makes everyone else visible without making them a gap.
     Shared by the Markdown and HTML renderers so they cannot drift."""
@@ -127,7 +132,7 @@ def render_completeness_markdown(report: CompletenessReport) -> str:
         if len(ordered) > MAX_PEOPLE_LISTED:
             lines.append(f"- …and {len(ordered) - MAX_PEOPLE_LISTED} more")
     else:
-        lines.append("_None yet._")
+        lines.append(f"_{NO_FOLLOWED_PEOPLE}_")
     if report.unfollowed_people:
         lines.extend(["", f"_{unfollowed_people_line(report.unfollowed_people)}_"])
     lines.extend(["", "## Interview", ""])
@@ -156,7 +161,7 @@ def render_completeness_markdown(report: CompletenessReport) -> str:
         shown, more = companies_listed(report)
         for company in shown:
             lines.append(
-                f"- {company.name} — {company.people_watched} people watched, "
+                f"- {company.name} — {company.people_watched} people followed, "
                 f"{company.documents} documents, {company.pov_cards} POV cards "
                 f"({company.missing_pov_cards} missing)"
             )
