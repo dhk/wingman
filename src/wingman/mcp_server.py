@@ -96,6 +96,12 @@ from wingman.application.focus import (
 )
 from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
+from wingman.application.model_usage import (
+    UsageReadError,
+    funded_ranking,
+    render_tenant_usage,
+    render_workspace_usage,
+)
 from wingman.application.opportunities import list_opportunity_summaries, render_opportunity_listing
 from wingman.application.outreach import build_outreach_brief, render_outreach_brief
 from wingman.application.pack import build_application_pack
@@ -380,6 +386,66 @@ def status() -> str:
             "Keys takes effect at once; otherwise ask whoever runs this Wingman."
         )
     return "\n".join(lines)
+
+
+@server.tool()
+def usage(limit: int = 100) -> str:
+    """Successful model calls for this workspace, with read-time cost estimates.
+
+    The ledger contains units and provenance only, never prompts or responses.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        return render_workspace_usage(config, max(1, limit))
+    except UsageReadError as exc:
+        return str(exc)
+
+
+@server.tool()
+def usage_all_tenants(limit_per_tenant: int = 100) -> str:
+    """Operator-only model usage rollup across registered workspaces."""
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    refusal = operator_only_refusal(config, "usage_all_tenants")
+    if refusal:
+        return refusal
+    from wingman.infrastructure.tenants import (
+        TenantRegistryError,
+        TenantRegistryUnreadable,
+        load_registry,
+        tenant_registry_path,
+    )
+
+    registry_path = tenant_registry_path()
+    try:
+        tenants = load_registry(registry_path)
+    except TenantRegistryUnreadable as exc:
+        return f"Could not read the tenant registry ({registry_path}): {exc}. No tenant workspaces were read or changed. Fix permissions and retry."
+    except TenantRegistryError as exc:
+        return (
+            f"Malformed tenant registry ({registry_path}): {exc}. "
+            "No tenant workspaces were read or changed. Repair the registry contents or "
+            "permissions, then try again."
+        )
+    if not tenants:
+        try:
+            state = "empty" if registry_path.is_file() else "file absent"
+        except OSError as exc:
+            from wingman.infrastructure.broadcast import permission_problem
+
+            return (
+                permission_problem(registry_path)
+                or f"Registry status could not be checked at {registry_path}: {exc}. No tenant workspaces were read or changed."
+            )
+        return f"All-tenant model usage: no tenants are registered in {registry_path} ({state})."
+    reports: list[str] = [funded_ranking(tenants, max(1, limit_per_tenant))]
+    for tenant in tenants:
+        report, _failed = render_tenant_usage(tenant, max(1, limit_per_tenant))
+        reports.append(report)
+    return "\n\n".join(reports)
 
 
 @server.tool()

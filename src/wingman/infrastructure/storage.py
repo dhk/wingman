@@ -21,6 +21,7 @@ from wingman.domain.corpus import CorpusDocument
 from wingman.domain.delivered_message import DeliveredMessage
 from wingman.domain.examples import Example
 from wingman.domain.heap import HeapItem
+from wingman.domain.model_usage import ModelUsage
 from wingman.domain.operator_answer import OperatorAnswer
 from wingman.domain.opportunity import Opportunity
 from wingman.domain.outreach import OutreachBrief
@@ -32,8 +33,15 @@ from wingman.domain.relationship import RelationshipLogEntry, RelationshipObject
 from wingman.domain.research import CompanySource, NewLinkEvent, ResearchSnapshot
 from wingman.domain.source_record import derive_document_key
 from wingman.domain.values import ValueProfile, ValueView
+from wingman.infrastructure.usage_ledger import (
+    MODEL_USAGE_INDEX_SQL,
+    MODEL_USAGE_SCHEMA,
+    MODEL_USAGE_TABLE_SQL,
+    flush_pending_usage,
+)
 
-_SCHEMA = """
+_SCHEMA = (
+    """
 CREATE TABLE IF NOT EXISTS source_records (
     record_id TEXT PRIMARY KEY,
     source_type TEXT NOT NULL,
@@ -282,6 +290,8 @@ CREATE TABLE IF NOT EXISTS delivered_messages (
     delivered_at TEXT NOT NULL
 );
 """
+    + MODEL_USAGE_SCHEMA
+)
 
 
 class DuplicateRecordError(Exception):
@@ -296,12 +306,44 @@ class Storage:
     """Persistence for Wingman records. Source records are insert-only, never updated."""
 
     def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path
         self._conn = sqlite3.connect(db_path)
+        self._migrate_model_usage_payers()
         self._conn.executescript(_SCHEMA)
         self._migrate_document_key()
         self._migrate_value_profile_view()
         self._migrate_about_retention()
         self._conn.commit()
+
+    def _migrate_model_usage_payers(self) -> None:
+        """Ledgers created earlier on the #557 branch reject the 'offline' payer.
+
+        That CHECK never shipped, so only a development database can carry
+        it. SQLite cannot alter a CHECK, so the table is rebuilt and copied
+        (the same recipe as '_migrate_value_profile_view'); rows are kept
+        byte-for-byte. A ledger with no CHECK at all already accepts
+        'offline' and is left alone.
+        """
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='model_usage'"
+        ).fetchone()
+        if row is None or "CHECK" not in row[0] or "'offline'" in row[0]:
+            return
+        columns = (
+            "usage_id, recorded_at, capability, provider, model, payer, input_tokens, "
+            "output_tokens, cache_read_tokens, cache_write_tokens, search_result_count, "
+            "latency_ms, caller_name"
+        )
+        self._conn.executescript(
+            "BEGIN;\n"
+            "ALTER TABLE model_usage RENAME TO model_usage_pre_offline;\n"
+            "DROP INDEX IF EXISTS idx_model_usage_recorded_at;\n"
+            f"{MODEL_USAGE_TABLE_SQL};\n"
+            f"INSERT INTO model_usage ({columns}) SELECT {columns} FROM model_usage_pre_offline;\n"
+            "DROP TABLE model_usage_pre_offline;\n"
+            f"{MODEL_USAGE_INDEX_SQL};\n"
+            "COMMIT;\n"
+        )
 
     def _migrate_about_retention(self) -> None:
         """Enable existing about sources once (#463), preserving future opt-outs.
@@ -408,6 +450,13 @@ class Storage:
 
     def close(self) -> None:
         self._conn.close()
+        # This connection may have been the lock that deferred a usage row
+        # (an uncommitted write while a model call returned). It is gone
+        # now, so write those rows rather than leaving them to exit.
+        try:
+            flush_pending_usage(self._db_path)
+        except Exception:  # noqa: BLE001, S110 — accounting never breaks a close
+            pass
 
     def add_source_record(self, record: SourceRecord) -> None:
         try:
@@ -1964,6 +2013,56 @@ class Storage:
             (limit,),
         )
         return [DeliveredMessage.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def add_model_usage(self, usage: ModelUsage) -> None:
+        self._conn.execute(
+            "INSERT INTO model_usage (usage_id, recorded_at, capability, provider, model, payer, "
+            "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
+            "search_result_count, latency_ms, caller_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                usage.usage_id,
+                usage.recorded_at.isoformat(),
+                usage.capability,
+                usage.provider,
+                usage.model,
+                usage.payer.value,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_tokens,
+                usage.cache_write_tokens,
+                usage.search_result_count,
+                usage.latency_ms,
+                usage.caller_name,
+            ),
+        )
+        self._conn.commit()
+
+    def list_model_usage(self, limit: int = 1000) -> list[ModelUsage]:
+        cursor = self._conn.execute(
+            "SELECT usage_id, recorded_at, capability, provider, model, payer, input_tokens, "
+            "output_tokens, cache_read_tokens, cache_write_tokens, search_result_count, "
+            "latency_ms, caller_name FROM model_usage "
+            "ORDER BY recorded_at DESC, rowid DESC LIMIT ?",
+            (limit,),
+        )
+        return [
+            ModelUsage(
+                usage_id=row[0],
+                recorded_at=datetime.fromisoformat(row[1]),
+                capability=row[2],
+                provider=row[3],
+                model=row[4],
+                payer=row[5],
+                input_tokens=row[6],
+                output_tokens=row[7],
+                cache_read_tokens=row[8],
+                cache_write_tokens=row[9],
+                search_result_count=row[10],
+                latency_ms=row[11],
+                caller_name=row[12],
+            )
+            for row in cursor.fetchall()
+        ]
 
     def count_commentary_entries(self) -> int:
         cursor = self._conn.execute("SELECT COUNT(*) FROM commentary_entries")

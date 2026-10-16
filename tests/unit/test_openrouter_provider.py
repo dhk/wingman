@@ -98,6 +98,7 @@ def test_complete_deduplicates_repeated_citation_urls(monkeypatch: pytest.Monkey
     provider = OpenRouterProvider(model="m", api_key="sk-or-test")
     response = provider.complete(_REQUEST)
     assert response.text.count("https://a.example.com") == 1
+    assert response.search_result_count == 1
 
 
 def test_complete_with_no_annotations_has_no_sources_section(
@@ -109,6 +110,7 @@ def test_complete_with_no_annotations_has_no_sources_section(
     response = provider.complete(_REQUEST)
     assert response.text == "plain text, nothing found"
     assert "Sources:" not in response.text
+    assert response.search_result_count == 0
 
 
 def test_no_key_raises_provider_error(monkeypatch: pytest.MonkeyPatch) -> None:

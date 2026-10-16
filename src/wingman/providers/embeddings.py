@@ -21,7 +21,8 @@ import os
 import re
 import urllib.error
 import urllib.request
-from typing import Literal, Protocol
+from dataclasses import dataclass
+from typing import Literal, Protocol, runtime_checkable
 
 _VOYAGE_ENDPOINT = "https://api.voyageai.com/v1/embeddings"
 _VOYAGE_ENV_KEY = "VOYAGE_API_KEY"
@@ -58,6 +59,19 @@ def _normalize(vector: list[float]) -> list[float]:
     return [value / norm for value in vector]
 
 
+@dataclass(frozen=True)
+class EmbeddingResult:
+    vectors: list[list[float]]
+    input_tokens: int | None
+
+
+@runtime_checkable
+class EmbeddingUsageProvider(Protocol):
+    """Optional per-call accounting result, without mutable last-response state."""
+
+    def embed_with_usage(self, texts: list[str], input_type: InputType) -> EmbeddingResult: ...
+
+
 class VoyageEmbeddingProvider:
     """Voyage AI embeddings over plain HTTPS (no SDK dependency).
 
@@ -78,6 +92,9 @@ class VoyageEmbeddingProvider:
         self._strict = strict
 
     def embed(self, texts: list[str], input_type: InputType) -> list[list[float]]:
+        return self.embed_with_usage(texts, input_type).vectors
+
+    def embed_with_usage(self, texts: list[str], input_type: InputType) -> EmbeddingResult:
         if self._strict:
             api_key = self._api_key or ""
             if not api_key:
@@ -125,7 +142,14 @@ class VoyageEmbeddingProvider:
             raise EmbeddingError(
                 f"Voyage API returned {len(vectors)} embeddings for {len(texts)} texts"
             )
-        return vectors
+        usage = body.get("usage", {})
+        tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
+        count = (
+            tokens
+            if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0
+            else None
+        )
+        return EmbeddingResult(vectors, count)
 
 
 class HashedEmbeddingProvider:
@@ -138,6 +162,8 @@ class HashedEmbeddingProvider:
     """
 
     provider_name = "hashed"
+    # Never reaches a metered API: usage is recorded as offline, no cost (#557).
+    offline = True
 
     def __init__(self, model: str = "hashed-256", dim: int = 256) -> None:
         self.model = model

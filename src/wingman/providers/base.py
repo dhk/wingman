@@ -33,6 +33,9 @@ class ModelResponse(BaseModel):
     model: str
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    search_result_count: int | None = None
     # The API's own reason generation stopped ("stop", "length",
     # "content_filter", ...) when the provider reports one — an
     # authoritative truncation signal (#261), not something callers should
@@ -47,4 +50,13 @@ class ProviderError(Exception):
 
 
 class ModelProvider(Protocol):
+    """A model backend.
+
+    Offline backends (recorded, fake, any provider that never reaches a
+    metered API) declare a class attribute 'offline = True'. Usage
+    accounting reads that property, never the provider's name, to record
+    their calls as zero-cost offline rows (#557, option b). Absent means
+    billable.
+    """
+
     def complete(self, request: ModelRequest) -> ModelResponse: ...

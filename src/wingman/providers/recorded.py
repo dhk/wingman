@@ -10,6 +10,9 @@ from wingman.providers.base import ModelRequest, ModelResponse, ProviderError
 class RecordedProvider:
     """Returns a fixed response text instead of calling a live model."""
 
+    # Never reaches a metered API: usage is recorded as offline, no cost (#557).
+    offline = True
+
     def __init__(self, text: str, model: str = "recorded") -> None:
         self._text = text
         self._model = model

@@ -3,10 +3,18 @@
 A shared multi-tenant process (RFC-048) serves several people from one
 OS process, and every MCP tool it exposes is reachable by every tenant
 holding a valid capability token. Most tools only ever touch the caller's
-own workspace, so that is exactly right. A few do not:
+own workspace, so that is exactly right. A few do not. The gated tools
+today are:
 
 - 'coach_persona' acts on somebody else's behalf;
 - 'carve_off_persona' writes a profile into another workspace;
+- 'usage_all_tenants' (MCP) and 'wingman usage --all-tenants' (CLI) read
+  every registered tenant's model-usage ledger (RFC-084, #554;
+  operator-gated, owner-approved 2026-10-16) — read-only accounting,
+  never tenant administration.
+
+Not yet gated because it does not exist yet:
+
 - a future 'motd'/'qotd' write surface would put a line at the top of
   every other tenant's next actions (RFC-065/RFC-067), outranking every
   computed one by design.

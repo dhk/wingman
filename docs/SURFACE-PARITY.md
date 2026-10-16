@@ -183,6 +183,7 @@ counterpart. Both filing surfaces require the reviewed content hash.
 | cli | `tenant urls` | `tenant_urls` |  |
 | cli | `tenant validate` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
 | cli | `today` | `changelog` |  |
+| cli | `usage` | `usage`, `usage_all_tenants` | Own-workspace read; --all-tenants is privileged read-only accounting (RFC-084). |
 | cli | `values` | `my_values` |  |
 | cli | `values-chart` | `values_chart` |  |
 | cli | `watchlist add` | `watchlist` |  |
@@ -277,6 +278,8 @@ counterpart. Both filing surfaces require the reviewed content hash.
 | mcp | `telemetry` | `telemetry show`, `telemetry status`, `telemetry summary` |  |
 | mcp | `tenant_url` | `tenant url` |  |
 | mcp | `tenant_urls` | `tenant urls` |  |
+| mcp | `usage` | `usage` | Tenant-scoped accounting read. |
+| mcp | `usage_all_tenants` | `usage` | Cross-tenant read-only accounting: operator-gated, owner-approved (2026-10-16); refused via operator_only_refusal for ordinary tenants, never tenant administration (RFC-068/RFC-084). |
 | mcp | `values_chart` | `values-chart` |  |
 | mcp | `watchlist` | `watchlist add`, `watchlist list`, `watchlist remove`, `watchlist run`, `watchlist show` |  |
 | mcp | `wingman_demo` | `demo` |  |

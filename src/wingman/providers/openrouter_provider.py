@@ -151,6 +151,14 @@ class OpenRouterProvider:
             model=str(body.get("model", self._model)),
             input_tokens=usage.get("prompt_tokens"),
             output_tokens=usage.get("completion_tokens"),
+            search_result_count=len(
+                {
+                    annotation.get("url_citation", {}).get("url")
+                    for annotation in annotations
+                    if annotation.get("type") == "url_citation"
+                    and annotation.get("url_citation", {}).get("url")
+                }
+            ),
             # "length" means the response was cut off by max_tokens, not
             # that the model finished — the authoritative truncation signal
             # (#261), found missing live when a real dossier response

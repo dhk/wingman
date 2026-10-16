@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +33,27 @@ def test_anthropic_provider_uses_explicit_api_key_over_env(monkeypatch: pytest.M
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
     provider = AnthropicProvider("claude-x", api_key="sk-ant-explicit")
     assert provider._client.api_key == "sk-ant-explicit"
+
+
+def test_anthropic_provider_maps_cache_token_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = AnthropicProvider("claude-x", api_key="sk-ant-explicit")
+    response = SimpleNamespace(
+        stop_reason="end_turn",
+        content=[SimpleNamespace(type="text", text="ok")],
+        model="claude-x",
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=5,
+            cache_read_input_tokens=7,
+            cache_creation_input_tokens=3,
+        ),
+    )
+    monkeypatch.setattr(provider._client.messages, "create", lambda **_kwargs: response)
+
+    result = provider.complete(ModelRequest(system="s", prompt="p"))
+
+    assert result.cache_read_tokens == 7
+    assert result.cache_write_tokens == 3
 
 
 def test_router_passes_explicit_config_key_to_anthropic_provider(tmp_path: Path) -> None:

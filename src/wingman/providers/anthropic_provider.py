@@ -123,6 +123,8 @@ class AnthropicProvider:
             model=response.model,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
+            cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", None),
+            cache_write_tokens=getattr(response.usage, "cache_creation_input_tokens", None),
             latency_ms=int((perf_counter() - start) * 1000),
         )
 

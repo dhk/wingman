@@ -1616,3 +1616,36 @@ Done fingerprints use the stable action key and evidence, with Markdown link tit
 **Why the models only propose.** This applies invariant 5. Every reviewer's answer passes one validator into one schema, and deterministic steps decide the rest: a failing check is blocking regardless of the verdict, only blocking findings reach the repair prompt, a patch touching `.github/`, `.agent-loop/`, agent instructions or agent startup config, or exceeding the line cap, is refused, and the terminal label is computed from job outputs. Authors run without a write credential, and a separate runner applies their patch.
 
 **Open until a run proves it.** How the Copilot CLI fails when the allowance is exhausted (the fall-through handles either a non-zero exit or an error message, but neither is documented). Whether `uv run --offline --frozen` works inside Codex's no-network sandbox. Codex has no documented turn or spend cap. The PAT makes the owner the PR author, so the merge is the human gate. Promote this to a durable decision, or remove it, after the pilot.
+
+## RFC-084: Raw model units are durable; prices are a read-time interpretation (#554) — Durable decision
+
+**Decision.** Every provider returned by the capability router is wrapped at one boundary that records exactly one content-free row after a successful call in the current workspace database. The row keeps provider, model, capability, payer provenance, raw token/cache/search units and latency (caller_name is reserved and currently unset by router call sites) — never prompts, responses, arguments, or retrieved text. Provider failure writes nothing; ledger failure is logged but cannot alter a successful result. Credential resolution now returns the key and its payer together, before the secret is discarded: workspace keys are `byok`, a strict explicitly funded fallback is `funded`, and the solo-process historical ladder is `ambient`.
+
+Prices live alongside each capability in `models.toml` and are applied only by readers. A call lacking any price required for the units it used is `unpriced`, not zero. This preserves historical measurements when prices change and avoids inventing old provider prices. Tenant-local reports are ordinary tools; registry-wide reports are operator-only. Budget warnings and enforcement remain a later phase built on this ledger.
+
+**Alternatives.** Recording at every application call site was rejected because retries and new callers would create gaps or duplicates. Storing calculated dollars was rejected because prices change and raw units are the auditable fact. Provider billing APIs were rejected as the primary ledger because they lose Wingman's tenant and capability provenance and may arrive late. Recording content for debugging was rejected because accounting does not require private career data.
+
+**Revisit if.** A provider exposes materially different billable units, a retry occurs below rather than above the wrapper and needs attempt-level accounting, or budget enforcement needs transactional reservations rather than post-success observations.
+
+
+**RFC-084 implementation boundaries.** Reporting opens databases with SQLite mode=ro,
+never workspace migrations; older workspaces with no ledger report that fact.
+Recording uses a ledger-only connection with a 250 ms lock timeout. Accounting
+is best-effort and reports are a lower bound if writes fail; RFC-080 budget
+warnings/enforcement remain deferred until omissions can be reliably accounted
+for. Reports show daily raw units, unknown counters with known subtotals, explicit
+newest-N truncation, and known funded-spend ranking. Offline calls (owner decision
+2026-10-16, option b) are classified by the provider's own `offline = True`
+property, stamped `payer = offline`, shown on one separate "no cost (offline)"
+line with no payer, never unpriced, and excluded from the billable header count,
+the newest-N window, billable totals and funded rankings. A lock-deferred row is
+queued in memory and retried rather than dropped; only rows still unwritable at
+exit (logged) or lost to a crash are omitted. Voyage response usage.total_tokens is captured per call,
+without mutable shared last-response state. Prices match exact provider/model
+identifiers or an operator-declared pricing_models list; no alias guessing.
+
+**RFC-068 addendum (RFC-084; Durable decision).** usage_all_tenants is an explicit
+privileged (operator-gated, owner-approved 2026-10-16) read-only accounting exception to local-only cross-tenant administration.
+It checks operator_only_refusal before registry or workspace access, reads no
+prompts, credentials or responses, and cannot migrate or modify another tenant's
+DB. The same CLI --all-tenants gate applies. This grants no provisioning authority.
