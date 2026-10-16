@@ -45,7 +45,8 @@ def _record(config: Config, usage: ModelUsage) -> None:
             )
     except Exception:  # noqa: BLE001 — accounting must never alter the paid call's result
         _logger.exception(
-            "model usage recording failed provider=%s model=%s capability=%s; call result preserved",
+            "model usage recording failed provider=%s model=%s capability=%s; the row is kept "
+            "in memory for a later retry; call result preserved",
             usage.provider,
             usage.model,
             usage.capability,

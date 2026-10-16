@@ -406,3 +406,96 @@ def test_own_workspace_usage_on_corrupt_or_locked_db_is_a_clean_error(
     assert locked.exit_code == 1
     assert not isinstance(locked.exception, sqlite3.Error)
     assert "could not be read" in locked.output
+
+
+# --- Codex review of 9a6e2da: queue lock held across I/O; batches lost --------
+
+
+@pytest.fixture
+def _clean_queue() -> object:
+    usage_ledger._pending.clear()
+    yield None
+    usage_ledger._pending.clear()
+
+
+def _locked_ledger(tmp_path: Path, name: str) -> tuple[Path, sqlite3.Connection]:
+    config = _config(tmp_path / name)
+    config.data_dir.mkdir(parents=True)
+    with Storage(config.db_path):
+        pass
+    lock = sqlite3.connect(config.db_path)
+    lock.execute("BEGIN IMMEDIATE")
+    return config.db_path, lock
+
+
+def _timed_concurrent_records(paths: list[Path]) -> list[float]:
+    import threading
+    import time
+
+    barrier = threading.Barrier(len(paths))
+    elapsed = [0.0] * len(paths)
+
+    def run(index: int, path: Path) -> None:
+        barrier.wait()
+        started = time.monotonic()
+        usage_ledger.record_usage(path, _row(index))
+        elapsed[index] = time.monotonic() - started
+
+    threads = [threading.Thread(target=run, args=pair) for pair in enumerate(paths)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return elapsed
+
+
+@pytest.mark.usefixtures("_clean_queue")
+def test_locked_ledgers_of_different_tenants_do_not_queue_behind_each_other(
+    tmp_path: Path,
+) -> None:
+    """Each call waits at most its own ledger's timeout, never other tenants'."""
+    ledgers = [_locked_ledger(tmp_path, f"tenant-{n}") for n in range(8)]
+    try:
+        elapsed = _timed_concurrent_records([path for path, _ in ledgers])
+    finally:
+        for _, lock in ledgers:
+            lock.rollback()
+            lock.close()
+    # Serialised behind one process-wide lock this took 8 x 0.25 s (~2 s).
+    assert max(elapsed) < 1.0, elapsed
+    assert usage_ledger.flush_pending_usage() == 0
+
+
+@pytest.mark.usefixtures("_clean_queue")
+def test_concurrent_calls_on_one_locked_ledger_enqueue_without_serial_retries(
+    tmp_path: Path,
+) -> None:
+    path, lock = _locked_ledger(tmp_path, "tenant")
+    try:
+        elapsed = _timed_concurrent_records([path] * 8)
+    finally:
+        lock.rollback()
+        lock.close()
+    assert max(elapsed) < 1.0, elapsed
+    assert usage_ledger.flush_pending_usage() == 0
+    with Storage(path) as storage:
+        assert len(storage.list_model_usage()) == 8
+
+
+@pytest.mark.usefixtures("_clean_queue")
+def test_a_non_lock_failure_keeps_every_deferred_row_for_a_later_flush(
+    tmp_path: Path,
+) -> None:
+    path, lock = _locked_ledger(tmp_path, "tenant")
+    assert usage_ledger.record_usage(path, _row(2)) is False  # deferred by the lock
+    lock.rollback()
+    lock.close()
+    good = path.read_bytes()
+    path.write_bytes(b"this is not a sqlite database" * 64)
+    with pytest.raises(sqlite3.DatabaseError):
+        usage_ledger.record_usage(path, _row(1))
+    assert len(usage_ledger._pending[path.resolve()]) == 2  # neither row discarded
+    path.write_bytes(good)
+    assert usage_ledger.flush_pending_usage(path) == 0
+    with Storage(path) as storage:
+        assert len(storage.list_model_usage()) == 2

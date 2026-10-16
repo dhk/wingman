@@ -48,7 +48,13 @@ _logger = get_logger("model_usage")
 # the row waits here instead and is written by the next recording, when a
 # Storage closes, or at interpreter exit. A crash still loses pending rows,
 # which is why reports call their totals a lower bound.
+#
+# `_pending_lock` guards only the two dicts below and is never held across
+# database I/O: one tenant's locked ledger must not delay another tenant's
+# paid call. At most one thread writes a given ledger at a time (`_in_flight`);
+# others append to its queue and return, and the writer drains what arrived.
 _pending: dict[Path, list[ModelUsage]] = {}
+_in_flight: set[Path] = set()
 _pending_lock = threading.Lock()
 
 
@@ -71,32 +77,64 @@ def _insert(path: Path, rows: list[ModelUsage], timeout: float) -> None:
             )
 
 
+def _cap_locked(key: Path) -> None:
+    """Bound one ledger's queue, oldest rows first; caller holds `_pending_lock`."""
+    queue = _pending.get(key, [])
+    dropped = len(queue) - MAX_PENDING_ROWS
+    if dropped > 0:
+        _logger.error(
+            "model usage: %d deferred row(s) dropped (queue full); totals are a lower bound",
+            dropped,
+        )
+        _pending[key] = queue[dropped:]
+
+
+def _drain(key: Path, timeout: float) -> None:
+    """Write `key`'s queue until it is empty; the caller owns `key` in `_in_flight`.
+
+    Any failure puts the unwritten batch back ahead of rows queued meanwhile,
+    releases ownership, and re-raises, so no deferred row is ever discarded
+    by a failed retry.
+    """
+    while True:
+        with _pending_lock:
+            batch = _pending.pop(key, [])
+            if not batch:
+                _in_flight.discard(key)
+                return
+        try:
+            _insert(key, batch, timeout)
+        except BaseException:
+            with _pending_lock:
+                _pending[key] = [*batch, *_pending.get(key, [])]
+                _cap_locked(key)
+                _in_flight.discard(key)
+            raise
+
+
 def record_usage(path: Path, usage: ModelUsage) -> bool:
     """Write one row (plus any earlier deferred rows for this ledger).
 
     Initializes only the ledger, never runs general workspace migrations.
     Returns False when the write was deferred because the database was
-    locked; other failures raise and the caller logs them.
+    locked. Other failures raise and the caller logs them; the row stays
+    queued for a later retry either way. When another thread is already
+    writing this ledger, the row joins its queue and is written by that
+    thread (True: nothing went wrong here).
     """
     key = path.resolve()
     with _pending_lock:
-        batch = [*_pending.pop(key, []), usage]
-        try:
-            _insert(path, batch, WRITE_TIMEOUT_SECONDS)
-        except sqlite3.OperationalError as exc:
-            if not _is_lock_error(exc):
-                if batch[:-1]:
-                    _pending[key] = batch[:-1]
-                raise
-            dropped = len(batch) - MAX_PENDING_ROWS
-            if dropped > 0:
-                _logger.error(
-                    "model usage: %d deferred row(s) dropped (queue full); totals are a lower bound",
-                    dropped,
-                )
-                batch = batch[dropped:]
-            _pending[key] = batch
+        _pending.setdefault(key, []).append(usage)
+        _cap_locked(key)
+        if key in _in_flight:
+            return True
+        _in_flight.add(key)
+    try:
+        _drain(key, WRITE_TIMEOUT_SECONDS)
+    except sqlite3.OperationalError as exc:
+        if _is_lock_error(exc):
             return False
+        raise
     return True
 
 
@@ -104,27 +142,30 @@ def flush_pending_usage(path: Path | None = None, *, at_exit: bool = False) -> i
     """Retry deferred rows; returns how many are still pending afterwards.
 
     At exit, rows that still cannot be written are logged as lost rather
-    than disappearing silently.
+    than disappearing silently. A ledger another thread is writing is left
+    to that thread.
     """
     timeout = EXIT_FLUSH_TIMEOUT_SECONDS if at_exit else WRITE_TIMEOUT_SECONDS
     with _pending_lock:
         keys = [path.resolve()] if path is not None else list(_pending)
-        for key in keys:
-            batch = _pending.pop(key, [])
-            if not batch:
+    for key in keys:
+        with _pending_lock:
+            if key in _in_flight or not _pending.get(key):
                 continue
-            try:
-                _insert(key, batch, timeout)
-            except sqlite3.Error as exc:
-                if at_exit:
-                    _logger.error(
-                        "model usage: %d deferred row(s) lost for %s (%s); totals are a lower bound",
-                        len(batch),
-                        key,
-                        exc,
-                    )
-                else:
-                    _pending[key] = batch
+            _in_flight.add(key)
+        try:
+            _drain(key, timeout)
+        except Exception as exc:  # noqa: BLE001 — a flush must never raise into Storage.close
+            if at_exit:
+                with _pending_lock:
+                    lost = _pending.pop(key, [])
+                _logger.error(
+                    "model usage: %d deferred row(s) lost for %s (%s); totals are a lower bound",
+                    len(lost),
+                    key,
+                    type(exc).__name__,
+                )
+    with _pending_lock:
         return sum(len(batch) for batch in _pending.values())
 
 

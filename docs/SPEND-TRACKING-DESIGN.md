@@ -8,6 +8,10 @@ timeout; they never run general workspace migrations. A write that hits a lock
 (commonly this process's own open transaction or unfinished read when the model
 call returns) is not dropped: the row is kept in memory, logged as deferred, and
 written by the next recording, when a `Storage` closes, or at interpreter exit.
+Only one thread writes a given ledger at a time, and no process-wide lock is held
+while it waits, so one tenant's locked ledger never delays another tenant's call;
+concurrent calls on the same ledger join its queue and return at once. A retry
+that fails for any reason, not only a lock, keeps every queued row.
 Rows still unwritable at exit, or lost to a crash, are logged as lost. A failed
 write can therefore still omit a paid call, so every report warns that totals are
 a lower bound. Failed provider
