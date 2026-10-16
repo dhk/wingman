@@ -66,16 +66,21 @@ def _read_csv(archive: zipfile.ZipFile, basename: str) -> tuple[str, list[dict[s
     return None
 
 
-def _persist_csv_source(
+def _prepare_csv_source(
     raw: str, basename: str, config: Config, storage: Storage
-) -> tuple[SourceRecord, bool]:
+) -> tuple[SourceRecord, Path | None]:
+    """The source record for this CSV, and where to keep its copy if it is new.
+
+    Nothing is written here: an import that fails later must leave no copy and
+    no record behind (#611), so `_keep_csv_source` runs only once every CSV in
+    the export has been read and something importable was found.
+    """
     content_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     existing = storage.get_source_record_by_hash(content_hash)
     if existing is not None:
-        return existing, False
+        return existing, None
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     stored = config.inbox_dir / f"{stamp}-{content_hash[:8]}-{basename}"
-    stored.write_text(raw, encoding="utf-8")
     record = SourceRecord(
         source_type="linkedin_export",
         source_locator=str(stored.relative_to(config.data_dir.resolve()))
@@ -84,8 +89,12 @@ def _persist_csv_source(
         content_hash=content_hash,
         document_key=derive_document_key(basename),
     )
+    return record, stored
+
+
+def _keep_csv_source(record: SourceRecord, stored: Path, raw: str, storage: Storage) -> None:
+    stored.write_text(raw, encoding="utf-8")
     storage.add_source_record(record)
-    return record, True
 
 
 def _item(
@@ -175,15 +184,23 @@ def import_linkedin(export_path: Path, config: Config, storage: Storage) -> Link
     }
     items: list[ProfileItem] = []
     found = {POSITIONS_CSV: 0, SKILLS_CSV: 0, RECOMMENDATIONS_CSV: 0}
-    sources_created = 0
+    new_sources: list[tuple[SourceRecord, Path, str]] = []
     with archive:
         for basename, builder in builders.items():
             loaded = _read_csv(archive, basename)
             if loaded is None:
                 continue
             raw, rows = loaded
-            record, created = _persist_csv_source(raw, basename, config, storage)
-            sources_created += int(created)
+            record, stored = _prepare_csv_source(raw, basename, config, storage)
+            pending = next(
+                (r for r, _, _ in new_sources if r.content_hash == record.content_hash), None
+            )
+            if pending is not None:
+                # Two identical CSVs in one export share one record, as they
+                # would if the first had already been kept.
+                record = pending
+            elif stored is not None:
+                new_sources.append((record, stored, raw))
             built = builder(rows, record)
             found[basename] = len(built)
             items.extend(built)
@@ -192,6 +209,9 @@ def import_linkedin(export_path: Path, config: Config, storage: Storage) -> Link
             "no positions, skills, or recommendations were found in the export. "
             "Nothing was imported; check that this is a LinkedIn data export zip."
         )
+    for record, stored, raw in new_sources:
+        _keep_csv_source(record, stored, raw, storage)
+    sources_created = len(new_sources)
 
     # A newer export supersedes each CSV's own earlier versions (RFC-028):
     # union the lineage of every CSV record this import touched.

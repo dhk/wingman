@@ -12,6 +12,12 @@ the live Typer command tree and registered FastMCP tools, rejects missing/stale
 rows, requires a reason for unmatched rows, and checks reciprocal counterparts.
 CLI `--help` options and group menus are not separate executable leaf commands.
 
+File-upload mappings are client-dependent: actual byte encoding must happen in
+client software, never by model reconstruction. Claude.ai/Desktop do not forward
+an attachment's bytes to a connector (see below); there is no browser fallback yet.
+The transcript mapping covers local file bytes only: CLI `--url` has no MCP
+counterpart. Both filing surfaces require the reviewed content hash.
+
 | Surface | Name | Counterparts | Reason when unmatched |
 | --- | --- | --- | --- |
 | cli | `actions done` | `action_triage` |  |
@@ -60,8 +66,8 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `company sources` | `company_source` |  |
 | cli | `company unpause-source` | `company_source` |  |
 | cli | `company warm-path` | `woven_warm_path` |  |
-| cli | `corpus add` |  | Gap: local file ingestion has no MCP equivalent; hosted file-access design deferred (#598). |
-| cli | `corpus list` |  | Gap: corpus-specific listing has no equivalent MCP tool; defer adding tools (#598). |
+| cli | `corpus add` | `corpus_add` | Client-dependent byte upload; native hosted attachment forwarding unverified. |
+| cli | `corpus list` | `corpus_list` |  |
 | cli | `criteria review` | `job_criteria` |  |
 | cli | `criteria save` | `job_criteria` |  |
 | cli | `criteria show` | `job_criteria` |  |
@@ -86,9 +92,9 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `heap show` | `heap` |  |
 | cli | `heap sort` | `heap` |  |
 | cli | `host-check` |  | Deliberately local host/runtime diagnostics. |
-| cli | `ingest` |  | Gap: local PDF/DOCX/file import is not equivalent to resume text/URL tools; hosted file ingestion design deferred (#598). |
-| cli | `ingest-linkedin` |  | Gap: profile ZIP import has no MCP equivalent; people_import_connections imports contacts only (#598). |
-| cli | `ingest-transcript` |  | Gap: transcript-file parsing has no equivalent MCP tool; import/consent design deferred (#598). |
+| cli | `ingest` | `ingest_resume_file`, `ingest_resume_url` |  |
+| cli | `ingest-linkedin` | `ingest_linkedin` | Client-dependent byte upload; native hosted attachment forwarding unverified. |
+| cli | `ingest-transcript` | `ingest_transcript` | Client-dependent byte upload; transcript URL fetching remains CLI-only. |
 | cli | `init` |  | Deliberately local workspace bootstrap; MCP requires an initialized workspace. |
 | cli | `interview` | `interview_react` |  |
 | cli | `keys list` |  | Deliberately local credential administration; secrets are not MCP tool arguments. |
@@ -109,6 +115,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `objective review` | `relationship_objective` |  |
 | cli | `objective save` | `relationship_objective` |  |
 | cli | `objective show` | `relationship_objective` |  |
+| cli | `opportunities list` | `opportunities_list` |  |
 | cli | `overnight` | `overnight` |  |
 | cli | `pack` | `pack` |  |
 | cli | `people add` | `people_add` |  |
@@ -176,6 +183,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | cli | `tenant urls` | `tenant_urls` |  |
 | cli | `tenant validate` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
 | cli | `today` | `changelog` |  |
+| cli | `usage` | `usage`, `usage_all_tenants` | Own-workspace read; --all-tenants is privileged read-only accounting (RFC-084). |
 | cli | `values` | `my_values` |  |
 | cli | `values-chart` | `values_chart` |  |
 | cli | `watchlist add` | `watchlist` |  |
@@ -208,6 +216,8 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `company_similar` | `company similar` |  |
 | mcp | `company_source` | `company add-source`, `company pause-source`, `company remove-source`, `company sources`, `company unpause-source` |  |
 | mcp | `completeness` |  | Deliberately MCP structured setup/readiness diagnostic; no exact CLI equivalent. |
+| mcp | `corpus_add` | `corpus add` | Client-dependent byte upload; native hosted attachment forwarding unverified. |
+| mcp | `corpus_list` | `corpus list` |  |
 | mcp | `digest` | `digest` |  |
 | mcp | `drive_auth` | `drive auth` |  |
 | mcp | `embed` | `embed` |  |
@@ -220,8 +230,11 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `gap_map` | `gap-map` |  |
 | mcp | `heap` | `heap add`, `heap remove`, `heap show`, `heap sort` |  |
 | mcp | `heap_read` |  | Deliberately MCP document/image payload retrieval; heap show lists metadata. |
+| mcp | `ingest_linkedin` | `ingest-linkedin` | Client-dependent byte upload; native hosted attachment forwarding unverified. |
+| mcp | `ingest_resume_file` | `ingest` | Client-dependent byte upload; native hosted attachment forwarding unverified. |
 | mcp | `ingest_resume_text` |  | Deliberately MCP text payload ingestion; CLI ingest takes a local file. |
-| mcp | `ingest_resume_url` |  | Deliberately MCP URL resume ingestion; CLI ingest takes a local file. |
+| mcp | `ingest_resume_url` | `ingest` |  |
+| mcp | `ingest_transcript` | `ingest-transcript` | Client-dependent byte upload; transcript URL fetching remains CLI-only. |
 | mcp | `interview_react` | `interview` |  |
 | mcp | `interview_status` |  | Deliberately MCP interview-progress inspection; terminal interview remains an interactive capture wizard. |
 | mcp | `job_criteria` | `criteria review`, `criteria save`, `criteria show` |  |
@@ -230,7 +243,7 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `my_pov` | `pov` |  |
 | mcp | `my_urls` | `mcp url` |  |
 | mcp | `my_values` | `values` |  |
-| mcp | `opportunities_list` |  | Gap: stored opportunity listing has no equivalent CLI command; defer adding commands (#598). |
+| mcp | `opportunities_list` | `opportunities list` |  |
 | mcp | `overnight` | `overnight` |  |
 | mcp | `pack` | `pack` |  |
 | mcp | `people_add` | `people add` |  |
@@ -265,6 +278,8 @@ CLI `--help` options and group menus are not separate executable leaf commands.
 | mcp | `telemetry` | `telemetry show`, `telemetry status`, `telemetry summary` |  |
 | mcp | `tenant_url` | `tenant url` |  |
 | mcp | `tenant_urls` | `tenant urls` |  |
+| mcp | `usage` | `usage` | Tenant-scoped accounting read. |
+| mcp | `usage_all_tenants` | `usage` | Cross-tenant read-only accounting: operator-gated, owner-approved (2026-10-16); refused via operator_only_refusal for ordinary tenants, never tenant administration (RFC-068/RFC-084). |
 | mcp | `values_chart` | `values-chart` |  |
 | mcp | `watchlist` | `watchlist add`, `watchlist list`, `watchlist remove`, `watchlist run`, `watchlist show` |  |
 | mcp | `wingman_demo` | `demo` |  |
@@ -286,10 +301,12 @@ chosen feed URL on both surfaces (`company add-feed` / `company_feed(attach)`);
 `feed_discover` is an optional preparation step, not an operation performed by
 that CLI command.
 
-Deferred gaps remain tracked in open issue #598. This scoped ledger change does
-not close that issue or decide the future hosted-ingestion interfaces. Reciprocal
-mappings are mechanically checked; their semantic accuracy still needs review.
-
-| cli | `usage` | `usage`, `usage_all_tenants` | Own-workspace read; --all-tenants is privileged read-only accounting (RFC-084). |
-| mcp | `usage` | `usage` | Tenant-scoped accounting read. |
-| mcp | `usage_all_tenants` | `usage` | Deliberate privileged read-only accounting exception (RFC-068/RFC-084), never tenant administration. |
+The deferred #598 gaps are closed for clients that can send file bytes: MCP
+accepts bounded file payloads, not server paths, and directory corpus imports
+use a ZIP. Claude.ai and Claude Desktop cannot: a connector's tool arguments
+are written by the model, which sees an attachment as extracted text, not its
+bytes. For those hosted users the file imports remain gaps until a browser
+upload exists (Beads `wingman-m4l`). Transcript preview is read-only, and
+filing requires the preview's review hash and the person's full name. Opportunity
+listing shares its application renderer across CLI and MCP. Reciprocal mappings
+are mechanically checked; their semantic accuracy still needs review.
