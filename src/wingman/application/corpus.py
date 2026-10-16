@@ -259,9 +259,7 @@ def add_to_corpus(
         added += 1
         titles.append(title)
     _logger.info(
-        "corpus_add path=%s source_type=%s added=%d skipped=%d unsupported=%d failures=%d",
-        path,
-        source_type,
+        "corpus_add added=%d skipped=%d unsupported=%d failures=%d",
         added,
         skipped,
         len(unsupported),

@@ -80,6 +80,12 @@ from wingman.application.feature_request import (
     render_preview,
     stamp_operator,
 )
+from wingman.application.file_payload import (
+    archive_file,
+    decode_file,
+    discard_upload,
+    rejection_reason,
+)
 from wingman.application.focus import (
     follow_company,
     json_digest,
@@ -2962,6 +2968,212 @@ def assess_job(job_description: str) -> str:
 
 
 @server.tool()
+def ingest_resume_file(content_base64: str, filename: str) -> str:
+    """Import supplied resume bytes (.md/.txt/.pdf/.docx/.tex), max 10 MiB.
+
+    Client must encode the actual attachment as standard base64; never invent
+    bytes or pass a local/server path. Same filename means a new version of
+    that document. Archives the original, then uses the CLI extraction and
+    evidence validation pipeline. Resume text is sent to the configured
+    extraction provider, just as for ingest_resume_text. No external write.
+    """
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        name, raw = decode_file(
+            content_base64, filename, {".md", ".markdown", ".txt", ".pdf", ".docx", ".tex"}
+        )
+    except ValueError as exc:
+        return f"Nothing was ingested: {exc}"
+    stored = False
+    try:
+        path = archive_file(name, raw, config)
+        stored = True
+        with Storage(config.db_path) as storage:
+            report = ingest_resume(
+                path, config, storage, get_provider(CapabilityClass.EXTRACT_FAST, config)
+            )
+    except IngestError as exc:
+        # The file's content was rejected before anything was persisted;
+        # keeping the copy would only pile up private uploads on retry.
+        discard_upload(path)
+        return f"Nothing was ingested: {rejection_reason(exc, path, name)} The upload was not kept."
+    except (OSError, ModelConfigError, ProviderError, ProposalParseError):
+        return _file_import_failure(stored)
+    return (
+        f"Accepted: {report.accepted}  Duplicates skipped: {report.skipped_duplicates}  "
+        f"Evidence merged: {report.evidence_merged}  Conflicts: {report.conflicts}  "
+        f"Updated: {report.updated}  Retired: {report.retired}  Rejected: {len(report.rejected)}\n"
+        + "\n".join(f"rejected {item.name!r}: {item.reason}" for item in report.rejected)
+    )
+
+
+def _file_import_failure(stored: bool) -> str:
+    artifact = (
+        "The uploaded file was preserved in your inbox."
+        if stored
+        else "No complete upload was stored."
+    )
+    return (
+        f"Import failed. {artifact} Existing records and any partial successful work were preserved. "
+        "Check the file format and ask your workspace operator to check storage permissions "
+        "and model availability, then retry."
+    )
+
+
+@server.tool()
+def ingest_linkedin(content_base64: str, filename: str = "linkedin.zip") -> str:
+    """Import positions, skills and recommendations from supplied LinkedIn ZIP bytes.
+
+    Standard base64, max 10 MiB compressed / 50 MiB expanded / 1000 entries.
+    Deterministic and private: no model or network call. Does not import
+    contacts/messages; people_import_connections is a separate operation.
+    Archives the original export in this workspace; never takes a server path.
+    """
+    from wingman.application.linkedin import import_linkedin
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        name, raw = decode_file(content_base64, filename, {".zip"})
+    except ValueError as exc:
+        return f"Nothing was imported: {exc}"
+    stored = False
+    try:
+        path = archive_file(name, raw, config)
+        stored = True
+        with Storage(config.db_path) as storage:
+            report = import_linkedin(path, config, storage)
+    except IngestError as exc:
+        discard_upload(path)
+        return f"Nothing was imported: {rejection_reason(exc, path, name)} The upload was not kept."
+    except OSError:
+        return _file_import_failure(stored)
+    counts = report.counts
+    return (
+        f"Found: {report.positions} positions, {report.skills} skills, {report.recommendations} recommendations\n"
+        f"Accepted: {counts.accepted}  Duplicates skipped: {counts.skipped_duplicates}  "
+        f"Evidence merged: {counts.evidence_merged}  Conflicts: {counts.conflicts}  "
+        f"Updated: {counts.updated}  Retired: {counts.retired}"
+    )
+
+
+@server.tool()
+def corpus_add(content_base64: str, filename: str, source_type: str = "writing") -> str:
+    """Add supplied writing (.md/.txt/.html or ZIP) to the private evidence corpus.
+
+    Standard base64, max 10 MiB / 50 MiB expanded / 1000 entries. To import a
+    directory, send a ZIP of it. Same deterministic parsing, provenance and
+    content-hash deduplication as CLI corpus add; no model/network calls.
+    """
+    from wingman.application.corpus import SUPPORTED_SUFFIXES, add_to_corpus
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    if not source_type.strip() or len(source_type) > 100 or any(ord(c) < 32 for c in source_type):
+        return "Nothing was added: use a nonempty source_type of at most 100 characters."
+    try:
+        name, raw = decode_file(content_base64, filename, SUPPORTED_SUFFIXES | {".zip"})
+    except ValueError as exc:
+        return f"Nothing was added: {exc}"
+    stored = False
+    try:
+        path = archive_file(name, raw, config)
+        stored = True
+        with Storage(config.db_path) as storage:
+            report = add_to_corpus(path, source_type, config, storage)
+    except IngestError as exc:
+        discard_upload(path)
+        return f"Nothing was added: {rejection_reason(exc, path, name)} The upload was not kept."
+    except OSError:
+        return _file_import_failure(stored)
+    kept = ""
+    if not report.added and not report.skipped_duplicates:
+        # Nothing landed in the corpus (add_to_corpus keeps its own copy of
+        # each document it does add), so this upload is not lineage for anything.
+        discard_upload(path)
+        kept = "\nNothing was added, so the upload was not kept."
+    return (
+        f"Added: {report.added}  Duplicates skipped: {report.skipped_duplicates}  "
+        f"Unsupported: {len(report.skipped_unsupported)}  Failures: {len(report.failures)}\n"
+        + "\n".join(f"+ {title}" for title in report.titles)
+        + "\n".join(
+            f"\nfailed {(name if failure.name == path.name else failure.name)!r}: "
+            f"{rejection_reason(Exception(failure.reason), path, name)}"
+            for failure in report.failures
+        )
+        + kept
+    )
+
+
+@server.tool()
+def corpus_list() -> str:
+    """List private corpus documents with IDs, source labels, dates and word counts."""
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    with Storage(config.db_path) as storage:
+        documents = storage.list_corpus_documents()
+    if not documents:
+        return "Corpus is empty; use corpus_add to add your writing."
+    return "\n".join(
+        f"{doc.doc_id}  [{doc.source_type}]  "
+        f"{doc.published_at.date().isoformat() if doc.published_at else 'unknown'}  "
+        f"{doc.title}  ({doc.word_count} words)"
+        for doc in documents
+    )
+
+
+@server.tool()
+def ingest_transcript(
+    content_base64: str, filename: str, note_for: str = "", reviewed_hash: str = ""
+) -> str:
+    """Preview actual Gemini file bytes (.md/.txt/.pdf), writing nothing by default.
+
+    Client-dependent: requires attachment byte encoding, never reconstructed bytes.
+    After showing the preview and obtaining explicit approval, call with an exact
+    full note_for name and reviewed_hash copied from that preview. A different
+    file needs a new preview. The original is archived and generated notes are
+    ENDORSED context, never human quotes. Speaker mismatches remain visible.
+    Filing is local only; sends no message. URL import is available via CLI only.
+    """
+    from wingman.application.transcript_import import file_transcript, preview_transcript
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        name, raw = decode_file(content_base64, filename, {".md", ".markdown", ".txt", ".pdf"})
+    except ValueError as exc:
+        return f"Nothing was written: {exc}"
+    try:
+        transcript, preview, _digest = preview_transcript(raw, name)
+        if not note_for.strip():
+            return (
+                preview
+                + "\nNothing was written. Review before filing with note_for and reviewed_hash."
+            )
+        if not reviewed_hash:
+            return preview + "\nNothing was filed: pass reviewed_hash from the approved preview."
+        with Storage(config.db_path) as storage:
+            if storage.find_person_by_name_key(" ".join(note_for.lower().split())) is None:
+                found = _find_person(storage, note_for)
+                hint = found if isinstance(found, str) else f"Use the full name {found.name!r}."
+                return preview + "\nNothing was filed: " + hint
+            result = file_transcript(
+                raw, name, transcript, note_for, reviewed_hash, config, storage
+            )
+        return preview + "\n" + result
+    except IngestError as exc:
+        return str(exc)
+    except OSError:
+        return "Transcript filing failed. Existing records and any stored original were preserved; check storage permissions before retrying. No message was sent."
+
+
+@server.tool()
 def ingest_resume_text(resume_markdown: str, filename: str = "resume.md") -> str:
     """Ingest resume text into the canonical profile (model extraction plus deterministic evidence validation). Returns the ingestion summary.
 
@@ -5283,6 +5495,16 @@ def _instrument_tools() -> None:
             **kwargs: object,
         ) -> str:
             started = time.monotonic()
+            file_import = __name in {
+                "ingest_resume_file",
+                "ingest_linkedin",
+                "ingest_transcript",
+                "corpus_add",
+                "corpus_list",
+            }
+            journal_args = (
+                {"content": "[file import arguments withheld]"} if file_import else kwargs
+            )
             try:
                 result = __original(*args, **kwargs)
             except Exception as exc:
@@ -5290,16 +5512,27 @@ def _instrument_tools() -> None:
                     load_config(),
                     "mcp",
                     __name,
-                    {"args": kwargs, "error": str(exc)},
+                    {
+                        "args": journal_args,
+                        "error": type(exc).__name__ if file_import else str(exc),
+                    },
                     outcome="error",
                     duration_ms=int((time.monotonic() - started) * 1000),
                 )
+                if file_import:
+                    return (
+                        "Import failed. Existing records and any stored upload were preserved. "
+                        "Ask your operator to inspect storage and retry."
+                    )
                 raise
             record_event(
                 load_config(),
                 "mcp",
                 __name,
-                {"args": kwargs, "result": result},
+                {
+                    "args": journal_args,
+                    "result": "[file import output withheld]" if file_import else result,
+                },
                 outcome="ok",
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
