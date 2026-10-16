@@ -43,9 +43,9 @@ MAX_COMPANIES_LISTED = 50
 
 
 def people_heading(report: CompletenessReport) -> str:
-    """The People section title. 'tracked' was wrong once imports stopped being
-    listed: it read '(0 tracked)' above a workspace holding thousands of people."""
-    return f"People ({len(report.people)} curated)"
+    """The People section title. It counts followed people only (#624); 'tracked'
+    once read '(0 tracked)' above a workspace holding thousands of people."""
+    return f"People ({len(report.people)} followed)"
 
 
 def companies_listed(report: CompletenessReport) -> tuple[list[CompanyCompleteness], int]:
@@ -56,13 +56,18 @@ def companies_listed(report: CompletenessReport) -> tuple[list[CompanyCompletene
     return ordered[:MAX_COMPANIES_LISTED], max(0, len(ordered) - MAX_COMPANIES_LISTED)
 
 
-def imported_people_line(count: int) -> str:
-    """The one line that makes an imported address book visible without making
-    it a gap. Shared by the Markdown and HTML renderers so they cannot drift."""
-    noun = "contact" if count == 1 else "contacts"
+# What an empty People section says, so a workspace that follows nobody yet
+# learns how to start (a new tenant with no import sees no unfollowed line).
+NO_FOLLOWED_PEOPLE = "None yet — people add, or watchlist add, follows someone."
+
+
+def unfollowed_people_line(count: int) -> str:
+    """The one line that makes everyone else visible without making them a gap.
+    Shared by the Markdown and HTML renderers so they cannot drift."""
+    noun = "person" if count == 1 else "people"
     return (
-        f"{count} imported {noun} not listed or counted as gaps — nobody has given them "
-        "a feed or logged an interaction yet. Either one brings a person into this list."
+        f"{count} other {noun} you are not following — not listed or counted as gaps. "
+        "people add, or watchlist add, brings someone into this list."
     )
 
 
@@ -127,9 +132,9 @@ def render_completeness_markdown(report: CompletenessReport) -> str:
         if len(ordered) > MAX_PEOPLE_LISTED:
             lines.append(f"- …and {len(ordered) - MAX_PEOPLE_LISTED} more")
     else:
-        lines.append("_None yet._")
-    if report.imported_people:
-        lines.extend(["", f"_{imported_people_line(report.imported_people)}_"])
+        lines.append(f"_{NO_FOLLOWED_PEOPLE}_")
+    if report.unfollowed_people:
+        lines.extend(["", f"_{unfollowed_people_line(report.unfollowed_people)}_"])
     lines.extend(["", "## Interview", ""])
     current = ""
     for row in report.interview:
@@ -156,14 +161,14 @@ def render_completeness_markdown(report: CompletenessReport) -> str:
         shown, more = companies_listed(report)
         for company in shown:
             lines.append(
-                f"- {company.name} — {company.people_watched} people watched, "
+                f"- {company.name} — {company.people_watched} people followed, "
                 f"{company.documents} documents, {company.pov_cards} POV cards "
                 f"({company.missing_pov_cards} missing)"
             )
         if more:
             lines.append(f"- …and {more} more")
     else:
-        lines.append("_None yet — no watched person has a company set._")
+        lines.append("_None yet — follow a company with company_follow or watchlist add._")
     if BLOCKED_SECTIONS:
         lines.extend(["", "## Blocked", ""])
         for name, reason in BLOCKED_SECTIONS:

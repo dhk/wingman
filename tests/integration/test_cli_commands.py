@@ -289,3 +289,16 @@ def test_perspectives_interview_branch_captures_a_reaction(workspace: Path, tmp_
 
     listing = runner.invoke(app, ["profile", "list"])
     assert "This matches how I already think about it." in listing.output
+
+
+def test_people_add_follows_the_person(workspace: Path) -> None:
+    """#624: `wingman people add` enrolls on the following list, same as the MCP tool."""
+    from wingman.application.people import FOLLOWING_LIST
+    from wingman.infrastructure.config import load_config
+    from wingman.infrastructure.storage import Storage
+
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    result = runner.invoke(app, ["people", "add", "Fay Follow"])
+    assert result.exit_code == 0, result.output
+    with Storage(load_config().db_path) as storage:
+        assert storage.watchlist_members(FOLLOWING_LIST) == [("person", "Fay Follow")]

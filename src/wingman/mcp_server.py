@@ -108,6 +108,7 @@ from wingman.application.people import (
     fetch_person_feed,
     find_people_evidence,
     fix_person,
+    follow_person,
     match_people,
     rename_person,
     seed_from_connections,
@@ -462,14 +463,17 @@ def completeness(as_html: bool = False) -> str:
     POV cards built vs. missing) — recomputed fresh on every call, no
     caching, no model call.
 
-    People and Companies cover CURATED people only: added by hand, given a
-    feed, logged with, given a relationship objective, put on a watchlist,
-    or given a saved deep-dive dossier. Contacts that arrived from a
-    LinkedIn import and have none of those are reported as one count ("N
-    imported contacts") and never counted as gaps, so a large import cannot
-    bury 'Things to do'. Do not tell the user to build POV cards for, or log
-    interactions with, those contacts in bulk. Each list names at most 50
-    entries, neediest first, then says how many more there are.
+    People and Companies cover what the user FOLLOWS: people and companies
+    on any watchlist. people_add enrolls a person on the 'following' list;
+    company_follow enrolls a company. To unfollow, remove the member from
+    every list it is on (watchlist(action='list'), then 'show' each; names
+    match exactly as stored).
+    Everyone else (LinkedIn imports, people nobody followed) is one count
+    ("N other people you are not following") and never a gap, so a large
+    import cannot bury 'Things to do'. Do not tell the user to build POV
+    cards for, or log interactions with, unfollowed people in bulk. Each
+    list names at most 50 entries, neediest first, then says how many more
+    there are.
 
     Interview Bootstrap and Applications are NOT included: there is no
     tool yet that reads back interview_react captures (#311) or lists
@@ -3285,12 +3289,16 @@ def people_add(
     linkedin_url: str = "",
     email: str = "",
 ) -> str:
-    """Add a person to the watchlist (or update them), optionally with their public writing URL,
+    """Add a person to the watchlist and follow them (or update them), optionally with their public writing URL,
     LinkedIn URL, and email (private address-book field; also imported from Connections.csv).
 
     substack_url is a legacy name for a public writing URL. Bounded discovery
     finds and verifies its RSS/Atom endpoint before storing. If no feed exists,
-    use feed_attach with kind="index_page" for the approved blog index instead."""
+    use feed_attach with kind="index_page" for the approved blog index instead.
+
+    Following means the person is on the 'following' watchlist, which is what
+    completeness measures. To unfollow, remove them from every list they are
+    on (watchlist 'list', then 'show'), not only 'following'."""
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
@@ -3305,6 +3313,7 @@ def people_add(
                 linkedin_url=linkedin_url or None,
                 email=email or None,
             )
+            follow_person(storage, person)
     except IngestError as exc:
         return f"people add failed: {exc}"
     verb = "Added" if created else "Updated"
@@ -3855,7 +3864,9 @@ def people_deep_dive_save(name: str, content: str) -> str:
     their explicit approval — this call is itself the storage approval
     gate (no separate confirmed flag: the reviewed content in hand is the
     proof, same shape as feed_discover/feed_attach). Creates the person if
-    they aren't already on the watchlist. Overwrites any previous dossier
+    wingman doesn't know them yet, and then follows them (the 'following'
+    list, as people_add does); someone already known keeps their follow
+    state. Overwrites any previous dossier
     for this person (rebuilt, not versioned — same as a POV card).
     """
     config = _ready_config()

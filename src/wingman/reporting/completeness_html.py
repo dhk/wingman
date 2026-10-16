@@ -15,9 +15,10 @@ from wingman.application.completeness import CompletenessReport, PersonCompleten
 from wingman.reporting.completeness import (
     BLOCKED_SECTIONS,
     MAX_PEOPLE_LISTED,
+    NO_FOLLOWED_PEOPLE,
     companies_listed,
-    imported_people_line,
     people_heading,
+    unfollowed_people_line,
 )
 from wingman.reporting.export import WINGMAN_PDF_CSS
 
@@ -151,9 +152,9 @@ def render_completeness_html(report: CompletenessReport) -> str:
             body.append(f"<li>…and {len(ordered) - MAX_PEOPLE_LISTED} more</li>")
         body.append("</ul>")
     else:
-        body.append('<p class="dim">None yet.</p>')
-    if report.imported_people:
-        body.append(f'<p class="dim">{_e(imported_people_line(report.imported_people))}</p>')
+        body.append(f'<p class="dim">{_e(NO_FOLLOWED_PEOPLE)}</p>')
+    if report.unfollowed_people:
+        body.append(f'<p class="dim">{_e(unfollowed_people_line(report.unfollowed_people))}</p>')
     body.append(
         f'<div class="section-divider"><span>Companies '
         f"({len(report.companies)} attributable)</span></div>"
@@ -162,7 +163,7 @@ def render_completeness_html(report: CompletenessReport) -> str:
         shown, more = companies_listed(report)
         for company in shown:
             body.append(f"<h3>{_e(company.name)}</h3>")
-            body.append(_meter("People watched", company.people_watched))
+            body.append(_meter("People followed", company.people_watched))
             body.append(_meter("Documents", company.documents))
             body.append(
                 _meter(
@@ -174,7 +175,9 @@ def render_completeness_html(report: CompletenessReport) -> str:
         if more:
             body.append(f'<p class="dim">…and {more} more</p>')
     else:
-        body.append('<p class="dim">None yet — no watched person has a company set.</p>')
+        body.append(
+            '<p class="dim">None yet — follow a company with company_follow or watchlist add.</p>'
+        )
     # The interview is the one section with a denominator the code actually
     # enforces — application.interview's per-subtype cap — so these meters
     # show real progress rather than the full-or-empty bar every count

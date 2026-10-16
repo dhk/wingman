@@ -640,3 +640,16 @@ def test_status_tells_an_unfunded_tenant_the_truth_about_an_ambient_key(
 
     with tenant_config_scope(tenant):
         assert "Model calls: UNAVAILABLE" in status()
+
+
+def test_people_add_follows_the_person(workspace: Path) -> None:
+    """#624: completeness measures the follow set, so adding someone by hand
+    enrolls them on the following list (and adding again is idempotent)."""
+    from wingman.application.people import FOLLOWING_LIST
+    from wingman.infrastructure.storage import Storage
+    from wingman.mcp_server import people_add
+
+    assert "Added Fay Follow" in people_add("Fay Follow")
+    assert "Updated Fay Follow" in people_add("Fay Follow", company="Acme")
+    with Storage(load_config().db_path) as storage:
+        assert storage.watchlist_members(FOLLOWING_LIST) == [("person", "Fay Follow")]

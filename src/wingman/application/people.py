@@ -107,6 +107,18 @@ def _resolve_writing_feed(
     return discovery.feed_url
 
 
+# The watchlist `people add` enrolls into (#624). Completeness measures the
+# follow set — members of any watchlist — so adding someone by hand is
+# following them. Unfollowing means removing them from every list they are
+# on (`company_follow` also enrolls people on `overnight`).
+FOLLOWING_LIST = "following"
+
+
+def follow_person(storage: Storage, person: Person) -> bool:
+    """Enroll a person on FOLLOWING_LIST; False if they were already on it."""
+    return storage.watchlist_add(FOLLOWING_LIST, "person", person.name)
+
+
 def add_person(
     name: str,
     storage: Storage,

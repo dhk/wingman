@@ -1261,6 +1261,50 @@ class Storage:
         )
         return [(row[0], row[1]) for row in cursor.fetchall()]
 
+    def all_watchlist_members(self) -> list[tuple[str, str]]:
+        """(member_kind, member_name) for every member of every list, in one query."""
+        cursor = self._conn.execute(
+            "SELECT DISTINCT member_kind, member_name FROM watchlist_members"
+        )
+        return [(row[0], row[1]) for row in cursor.fetchall()]
+
+    def migration_done(self, name: str) -> bool:
+        self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)")
+        row = self._conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?", (name,)
+        ).fetchone()
+        return row is not None
+
+    def backfill_watchlist_once(
+        self, migration: str, list_name: str, member_kind: str, names: list[str]
+    ) -> int | None:
+        """Add names to a list exactly once per workspace, ever.
+
+        The marker and the members commit together, so a crash leaves neither,
+        and a later run never re-adds someone the owner has since removed.
+        Returns how many were added, or None if this migration already ran.
+        """
+        self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)")
+        inserted = self._conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (name) VALUES (?)", (migration,)
+        )
+        if not inserted.rowcount:
+            self._conn.commit()
+            return None
+        list_key = " ".join(list_name.lower().split())
+        now = datetime.now(UTC).isoformat()
+        added = 0
+        for name in names:
+            cursor = self._conn.execute(
+                "INSERT OR IGNORE INTO watchlist_members"
+                " (list_key, list_name, member_kind, member_name, added_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (list_key, list_name.strip(), member_kind, name.strip(), now),
+            )
+            added += cursor.rowcount
+        self._conn.commit()
+        return added
+
     def watchlist_rename_member(self, member_kind: str, old_name: str, new_name: str) -> int:
         """Rename a member across every list it's on; returns the number of lists touched."""
         cursor = self._conn.execute(
