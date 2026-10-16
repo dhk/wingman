@@ -41,7 +41,7 @@ import tempfile
 import threading
 import time
 import tomllib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -480,56 +480,91 @@ def _write_reservation(path: Path, issuer: str, subject: str, value: dict[str, A
         ) from exc
 
 
+def _issuer_keys(issuer: str, also_issuers: Iterable[str]) -> tuple[str, ...]:
+    """The given issuer first, then each other one once (#618)."""
+    return tuple(dict.fromkeys((issuer, *also_issuers)))
+
+
 def reserve_trusted_identity(
     path: Path,
     issuer: str,
     subject: str,
     slug: str,
     *,
+    also_issuers: Iterable[str] = (),
     now: Callable[[], float] = time.time,
 ) -> str:
-    """Reserve an identity for one provisioning operation before state is created."""
+    """Reserve an identity for one provisioning operation before state is created.
+
+    With `also_issuers` (#618) the same subject is reserved under each of them
+    too, with one token, all or nothing: every key is checked before any is
+    written, and a failed write withdraws the ones already written.
+    """
+    issuers = _issuer_keys(issuer, also_issuers)
     with _identity_map_lock(path):
-        _validate_binding(_identity_map_or_empty(path), issuer, subject, slug)
+        identities = _identity_map_or_empty(path)
+        for key_issuer in issuers:
+            _validate_binding(identities, key_issuer, subject, slug)
         current_time = now()
-        existing = _read_reservation(path, issuer, subject, now=current_time)
-        if existing is not None:
-            raise IdentityMapError(
-                f"identity ({issuer!r}, {subject!r}) is reserved for provisioning "
-                f"tenant {existing['slug']!r}"
-            )
+        for key_issuer in issuers:
+            existing = _read_reservation(path, key_issuer, subject, now=current_time)
+            if existing is not None:
+                raise IdentityMapError(
+                    f"identity ({key_issuer!r}, {subject!r}) is reserved for provisioning "
+                    f"tenant {existing['slug']!r}"
+                )
         token = secrets.token_urlsafe(24)
-        _write_reservation(
-            path,
-            issuer,
-            subject,
-            {
-                "issuer": issuer,
-                "subject": subject,
-                "slug": slug,
-                "token": token,
-                "expires_at": current_time + _PROVISIONING_RESERVATION_TTL_SECONDS,
-            },
-        )
+        written: list[str] = []
+        try:
+            for key_issuer in issuers:
+                _write_reservation(
+                    path,
+                    key_issuer,
+                    subject,
+                    {
+                        "issuer": key_issuer,
+                        "subject": subject,
+                        "slug": slug,
+                        "token": token,
+                        "expires_at": current_time + _PROVISIONING_RESERVATION_TTL_SECONDS,
+                    },
+                )
+                written.append(key_issuer)
+        except IdentityMapError:
+            for key_issuer in written:
+                try:
+                    _reservation_path(path, key_issuer, subject).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
         return token
 
 
 def release_trusted_identity_reservation(
-    path: Path, issuer: str, subject: str, reservation: str
+    path: Path,
+    issuer: str,
+    subject: str,
+    reservation: str,
+    *,
+    also_issuers: Iterable[str] = (),
 ) -> bool:
-    """Release only the caller's own still-active provisioning reservation."""
+    """Release only the caller's own still-active provisioning reservation(s)."""
+    released = False
     with _identity_map_lock(path):
-        existing = _read_reservation(path, issuer, subject, now=time.time())
-        if existing is None or not secrets.compare_digest(existing["token"], reservation):
-            return False
-        reservation_path = _reservation_path(path, issuer, subject)
-        try:
-            reservation_path.unlink(missing_ok=True)
-        except OSError as exc:
-            raise IdentityMapError(
-                f"OAuth provisioning reservation {reservation_path} could not be released: {exc}"
-            ) from exc
-        return True
+        for key_issuer in _issuer_keys(issuer, also_issuers):
+            existing = _read_reservation(path, key_issuer, subject, now=time.time())
+            if existing is None or not secrets.compare_digest(existing["token"], reservation):
+                continue
+            reservation_path = _reservation_path(path, key_issuer, subject)
+            try:
+                reservation_path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise IdentityMapError(
+                    f"OAuth provisioning reservation {reservation_path} could not be released: "
+                    f"{exc}"
+                ) from exc
+            released = True
+    return released
 
 
 def renew_trusted_identity_reservation(
@@ -538,9 +573,14 @@ def renew_trusted_identity_reservation(
     subject: str,
     reservation: str,
     *,
+    also_issuers: Iterable[str] = (),
     now: Callable[[], float] = time.time,
 ) -> bool:
-    """Extend only the caller's own still-active provisioning reservation."""
+    """Extend only the caller's own still-active provisioning reservation(s).
+
+    False when the given issuer's reservation is not the caller's; the other
+    issuers' reservations are renewed only where they carry the same token.
+    """
     with _identity_map_lock(path):
         current_time = now()
         existing = _read_reservation(path, issuer, subject, now=current_time)
@@ -548,24 +588,44 @@ def renew_trusted_identity_reservation(
             return False
         existing["expires_at"] = current_time + _PROVISIONING_RESERVATION_TTL_SECONDS
         _write_reservation(path, issuer, subject, existing)
+        for key_issuer in _issuer_keys(issuer, also_issuers)[1:]:
+            other = _read_reservation(path, key_issuer, subject, now=current_time)
+            if other is not None and secrets.compare_digest(other["token"], reservation):
+                other["expires_at"] = existing["expires_at"]
+                _write_reservation(path, key_issuer, subject, other)
         return True
 
 
-def preflight_trusted_identity(path: Path, issuer: str, subject: str, slug: str) -> bool:
+def preflight_trusted_identity(
+    path: Path,
+    issuer: str,
+    subject: str,
+    slug: str,
+    *,
+    also_issuers: Iterable[str] = (),
+) -> tuple[str, ...]:
     """Validate a proposed binding under the writer lock without changing the map.
 
     This is used before tenant provisioning. A corrupt map or an identity already
     owned by another tenant therefore cannot leave a workspace and registry row
-    behind with no usable login. False means the exact binding already exists.
+    behind with no usable login. Returns the issuers a bind would write; empty
+    means the exact binding already exists under every one of them.
     """
+    issuers = _issuer_keys(issuer, also_issuers)
     with _identity_map_lock(path):
-        available = _validate_binding(_identity_map_or_empty(path), issuer, subject, slug)
-        active = _read_reservation(path, issuer, subject, now=time.time())
-        if active is not None:
-            raise IdentityMapError(
-                f"identity ({issuer!r}, {subject!r}) is reserved for provisioning "
-                f"tenant {active['slug']!r}"
-            )
+        identities = _identity_map_or_empty(path)
+        available = tuple(
+            key_issuer
+            for key_issuer in issuers
+            if _validate_binding(identities, key_issuer, subject, slug)
+        )
+        for key_issuer in issuers:
+            active = _read_reservation(path, key_issuer, subject, now=time.time())
+            if active is not None:
+                raise IdentityMapError(
+                    f"identity ({key_issuer!r}, {subject!r}) is reserved for provisioning "
+                    f"tenant {active['slug']!r}"
+                )
         return available
 
 
@@ -610,11 +670,20 @@ def bind_trusted_identity(
     slug: str,
     *,
     reservation: str | None = None,
-) -> bool:
-    """Atomically bind one operator-approved identity; False means already exact."""
+    also_issuers: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Atomically bind one operator-approved identity; returns the issuers written.
+
+    With `also_issuers` (#618) the same subject is bound under each of them in
+    the same single replacement of the map: if any of those keys belongs to a
+    different tenant, or is reserved for another provisioning run, nothing is
+    written at all. An empty result means every binding was already exact.
+    """
+    issuers = _issuer_keys(issuer, also_issuers)
     with _identity_map_lock(path):
         identities = _identity_map_or_empty(path)
-        active = _read_reservation(path, issuer, subject, now=time.time())
+        now = time.time()
+        active = _read_reservation(path, issuer, subject, now=now)
         if active is not None:
             matches = (
                 reservation is not None
@@ -630,30 +699,47 @@ def bind_trusted_identity(
                 )
         elif reservation is not None:
             raise IdentityMapError("OAuth provisioning reservation token is absent or expired")
-        if not _validate_binding(identities, issuer, subject, slug):
-            if active is not None:
-                reservation_path = _reservation_path(path, issuer, subject)
-                try:
-                    reservation_path.unlink(missing_ok=True)
-                except OSError as exc:
-                    raise IdentityMapError(
-                        f"the identity binding already exists, but provisioning reservation "
-                        f"{reservation_path} could not be removed: {exc}"
-                    ) from exc
-            return False
-        entries = identities.entries()
-        entries[(issuer, subject)] = slug
-        write_identity_map_locked(path, entries)
-        if active is not None:
-            reservation_path = _reservation_path(path, issuer, subject)
+        owned = [issuer] if active is not None else []
+        for other in issuers[1:]:
+            held = _read_reservation(path, other, subject, now=now)
+            if held is None:
+                continue
+            if not (
+                reservation is not None
+                and held["slug"] == slug
+                and secrets.compare_digest(held["token"], reservation)
+            ):
+                raise IdentityMapError(
+                    f"identity ({other!r}, {subject!r}) is reserved for provisioning "
+                    f"tenant {held['slug']!r}"
+                )
+            owned.append(other)
+        # Every key is validated before anything is written: all or nothing.
+        written = tuple(
+            key_issuer
+            for key_issuer in issuers
+            if _validate_binding(identities, key_issuer, subject, slug)
+        )
+        if written:
+            entries = identities.entries()
+            for key_issuer in written:
+                entries[(key_issuer, subject)] = slug
+            write_identity_map_locked(path, entries)
+        for key_issuer in owned:
+            reservation_path = _reservation_path(path, key_issuer, subject)
             try:
                 reservation_path.unlink(missing_ok=True)
             except OSError as exc:
+                state = (
+                    f"identity binding was written to {path}"
+                    if written
+                    else "the identity binding already exists"
+                )
                 raise IdentityMapError(
-                    f"identity binding was written to {path}, but provisioning reservation "
-                    f"{reservation_path} could not be removed: {exc}"
+                    f"{state}, but provisioning reservation {reservation_path} could not be "
+                    f"removed: {exc}"
                 ) from exc
-    return True
+    return written
 
 
 def _challenge(

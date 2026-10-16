@@ -17,7 +17,8 @@ Each phase must leave Wingman in a usable state.
 | 8 — Controlled Connectors | Not started (explicit imports only, by design so far) |
 | 9 — Outcome Post-Mortems | Not started |
 
-Shipped alongside the phases: shared CLI/MCP operations with documented gaps and
+Shipped alongside the phases: shared CLI/MCP operations, including client-dependent file-payload imports (native hosted attachment forwarding
+unverified; corpus/transcript lack a browser fallback), with
 intentional exceptions ([parity ledger](docs/SURFACE-PARITY.md), RFC-008;
 remote transport RFC-017), design-system PDF exports, backup/
 restore, Keychain-backed keys (RFC-019), object rename/delete/fix for people

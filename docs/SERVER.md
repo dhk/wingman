@@ -849,9 +849,11 @@ email invite:** their first successful WorkOS sign-in is refused with 403. It re
 only the verified opaque `(iss, sub)`, first/last-seen times, and sign-in count
 in `oauth-identities-onboarding.json`; no bearer token or email is stored, no
 workspace exists, and no tenant data is reachable. Browser setup and MCP use
-different WorkOS token classes and issuers, so one person may produce two
-pending rows. Those rows may also have different opaque `sub` values; never
-infer that they belong together. Confirm each identity out of band. The
+different WorkOS token classes and issuers, so one person who tries both may
+produce two pending rows. They carry the same full `sub` (one WorkOS user has
+one subject under both issuers, #582), and approving or binding either covers
+both (#618). Rows with different `sub` values are different WorkOS users;
+never infer that they belong together. Confirm the identity out of band. The
 pending queue is capped at 128 identities, so two token identities can consume
 two slots. Once full it keeps its existing records and refuses to persist new
 ones, while every unapproved request remains forbidden.
@@ -899,17 +901,11 @@ sudo -iu wingman-shared wingman tenant oauth-pending \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml
 
 sudo wingman tenant oauth-approve taylor \
-  --issuer 'the exact issuer printed for one verified surface' \
-  --subject user_01EXAMPLE_FOR_ONE_SURFACE \
+  --issuer 'the exact issuer printed on the pending row' \
+  --subject user_01EXAMPLE \
   --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
   --registry /etc/wingman/tenants.toml \
   --data-root /home/wingman-shared/tenants
-
-sudo -iu wingman-shared wingman tenant oauth-bind taylor \
-  --issuer 'the exact issuer printed for the other verified surface' \
-  --subject user_01EXAMPLE_FOR_THE_OTHER_SURFACE \
-  --identities /home/wingman-shared/.config/wingman/oauth-identities.toml \
-  --registry /etc/wingman/tenants.toml
 ```
 
 For a slug-only invite, approval is the step that creates the workspace (an
@@ -924,12 +920,43 @@ remain false. Each durable step is idempotent: after interruption, rerunning
 the same approval completes the safe partial state instead of assigning it to
 somebody else.
 
-`oauth-approve` consumes the invite after binding one pending identity. Use
-`oauth-bind` for the second verified identity; do not try to approve the same
-invite twice. `oauth-bind` removes the identity it binds from the pending
-queue, as approval does. Both exact `(iss, sub)` pairs may point to the same tenant, but
-neither email nor a coincidentally matching `sub` is proof that they belong to
-the same person.
+**Both surfaces from one command (#618).** `oauth-approve` and `oauth-bind`
+bind the given subject under `--issuer` and under every other issuer the
+shared service trusts, so the person is not refused a second time on the
+other surface and there is no second operator command. The trusted set is
+read from the service's own OAuth env files, never from a flag: the MCP
+issuer is the `--oauth-issuer` inside `WINGMAN_OAUTH_ARGS` in
+`/etc/wingman/oauth.env` (or the file named by
+`/etc/wingman/oauth-config-path`, resolved as `wingman-add-tenant.sh` does),
+and the browser-session issuer follows from the `--oauth-web-client-id` inside
+`WINGMAN_OAUTH_WEB_ARGS` in `/etc/wingman/oauth-web.env` (absent file: no
+browser login, so the MCP issuer alone). `oauth-approve` runs as root, whose
+environment never loads those files, so they are parsed as data: never
+sourced, only those two keys (and `WINGMAN_OAUTH_ISSUER`, cross-checked) kept,
+and nothing else from them, including the browser client secret, ever
+printed or logged. The args are split into words the way systemd expands an
+unquoted `$VAR`, quotes honoured and removed (`'client_01X'` is
+`client_01X`); a backslash or an unbalanced quote is refused rather than
+guessed at. `--oauth-config` / `--oauth-web-config` point at the files
+on a box provisioned with `WINGMAN_SHARED_OAUTH_CONFIG` /
+`WINGMAN_SHARED_OAUTH_WEB_CONFIG`; they name files, not issuers.
+
+Both commands refuse, writing nothing, when those files are absent or
+unreadable (an unreadable file is reported as a permission problem, not as
+missing), when `--issuer` is not a trusted issuer, or when the subject is
+already bound to a different tenant (or reserved for another provisioning run)
+under any trusted issuer. Every binding goes into one atomic replacement of
+the identity map, so either all of them land or none does; an existing exact
+binding is left as is, which makes a rerun idempotent and lets it complete a
+tenant bound on one surface by an earlier build. Pending rows for the subject
+under every trusted issuer are cleared, identity map first and onboarding
+state second, the same lock order as the sign-in path. `oauth-bind --preflight`
+lists each issuer as `would bind` or `already bound`; provisioning
+reservations (`--reserve`) cover every trusted issuer with one token.
+
+`oauth-approve` consumes the invite; do not try to approve the same invite
+twice. Neither email nor a coincidentally matching `sub` across different
+pending rows is proof that two rows belong to the same person.
 
 Pending-state rows are fully schema-validated before use, so a damaged queue is
 reported as an onboarding-state error rather than becoming a traceback or a
@@ -968,7 +995,8 @@ workspace initialization, the script renews and revalidates the reservation
 immediately before registry mutation. The final bind consumes it; a failed
 attempt releases it.
 
-For an existing tenant, preserve their workspace and add only the binding:
+For an existing tenant, preserve their workspace and add only the binding
+(one command covers both surfaces, as above):
 
 ```bash
 sudo -iu wingman-shared wingman tenant oauth-bind jason \

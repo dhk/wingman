@@ -624,10 +624,12 @@ def test_an_email_invite_can_still_be_approved_by_hand(world: _World) -> None:
         issuer=MCP_ISSUER,
         subject=SUB,
         service_user=SERVICE_USER,
+        trusted_issuers=(MCP_ISSUER, BROWSER_ISSUER),
     )
 
     assert data_dir == world.data_root / "pat"
-    assert world.on_disk() == {(MCP_ISSUER, SUB): "pat"}
+    # Both surfaces, like a claimed invite (#618).
+    assert world.on_disk() == {(MCP_ISSUER, SUB): "pat", (BROWSER_ISSUER, SUB): "pat"}
     assert [tenant.slug for tenant in load_registry(world.registry)] == ["pat"]
     assert not (data_dir / INVITE_MARKER).exists()
     assert world.store.invites() == []

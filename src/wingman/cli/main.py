@@ -222,6 +222,8 @@ from wingman.version import wingman_version
 app = typer.Typer(help="Wingman: local-first career intelligence.")
 corpus_app = typer.Typer(help="Manage the corpus: your writing as citable evidence.")
 app.add_typer(corpus_app, name="corpus")
+opportunities_app = typer.Typer(help="Inspect assessed opportunities.")
+app.add_typer(opportunities_app, name="opportunities")
 people_app = typer.Typer(help="Watchlist of people and their public writing.")
 app.add_typer(people_app, name="people")
 company_app = typer.Typer(help="Companies, seen through the writing of their people and blogs.")
@@ -1482,101 +1484,50 @@ def restore(
 
 @app.command("ingest-transcript")
 def ingest_transcript(
-    path: Path | None = typer.Argument(
-        None, help="A Gemini call transcript: Markdown, plain text, or an exported PDF."
-    ),
-    url: str | None = typer.Option(
-        None,
-        "--url",
-        help="Fetch a link-accessible Google Doc instead (the tabbed Notes + Transcript export).",
-    ),
+    path: Path | None = typer.Argument(None, help="Gemini transcript: Markdown, text, or PDF."),
+    url: str | None = typer.Option(None, "--url", help="Fetch a link-accessible Google Doc."),
     note_for: str = typer.Option(
-        "",
-        "--note-for",
-        help="After reviewing the preview: file this call as an interaction note on a "
-        "watched person. Only ever the person you name — never inferred from the export.",
+        "", "--note-for", help="Full name of the person to file against after review."
+    ),
+    reviewed_hash: str = typer.Option(
+        "", "--reviewed-hash", help="Hash printed by the approved preview; required for filing."
     ),
 ) -> None:
-    """Read a Google Meet / Gemini call transcript and show what is in it (#134).
+    """Preview a Gemini transcript; file approved generated context as endorsed.
 
-    Previews by default and writes nothing. Three things about the real
-    export shape the output.
-
-    Only the Transcript tab is anybody's words. The Summary, Next steps and
-    Details sections are Gemini's paraphrase — Google's own footer says to
-    check them — so they are carried as context and never quoted as
-    evidence that a human said something.
-
-    Speaker labels are generated and do get names wrong. In the first real
-    export used to build this, the invitee 'Chuck Patel
-    <cpatel@champsinc.com>' is transcribed throughout as 'Chuck Norris'. So
-    attribution comes from the calendar Invited line, and any speaker that
-    does not match an invitee is flagged for you to confirm rather than
-    reconciled automatically.
-
-    A call is often BOTH an interview and a company conversation, so this
-    classifies nothing. It shows you what it found; --note-for files the
-    call against the person you name.
+    Preview persists nothing, including for --url. Filing archives the original
+    and links it from the endorsed interaction note. Never infers a recipient.
     """
     configure_logging()
-    from wingman.application.transcript import (
-        match_speakers,
-        parse_transcript,
-        render_transcript,
-    )
+    from wingman.application.transcript_import import file_transcript, preview_transcript
 
     config = load_config()
     _require_workspace(config, "read")
     if path is None and not url:
         typer.echo("Give a transcript file, or --url for a link-accessible Google Doc.", err=True)
         raise typer.Exit(code=2)
-
     try:
-        from wingman.application.resume_formats import extract_resume_text
-
         if url:
-            # The same one explicit, https-only fetch resume ingestion uses
-            # (RFC-009): the raw bytes are archived to the inbox first, so
-            # the original artifact is the provenance record.
             from wingman.application.resume_formats import fetch_resume_bytes
 
             name, raw = fetch_resume_bytes(url)
-            config.inbox_dir.mkdir(parents=True, exist_ok=True)
-            archived = config.inbox_dir / name
-            archived.write_bytes(raw)
-            text = extract_resume_text(archived)
         else:
-            text = extract_resume_text(path)  # type: ignore[arg-type]
-        transcript = parse_transcript(text)
-    except IngestError as exc:
-        typer.echo(f"transcript read failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-
-    matches = match_speakers(transcript)
-    typer.echo(render_transcript(transcript, matches))
-
-    if not note_for:
-        typer.echo(
-            "Nothing was written. Re-run with --note-for '<person>' to file this call "
-            "as an interaction note on somebody you name."
-        )
-        return
-
-    from wingman.application.relationship import log_interaction
-
-    summary = f"Call: {transcript.title or 'transcript'}"
-    if transcript.date:
-        summary += f" ({transcript.date})"
-    summary += f". {len(transcript.turns)} turns transcribed by Gemini."
-    if transcript.next_steps:
-        summary += f" Next steps, as the export recorded them: {transcript.next_steps}"
-    try:
+            assert path is not None
+            name, raw = path.name, path.read_bytes()
+        transcript, preview, _digest = preview_transcript(raw, name)
+        typer.echo(preview)
+        if not note_for:
+            typer.echo(
+                "Nothing was written. After review, re-run with --note-for and --reviewed-hash."
+            )
+            return
         with Storage(config.db_path) as storage:
-            log_interaction(note_for, summary, config, storage)
-    except IngestError as exc:
-        typer.echo(f"note failed: {exc}", err=True)
+            typer.echo(
+                file_transcript(raw, name, transcript, note_for, reviewed_hash, config, storage)
+            )
+    except (IngestError, OSError) as exc:
+        typer.echo(f"Transcript failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(f"Filed against {note_for}: {summary}")
 
 
 @app.command()
@@ -4667,6 +4618,41 @@ def _load_tenant_or_exit(slug: str, registry: Path | None) -> tuple[Tenant, Path
     return tenant, registry_path
 
 
+_OAUTH_CONFIG_HELP = (
+    "The shared service's OAuth env file, when it is not where the saved "
+    "/etc/wingman/oauth-config-path pointer (or the default /etc/wingman/oauth.env) "
+    "says. A file path, never an issuer: the trusted issuers are read from it."
+)
+_OAUTH_WEB_CONFIG_HELP = (
+    "The shared service's browser-login env file, when it is not the default "
+    "/etc/wingman/oauth-web.env. Read for --oauth-web-client-id only."
+)
+
+
+def _issuers_for_binding_or_exit(
+    issuer: str, oauth_config: Path | None, oauth_web_config: Path | None
+) -> tuple[str, ...]:
+    """The given issuer, then every other issuer the shared service trusts (#618).
+
+    Read from the service's own OAuth env files, never from a flag, and
+    refused (exit 1, nothing bound) when they cannot be read or the given
+    issuer is not one of them.
+    """
+    from wingman.infrastructure.oauth_service_issuers import (
+        ServiceIssuersError,
+        read_service_issuers,
+    )
+
+    try:
+        return read_service_issuers(
+            oauth_config.expanduser() if oauth_config is not None else None,
+            oauth_web_config.expanduser() if oauth_web_config is not None else None,
+        ).for_binding(issuer)
+    except ServiceIssuersError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+
 @tenant_app.command("oauth-bind")
 def tenant_oauth_bind_cmd(
     slug: str = typer.Argument(..., help="Existing tenant slug to receive this identity."),
@@ -4703,6 +4689,10 @@ def tenant_oauth_bind_cmd(
         "--renew-reservation",
         help="Extend an active provisioning claim immediately before registry mutation.",
     ),
+    oauth_config: Path | None = typer.Option(None, "--oauth-config", help=_OAUTH_CONFIG_HELP),
+    oauth_web_config: Path | None = typer.Option(
+        None, "--oauth-web-config", help=_OAUTH_WEB_CONFIG_HELP
+    ),
 ) -> None:
     """Bind one operator-trusted OAuth identity to an existing tenant.
 
@@ -4710,6 +4700,13 @@ def tenant_oauth_bind_cmd(
     wingman-add-tenant.sh, then run this command. Login alone never creates
     a workspace, and no email, privilege, or funded access is inferred.
     A bound identity is removed from the pending approval queue.
+
+    The subject is bound under --issuer AND under every other issuer the
+    shared service trusts (the browser login and the MCP connector), read
+    from the service's own OAuth env files: one WorkOS user has the same
+    subject on both. Refused, with nothing bound, if those files cannot be
+    read, --issuer is not one of them, or the other surface already belongs
+    to a different tenant.
     """
     configure_logging()
     from wingman.infrastructure.oauth_bearer import (
@@ -4739,9 +4736,14 @@ def tenant_oauth_bind_cmd(
         )
         raise typer.Exit(code=2)
 
+    issuers = _issuers_for_binding_or_exit(issuer, oauth_config, oauth_web_config)
+    also = issuers[1:]
+
     if reserve:
         try:
-            token = reserve_trusted_identity(identity_path, issuer, subject, slug)
+            token = reserve_trusted_identity(
+                identity_path, issuer, subject, slug, also_issuers=also
+            )
         except IdentityMapError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=1) from exc
@@ -4751,7 +4753,7 @@ def tenant_oauth_bind_cmd(
     if renew_reservation is not None:
         try:
             renewed = renew_trusted_identity_reservation(
-                identity_path, issuer, subject, renew_reservation
+                identity_path, issuer, subject, renew_reservation, also_issuers=also
             )
         except IdentityMapError as exc:
             typer.echo(str(exc), err=True)
@@ -4765,7 +4767,7 @@ def tenant_oauth_bind_cmd(
     if release_reservation is not None:
         try:
             released = release_trusted_identity_reservation(
-                identity_path, issuer, subject, release_reservation
+                identity_path, issuer, subject, release_reservation, also_issuers=also
             )
         except IdentityMapError as exc:
             typer.echo(str(exc), err=True)
@@ -4778,38 +4780,48 @@ def tenant_oauth_bind_cmd(
 
     if preflight:
         try:
-            changed = preflight_trusted_identity(identity_path, issuer, subject, slug)
+            available = preflight_trusted_identity(
+                identity_path, issuer, subject, slug, also_issuers=also
+            )
         except IdentityMapError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=1) from exc
-        if changed:
+        if available:
             typer.echo(f"Trusted OAuth identity is available to bind to {slug!r}.")
         else:
             typer.echo(f"That trusted OAuth identity is already bound to {slug!r}.")
+        for key_issuer in issuers:
+            state = "would bind" if key_issuer in available else "already bound"
+            typer.echo(f"  {state} under {key_issuer}")
         return
 
     _tenant, registry_path = _load_tenant_or_exit(slug, registry)
     try:
-        changed = bind_trusted_identity(
-            identity_path, issuer, subject, slug, reservation=reservation
+        written = bind_trusted_identity(
+            identity_path, issuer, subject, slug, reservation=reservation, also_issuers=also
         )
     except IdentityMapError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    if changed:
+    if written:
         binding_status = f"Bound trusted OAuth identity to tenant {slug!r} in {identity_path}."
     else:
         binding_status = (
             f"Trusted OAuth binding for tenant {slug!r} already existed in {identity_path}."
         )
+    binding_status += "".join(
+        f"\n  {'bound' if key_issuer in written else 'already bound'} under {key_issuer}"
+        for key_issuer in issuers
+    )
     # After the bind, not before: a bound identity is never re-queued (the
     # server checks the on-disk map first), so this cannot race a sign-in.
+    # Identity map first, then onboarding, as everywhere else.
     pending_problem: str | None = None
     try:
-        if OAuthOnboardingStore(onboarding_path_for(identity_path)).discard_pending(
-            issuer, subject
-        ):
-            binding_status += " Removed it from the pending approval queue."
+        store = OAuthOnboardingStore(onboarding_path_for(identity_path))
+        removed = [store.discard_pending(key_issuer, subject) for key_issuer in issuers]
+        if any(removed):
+            binding_status += "\nRemoved it from the pending approval queue."
     except OAuthOnboardingError as exc:
         pending_problem = (
             "The binding was written, but the identity is still listed as pending "
@@ -5135,8 +5147,20 @@ def tenant_oauth_approve_cmd(
         "--service-user",
         help="OS account that owns OAuth state and tenant workspaces.",
     ),
+    oauth_config: Path | None = typer.Option(None, "--oauth-config", help=_OAUTH_CONFIG_HELP),
+    oauth_web_config: Path | None = typer.Option(
+        None, "--oauth-web-config", help=_OAUTH_WEB_CONFIG_HELP
+    ),
 ) -> None:
-    """Approve one verified pending identity into its reserved tenant."""
+    """Approve one verified pending identity into its reserved tenant.
+
+    The subject is bound under --issuer and under every other issuer the
+    shared service trusts, read from the service's own OAuth env files
+    (this command runs as root, whose environment does not load them), so
+    the person is let in on both the browser and the connector. Refused,
+    with nothing created, if those files cannot be read, --issuer is not one
+    of them, or the other surface already belongs to a different tenant.
+    """
     configure_logging()
     from wingman.infrastructure.oauth_onboarding import (
         OAuthOnboardingError,
@@ -5146,6 +5170,7 @@ def tenant_oauth_approve_cmd(
     from wingman.infrastructure.tenants import tenant_registry_path
 
     registry_path = (registry or tenant_registry_path()).expanduser()
+    issuers = _issuers_for_binding_or_exit(issuer, oauth_config, oauth_web_config)
     try:
         data_dir = approve_pending_tenant(
             identity_path=identities.expanduser(),
@@ -5155,6 +5180,7 @@ def tenant_oauth_approve_cmd(
             issuer=issuer,
             subject=subject,
             service_user=service_user,
+            trusted_issuers=issuers,
         )
     except OAuthOnboardingError as exc:
         typer.echo(str(exc), err=True)
@@ -5169,6 +5195,7 @@ def tenant_oauth_approve_cmd(
         )
         raise typer.Exit(code=1) from exc
     typer.echo(f"Approved {slug!r}: isolated workspace {data_dir}; privileged=false; funded=false.")
+    typer.echo("Bound under: " + ", ".join(issuers))
     if signaled_pid is not None:
         typer.echo(
             f"Signaled the running shared service (pid {signaled_pid}) to reload. "
@@ -7143,6 +7170,22 @@ def run() -> None:
             )
         except Exception:  # noqa: BLE001, S110 — the journal never breaks the CLI
             pass
+
+
+@opportunities_app.command("list")
+def opportunities_list() -> None:
+    """List assessed opportunities using the same summaries as MCP."""
+    from wingman.application.opportunities import (
+        list_opportunity_summaries,
+        render_opportunity_listing,
+    )
+
+    configure_logging()
+    config = load_config()
+    _require_workspace(config, "listed")
+    with Storage(config.db_path) as storage:
+        summaries = list_opportunity_summaries(storage, config)
+    typer.echo(render_opportunity_listing(summaries))
 
 
 if __name__ == "__main__":

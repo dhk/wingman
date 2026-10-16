@@ -116,6 +116,46 @@ Build-time tooling (which model writes the code) is a separate concern, owned by
 
 The exhaustive [CLI/MCP ledger](SURFACE-PARITY.md) records existing counterparts, deliberate exceptions, and deferred gaps. A contract test enumerates registered tools and all CLI leaf commands (including aliases), checks exact inventory coverage and reciprocal mappings, and rejects unmatched entries without a reason. Adding a row does not implement a gap. New tools, especially hosted ingestion, require a separate design; this change adds none.
 
+### Client-dependent file import operations (#598) — Durable decision
+
+MCP imports accept the actual attachment bytes as standard base64 and a basename,
+never a server filesystem path: `ingest_resume_file`, `ingest_linkedin`,
+`ingest_transcript`, and `corpus_add`. Clients must encode real attachments;
+models must not reconstruct or invent binary data. Existing browser upload remains
+the fallback for resume/LinkedIn files when the client cannot send file bytes.
+The same application pipelines enforce extraction, evidence validation, document
+lineage and deduplication. `corpus_list` and CLI `opportunities list` close the
+remaining listing gaps; deliberate operator/conversational exceptions remain in
+the ledger.
+
+Bound payloads before storing or invoking models: 10 MiB decoded, ZIP/DOCX at most
+1000 entries and 50 MiB expanded, no encrypted/unsupported compression. ZIP
+members are read as data, never extracted to caller-selected paths. Imports
+archive original bytes in the current tenant inbox, preserving prior records and
+partial successes on failure. MCP errors do not echo server paths. Opt-in tool telemetry withholds upload bytes
+and all argument values/result contents, including names, transcript previews and
+corpus titles. Unexpected import exceptions return a generic recovery message,
+never exception text. Resume text
+uses the configured extraction provider; LinkedIn, corpus, and transcripts remain
+deterministic with no network or model calls.
+
+Transcript preview uses a temporary file removed immediately and persists
+nothing, including CLI URL previews. Filing requires the user's explicit full-name
+instruction after review and the SHA-256 `reviewed_hash` of the previewed bytes
+(`--reviewed-hash` on CLI). The hash binds content, not proof of human review.
+Both surfaces share a filing helper: archive original bytes and a source record,
+link the local artifact from the log entry, and record Gemini-generated notes as
+ENDORSED, never OBSERVED. Speaker mismatches remain visible. No profile claims,
+messages, or external writes are made by this tool.
+
+Trade-off: base64 costs roughly one third more transport space and requires client
+attachment encoding support. There is no arbitrary server-path fallback. Larger
+exports need a smaller subset or operator-assisted local import. This does not
+claim automatic attachment access in every MCP client. Claude.ai/Desktop native
+attachment forwarding is unverified. Corpus/transcript remain hosted gaps for
+clients without a byte encoder; no browser fallback ships for them. Transcript
+URL fetching is CLI-only. No model may re-encode text into purported original bytes.
+
 ## RFC-009: Read-only public-feed fetching, explicitly invoked
 
 **Decision.** Wingman's first network access: `wingman people fetch` reads the public, unauthenticated RSS feed of a person the user has explicitly put on their watchlist. The rules, enforced in one place (`infrastructure/fetch.py`):
@@ -1510,6 +1550,47 @@ identity key" and "do not obtain `sub` from email".
   registered and unreachable.
 - **Staging.** #584 recorded invites; #585 claims them at sign-in. The
   superseded rules above now describe only the manual path.
+
+**Amendment (2026-10-12): manual binding covers both surfaces (#618; Durable
+decision).** The 2026-10-09 amendment bound a *claimed* email invite under both
+trusted issuers but left manual `oauth-approve` binding only the issuer it was
+given, so the operator ran a second `oauth-bind` and the person was refused a
+second time on the other surface. Now `oauth-approve` and `oauth-bind` bind the
+given `sub` under `--issuer` and under every other issuer the shared service
+trusts, on the same #582 evidence (one WorkOS user, one `sub`, both issuers).
+
+- **Where the trusted set comes from.** The service's own configuration, never
+  a command-line value: `--oauth-issuer` inside `WINGMAN_OAUTH_ARGS` in the
+  OAuth env file (`/etc/wingman/oauth.env`, or the path saved in
+  `/etc/wingman/oauth-config-path`), and the WorkOS session issuer derived from
+  `--oauth-web-client-id` inside `WINGMAN_OAUTH_WEB_ARGS` in
+  `/etc/wingman/oauth-web.env` — the same `EnvironmentFile=`s, the same
+  values the unit's `ExecStart=` expands. `oauth-approve` runs as root through
+  plain `sudo`, whose environment never loads them, so they are parsed as
+  data: never sourced, only those keys kept, and nothing else in them (the
+  browser client secret included) printed, logged or put in an exception.
+  The args are split as systemd expands an unquoted `$VAR`: whitespace
+  words, single and double quotes honoured and removed. A backslash or an
+  unbalanced quote is refused, since that is where the two parsers could
+  disagree and bind an issuer the service never checks.
+  `--oauth-config` / `--oauth-web-config` may name the files on an unusual
+  install; they cannot name an issuer.
+- **Fail closed.** Absent or unreadable configuration (reported distinctly),
+  an `--issuer` outside the trusted set, or the subject already bound to — or
+  reserved for — a different tenant under any trusted issuer: nothing is bound
+  and nothing is created. There is no single-surface opt-out: the only case it
+  would serve is a subject that differs between surfaces, which #582 showed
+  does not happen for one WorkOS user, and binding one surface of a person
+  whose other surface belongs to someone else is exactly what must not happen.
+- **Atomic and idempotent.** All bindings are written in one replacement of
+  the identity map, or none. An exact existing binding is left alone, so a
+  rerun changes nothing, and a tenant bound on one surface by an earlier build
+  gains the other. Provisioning reservations cover every trusted issuer under
+  one token. Pending rows for the subject under every trusted issuer are
+  cleared after the bind, identity map before onboarding state — the lock
+  order used everywhere.
+- **What it does not change.** Each binding is still an `(iss, sub)` key. Two
+  pending rows with *different* subjects are still two people.
 
 ## RFC-082: Client-owned artifact kinds (#503) — Durable decision
 
