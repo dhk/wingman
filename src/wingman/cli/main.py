@@ -2227,7 +2227,9 @@ def people_deep_dive(
     The only wingman lookup that reaches the open web (via OpenRouter) and
     the only one that costs API usage per call — every other lookup stays
     inside approved sources or stored data. Asks before searching (the
-    paid call) and again before storing what it finds.
+    paid call) and again before storing what it finds. Storing creates the
+    person if wingman doesn't know them yet and follows them, as
+    `people add` does; someone already known keeps their follow state.
     """
     configure_logging()
     config = load_config()

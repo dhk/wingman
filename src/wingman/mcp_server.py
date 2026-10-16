@@ -3864,7 +3864,9 @@ def people_deep_dive_save(name: str, content: str) -> str:
     their explicit approval — this call is itself the storage approval
     gate (no separate confirmed flag: the reviewed content in hand is the
     proof, same shape as feed_discover/feed_attach). Creates the person if
-    they aren't already on the watchlist. Overwrites any previous dossier
+    wingman doesn't know them yet, and then follows them (the 'following'
+    list, as people_add does); someone already known keeps their follow
+    state. Overwrites any previous dossier
     for this person (rebuilt, not versioned — same as a POV card).
     """
     config = _ready_config()

@@ -18,6 +18,7 @@ shape as feed_discover/feed_attach).
 from __future__ import annotations
 
 from wingman.application.ingest import IngestError
+from wingman.application.people import follow_person
 from wingman.domain.person import Person, PersonDossier, PersonOrigin
 from wingman.infrastructure.storage import Storage
 from wingman.providers.base import ModelProvider, ModelRequest, ModelResponse
@@ -94,7 +95,11 @@ def save_person_dossier(
 
     Call only after the caller has shown 'content' to the user and gotten
     explicit approval to store it — this function itself makes no model
-    call and asks no questions."""
+    call and asks no questions.
+
+    A person this save creates is followed, as `people add` does (#624);
+    an existing person's follow state is left alone, so someone the owner
+    unfollowed is not put back on a list."""
     if not content.strip():
         raise IngestError("no dossier content to store — run the deep-dive search first.")
     name_key = " ".join(name.lower().split())
@@ -102,6 +107,7 @@ def save_person_dossier(
     if person is None:
         person = Person(name=name.strip(), origin=PersonOrigin.MANUAL)
         storage.add_person(person)
+        follow_person(storage, person)
     dossier = PersonDossier(
         person_id=person.person_id,
         person_name=person.name,

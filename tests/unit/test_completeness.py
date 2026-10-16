@@ -550,7 +550,7 @@ def test_pov_action_counts_followed_people_whose_employer_is_not_followed(
         "Cy": True,
     }
     titles = [action.title for action in next_actions(report)]
-    assert "Build POV cards for 2 watched people" in titles
+    assert "Build POV cards for 2 followed people" in titles
 
 
 def test_an_empty_workspace_says_how_to_follow_someone(workspace: Path) -> None:
@@ -561,3 +561,21 @@ def test_an_empty_workspace_says_how_to_follow_someone(workspace: Path) -> None:
     html = render_completeness_html(report)
     assert "None yet — people add, or watchlist add, follows someone." in markdown
     assert "None yet — people add, or watchlist add, follows someone." in html
+
+
+def test_pov_action_counts_five_followed_people_at_five_unfollowed_companies(
+    workspace: Path,
+) -> None:
+    """#625 review, the confirmed scenario: five followed people, each at a
+    different employer nobody followed, no POV cards. Before the fix the
+    action vanished (companies == [] so the sum was 0)."""
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        _settled(storage)
+        for index in range(5):
+            _followed(storage, f"Person {index}", company=f"Unfollowed {index}")
+        report = compute_completeness(storage, config)
+
+    assert report.companies == []
+    titles = [action.title for action in next_actions(report)]
+    assert "Build POV cards for 5 followed people" in titles

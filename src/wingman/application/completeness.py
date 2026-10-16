@@ -436,10 +436,10 @@ def next_actions(report: CompletenessReport) -> list[NextAction]:
     if missing_pov:
         actions.append(
             NextAction(
-                title=f"Build POV cards for {missing_pov} watched people",
+                title=f"Build POV cards for {missing_pov} followed people",
                 why=(
                     "A point of view is what you can actually walk into a conversation with; "
-                    "a watched person without one is a name on a list."
+                    "a followed person without one is a name on a list."
                 ),
                 how="say: build <name>'s point-of-view card",
             )

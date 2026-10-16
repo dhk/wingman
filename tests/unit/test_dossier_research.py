@@ -192,3 +192,28 @@ def test_merge_person_keeps_keepers_dossier_when_both_have_one(workspace: Path) 
         kept = storage.get_person_dossier(keep.person_id)
         assert kept is not None
         assert kept.content == "Keeper's findings."
+
+
+def test_an_approved_save_that_creates_a_person_follows_them(workspace: Path) -> None:
+    """#625 review (owner decision): a deep-dive save that creates a new
+    person follows them, the same way `people add` does."""
+    from wingman.application.people import FOLLOWING_LIST
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        save_person_dossier("Scott Brady", "Findings.", storage)
+        following = storage.watchlist_members(FOLLOWING_LIST)
+    assert following == [("person", "Scott Brady")]
+
+
+def test_a_save_for_an_existing_person_does_not_re_follow_them(workspace: Path) -> None:
+    """Someone the owner already has (and may have unfollowed on purpose) is
+    not put back on a list by a later deep-dive save."""
+    from wingman.application.people import FOLLOWING_LIST, add_person
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        add_person("Scott Brady", storage)
+        save_person_dossier("Scott Brady", "Findings.", storage)
+        following = storage.watchlist_members(FOLLOWING_LIST)
+    assert following == []
