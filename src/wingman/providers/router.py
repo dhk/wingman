@@ -199,7 +199,7 @@ def get_provider(capability: CapabilityClass, config: Config) -> ModelProvider:
         if not isinstance(raw_path, str) or not raw_path:
             raise ModelConfigError(f"[models.{capability.value}] needs a 'path' in {path}.")
         return UsageTrackingProvider(
-            RecordedProvider.from_file(Path(raw_path)), config, capability, Payer.AMBIENT
+            RecordedProvider.from_file(Path(raw_path)), config, capability, Payer.OFFLINE
         )
     raise ModelConfigError(
         f"[models.{capability.value}] in {path} names unknown provider {provider!r}; "
@@ -247,7 +247,7 @@ def get_embedding_provider(config: Config) -> EmbeddingProvider:
             voyage_credential.payer,
         )
     if provider_name == "hashed":
-        return UsageTrackingEmbeddingProvider(HashedEmbeddingProvider(), config, Payer.AMBIENT)
+        return UsageTrackingEmbeddingProvider(HashedEmbeddingProvider(), config, Payer.OFFLINE)
     raise ModelConfigError(
         f"[models.embed_semantic] in {path} names unknown provider {provider_name!r}; "
         "supported providers are 'voyage' and 'hashed'."

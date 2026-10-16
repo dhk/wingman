@@ -1632,14 +1632,18 @@ Recording uses a ledger-only connection with a 250 ms lock timeout. Accounting
 is best-effort and reports are a lower bound if writes fail; RFC-080 budget
 warnings/enforcement remain deferred until omissions can be reliably accounted
 for. Reports show daily raw units, unknown counters with known subtotals, explicit
-newest-N truncation, and known funded-spend ranking. Offline recorded/hashed calls
-remain inspectable but are separately marked non-billable, priced zero and excluded
-from funded rankings. Voyage response usage.total_tokens is captured per call,
+newest-N truncation, and known funded-spend ranking. Offline calls (owner decision
+2026-10-16, option b) are classified by the provider's own `offline = True`
+property, stamped `payer = offline`, shown on one separate "no cost (offline)"
+line with no payer, never unpriced, and excluded from the billable header count,
+the newest-N window, billable totals and funded rankings. A lock-deferred row is
+queued in memory and retried rather than dropped; only rows still unwritable at
+exit (logged) or lost to a crash are omitted. Voyage response usage.total_tokens is captured per call,
 without mutable shared last-response state. Prices match exact provider/model
 identifiers or an operator-declared pricing_models list; no alias guessing.
 
 **RFC-068 addendum (RFC-084; Durable decision).** usage_all_tenants is an explicit
-privileged read-only accounting exception to local-only cross-tenant administration.
+privileged (operator-gated, owner-approved 2026-10-16) read-only accounting exception to local-only cross-tenant administration.
 It checks operator_only_refusal before registry or workspace access, reads no
 prompts, credentials or responses, and cannot migrate or modify another tenant's
 DB. The same CLI --all-tenants gate applies. This grants no provisioning authority.

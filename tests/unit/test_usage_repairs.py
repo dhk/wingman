@@ -230,9 +230,10 @@ def test_offline_calls_are_marked_non_billable_and_funded_ranking_is_explicit(tm
     from wingman.application.model_usage import funded_ranking
 
     config = Config(data_dir=tmp_path, data_dir_source="test")
-    offline = row().model_copy(update={"provider": "recorded"})
-    assert "[offline/non-billable]" in render_usage(config, [offline])
-    assert "$0.000000" in render_usage(config, [offline])
+    offline = row().model_copy(update={"provider": "recorded", "payer": Payer.OFFLINE})
+    report = render_usage(config, [offline])
+    assert "- no cost (offline): 1 call(s)" in report
+    assert "unpriced" not in report.lower()
     config.models_config_path.write_text(
         '[models.extract_fast]\nprovider="anthropic"\nmodel="dated-model"\ninput_usd_per_million=1.0\n'
     )
@@ -255,5 +256,5 @@ def test_operator_reports_never_load_tenant_credentials(tmp_path, monkeypatch):
     monkeypatch.setattr(Tenant, "config", forbidden)
     report, failed = render_tenant_usage(tenant, 10)
     assert not failed, report
-    assert "1 successful call(s)" in report
+    assert "1 billable call(s)" in report
     assert "sample:" in funded_ranking([tenant], 10)

@@ -162,6 +162,8 @@ class HashedEmbeddingProvider:
     """
 
     provider_name = "hashed"
+    # Never reaches a metered API: usage is recorded as offline, no cost (#557).
+    offline = True
 
     def __init__(self, model: str = "hashed-256", dim: int = 256) -> None:
         self.model = model

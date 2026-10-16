@@ -13,6 +13,10 @@ class Payer(StrEnum):
     BYOK = "byok"
     FUNDED = "funded"
     AMBIENT = "ambient"
+    # Not a payer: a recorded, hashed or fake provider that never reaches a
+    # metered API (owner decision 2026-10-16, option b). Stamped from the
+    # provider's own 'offline' property at write time, never from its name.
+    OFFLINE = "offline"
 
 
 class ModelUsage(BaseModel):

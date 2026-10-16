@@ -7,16 +7,42 @@ from time import perf_counter
 from wingman.domain.model_usage import ModelUsage, Payer
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.logs import get_logger
-from wingman.infrastructure.usage_ledger import record_usage
+from wingman.infrastructure.usage_ledger import WRITE_TIMEOUT_SECONDS, record_usage
 from wingman.providers.base import CapabilityClass, ModelProvider, ModelRequest, ModelResponse
 from wingman.providers.embeddings import EmbeddingProvider, EmbeddingUsageProvider, InputType
 
 _logger = get_logger("model_usage")
 
 
+def is_offline(provider: object) -> bool:
+    """True only when the provider itself declares it never meters (#557, option b)."""
+    return getattr(provider, "offline", False) is True
+
+
+def _usage_payer(provider: object, payer: Payer) -> Payer:
+    """Offline providers are never attributed to a payer; billable ones never go free."""
+    if is_offline(provider):
+        return Payer.OFFLINE
+    if payer is Payer.OFFLINE:
+        raise ValueError(
+            f"{type(provider).__name__} is billable (it does not declare offline = True); "
+            "its usage cannot be recorded as offline."
+        )
+    return payer
+
+
 def _record(config: Config, usage: ModelUsage) -> None:
     try:
-        record_usage(config.db_path, usage)
+        if not record_usage(config.db_path, usage):
+            _logger.warning(
+                "model usage write deferred provider=%s model=%s capability=%s: database "
+                "locked for %.2fs (often this process's own open transaction); the row is "
+                "kept in memory and retried, but is lost if the process dies first",
+                usage.provider,
+                usage.model,
+                usage.capability,
+                WRITE_TIMEOUT_SECONDS,
+            )
     except Exception:  # noqa: BLE001 — accounting must never alter the paid call's result
         _logger.exception(
             "model usage recording failed provider=%s model=%s capability=%s; call result preserved",
@@ -38,7 +64,7 @@ class UsageTrackingProvider:
         self._inner = inner
         self._config = config
         self._capability = capability
-        self._payer = payer
+        self._payer = _usage_payer(inner, payer)
         self._caller_name = caller_name
 
     def __getattr__(self, name: str) -> object:
@@ -76,7 +102,7 @@ class UsageTrackingEmbeddingProvider:
     ) -> None:
         self._inner = inner
         self._config = config
-        self._payer = payer
+        self._payer = _usage_payer(inner, payer)
         self._caller_name = caller_name
         self.provider_name = inner.provider_name
         self.model = inner.model

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import sqlite3
 import tomllib
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from wingman.domain.model_usage import ModelUsage
+from wingman.domain.model_usage import ModelUsage, Payer
 from wingman.infrastructure.config import Config
 from wingman.infrastructure.usage_ledger import read_usage
 
@@ -26,11 +27,20 @@ def render_tenant_usage(tenant: Tenant, limit: int) -> tuple[str, bool]:
     try:
         config = Config(data_dir=tenant.data_dir, data_dir_source="read-only usage report")
         if not config.db_path.exists():
-            return f"Tenant {tenant.slug}: no workspace yet ({config.db_path} missing).", True
-        rows, total, present = read_usage(config.db_path, limit)
-        if not present:
+            # A registered tenant who has not made a workspace yet has spent
+            # nothing; that is a fact to report, not a read failure.
+            return f"Tenant {tenant.slug}: no usage yet (no workspace database yet).", False
+        read = read_usage(config.db_path, limit)
+        if not read.present:
             return f"Tenant {tenant.slug}: no usage recorded (ledger not yet created).", False
-        return render_usage(config, rows, heading=f"Tenant {tenant.slug}", total_count=total), False
+        report = render_usage(
+            config,
+            read.rows,
+            heading=f"Tenant {tenant.slug}",
+            total_count=read.total,
+            offline_count=read.offline_count,
+        )
+        return report, False
     except Exception as exc:  # noqa: BLE001 — one bad tenant must not hide the rest
         return f"Tenant {tenant.slug}: could not be read — {exc}", True
 
@@ -67,7 +77,7 @@ def _price_usage(config: Config, rows: list[ModelUsage]) -> tuple[list[PricedUsa
 
 
 def _row_cost(row: ModelUsage, entry: object) -> Decimal | None:
-    if row.provider in {"recorded", "hashed"}:
+    if row.payer is Payer.OFFLINE:
         return Decimal(0)
     if not isinstance(entry, dict):
         return None
@@ -125,13 +135,27 @@ def render_usage(
     *,
     heading: str = "Model usage",
     total_count: int | None = None,
+    offline_count: int = 0,
 ) -> str:
+    """Billable calls grouped by day and payer, offline calls on one line apart.
+
+    'rows' may include offline rows (they are split out here); 'total_count'
+    and 'offline_count', when given, are the ledger's full counts, and
+    offline rows in 'rows' are not counted again.
+    """
+    offline_rows = [row for row in rows if row.payer is Payer.OFFLINE]
+    rows = [row for row in rows if row.payer is not Payer.OFFLINE]
+    offline_total = offline_count + len(offline_rows)
     priced, diagnostic = _price_usage(config, rows)
     total = len(rows) if total_count is None else total_count
     scope = f"; newest {len(rows)} of {total} (truncated)" if total > len(rows) else ""
-    lines = [f"{heading}: {len(rows)} successful call(s){scope}"]
+    lines = [f"{heading}: {len(rows)} billable call(s){scope}"]
     if not rows:
-        lines = [f"{heading}: no successful model calls recorded."]
+        lines = [
+            f"{heading}: no billable model calls recorded."
+            if offline_total
+            else f"{heading}: no successful model calls recorded."
+        ]
     groups: dict[tuple[str, str, str, str, str], list[PricedUsage]] = {}
     for item in priced:
         r = item.usage
@@ -156,12 +180,15 @@ def render_usage(
                 else f"unknown (known subtotal {subtotal})"
             )
             units.append(f"{name}={value_text}")
-        offline = " [offline/non-billable]" if provider in {"recorded", "hashed"} else ""
         lines.append(
-            f"- {day} | {payer} | {capability} | {provider}/{model}: {len(items)} call(s), {price}{offline}; "
+            f"- {day} | {payer} | {capability} | {provider}/{model}: {len(items)} call(s), {price}; "
             + ", ".join(units)
         )
-    if diagnostic:
+    if offline_total:
+        # Owner decision 2026-10-16 (option b): one line, no payer, no price,
+        # never unpriced and never part of any billable total above.
+        lines.append(f"- no cost (offline): {offline_total} call(s)")
+    if diagnostic and rows:
         lines.append(
             f"Pricing unavailable: {diagnostic}. Raw usage remains available; these calls are unpriced, not zero-cost."
         )
@@ -175,11 +202,22 @@ def render_usage(
     return "\n".join(lines)
 
 
+class UsageReadError(Exception):
+    """The workspace database could not be read for a usage report."""
+
+
 def render_workspace_usage(config: Config, limit: int) -> str:
-    rows, total, present = read_usage(config.db_path, limit)
-    if not present:
+    """Own-workspace report; raises UsageReadError, never a raw sqlite error."""
+    try:
+        read = read_usage(config.db_path, limit)
+    except sqlite3.Error as exc:
+        raise UsageReadError(
+            f"Model usage could not be read from {config.db_path} ({exc}). Nothing was changed; "
+            "if the database is busy, retry in a moment; if it is damaged, restore it from a backup."
+        ) from exc
+    if not read.present:
         return "Model usage: no usage recorded (ledger not yet created)."
-    return render_usage(config, rows, total_count=total)
+    return render_usage(config, read.rows, total_count=read.total, offline_count=read.offline_count)
 
 
 def funded_ranking(tenants: list[Tenant], limit: int) -> str:
@@ -188,12 +226,13 @@ def funded_ranking(tenants: list[Tenant], limit: int) -> str:
     for tenant in tenants:
         try:
             config = Config(data_dir=tenant.data_dir, data_dir_source="read-only usage report")
-            rows, total, _present = read_usage(config.db_path, limit)
+            if not config.db_path.exists():
+                ranked.append((Decimal(0), tenant.slug, False))
+                continue
+            # read_usage already excludes offline rows from rows and total.
+            rows, total, _present, _offline = read_usage(config.db_path, limit)
             funded = [
-                item
-                for item in price_usage(config, rows)
-                if item.usage.payer.value == "funded"
-                and item.usage.provider not in {"recorded", "hashed"}
+                item for item in price_usage(config, rows) if item.usage.payer is Payer.FUNDED
             ]
             cost = sum((item.cost_usd for item in funded if item.cost_usd is not None), Decimal(0))
             ranked.append(

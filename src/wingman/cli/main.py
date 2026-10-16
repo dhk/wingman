@@ -71,6 +71,7 @@ from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.linkedin import import_linkedin
 from wingman.application.model_usage import (
+    UsageReadError,
     funded_ranking,
     render_tenant_usage,
     render_workspace_usage,
@@ -1282,7 +1283,7 @@ def demo() -> None:
                 "real semantic quality."
             )
             embedder = UsageTrackingEmbeddingProvider(
-                HashedEmbeddingProvider(), config, Payer.AMBIENT
+                HashedEmbeddingProvider(), config, Payer.OFFLINE
             )
         elif embedder is not None and embedder.provider_name == "voyage":
             typer.echo(
@@ -1435,7 +1436,11 @@ def usage(
     config = load_config()
     if not all_tenants:
         _require_workspace(config, "reported")
-        typer.echo(render_workspace_usage(config, limit))
+        try:
+            typer.echo(render_workspace_usage(config, limit))
+        except UsageReadError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
         return
     refusal = operator_only_refusal(config, "usage --all-tenants")
     if refusal:

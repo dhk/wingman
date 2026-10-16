@@ -346,8 +346,8 @@ def test_tenant_usage_read_does_not_create_a_missing_database(tmp_path: Path) ->
 
     report, failed = render_tenant_usage(tenant, 100)
 
-    assert failed
-    assert "no workspace yet" in report
+    assert not failed
+    assert "no usage yet" in report
     assert not (tenant.data_dir / "wingman.db").exists()
 
 

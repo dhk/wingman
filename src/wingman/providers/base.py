@@ -50,4 +50,13 @@ class ProviderError(Exception):
 
 
 class ModelProvider(Protocol):
+    """A model backend.
+
+    Offline backends (recorded, fake, any provider that never reaches a
+    metered API) declare a class attribute 'offline = True'. Usage
+    accounting reads that property, never the provider's name, to record
+    their calls as zero-cost offline rows (#557, option b). Absent means
+    billable.
+    """
+
     def complete(self, request: ModelRequest) -> ModelResponse: ...

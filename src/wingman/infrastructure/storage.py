@@ -33,8 +33,15 @@ from wingman.domain.relationship import RelationshipLogEntry, RelationshipObject
 from wingman.domain.research import CompanySource, NewLinkEvent, ResearchSnapshot
 from wingman.domain.source_record import derive_document_key
 from wingman.domain.values import ValueProfile, ValueView
+from wingman.infrastructure.usage_ledger import (
+    MODEL_USAGE_INDEX_SQL,
+    MODEL_USAGE_SCHEMA,
+    MODEL_USAGE_TABLE_SQL,
+    flush_pending_usage,
+)
 
-_SCHEMA = """
+_SCHEMA = (
+    """
 CREATE TABLE IF NOT EXISTS source_records (
     record_id TEXT PRIMARY KEY,
     source_type TEXT NOT NULL,
@@ -282,23 +289,9 @@ CREATE TABLE IF NOT EXISTS delivered_messages (
     payload TEXT NOT NULL,
     delivered_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS model_usage (
-    usage_id TEXT PRIMARY KEY,
-    recorded_at TEXT NOT NULL,
-    capability TEXT NOT NULL,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    payer TEXT NOT NULL CHECK (payer IN ('byok', 'funded', 'ambient')),
-    input_tokens INTEGER,
-    output_tokens INTEGER,
-    cache_read_tokens INTEGER,
-    cache_write_tokens INTEGER,
-    search_result_count INTEGER,
-    latency_ms INTEGER NOT NULL,
-    caller_name TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_model_usage_recorded_at ON model_usage (recorded_at);
 """
+    + MODEL_USAGE_SCHEMA
+)
 
 
 class DuplicateRecordError(Exception):
@@ -313,12 +306,44 @@ class Storage:
     """Persistence for Wingman records. Source records are insert-only, never updated."""
 
     def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path
         self._conn = sqlite3.connect(db_path)
+        self._migrate_model_usage_payers()
         self._conn.executescript(_SCHEMA)
         self._migrate_document_key()
         self._migrate_value_profile_view()
         self._migrate_about_retention()
         self._conn.commit()
+
+    def _migrate_model_usage_payers(self) -> None:
+        """Ledgers created earlier on the #557 branch reject the 'offline' payer.
+
+        That CHECK never shipped, so only a development database can carry
+        it. SQLite cannot alter a CHECK, so the table is rebuilt and copied
+        (the same recipe as '_migrate_value_profile_view'); rows are kept
+        byte-for-byte. A ledger with no CHECK at all already accepts
+        'offline' and is left alone.
+        """
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='model_usage'"
+        ).fetchone()
+        if row is None or "CHECK" not in row[0] or "'offline'" in row[0]:
+            return
+        columns = (
+            "usage_id, recorded_at, capability, provider, model, payer, input_tokens, "
+            "output_tokens, cache_read_tokens, cache_write_tokens, search_result_count, "
+            "latency_ms, caller_name"
+        )
+        self._conn.executescript(
+            "BEGIN;\n"
+            "ALTER TABLE model_usage RENAME TO model_usage_pre_offline;\n"
+            "DROP INDEX IF EXISTS idx_model_usage_recorded_at;\n"
+            f"{MODEL_USAGE_TABLE_SQL};\n"
+            f"INSERT INTO model_usage ({columns}) SELECT {columns} FROM model_usage_pre_offline;\n"
+            "DROP TABLE model_usage_pre_offline;\n"
+            f"{MODEL_USAGE_INDEX_SQL};\n"
+            "COMMIT;\n"
+        )
 
     def _migrate_about_retention(self) -> None:
         """Enable existing about sources once (#463), preserving future opt-outs.
@@ -425,6 +450,13 @@ class Storage:
 
     def close(self) -> None:
         self._conn.close()
+        # This connection may have been the lock that deferred a usage row
+        # (an uncommitted write while a model call returned). It is gone
+        # now, so write those rows rather than leaving them to exit.
+        try:
+            flush_pending_usage(self._db_path)
+        except Exception:  # noqa: BLE001, S110 — accounting never breaks a close
+            pass
 
     def add_source_record(self, record: SourceRecord) -> None:
         try:

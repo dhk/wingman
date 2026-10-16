@@ -97,6 +97,7 @@ from wingman.application.focus import (
 from wingman.application.gdrive_push import push_backup, push_digest
 from wingman.application.ingest import IngestError, ingest_resume, ingest_resume_from_url
 from wingman.application.model_usage import (
+    UsageReadError,
     funded_ranking,
     render_tenant_usage,
     render_workspace_usage,
@@ -395,7 +396,10 @@ def usage(limit: int = 100) -> str:
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
-    return render_workspace_usage(config, max(1, limit))
+    try:
+        return render_workspace_usage(config, max(1, limit))
+    except UsageReadError as exc:
+        return str(exc)
 
 
 @server.tool()
