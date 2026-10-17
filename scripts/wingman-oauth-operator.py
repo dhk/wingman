@@ -20,6 +20,7 @@ def safe(text: str, subjects: tuple[str, ...] = ()) -> str:
     for subject in subjects:
         text = text.replace(subject, "…" + subject[-4:])
     text = re.sub(r"subject=([^\s]+)", lambda m: "subject=…" + m[1][-4:], text)
+    text = re.sub(r"\buser_[A-Za-z0-9_-]+", lambda m: "…" + m[0][-4:], text)
     return re.sub(r"[^\s<>]+@[^\s<>]+", "[address withheld]", text)
 
 

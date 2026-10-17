@@ -81,3 +81,12 @@ def test_onboarding_help() -> None:
     )
     assert result.returncode == 0
     assert "--csv" in result.stdout
+
+
+def test_error_subjects_are_redacted_even_without_subject_label() -> None:
+    import runpy
+
+    safe = runpy.run_path(str(CTL.with_name("wingman-oauth-operator.py")))["safe"]
+    output = safe("duplicate identity ('https://issuer.test', 'user_SYNTHETICFULLSUBJECT1234')")
+    assert "user_SYNTHETICFULLSUBJECT1234" not in output
+    assert "1234" in output
