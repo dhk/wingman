@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
 from wingman.cli.main import app
@@ -25,7 +24,8 @@ from wingman.infrastructure.host_manifest import (
     render_drift,
 )
 
-ALL_UNITS = frozenset({"wingman-upgrade-all.service", "wingman-upgrade-all.timer"})
+#: No release expects any systemd unit since the upgrade-all units went (#617).
+ALL_UNITS: frozenset[str] = frozenset()
 
 
 def _home(tmp_path: Path) -> Path:
@@ -103,23 +103,11 @@ def test_a_conflicting_layout_is_never_touched_by_apply(tmp_path: Path) -> None:
     assert (new / "secrets.env").read_text() == "ANTHROPIC_API_KEY=new\n"
 
 
-@pytest.mark.parametrize("missing", ["wingman-upgrade-all.service", "wingman-upgrade-all.timer"])
-def test_a_missing_systemd_unit_is_reported_never_applied(tmp_path: Path, missing: str) -> None:
-    context = _context(tmp_path, units=ALL_UNITS - {missing})
-
-    drifts = check_host(context)
-
-    assert all(drift.tier is DriftTier.REPORT for drift in drifts)
-    assert apply_auto(drifts, context) == []
-
-
-def test_no_systemd_at_all_reports_every_unit_rather_than_crashing(tmp_path: Path) -> None:
-    """A box without systemd cannot run them, so 'missing' is the truthful
-    answer — and a manifest check that raised would be a diagnostic that
-    made things worse."""
-    drifts = check_host(_context(tmp_path, units=frozenset()))
-
-    assert _names(drifts) == {"upgrade-all-unit", "upgrade-all-timer"}
+def test_the_retired_upgrade_all_units_are_no_longer_expected(tmp_path: Path) -> None:
+    """#617: wingman-upgrade-all.service and its timer kept per-account
+    (shape B) installs current. Shape B is retired, so a host without them —
+    including a box with no systemd at all — is not drift."""
+    assert check_host(_context(tmp_path, units=frozenset())) == []
 
 
 def test_a_wrapper_copy_that_drifted_from_the_checkout_is_reported(tmp_path: Path) -> None:
@@ -172,7 +160,6 @@ def test_a_check_that_raises_never_hides_the_others(tmp_path: Path, monkeypatch)
     assert "could not be checked" in next(
         d.detail for d in drifts if d.expectation.name == "exploding"
     )
-    assert {"upgrade-all-unit", "upgrade-all-timer"} <= _names(drifts)
 
 
 def test_every_auto_expectation_carries_something_that_applies_it() -> None:
@@ -191,9 +178,14 @@ def test_no_report_expectation_can_apply_anything() -> None:
 
 
 def test_the_report_says_why_it_matters_and_how_to_fix_it(tmp_path: Path) -> None:
-    """'wingman-upgrade-all.timer is missing' means nothing to somebody who
-    does not already know what that timer does."""
-    rendered = render_drift(check_host(_context(tmp_path, units=frozenset())))
+    """'keys.env is still present' means nothing to somebody who does not
+    already know why two layouts disagreeing matters."""
+    context = _context(tmp_path)
+    (context.home / ".config" / "keys.env").write_text("ANTHROPIC_API_KEY=old\n", encoding="utf-8")
+    new = context.home / ".config" / "wingman"
+    new.mkdir(parents=True)
+    (new / "secrets.env").write_text("ANTHROPIC_API_KEY=new\n", encoding="utf-8")
+    rendered = render_drift(check_host(context))
 
     assert "why it matters" in rendered
     assert "fix:" in rendered
@@ -207,17 +199,24 @@ def test_a_clean_host_says_so_plainly(tmp_path: Path) -> None:
 def test_the_cli_exits_nonzero_on_drift_so_a_deploy_can_gate_on_it(monkeypatch) -> None:
     from wingman.infrastructure import host_manifest
 
-    monkeypatch.setattr(host_manifest, "installed_units", frozenset)
+    drifting = host_manifest.Expectation(
+        name="always-drifting",
+        why="test double",
+        tier=DriftTier.REPORT,
+        check=lambda _context: "always",
+        fix="n/a",
+    )
+    monkeypatch.setattr(host_manifest, "MANIFEST", (drifting,))
     result = CliRunner().invoke(app, ["host-check"])
 
     assert result.exit_code == 1
-    assert "upgrade-all-unit" in result.output
+    assert "always-drifting" in result.output
 
 
 def test_the_cli_is_clean_when_the_host_matches(monkeypatch) -> None:
     from wingman.infrastructure import host_manifest
 
-    monkeypatch.setattr(host_manifest, "installed_units", lambda: ALL_UNITS)
+    monkeypatch.setattr(host_manifest, "MANIFEST", ())
     result = CliRunner().invoke(app, ["host-check"])
 
     assert result.exit_code == 0
@@ -226,7 +225,7 @@ def test_the_cli_is_clean_when_the_host_matches(monkeypatch) -> None:
 
 def test_doctor_never_fails_over_an_operators_systemd_units(monkeypatch, tmp_path: Path) -> None:
     """Most of the manifest describes an OPERATOR's box. Somebody running
-    wingman on their laptop will never have wingman-upgrade-all.service, and
+    wingman on their laptop will never have an operator's systemd units, and
     correctly so — failing doctor over it would teach every ordinary user to
     ignore a red line. Caught by CI, which has no systemd at all."""
     from wingman.infrastructure import host_manifest

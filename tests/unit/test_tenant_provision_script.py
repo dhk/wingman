@@ -519,15 +519,17 @@ def test_shared_provisioner_publishes_the_root_metadata_route_with_oauth() -> No
     assert "s/^WINGMAN_OAUTH_AUDIENCE=//p" in body
 
 
-def test_shared_provisioner_never_tells_the_operator_to_add_it_to_the_upgrade_sweep() -> None:
-    """#577: following that advice put the shared account in the per-account
-    sweep, which restarted it a second time during every 'wg upgrade-all'."""
+def test_shared_provisioner_never_mentions_the_retired_upgrade_sweep() -> None:
+    """#577 put the shared account in the per-account sweep, which restarted
+    it a second time during every 'wg upgrade-all'. #617 removed the sweep
+    with shape B, so neither the script nor SERVER.md may send an operator
+    to WINGMAN_UPGRADE_USERS at all."""
     body = PROVISION_SCRIPT.read_text(encoding="utf-8")
     server_doc = (ROOT / "docs" / "SERVER.md").read_text(encoding="utf-8")
 
-    assert "by hand: add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS" not in body
-    assert "Do NOT add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS" in body
-    assert "WINGMAN_UPGRADE_USERS=dhk,trent,wingman-shared" not in server_doc
+    assert "WINGMAN_UPGRADE_USERS" not in body
+    assert "WINGMAN_UPGRADE_USERS=" not in server_doc
+    assert "wg redeploy-shared" in body
 
 
 def test_every_oauth_bind_call_reads_the_same_service_config_the_script_resolved() -> None:

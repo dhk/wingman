@@ -1,8 +1,8 @@
 """What this version of the code expects the HOST to look like (RFC-072, #212).
 
 Wingman's operational surface — the split host-config layout (RFC-046), the
-systemd units that run the shared process and the cross-account upgrade, the
-`wingman-ctl` wrapper an operator actually types — has always shipped as
+systemd units a host runs, the `wingman-ctl` wrapper an operator actually
+types — has always shipped as
 one-off hand-written migrations (`migrate_legacy_host_file`) or as prose an
 operator had to notice and apply. There was no single place answering "does
 this box match what this build expects?", so drift was discovered when
@@ -160,6 +160,8 @@ def _apply_legacy_host_file(context: HostContext) -> str:
 
 
 def _unit_check(unit: str) -> Callable[[HostContext], str | None]:
+    # No expectation uses this since the upgrade-all units went (#617). Kept
+    # because a systemd expectation is the commonest kind a release adds.
     def check(context: HostContext) -> str | None:
         if unit in context.units:
             return None
@@ -214,27 +216,10 @@ MANIFEST: tuple[Expectation, ...] = (
             "then remove ~/.config/keys.env by hand (never auto-deleted)"
         ),
     ),
-    Expectation(
-        name="upgrade-all-unit",
-        why=(
-            "wingman-upgrade-all.service is what keeps every account's own CLI current. "
-            "Without it 'wg upgrade-all' can only redeploy the shared process, and an "
-            "operator's CLI silently falls behind the process it administers (#375)."
-        ),
-        tier=DriftTier.REPORT,
-        check=_unit_check("wingman-upgrade-all.service"),
-        fix="see docs/SERVER.md §7 — install the unit and its timer",
-    ),
-    Expectation(
-        name="upgrade-all-timer",
-        why=(
-            "The timer is what makes the upgrade scheduled rather than remembered. "
-            "The unit alone means it only ever runs when somebody thinks to run it."
-        ),
-        tier=DriftTier.REPORT,
-        check=_unit_check("wingman-upgrade-all.timer"),
-        fix="sudo systemctl enable --now wingman-upgrade-all.timer",
-    ),
+    # The wingman-upgrade-all unit and timer were expected here until #617:
+    # they kept per-account (shape B) installs current, and shape B is
+    # retired. A host that still has them is not drift — it is a leftover the
+    # operator removes by hand (docs/SERVER.md §7).
     Expectation(
         name="wrapper-script",
         why=(

@@ -125,7 +125,7 @@ def test_unit_state_for_another_account_is_unknown_without_root(monkeypatch) -> 
 
 def test_unit_state_for_another_account_carries_xdg_runtime_dir_as_root(monkeypatch) -> None:
     """Without XDG_RUNTIME_DIR the call cannot reach that account's session
-    bus at all — the gotcha upgrade_all.py carries on every sudo call."""
+    bus at all (RFC-042)."""
     _fake_passwd(monkeypatch, {"trent": 1001})
     run = _runner({("sudo",): (0, "active\n")})
     assert unit_state("trent", run=run, euid=0) == "active"
@@ -309,7 +309,7 @@ def test_an_empty_port_is_still_omitted(tmp_path: Path) -> None:
 def test_listening_without_an_active_unit_is_called_unmanaged() -> None:
     service, note = service_column(True, "failed")
     assert service == "UNMANAGED"
-    assert "upgrade-all will not restart" in note
+    assert "nothing will restart this instance" in note
 
 
 def test_listening_under_systemd_is_quiet() -> None:
@@ -381,7 +381,7 @@ def test_collect_flags_the_unmanaged_instance_and_leaves_the_others_alone(
 
     assert [row.port for row in rows] == [8787, 8788, 8789]
     assert rows[0].service == "UNMANAGED"
-    assert "upgrade-all will not restart" in rows[0].note
+    assert "nothing will restart this instance" in rows[0].note
     assert rows[0].build == "current"
     # Other accounts: honestly unknown at this privilege, never guessed.
     assert rows[1].service == "?" and rows[1].note == ""
@@ -424,7 +424,7 @@ def test_render_puts_the_unmanaged_row_in_a_needs_attention_block() -> None:
             started_at="2026-08-05T19:28:11+00:00",
             build="current",
             service="UNMANAGED",
-            note="unit is 'failed' — upgrade-all will not restart this instance",
+            note="unit is 'failed' — nothing will restart this instance",
         ),
         InstanceRow(
             port=8788,

@@ -11,9 +11,7 @@
 # silently expanding in the CALLING shell instead of the target
 # account's, PATH not surviving a non-interactive 'bash -c', and
 # 'systemctl --user' unable to reach a fresh account's session bus at
-# all without XDG_RUNTIME_DIR pointed at it explicitly — the same fix
-# 'infrastructure/upgrade_all.py' already needed for this exact reason,
-# RFC-042).
+# all without XDG_RUNTIME_DIR pointed at it explicitly, RFC-042).
 #
 # Usage: sudo ./wingman-provision-shared.sh
 # Env overrides: WINGMAN_SHARED_USER (default wingman-shared),
@@ -249,11 +247,8 @@ if [ ! -f "$KEY_PATH" ]; then
 fi
 
 say "5/7 clone + install wingman (SSH URL — this box's git identity is deploy-key-only, HTTPS prompts for credentials that don't exist)"
-# ~/src/wingman, not ~/wingman: infrastructure/upgrade_all.py's
-# REPO_SUBPATH assumes this exact convention (CLAUDE.md's documented
-# code-location default, every account) for the cross-account
-# wingman-upgrade-all sweep to find this checkout without an explicit
-# WINGMAN_UPGRADE_SOURCE_<user> override.
+# ~/src/wingman, not ~/wingman: CLAUDE.md's documented code-location
+# default for every account, and where wingman-redeploy-shared.sh pulls.
 if [ ! -d "/home/$SERVICE_USER/src/wingman/.git" ]; then
   sudo -iu "$SERVICE_USER" bash -c "mkdir -p ~/src && git clone $REPO_URL ~/src/wingman"
 fi
@@ -303,8 +298,7 @@ fi
 rm -f "$UNIT_TEMP"
 # 'systemctl --user' needs XDG_RUNTIME_DIR pointed at this account's own
 # runtime dir to reach its session bus at all when invoked via sudo from
-# root — 'sudo -iu' alone isn't enough (this is the exact fix
-# 'infrastructure/upgrade_all.py' already needed, RFC-042); without it
+# root — 'sudo -iu' alone isn't enough (RFC-042); without it
 # this fails with "Failed to connect to bus: No medium found".
 sudo -u "$SERVICE_USER" env "XDG_RUNTIME_DIR=/run/user/$SERVICE_UID" \
   systemctl --user daemon-reload
@@ -395,8 +389,4 @@ else
   say "                        exists in an interactive shell that's sourced its own"
   say "                        .bashrc, which $SERVICE_USER was never given)"
 fi
-# Not WINGMAN_UPGRADE_USERS (#577): that sweep bare-restarts each account's
-# service, which races wingman-redeploy-shared.sh's stop/wait/start (#415).
 say "Upgrade this process with 'wg redeploy-shared' (or 'wg upgrade-all')."
-say "Do NOT add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS — that sweep would restart"
-say "it a second time, racing the redeploy (docs/SERVER.md §7, #577)."

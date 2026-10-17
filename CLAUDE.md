@@ -47,11 +47,12 @@ the same protocol as wingman's own MCP tool).
   first time any wingman command runs after upgrading. GitHub access is
   via SSH — use `git@github.com:` URLs in any command meant for lobster.
   `wg` is aliased to `scripts/wingman-ctl` here too (same as the Mac,
-  below) — `wg upgrade` refreshes just this account, `wg upgrade-all`
-  updates everything on the box: each account's own CLI via
-  `wingman-upgrade-all.service` (dhk + trent) first, then the shared
+  below) — `wg upgrade` refreshes just this account's CLI, `wg upgrade-all`
+  updates everything on the box: this account's CLI first, then the shared
   multi-tenant process every tenant talks to (#375). It reports which
-  half did not happen rather than exiting quietly.
+  half did not happen rather than exiting quietly. Every tenant is on the
+  shared service; the per-account (shape B) servers, `wg start/stop/cycle`
+  and the `wingman-upgrade-all` systemd sweep are retired (#617).
 - **Mac** — the owner's laptop. **Global convention: every repo checkout
   lives under `~/Documents/dev`** (e.g. `~/Documents/dev/wingman`,
   `~/Documents/dev/alexandria`) — not specific to this repo, applies
