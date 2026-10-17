@@ -16,7 +16,7 @@ def test_shared_status_without_personal_server(tmp_path: Path, personal: bool) -
     etc = tmp_path / "etc" / "wingman"
     etc.mkdir(parents=True)
     (etc / "tenants.toml").write_text(
-        '[[tenants]]\nslug="private-slug"\ndata_dir="/private/workspace"\n'
+        '[[tenant]]\nslug="private-slug"\ndata_dir="/private/workspace"\n'
     )
     (etc / "oauth-config-path").write_text(str(etc / "oauth.env"))
     (etc / "oauth.env").write_text("WINGMAN_OAUTH_ARGS=--oauth-identities /absent/map.toml\n")
@@ -66,7 +66,7 @@ def test_unreadable_shared_config_needs_sudo(tmp_path: Path) -> None:
     etc = tmp_path / "etc/wingman"
     etc.mkdir(parents=True)
     registry = etc / "tenants.toml"
-    registry.write_text("[[tenants]]\nslug='hidden'\ndata_dir='/hidden'\n")
+    registry.write_text("[[tenant]]\nslug='hidden'\ndata_dir='/hidden'\n")
     registry.chmod(0)
     try:
         result = subprocess.run(

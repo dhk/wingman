@@ -143,7 +143,7 @@ def main() -> int:
         print("  Pending / outstanding invites / operator notifications: unavailable")
     try:
         registry = read(etc / "tenants.toml")
-        count = len(tomllib.loads(registry).get("tenants", [])) if registry is not None else 0
+        count = len(tomllib.loads(registry).get("tenant", [])) if registry is not None else 0
         print(f"  Tenants: {count}")
     except PermissionError:
         print("  Tenants: (needs sudo)")
