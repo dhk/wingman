@@ -39,7 +39,7 @@ def test_bind_reference_preflight_confirmation_and_redaction(
     bindir.mkdir()
     for name, body in {
         "getent": f'echo "wingman-shared:x:1:1::{shared}:/bin/bash"',
-        "sudo": 'while [ "$1" = "-H" ] || [ "$1" = "-u" ]; do if [ "$1" = "-u" ]; then shift 2; else shift; fi; done; exec "$@"',
+        "sudo": 'if [ "$1" = "-v" ]; then echo "SUDO_AUTH_READY" >&2; exit 0; fi; [ "$1" = "-n" ] || exit 98; shift; while [ "$1" = "-H" ] || [ "$1" = "-u" ]; do if [ "$1" = "-u" ]; then shift 2; else shift; fi; done; exec "$@"',
     }.items():
         path = bindir / name
         path.write_text("#!/bin/sh\n" + body + "\n")
@@ -57,6 +57,7 @@ def test_bind_reference_preflight_confirmation_and_redaction(
         },
     )
     assert "synthetic-full-subject" not in result.stdout + result.stderr
+    assert "SUDO_AUTH_READY" in result.stderr
     if rows == 1:
         assert result.returncode == 0, result.stderr
         assert "9876" in result.stdout

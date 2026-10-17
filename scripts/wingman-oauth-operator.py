@@ -40,7 +40,7 @@ def read_host(path: Path) -> str:
     except PermissionError:
         # Capture only; file contents can include a client secret and must never be echoed.
         result = subprocess.run(
-            ["sudo", "cat", str(path)], capture_output=True, text=True, check=False
+            ["sudo", "-n", "cat", str(path)], capture_output=True, text=True, check=False
         )
         if result.returncode:
             raise OperatorError(
@@ -101,10 +101,15 @@ def main() -> int:
     if args.command in expected and len(args.arguments) != expected[args.command]:
         parser.error(f"{args.command}: expected {expected[args.command]} arguments")
     try:
+        # Authenticate with inherited terminal output before capturing any command's
+        # output. Otherwise sudo's password prompt would be hidden in the pipe.
+        authenticated = subprocess.run(["sudo", "-v"], check=False)
+        if authenticated.returncode:
+            raise OperatorError("sudo authentication failed; nothing changed.")
         user, home, identities, registry, config = settings()
         binary = str(home / ".local/bin/wingman")
-        shared = ["sudo", "-H", "-u", user, binary]
-        root = ["sudo", binary]
+        shared = ["sudo", "-n", "-H", "-u", user, binary]
+        root = ["sudo", "-n", binary]
         common = ["--identities", str(identities)]
         binding = [
             *common,

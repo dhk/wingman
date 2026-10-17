@@ -88,7 +88,9 @@ account's home (`tenants/` beneath it). `WINGMAN_SHARED_USER`,
 locations. Config files are read as data, never executed. Commands use the
 shared account via `sudo -H -u` (which preserves argument boundaries), while
 workspace preparation uses the existing root-run CLI as required by its
-root-owned registry. Config reads request sudo only when unreadable.
+root-owned registry. Sudo authenticates visibly before captured command output; later commands use
+noninteractive sudo so an expired ticket fails rather than hiding a password
+prompt. Unreadable config files are read through the authenticated sudo path.
 
 `wg remove` is deferred by owner decision: there is no existing CLI removal
 operation to wrap, and migration retirement is handled separately in #616.
