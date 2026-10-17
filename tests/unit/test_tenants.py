@@ -32,19 +32,19 @@ def test_load_registry_absent_file_is_empty_not_an_error(tmp_path: Path) -> None
 
 def test_load_registry_parses_entries(tmp_path: Path) -> None:
     registry = tmp_path / "tenants.toml"
-    jason_dir = tmp_path / "jason"
+    quinn_dir = tmp_path / "quinn"
     bob_dir = tmp_path / "bob"
-    _write_registry(registry, ("jason", jason_dir), ("bob", bob_dir))
+    _write_registry(registry, ("quinn", quinn_dir), ("bob", bob_dir))
     tenants = load_registry(registry)
-    assert {t.slug for t in tenants} == {"jason", "bob"}
+    assert {t.slug for t in tenants} == {"quinn", "bob"}
     by_slug = {t.slug: t for t in tenants}
-    assert by_slug["jason"].data_dir == jason_dir
+    assert by_slug["quinn"].data_dir == quinn_dir
     assert by_slug["bob"].data_dir == bob_dir
 
 
 def test_load_registry_rejects_duplicate_slug(tmp_path: Path) -> None:
     registry = tmp_path / "tenants.toml"
-    _write_registry(registry, ("jason", tmp_path / "a"), ("jason", tmp_path / "b"))
+    _write_registry(registry, ("quinn", tmp_path / "a"), ("quinn", tmp_path / "b"))
     with pytest.raises(TenantRegistryError, match="more than once"):
         load_registry(registry)
 
@@ -58,7 +58,7 @@ def test_load_registry_rejects_missing_slug(tmp_path: Path) -> None:
 
 def test_load_registry_rejects_missing_data_dir(tmp_path: Path) -> None:
     registry = tmp_path / "tenants.toml"
-    registry.write_text('[[tenant]]\nslug = "jason"\n', encoding="utf-8")
+    registry.write_text('[[tenant]]\nslug = "quinn"\n', encoding="utf-8")
     with pytest.raises(TenantRegistryError, match="no 'data_dir'"):
         load_registry(registry)
 
@@ -79,12 +79,12 @@ def test_load_registry_defaults_privileged_to_false_and_reads_an_explicit_true(
     registry = tmp_path / "tenants.toml"
     registry.write_text(
         f'[[tenant]]\nslug = "dhk"\ndata_dir = "{tmp_path / "dhk"}"\nprivileged = true\n\n'
-        f'[[tenant]]\nslug = "trent"\ndata_dir = "{tmp_path / "trent"}"\n',
+        f'[[tenant]]\nslug = "riley"\ndata_dir = "{tmp_path / "riley"}"\n',
         encoding="utf-8",
     )
     by_slug = {tenant.slug: tenant for tenant in load_registry(registry)}
     assert by_slug["dhk"].privileged is True
-    assert by_slug["trent"].privileged is False
+    assert by_slug["riley"].privileged is False
 
 
 def test_load_registry_rejects_a_privileged_value_that_is_not_a_boolean(tmp_path: Path) -> None:
@@ -115,16 +115,16 @@ def test_load_registry_refuses_a_box_wide_privileged_default(tmp_path: Path) -> 
 
 
 def test_tenant_read_token_none_when_absent(tmp_path: Path) -> None:
-    tenant = Tenant(slug="jason", data_dir=tmp_path / "jason")
+    tenant = Tenant(slug="quinn", data_dir=tmp_path / "quinn")
     assert tenant.read_token() is None
 
 
 def test_tenant_read_token_reads_the_workspace_token_file(tmp_path: Path) -> None:
-    data_dir = tmp_path / "jason"
+    data_dir = tmp_path / "quinn"
     data_dir.mkdir()
-    (data_dir / "mcp-http-token").write_text("tok-jason-abc\n", encoding="utf-8")
-    tenant = Tenant(slug="jason", data_dir=data_dir)
-    assert tenant.read_token() == "tok-jason-abc"
+    (data_dir / "mcp-http-token").write_text("tok-quinn-abc\n", encoding="utf-8")
+    tenant = Tenant(slug="quinn", data_dir=data_dir)
+    assert tenant.read_token() == "tok-quinn-abc"
 
 
 def test_tenant_config_is_strict_and_workspace_scoped(
@@ -137,28 +137,28 @@ def test_tenant_config_is_strict_and_workspace_scoped(
     test_feature_request's declared-tier coverage."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-shared-process-env")
     monkeypatch.setenv("GITHUB_SHARED_ISSUES_KEY", "ghp-shared-process-env")
-    data_dir = tmp_path / "jason"
-    store_workspace_key(data_dir, "anthropic", "sk-ant-jasons-own")
-    store_workspace_key(data_dir, "github", "ghp-jasons-own")
-    tenant = Tenant(slug="jason", data_dir=data_dir)
+    data_dir = tmp_path / "quinn"
+    store_workspace_key(data_dir, "anthropic", "sk-ant-quinns-own")
+    store_workspace_key(data_dir, "github", "ghp-quinns-own")
+    tenant = Tenant(slug="quinn", data_dir=data_dir)
     config = tenant.config()
     assert config.strict_provider_keys is True
-    assert config.anthropic_api_key == "sk-ant-jasons-own"  # workspace file, not env
+    assert config.anthropic_api_key == "sk-ant-quinns-own"  # workspace file, not env
     assert config.voyage_api_key is None  # no workspace value for voyage
-    assert config.github_shared_issues_key == "ghp-jasons-own"  # workspace file, not env
+    assert config.github_shared_issues_key == "ghp-quinns-own"  # workspace file, not env
 
 
 def test_tenant_index_resolves_token_to_correct_tenant(tmp_path: Path) -> None:
-    jason_dir = tmp_path / "jason"
+    quinn_dir = tmp_path / "quinn"
     bob_dir = tmp_path / "bob"
-    jason_dir.mkdir()
+    quinn_dir.mkdir()
     bob_dir.mkdir()
-    (jason_dir / "mcp-http-token").write_text("tok-jason", encoding="utf-8")
+    (quinn_dir / "mcp-http-token").write_text("tok-quinn", encoding="utf-8")
     (bob_dir / "mcp-http-token").write_text("tok-bob", encoding="utf-8")
     index = TenantIndex(
-        [Tenant(slug="jason", data_dir=jason_dir), Tenant(slug="bob", data_dir=bob_dir)]
+        [Tenant(slug="quinn", data_dir=quinn_dir), Tenant(slug="bob", data_dir=bob_dir)]
     )
-    assert index.resolve("tok-jason").slug == "jason"  # type: ignore[union-attr]
+    assert index.resolve("tok-quinn").slug == "quinn"  # type: ignore[union-attr]
     assert index.resolve("tok-bob").slug == "bob"  # type: ignore[union-attr]
     assert index.resolve("tok-nobody") is None
     assert index.resolve("") is None
@@ -166,19 +166,19 @@ def test_tenant_index_resolves_token_to_correct_tenant(tmp_path: Path) -> None:
 
 
 def test_tenant_index_ignores_a_tenant_with_no_token_yet(tmp_path: Path) -> None:
-    data_dir = tmp_path / "jason"  # no mcp-http-token written
-    index = TenantIndex([Tenant(slug="jason", data_dir=data_dir)])
+    data_dir = tmp_path / "quinn"  # no mcp-http-token written
+    index = TenantIndex([Tenant(slug="quinn", data_dir=data_dir)])
     assert index.resolve("anything") is None
     assert len(index) == 1  # still known by slug, just not reachable by token yet
 
 
 def test_tenant_index_reload_picks_up_a_rotated_token(tmp_path: Path) -> None:
-    data_dir = tmp_path / "jason"
+    data_dir = tmp_path / "quinn"
     data_dir.mkdir()
     token_path = data_dir / "mcp-http-token"
     token_path.write_text("tok-old", encoding="utf-8")
     registry = tmp_path / "tenants.toml"
-    _write_registry(registry, ("jason", data_dir))
+    _write_registry(registry, ("quinn", data_dir))
 
     index = TenantIndex.from_registry_path(registry)
     assert index.resolve("tok-old") is not None
@@ -190,11 +190,11 @@ def test_tenant_index_reload_picks_up_a_rotated_token(tmp_path: Path) -> None:
 
 
 def test_tenant_index_reload_picks_up_a_newly_added_tenant(tmp_path: Path) -> None:
-    jason_dir = tmp_path / "jason"
-    jason_dir.mkdir()
-    (jason_dir / "mcp-http-token").write_text("tok-jason", encoding="utf-8")
+    quinn_dir = tmp_path / "quinn"
+    quinn_dir.mkdir()
+    (quinn_dir / "mcp-http-token").write_text("tok-quinn", encoding="utf-8")
     registry = tmp_path / "tenants.toml"
-    _write_registry(registry, ("jason", jason_dir))
+    _write_registry(registry, ("quinn", quinn_dir))
 
     index = TenantIndex.from_registry_path(registry)
     assert len(index) == 1
@@ -202,7 +202,7 @@ def test_tenant_index_reload_picks_up_a_newly_added_tenant(tmp_path: Path) -> No
     bob_dir = tmp_path / "bob"
     bob_dir.mkdir()
     (bob_dir / "mcp-http-token").write_text("tok-bob", encoding="utf-8")
-    _write_registry(registry, ("jason", jason_dir), ("bob", bob_dir))
+    _write_registry(registry, ("quinn", quinn_dir), ("bob", bob_dir))
     index.reload(registry)
     assert len(index) == 2
     assert index.resolve("tok-bob").slug == "bob"  # type: ignore[union-attr]
@@ -224,14 +224,14 @@ def test_a_token_shared_by_two_tenants_resolves_to_neither(tmp_path: Path) -> No
     lose it; each can be issued a fresh one.
     """
     shared = "same-token-in-two-places"
-    first = _tenant_with_token(tmp_path, "jason", shared)
+    first = _tenant_with_token(tmp_path, "quinn", shared)
     second = _tenant_with_token(tmp_path, "taylor", shared)
 
     index = TenantIndex([first, second])
 
     assert index.resolve(shared) is None
     # ...and neither tenant has been dropped from the registry itself.
-    assert {t.slug for t in index.tenants} == {"jason", "taylor"}
+    assert {t.slug for t in index.tenants} == {"quinn", "taylor"}
 
 
 def test_a_third_tenant_cannot_reinstate_an_already_ambiguous_token(
@@ -242,7 +242,7 @@ def test_a_third_tenant_cannot_reinstate_an_already_ambiguous_token(
     then the entry is gone and looks unclaimed."""
     shared = "token-in-three-places"
     tenants = [
-        _tenant_with_token(tmp_path, "jason", shared),
+        _tenant_with_token(tmp_path, "quinn", shared),
         _tenant_with_token(tmp_path, "taylor", shared),
         _tenant_with_token(tmp_path, "morgan", shared),
     ]
@@ -255,7 +255,7 @@ def test_one_duplicated_token_does_not_disable_everybody_else(tmp_path: Path) ->
     one duplicated file — a worse outcome than the bug."""
     shared = "duplicated"
     tenants = [
-        _tenant_with_token(tmp_path, "jason", shared),
+        _tenant_with_token(tmp_path, "quinn", shared),
         _tenant_with_token(tmp_path, "taylor", shared),
         _tenant_with_token(tmp_path, "morgan", "morgans-own-token"),
     ]
@@ -283,7 +283,7 @@ def test_an_unreadable_registry_raises_a_registry_error_not_a_permission_error(
     directory = tmp_path / "etc"
     directory.mkdir()
     registry = directory / "tenants.toml"
-    _write_registry(registry, ("jason", tmp_path / "jason"))
+    _write_registry(registry, ("quinn", tmp_path / "quinn"))
     directory.chmod(0o000)
     try:
         with pytest.raises(TenantRegistryError) as caught:
@@ -301,7 +301,7 @@ def test_the_unreadable_diagnosis_is_the_one_written_for_motd(tmp_path: Path) ->
     directory = tmp_path / "etc"
     directory.mkdir()
     registry = directory / "tenants.toml"
-    _write_registry(registry, ("jason", tmp_path / "jason"))
+    _write_registry(registry, ("quinn", tmp_path / "quinn"))
     directory.chmod(0o000)
     try:
         with pytest.raises(TenantRegistryError) as caught:
@@ -323,7 +323,7 @@ def test_an_unreadable_registry_is_never_read_as_an_empty_one(tmp_path: Path) ->
     directory = tmp_path / "etc"
     directory.mkdir()
     registry = directory / "tenants.toml"
-    _write_registry(registry, ("jason", tmp_path / "jason"))
+    _write_registry(registry, ("quinn", tmp_path / "quinn"))
     directory.chmod(0o000)
     try:
         with pytest.raises(TenantRegistryError):
@@ -351,15 +351,15 @@ def test_load_registry_defaults_funded_to_false_and_reads_an_explicit_true(
     exactly what it meant."""
     registry = tmp_path / "tenants.toml"
     registry.write_text(
-        f'[[tenant]]\nslug = "jason"\ndata_dir = "{tmp_path / "jason"}"\nfunded = true\n\n'
-        f'[[tenant]]\nslug = "trent"\ndata_dir = "{tmp_path / "trent"}"\n',
+        f'[[tenant]]\nslug = "quinn"\ndata_dir = "{tmp_path / "quinn"}"\nfunded = true\n\n'
+        f'[[tenant]]\nslug = "riley"\ndata_dir = "{tmp_path / "riley"}"\n',
         encoding="utf-8",
     )
     by_slug = {tenant.slug: tenant for tenant in load_registry(registry)}
-    assert by_slug["jason"].funded is True
-    assert by_slug["trent"].funded is False
-    assert by_slug["jason"].config().funded is True
-    assert by_slug["trent"].config().funded is False
+    assert by_slug["quinn"].funded is True
+    assert by_slug["riley"].funded is False
+    assert by_slug["quinn"].config().funded is True
+    assert by_slug["riley"].config().funded is False
 
 
 def test_load_registry_rejects_a_funded_value_that_is_not_a_boolean(tmp_path: Path) -> None:
@@ -369,7 +369,7 @@ def test_load_registry_rejects_a_funded_value_that_is_not_a_boolean(tmp_path: Pa
     registry = tmp_path / "tenants.toml"
     for bad in ('"true"', "1", '"yes"'):
         registry.write_text(
-            f'[[tenant]]\nslug = "jason"\ndata_dir = "{tmp_path / "jason"}"\nfunded = {bad}\n',
+            f'[[tenant]]\nslug = "quinn"\ndata_dir = "{tmp_path / "quinn"}"\nfunded = {bad}\n',
             encoding="utf-8",
         )
         with pytest.raises(TenantRegistryError, match="malformed 'funded'"):
@@ -382,7 +382,7 @@ def test_load_registry_refuses_a_box_wide_funded_default(tmp_path: Path) -> None
     than ignored, so an operator who wrote it is told while they are still
     looking at the file. Same for the bare top-level form."""
     registry = tmp_path / "tenants.toml"
-    entry = f'[[tenant]]\nslug = "jason"\ndata_dir = "{tmp_path / "jason"}"\n'
+    entry = f'[[tenant]]\nslug = "quinn"\ndata_dir = "{tmp_path / "quinn"}"\n'
     for header in ("[defaults]\nfunded = true\n\n", "funded = false\n\n"):
         registry.write_text(header + entry, encoding="utf-8")
         with pytest.raises(TenantRegistryError, match="one named tenant at a time"):

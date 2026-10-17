@@ -49,7 +49,7 @@ the same protocol as wingman's own MCP tool).
   `wg` is aliased to `scripts/wingman-ctl` here too (same as the Mac,
   below) — `wg upgrade` refreshes just this account, `wg upgrade-all`
   updates everything on the box: each account's own CLI via
-  `wingman-upgrade-all.service` (dhk + trent) first, then the shared
+  `wingman-upgrade-all.service` (dhk + riley) first, then the shared
   multi-tenant process every tenant talks to (#375). It reports which
   half did not happen rather than exiting quietly.
 - **Mac** — the owner's laptop. **Global convention: every repo checkout

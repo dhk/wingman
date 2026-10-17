@@ -38,16 +38,16 @@ def _seed_persona_capture(config: Config, persona_name: str = "Mike Chen") -> No
 
 @pytest.fixture
 def shared_box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Tenant]:
-    """One registry, two tenants: 'dhk' privileged, 'trent' ordinary."""
+    """One registry, two tenants: 'dhk' privileged, 'riley' ordinary."""
     dhk_dir = tmp_path / "tenants" / "dhk"
-    trent_dir = tmp_path / "tenants" / "trent"
-    for directory in (dhk_dir, trent_dir):
+    riley_dir = tmp_path / "tenants" / "riley"
+    for directory in (dhk_dir, riley_dir):
         directory.mkdir(parents=True)
         Storage(directory / "wingman.db").close()
     registry = tmp_path / "tenants.toml"
     registry.write_text(
         f'[[tenant]]\nslug = "dhk"\ndata_dir = "{dhk_dir}"\nprivileged = true\n\n'
-        f'[[tenant]]\nslug = "trent"\ndata_dir = "{trent_dir}"\n',
+        f'[[tenant]]\nslug = "riley"\ndata_dir = "{riley_dir}"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -93,9 +93,9 @@ def test_the_solo_paths_declare_themselves_privileged_explicitly(
 
 def test_a_tenant_config_carries_the_registrys_flag(shared_box: dict[str, Tenant]) -> None:
     assert shared_box["dhk"].privileged is True
-    assert shared_box["trent"].privileged is False
+    assert shared_box["riley"].privileged is False
     assert shared_box["dhk"].config().privileged is True
-    assert shared_box["trent"].config().privileged is False
+    assert shared_box["riley"].config().privileged is False
 
 
 def test_operator_only_refusal_answers_none_only_when_privileged(tmp_path: Path) -> None:
@@ -127,7 +127,7 @@ def test_coach_persona_refuses_every_action_for_an_unprivileged_tenant(
     could 'set'."""
     from wingman.mcp_server import coach_persona
 
-    config = shared_box["trent"].config()
+    config = shared_box["riley"].config()
     with tenant_config_scope(config):
         for action in ("set", "who", "list", "clear"):
             assert "isn't available in this workspace" in coach_persona(action, "Mike Chen")
@@ -162,7 +162,7 @@ def test_carve_off_persona_refuses_an_unprivileged_tenant(
     nothing else."""
     from wingman.mcp_server import carve_off_persona
 
-    config = shared_box["trent"].config()
+    config = shared_box["riley"].config()
     _seed_persona_capture(config)
     target = tmp_path / "mike"
     with tenant_config_scope(config):
@@ -211,7 +211,7 @@ def test_an_ordinary_tool_still_works_for_an_unprivileged_tenant(
     a tenant's own workspace tools are exactly as they were."""
     from wingman.mcp_server import status
 
-    with tenant_config_scope(shared_box["trent"].config()):
+    with tenant_config_scope(shared_box["riley"].config()):
         report = status()
     assert "isn't available in this workspace" not in report
     assert "Source records:" in report

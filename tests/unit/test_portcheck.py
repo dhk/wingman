@@ -79,15 +79,15 @@ def test_falls_back_to_lsof_when_ss_unavailable(monkeypatch) -> None:
         {
             ("lsof",): (
                 0,
-                "COMMAND   PID USER   FD   TYPE\nwingman-  555 trent   7u  IPv4\n",
+                "COMMAND   PID USER   FD   TYPE\nwingman-  555 riley   7u  IPv4\n",
             ),
-            ("ps",): (0, "trent wingman-mcp --http --port 8788\n"),
+            ("ps",): (0, "riley wingman-mcp --http --port 8788\n"),
         }
     )
     owner = find_port_owner(8788, run=run)
     assert owner is not None
     assert owner.pid == 555
-    assert owner.user == "trent"
+    assert owner.user == "riley"
 
 
 def test_cross_account_owner_with_unreadable_command(monkeypatch) -> None:

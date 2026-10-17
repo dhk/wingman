@@ -41,27 +41,27 @@ def _scripted_runner(responses: dict[tuple[str, ...], tuple[int, str]]):
 
 
 def test_target_for_known_user_is_checkout_shape_by_default() -> None:
-    target = target_for("trent", resolve_home=_homes({"trent": "/home/trent"}))
+    target = target_for("riley", resolve_home=_homes({"riley": "/home/riley"}))
     assert target == UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        home="/home/trent",
-        own_checkout="/home/trent/src/wingman",
+        user="riley",
+        install_source="/home/riley/src/wingman",
+        home="/home/riley",
+        own_checkout="/home/riley/src/wingman",
     )
 
 
 def test_target_for_with_install_source_is_local_path_shape() -> None:
-    """#167: a user with no checkout of their own (e.g. Trent) installs from
+    """#167: a user with no checkout of their own (e.g. Riley) installs from
     someone else's already-updated checkout, and has nothing to pull."""
     target = target_for(
-        "trent",
-        resolve_home=_homes({"trent": "/home/trent"}),
+        "riley",
+        resolve_home=_homes({"riley": "/home/riley"}),
         install_source="/home/dhk/src/wingman",
     )
     assert target == UpgradeTarget(
-        user="trent",
+        user="riley",
         install_source="/home/dhk/src/wingman",
-        home="/home/trent",
+        home="/home/riley",
         own_checkout=None,
     )
 
@@ -71,12 +71,12 @@ def test_target_for_unknown_user_is_none() -> None:
 
 
 def test_parse_usernames_accepts_commas_and_whitespace() -> None:
-    assert _parse_usernames("dhk, trent   pat") == ["dhk", "trent", "pat"]
+    assert _parse_usernames("dhk, riley   pat") == ["dhk", "riley", "pat"]
     assert _parse_usernames("") == []
 
 
 def test_source_override_env_var_name() -> None:
-    assert _source_override_env_var("trent") == "WINGMAN_UPGRADE_SOURCE_trent"
+    assert _source_override_env_var("riley") == "WINGMAN_UPGRADE_SOURCE_riley"
 
 
 # --- upgrade_one: the happy path and each failure point -----------------
@@ -84,18 +84,18 @@ def test_source_override_env_var_name() -> None:
 
 def test_full_upgrade_pulls_reinstalls_and_restarts() -> None:
     target = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
+        user="riley",
+        install_source="/home/riley/src/wingman",
+        own_checkout="/home/riley/src/wingman",
     )
     run = _scripted_runner(
         {
-            ("sudo", "-u", "trent", "env", "XDG_RUNTIME_DIR=/run/user/1001", "git"): (0, ""),
-            ("sudo", "-u", "trent", "env", "XDG_RUNTIME_DIR=/run/user/1001", "uv"): (0, ""),
+            ("sudo", "-u", "riley", "env", "XDG_RUNTIME_DIR=/run/user/1001", "git"): (0, ""),
+            ("sudo", "-u", "riley", "env", "XDG_RUNTIME_DIR=/run/user/1001", "uv"): (0, ""),
             (
                 "sudo",
                 "-u",
-                "trent",
+                "riley",
                 "env",
                 "XDG_RUNTIME_DIR=/run/user/1001",
                 "systemctl",
@@ -105,7 +105,7 @@ def test_full_upgrade_pulls_reinstalls_and_restarts() -> None:
             (
                 "sudo",
                 "-u",
-                "trent",
+                "riley",
                 "env",
                 "XDG_RUNTIME_DIR=/run/user/1001",
                 "systemctl",
@@ -114,7 +114,7 @@ def test_full_upgrade_pulls_reinstalls_and_restarts() -> None:
             ): (0, ""),
         }
     )
-    result = upgrade_one(target, run=run, resolve_uid=_uids({"trent": 1001}))
+    result = upgrade_one(target, run=run, resolve_uid=_uids({"riley": 1001}))
     assert result.ok
     assert result.steps == ["pulled latest", "reinstalled", "restarted wingman-mcp.service"]
     # every call ran as the target user, with XDG_RUNTIME_DIR set
@@ -124,14 +124,14 @@ def test_full_upgrade_pulls_reinstalls_and_restarts() -> None:
 
 
 def test_local_path_shape_skips_pull_entirely() -> None:
-    """#167: Trent's install has nothing of his own to 'git pull' — the
+    """#167: Riley's install has nothing of his own to 'git pull' — the
     upgrade must never attempt it, only reinstall from the source path."""
-    target = UpgradeTarget(user="trent", install_source="/home/dhk/src/wingman", own_checkout=None)
+    target = UpgradeTarget(user="riley", install_source="/home/dhk/src/wingman", own_checkout=None)
 
     def run(argv: list[str]) -> tuple[int, str]:
         assert "git" not in argv, f"local-path shape must never pull: {argv}"
         if "uv" in argv:
-            assert argv[-1] == "/home/dhk/src/wingman"  # installs from the SOURCE, not trent's home
+            assert argv[-1] == "/home/dhk/src/wingman"  # installs from the SOURCE, not riley's home
             return 0, ""
         if "is-active" in argv:
             return 0, "active\n"
@@ -139,19 +139,19 @@ def test_local_path_shape_skips_pull_entirely() -> None:
             return 0, ""
         raise AssertionError(f"unexpected call: {argv}")
 
-    result = upgrade_one(target, run=run, resolve_uid=_uids({"trent": 1001}))
+    result = upgrade_one(target, run=run, resolve_uid=_uids({"riley": 1001}))
     assert result.ok
     assert result.steps == ["reinstalled", "restarted wingman-mcp.service"]  # no "pulled latest"
 
 
 def test_pull_failure_stops_before_reinstall() -> None:
     target = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
+        user="riley",
+        install_source="/home/riley/src/wingman",
+        own_checkout="/home/riley/src/wingman",
     )
-    run = _scripted_runner({("sudo", "-u", "trent"): (1, "local changes present")})
-    result = upgrade_one(target, run=run, resolve_uid=_uids({"trent": 1001}))
+    run = _scripted_runner({("sudo", "-u", "riley"): (1, "local changes present")})
+    result = upgrade_one(target, run=run, resolve_uid=_uids({"riley": 1001}))
     assert not result.ok
     assert "pull failed, nothing was touched" in result.steps[0]
     assert "local changes present" in result.steps[0]
@@ -160,9 +160,9 @@ def test_pull_failure_stops_before_reinstall() -> None:
 
 def test_reinstall_failure_stops_before_restart() -> None:
     target = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
+        user="riley",
+        install_source="/home/riley/src/wingman",
+        own_checkout="/home/riley/src/wingman",
     )
 
     def run(argv: list[str]) -> tuple[int, str]:
@@ -172,7 +172,7 @@ def test_reinstall_failure_stops_before_restart() -> None:
             return 1, "disk full"
         raise AssertionError(f"unexpected call after reinstall failure: {argv}")
 
-    result = upgrade_one(target, run=run, resolve_uid=_uids({"trent": 1001}))
+    result = upgrade_one(target, run=run, resolve_uid=_uids({"riley": 1001}))
     assert not result.ok
     assert "reinstall failed, nothing was restarted" in result.steps[1]
     assert "disk full" in result.steps[1]
@@ -197,9 +197,9 @@ def test_non_systemd_managed_user_is_reported_ok_without_restart() -> None:
 
 def test_restart_failure_is_reported() -> None:
     target = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
+        user="riley",
+        install_source="/home/riley/src/wingman",
+        own_checkout="/home/riley/src/wingman",
     )
 
     def run(argv: list[str]) -> tuple[int, str]:
@@ -209,7 +209,7 @@ def test_restart_failure_is_reported() -> None:
             return 0, "active\n"
         return 0, ""  # git pull / uv reinstall
 
-    result = upgrade_one(target, run=run, resolve_uid=_uids({"trent": 1001}))
+    result = upgrade_one(target, run=run, resolve_uid=_uids({"riley": 1001}))
     assert not result.ok
     assert "restart failed" in result.steps[-1]
 
@@ -222,30 +222,30 @@ def test_one_users_failure_never_blocks_another() -> None:
         user="dhk", install_source="/home/dhk/src/wingman", own_checkout="/home/dhk/src/wingman"
     )
     bad = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
+        user="riley",
+        install_source="/home/riley/src/wingman",
+        own_checkout="/home/riley/src/wingman",
     )
 
     def run(argv: list[str]) -> tuple[int, str]:
-        if "-u" in argv and "trent" in argv:
-            return 1, "pull failed for trent"
+        if "-u" in argv and "riley" in argv:
+            return 1, "pull failed for riley"
         if "is-active" in argv:
             return 0, "active\n"
         return 0, ""
 
-    results = upgrade_all([bad, good], run=run, resolve_uid=_uids({"dhk": 1000, "trent": 1001}))
+    results = upgrade_all([bad, good], run=run, resolve_uid=_uids({"dhk": 1000, "riley": 1001}))
     by_user = {result.user: result for result in results}
-    assert not by_user["trent"].ok
-    assert by_user["dhk"].ok  # unaffected by trent's failure
+    assert not by_user["riley"].ok
+    assert by_user["dhk"].ok  # unaffected by riley's failure
 
 
 def test_checkout_shape_users_run_before_local_path_shape_users() -> None:
     """#167: a local-path target may install from a checkout-shape target's
     directory, so the checkout must be pulled first regardless of input
-    order — Trent listed before dhk must still upgrade dhk first."""
-    trent_local_path = UpgradeTarget(
-        user="trent", install_source="/home/dhk/src/wingman", own_checkout=None
+    order — Riley listed before dhk must still upgrade dhk first."""
+    riley_local_path = UpgradeTarget(
+        user="riley", install_source="/home/dhk/src/wingman", own_checkout=None
     )
     dhk_checkout = UpgradeTarget(
         user="dhk", install_source="/home/dhk/src/wingman", own_checkout="/home/dhk/src/wingman"
@@ -261,16 +261,16 @@ def test_checkout_shape_users_run_before_local_path_shape_users() -> None:
         return 0, ""
 
     upgrade_all(
-        [trent_local_path, dhk_checkout], run=run, resolve_uid=_uids({"dhk": 1000, "trent": 1001})
+        [riley_local_path, dhk_checkout], run=run, resolve_uid=_uids({"dhk": 1000, "riley": 1001})
     )
-    assert order == ["dhk", "trent"]  # checkout-shape first, despite input order
+    assert order == ["dhk", "riley"]  # checkout-shape first, despite input order
 
 
 def test_a_runner_that_raises_is_caught_and_reported() -> None:
     target = UpgradeTarget(
-        user="trent",
-        install_source="/home/trent/src/wingman",
-        own_checkout="/home/trent/src/wingman",
+        user="riley",
+        install_source="/home/riley/src/wingman",
+        own_checkout="/home/riley/src/wingman",
     )
 
     def exploding_run(argv: list[str]) -> tuple[int, str]:
@@ -300,11 +300,11 @@ def test_main_reads_per_user_source_override_from_env(monkeypatch, capsys) -> No
     local-path shape end to end via the real CLI entry point."""
     import wingman.infrastructure.upgrade_all as upgrade_all_module
 
-    monkeypatch.setenv("WINGMAN_UPGRADE_SOURCE_trent", "/home/dhk/src/wingman")
+    monkeypatch.setenv("WINGMAN_UPGRADE_SOURCE_riley", "/home/dhk/src/wingman")
     monkeypatch.setattr(
-        upgrade_all_module, "_default_home", lambda u: {"trent": "/home/trent"}.get(u)
+        upgrade_all_module, "_default_home", lambda u: {"riley": "/home/riley"}.get(u)
     )
-    monkeypatch.setattr(upgrade_all_module, "_default_uid", lambda u: {"trent": 1001}.get(u))
+    monkeypatch.setattr(upgrade_all_module, "_default_uid", lambda u: {"riley": 1001}.get(u))
 
     def run(argv: list[str]) -> tuple[int, str]:
         assert "git" not in argv
@@ -316,9 +316,9 @@ def test_main_reads_per_user_source_override_from_env(monkeypatch, capsys) -> No
 
     monkeypatch.setattr(upgrade_all_module, "_default_runner", run)
 
-    main(["--users", "trent"])
+    main(["--users", "riley"])
     out = capsys.readouterr().out
-    assert "[ok] trent:" in out
+    assert "[ok] riley:" in out
     assert "reinstalled" in out
 
 

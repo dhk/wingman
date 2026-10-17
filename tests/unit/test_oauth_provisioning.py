@@ -56,7 +56,7 @@ def _registry(tmp_path: Path, *slugs: str) -> Path:
 
 
 def test_operator_binds_a_trusted_identity_to_an_existing_tenant(tmp_path: Path) -> None:
-    registry = _registry(tmp_path, "jason")
+    registry = _registry(tmp_path, "quinn")
     identities = tmp_path / "oauth-identities.toml"
 
     result = cli.invoke(
@@ -64,7 +64,7 @@ def test_operator_binds_a_trusted_identity_to_an_existing_tenant(tmp_path: Path)
         [
             "tenant",
             "oauth-bind",
-            "jason",
+            "quinn",
             "--issuer",
             ISSUER,
             "--subject",
@@ -77,16 +77,16 @@ def test_operator_binds_a_trusted_identity_to_an_existing_tenant(tmp_path: Path)
     )
 
     assert result.exit_code == 0, result.output
-    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "jason"
+    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "quinn"
     assert identities.stat().st_mode & 0o777 == 0o600
     assert "trusted OAuth identity" in result.output
 
 
 def test_operator_cannot_bind_one_identity_to_two_tenants(tmp_path: Path) -> None:
-    registry = _registry(tmp_path, "jason", "taylor")
+    registry = _registry(tmp_path, "quinn", "taylor")
     identities = tmp_path / "oauth-identities.toml"
     identities.write_text(
-        f'[[identity]]\niss = "{ISSUER}"\nsub = "user_123"\nslug = "jason"\n',
+        f'[[identity]]\niss = "{ISSUER}"\nsub = "user_123"\nslug = "quinn"\n',
         encoding="utf-8",
     )
 
@@ -108,12 +108,12 @@ def test_operator_cannot_bind_one_identity_to_two_tenants(tmp_path: Path) -> Non
     )
 
     assert result.exit_code == 1
-    assert "already bound to 'jason'" in result.output
-    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "jason"
+    assert "already bound to 'quinn'" in result.output
+    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "quinn"
 
 
 def test_operator_cannot_bind_to_an_unknown_tenant(tmp_path: Path) -> None:
-    registry = _registry(tmp_path, "jason")
+    registry = _registry(tmp_path, "quinn")
     identities = tmp_path / "oauth-identities.toml"
     identities.write_text("", encoding="utf-8")
 
@@ -160,16 +160,16 @@ def test_binding_an_existing_tenant_clears_only_that_pending_row(tmp_path: Path)
     # oauth-approve, so before this the bound identity stayed listed as
     # "awaiting approval" forever, inviting an operator to approve it into
     # a second, empty workspace.
-    registry = _registry(tmp_path, "jason")
+    registry = _registry(tmp_path, "quinn")
     identities = tmp_path / "oauth-identities.toml"
     store = OAuthOnboardingStore(onboarding_path_for(identities))
     assert store.record_pending(ISSUER, "user_123", now=1.0)
     assert store.record_pending(ISSUER, "someone_else", now=2.0)
 
-    result = cli.invoke(app, _bind_args("jason", "user_123", identities, registry))
+    result = cli.invoke(app, _bind_args("quinn", "user_123", identities, registry))
 
     assert result.exit_code == 0, result.output
-    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "jason"
+    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "quinn"
     assert [item.subject for item in store.pending()] == ["someone_else"]
     assert "Removed it from the pending approval queue" in result.output
 
@@ -177,13 +177,13 @@ def test_binding_an_existing_tenant_clears_only_that_pending_row(tmp_path: Path)
 def test_rebinding_an_exact_binding_clears_a_stale_pending_row(tmp_path: Path) -> None:
     # The state a deployment is left in by a bind that predates this fix:
     # bound on disk, still listed as pending. Re-running the bind is the fix.
-    registry = _registry(tmp_path, "jason")
+    registry = _registry(tmp_path, "quinn")
     identities = tmp_path / "oauth-identities.toml"
-    bind_trusted_identity(identities, ISSUER, "user_123", "jason")
+    bind_trusted_identity(identities, ISSUER, "user_123", "quinn")
     store = OAuthOnboardingStore(onboarding_path_for(identities))
     assert store.record_pending(ISSUER, "user_123", now=1.0)
 
-    result = cli.invoke(app, _bind_args("jason", "user_123", identities, registry))
+    result = cli.invoke(app, _bind_args("quinn", "user_123", identities, registry))
 
     assert result.exit_code == 0, result.output
     assert "already existed" in result.output
@@ -191,13 +191,13 @@ def test_rebinding_an_exact_binding_clears_a_stale_pending_row(tmp_path: Path) -
 
 
 def test_preflight_leaves_the_pending_queue_alone(tmp_path: Path) -> None:
-    registry = _registry(tmp_path, "jason")
+    registry = _registry(tmp_path, "quinn")
     identities = tmp_path / "oauth-identities.toml"
     store = OAuthOnboardingStore(onboarding_path_for(identities))
     assert store.record_pending(ISSUER, "user_123", now=1.0)
 
     result = cli.invoke(
-        app, [*_bind_args("jason", "user_123", identities, registry), "--preflight"]
+        app, [*_bind_args("quinn", "user_123", identities, registry), "--preflight"]
     )
 
     assert result.exit_code == 0, result.output
@@ -207,7 +207,7 @@ def test_preflight_leaves_the_pending_queue_alone(tmp_path: Path) -> None:
 def test_a_stuck_pending_queue_does_not_undo_a_written_binding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    registry = _registry(tmp_path, "jason")
+    registry = _registry(tmp_path, "quinn")
     identities = tmp_path / "oauth-identities.toml"
 
     def unwritable(self: OAuthOnboardingStore, issuer: str, subject: str) -> bool:
@@ -215,17 +215,17 @@ def test_a_stuck_pending_queue_does_not_undo_a_written_binding(
 
     monkeypatch.setattr(OAuthOnboardingStore, "discard_pending", unwritable)
 
-    result = cli.invoke(app, _bind_args("jason", "user_123", identities, registry))
+    result = cli.invoke(app, _bind_args("quinn", "user_123", identities, registry))
 
     # Non-zero so automation notices the stale row, but the binding stands.
     assert result.exit_code == 1, result.output
-    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "jason"
+    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "quinn"
     assert "Bound trusted OAuth identity" in result.output
     assert "still listed as pending" in result.output
 
 
 def test_malformed_identity_map_is_preserved(tmp_path: Path) -> None:
-    registry = _registry(tmp_path, "jason")
+    registry = _registry(tmp_path, "quinn")
     identities = tmp_path / "oauth-identities.toml"
     malformed = "[[identity]\n"
     identities.write_text(malformed, encoding="utf-8")
@@ -235,7 +235,7 @@ def test_malformed_identity_map_is_preserved(tmp_path: Path) -> None:
         [
             "tenant",
             "oauth-bind",
-            "jason",
+            "quinn",
             "--issuer",
             ISSUER,
             "--subject",
@@ -398,7 +398,7 @@ def test_oauth_binding_reports_when_disk_changed_but_live_reload_was_denied(
 ) -> None:
     from wingman.infrastructure import tenant_process
 
-    registry = _registry(tmp_path, "jason")
+    registry = _registry(tmp_path, "quinn")
     identities = tmp_path / "oauth-identities.toml"
 
     def denied(_registry: Path) -> int | None:
@@ -410,7 +410,7 @@ def test_oauth_binding_reports_when_disk_changed_but_live_reload_was_denied(
         [
             "tenant",
             "oauth-bind",
-            "jason",
+            "quinn",
             "--issuer",
             ISSUER,
             "--subject",
@@ -426,7 +426,7 @@ def test_oauth_binding_reports_when_disk_changed_but_live_reload_was_denied(
     assert "Binding is on disk" in result.output
     assert "running process still uses the previous identity map" in result.output
     assert "No running shared process found" not in result.output
-    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "jason"
+    assert IdentityMap.from_toml(identities).slug_for(ISSUER, "user_123") == "quinn"
 
 
 def test_concurrent_bindings_serialize_the_read_modify_write(
@@ -498,13 +498,13 @@ def test_a_provisioning_reservation_blocks_a_competing_tenant_until_released(
 
 def test_only_the_reservation_owner_can_finish_or_release_provisioning(tmp_path: Path) -> None:
     identities = tmp_path / "oauth-identities.toml"
-    reservation = reserve_trusted_identity(identities, ISSUER, "user_123", "jason")
+    reservation = reserve_trusted_identity(identities, ISSUER, "user_123", "quinn")
 
     with pytest.raises(IdentityMapError, match="reservation token"):
-        bind_trusted_identity(identities, ISSUER, "user_123", "jason", reservation="not-the-token")
+        bind_trusted_identity(identities, ISSUER, "user_123", "quinn", reservation="not-the-token")
     assert not release_trusted_identity_reservation(identities, ISSUER, "user_123", "not-the-token")
 
-    assert bind_trusted_identity(identities, ISSUER, "user_123", "jason", reservation=reservation)
+    assert bind_trusted_identity(identities, ISSUER, "user_123", "quinn", reservation=reservation)
 
 
 def test_a_crashed_provisioning_reservation_expires(tmp_path: Path) -> None:
@@ -528,7 +528,7 @@ def test_the_reservation_owner_can_renew_before_registry_mutation(tmp_path: Path
     identities = tmp_path / "oauth-identities.toml"
     clock = [time.time()]
     reservation = reserve_trusted_identity(
-        identities, ISSUER, "user_123", "jason", now=lambda: clock[0]
+        identities, ISSUER, "user_123", "quinn", now=lambda: clock[0]
     )
     clock[0] += 3599.0
 
@@ -540,7 +540,7 @@ def test_the_reservation_owner_can_renew_before_registry_mutation(tmp_path: Path
         now=lambda: clock[0],
     )
     clock[0] += 2.0
-    with pytest.raises(IdentityMapError, match="reserved.*jason"):
+    with pytest.raises(IdentityMapError, match="reserved.*quinn"):
         reserve_trusted_identity(identities, ISSUER, "user_123", "other", now=lambda: clock[0])
 
 
@@ -549,10 +549,10 @@ def test_existing_binding_still_retries_the_live_reload(
 ) -> None:
     from wingman.infrastructure import tenant_process
 
-    registry = _registry(tmp_path, "jason")
+    registry = _registry(tmp_path, "quinn")
     identities = tmp_path / "oauth-identities.toml"
     identities.write_text(
-        f'[[identity]]\niss = "{ISSUER}"\nsub = "user_123"\nslug = "jason"\n',
+        f'[[identity]]\niss = "{ISSUER}"\nsub = "user_123"\nslug = "quinn"\n',
         encoding="utf-8",
     )
     signaled: list[Path] = []
@@ -567,7 +567,7 @@ def test_existing_binding_still_retries_the_live_reload(
         [
             "tenant",
             "oauth-bind",
-            "jason",
+            "quinn",
             "--issuer",
             ISSUER,
             "--subject",

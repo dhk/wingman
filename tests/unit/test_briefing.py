@@ -72,11 +72,11 @@ def test_a_hosted_tenant_is_not_told_to_run_the_overnight(
     model call on somebody else's job — and the warning they DO need is the
     opposite one, that firing too early reads yesterday's digest."""
     monkeypatch.delenv(ENV_DATA_DIR, raising=False)
-    data_dir = tmp_path / "tenants" / "trent"
+    data_dir = tmp_path / "tenants" / "riley"
     data_dir.mkdir(parents=True)
     Storage(data_dir / "wingman.db").close()
 
-    prompt = render_prompt(_schedule(), Tenant(slug="trent", data_dir=data_dir).config())
+    prompt = render_prompt(_schedule(), Tenant(slug="riley", data_dir=data_dir).config())
 
     assert "Run overnight" not in prompt
     assert "host's schedule" in prompt

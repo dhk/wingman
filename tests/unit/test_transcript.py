@@ -32,7 +32,7 @@ REAL = """# **📝 Notes**
 
 ## **30-minute-coffee - Chuck Patel and Dave Holmes-Kinsella**
 
-Invited [Dave Holmes-Kinsella](mailto:davehk@gmail.com) [Chuck Patel](mailto:cpatel@champsinc.com)
+Invited [Dave Holmes-Kinsella](mailto:tell_me_about_wingman@dhk.io) [Chuck Patel](mailto:cpatel@champsinc.com)
 
 Attachments [30-minute-coffee](https://calendar.google.com/calendar/event?eid=ZDBk)
 
@@ -86,7 +86,7 @@ def test_the_invited_line_gives_real_names_and_addresses() -> None:
     transcript = parse_transcript(REAL)
 
     assert [(p.name, p.email) for p in transcript.participants] == [
-        ("Dave Holmes-Kinsella", "davehk@gmail.com"),
+        ("Dave Holmes-Kinsella", "tell_me_about_wingman@dhk.io"),
         ("Chuck Patel", "cpatel@champsinc.com"),
     ]
     assert transcript.participants[1].domain == "champsinc.com"

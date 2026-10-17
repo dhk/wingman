@@ -65,18 +65,18 @@ port = 8787
 token = "dhktoken"
 
 [[instance]]
-name = "trent"
+name = "riley"
 port = 8788
-prefix = "/trent"
-token = "trenttoken"
+prefix = "/riley"
+token = "rileytoken"
 """,
         encoding="utf-8",
     )
     instances = load_instances(load_config())
-    assert [i.name for i in instances] == ["dhk", "trent"]
+    assert [i.name for i in instances] == ["dhk", "riley"]
     assert instances[0].host == "127.0.0.1"  # default
     assert instances[0].prefix == ""
-    assert instances[1].prefix == "/trent"
+    assert instances[1].prefix == "/riley"
     assert instances[0].stripped is False and instances[1].stripped is False  # default
 
 
@@ -84,10 +84,10 @@ def test_load_instances_parses_stripped_flag(workspace: Path) -> None:
     (workspace / "installations.toml").write_text(
         """
 [[instance]]
-name = "trent"
+name = "riley"
 port = 8788
-prefix = "/trent"
-token = "trenttoken"
+prefix = "/riley"
+token = "rileytoken"
 stripped = true
 """,
         encoding="utf-8",
@@ -143,10 +143,10 @@ port = 8787
 token = "dhktoken"
 
 [[instance]]
-name = "trent"
+name = "riley"
 port = 8788
-prefix = "/trent"
-token = "trenttoken"
+prefix = "/riley"
+token = "rileytoken"
 """,
         encoding="utf-8",
     )
@@ -164,11 +164,11 @@ token = "trenttoken"
     monkeypatch.setattr(admin_module, "_check_health", fake_check_health)
     monkeypatch.setattr("wingman.mcp_server._tailscale_dns_name", lambda: None)  # deterministic
     page = http.get(f"/admin/{token}/installations").text
-    assert ">dhk<" in page and ">trent<" in page
+    assert ">dhk<" in page and ">riley<" in page
     assert "running" in page and "stopped" in page
     assert "v0.5.0" in page and "2026-07-23T00:00:00" in page
     assert 'href="http://127.0.0.1:8787/ui/dhktoken/"' in page
-    assert 'href="http://127.0.0.1:8788/trent/ui/trenttoken/"' in page
+    assert 'href="http://127.0.0.1:8788/riley/ui/rileytoken/"' in page
 
 
 def test_check_health_is_async_not_blocking(workspace: Path) -> None:
@@ -185,7 +185,7 @@ def test_check_health_is_async_not_blocking(workspace: Path) -> None:
 def test_check_health_omits_prefix_only_when_stripped() -> None:
     """Regression: after moving an instance to Tailscale 'serve --set-path'
     (the front strips the prefix before the backend ever sees it), the
-    admin page kept checking health at .../trent/health locally — a path
+    admin page kept checking health at .../riley/health locally — a path
     the backend no longer serves once it drops --prefix, so a genuinely
     healthy instance read as 'stopped'. Native '--prefix' instances (the
     backend really does listen under the prefix) must keep including it."""
@@ -198,7 +198,7 @@ def test_check_health_omits_prefix_only_when_stripped() -> None:
         return httpx.Response(200, json={"version": "1.0", "started_at": "now"})
 
     stripped = Instance(
-        name="trent", host="127.0.0.1", port=8788, prefix="/trent", token="TOK", stripped=True
+        name="riley", host="127.0.0.1", port=8788, prefix="/riley", token="TOK", stripped=True
     )
     native_bare = Instance(name="dhk", host="127.0.0.1", port=8787, prefix="", token="TOK2")
     native_prefixed = Instance(name="x", host="127.0.0.1", port=9999, prefix="/x", token="TOK3")
@@ -222,20 +222,20 @@ def test_check_health_omits_prefix_only_when_stripped() -> None:
 def test_open_url_prefers_tunnel_host_over_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
     """The launcher link is normally opened from a browser reached through
     the tunnel, not from lobster itself — a loopback link there resolves
-    against the viewer's OWN machine, not lobster (issue: Trent's
+    against the viewer's OWN machine, not lobster (issue: Riley's
     drilldown link pointed at 127.0.0.1:8788, unreachable off-box)."""
     from wingman.admin import Instance, _open_url
 
     instance = Instance(
-        name="trent", host="127.0.0.1", port=8788, prefix="/trent", token="TOK", tunnel_port=8443
+        name="riley", host="127.0.0.1", port=8788, prefix="/riley", token="TOK", tunnel_port=8443
     )
     monkeypatch.setattr("wingman.mcp_server._tailscale_dns_name", lambda: None)
-    assert _open_url(instance) == "http://127.0.0.1:8788/trent/ui/TOK/"  # no tunnel: loopback
+    assert _open_url(instance) == "http://127.0.0.1:8788/riley/ui/TOK/"  # no tunnel: loopback
 
     monkeypatch.setattr(
         "wingman.mcp_server._tailscale_dns_name", lambda: "lobster.tail08dfce.ts.net"
     )
-    assert _open_url(instance) == "https://lobster.tail08dfce.ts.net:8443/trent/ui/TOK/"
+    assert _open_url(instance) == "https://lobster.tail08dfce.ts.net:8443/riley/ui/TOK/"
 
     no_port = Instance(name="dhk", host="127.0.0.1", port=8787, prefix="", token="TOK2")
     assert _open_url(no_port) == "https://lobster.tail08dfce.ts.net/ui/TOK2/"  # no tunnel_port set
@@ -254,7 +254,7 @@ def test_open_url_loopback_fallback_omits_prefix_for_stripped_instance(
 
     monkeypatch.setattr("wingman.mcp_server._tailscale_dns_name", lambda: None)
     stripped = Instance(
-        name="trent", host="127.0.0.1", port=8788, prefix="/trent", token="TOK", stripped=True
+        name="riley", host="127.0.0.1", port=8788, prefix="/riley", token="TOK", stripped=True
     )
     assert _open_url(stripped) == "http://127.0.0.1:8788/ui/TOK/"
 

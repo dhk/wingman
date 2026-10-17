@@ -114,7 +114,7 @@ that has no GitHub identity of its own. One-time setup:
 
 ```bash
 sudo groupadd wingman                              # once per box
-sudo usermod -aG wingman dhk && sudo usermod -aG wingman trent   # per account that needs it
+sudo usermod -aG wingman dhk && sudo usermod -aG wingman riley   # per account that needs it
 # each added account needs a fresh login (or `newgrp wingman`) for the group to take effect
 
 sudo install -d -m 750 -o root -g wingman /etc/wingman
@@ -141,7 +141,7 @@ wingman measured, and shown to each account exactly once:
 sudo wingman motd set "Re-ingest your CV" \
   --why "The resume parser changed on the 10th and older ingests lost job titles." \
   --how "say: here's my resume"
-sudo wingman motd set "Rotate your API key" --to trent   # one tenant, by slug
+sudo wingman motd set "Rotate your API key" --to riley   # one tenant, by slug
 wingman motd show    # what it says NOW, and whether THIS account has seen it
 wingman motd history # what this account was TOLD — kept when each was delivered
 sudo rm /etc/wingman/motd.json   # stop saying anything
@@ -181,10 +181,10 @@ sentence that tells them you will be able to read the answer.
 ```bash
 sudo wingman qotd set "What is slowing you down this week?" \
   --why "Deciding what to build next month."
-sudo wingman qotd set "Did the new digest land for you?" --to trent
+sudo wingman qotd set "Did the new digest land for you?" --to riley
 wingman qotd show          # what is being asked, of whom, and whether THIS account answered
 wingman tenant answers     # every tenant's answers — an operator act, run by you
-wingman tenant answers trent --id 2026-08-11   # one tenant, one question
+wingman tenant answers riley --id 2026-08-11   # one tenant, one question
 sudo rm /etc/wingman/qotd.json   # stop asking
 ```
 
@@ -212,12 +212,12 @@ their own time, wingman emits a form for one named person and ingests
 their responses back into that person's own workspace.
 
 ```bash
-wingman tenant form jason --out ~/forms     # writes the Apps Script + the manifest
+wingman tenant form quinn --out ~/forms     # writes the Apps Script + the manifest
 # paste the .gs into script.google.com, run it once, send them the published URL
 # they fill it in; download the responses as CSV
 
-sudo -u jason -H wingman tenant ingest-form jason ~/jason-responses.csv
-sudo -u jason -H wingman tenant ingest-form jason ~/jason-responses.csv --apply
+sudo -u quinn -H wingman tenant ingest-form quinn ~/quinn-responses.csv
+sudo -u quinn -H wingman tenant ingest-form quinn ~/quinn-responses.csv --apply
 ```
 
 **The first run writes nothing.** It prints the assembled job-criteria
@@ -514,7 +514,7 @@ instance started any other way has no supervisor to bring it back up
 afterward, so the button explains that instead of guessing.
 
 **Virtual folders for multiple instances.** One hostname can front every
-instance as `/dhk/…`, `/trent/…` — two ways, and they must not be
+instance as `/dhk/…`, `/riley/…` — two ways, and they must not be
 combined (the prefixes would stack):
 
 *Native prefix (preferred — the server owns its folder):* each instance
@@ -522,7 +522,7 @@ listens on its path itself, so any pass-through front (nginx, Caddy,
 direct tailnet access to the port) works with no path rewriting:
 
 ```ini
-ExecStart=%h/.local/bin/wingman-mcp --http --port 8788 --prefix /trent
+ExecStart=%h/.local/bin/wingman-mcp --http --port 8788 --prefix /riley
 ```
 
 *Tailscale path mounts (no other proxy needed):* `tailscale serve
@@ -531,7 +531,7 @@ front the instances run WITHOUT `--prefix`:
 
 ```bash
 sudo tailscale serve --bg --set-path /dhk   http://127.0.0.1:8787
-sudo tailscale serve --bg --set-path /trent http://127.0.0.1:8788
+sudo tailscale serve --bg --set-path /riley http://127.0.0.1:8788
 ```
 
 Either way each person's bookmark is
@@ -584,11 +584,11 @@ port = 8787
 token = "<dhk's mcp-http-token>"
 
 [[instance]]
-name = "trent"
+name = "riley"
 port = 8788
-prefix = "/trent"
-token = "<trent's mcp-http-token>"
-stripped = true   # tailscale 'serve --set-path' strips /trent before the backend sees it
+prefix = "/riley"
+token = "<riley's mcp-http-token>"
+stripped = true   # tailscale 'serve --set-path' strips /riley before the backend sees it
 ```
 
 The "Open" link on each row prefers the same Tailscale-detected tunnel
@@ -599,9 +599,9 @@ process itself also listens under that prefix depends on which of the two
 multi-instance patterns above this instance uses:
 
 - **Native `--prefix`** (default, `stripped` omitted or `false`): the
-  backend really does register routes under `/trent`, so the admin page's
-  health check hits `/trent/health` locally too.
-- **Tailscale path mount** (`stripped = true`): the front strips `/trent`
+  backend really does register routes under `/riley`, so the admin page's
+  health check hits `/riley/health` locally too.
+- **Tailscale path mount** (`stripped = true`): the front strips `/riley`
   before forwarding, so the backend listens bare — the health check must
   hit plain `/health` locally, even though the public URL still has the
   prefix. Getting this wrong makes a genuinely healthy instance read as
@@ -632,7 +632,7 @@ graceful stop). One user's failed pull or reinstall is reported and
 skipped — it never blocks the others.
 
 This needs its own, separate root-owned install (it never touches any
-workspace, never reads a key, and root should not share dhk's or Trent's
+workspace, never reads a key, and root should not share dhk's or Riley's
 own `uv tool` install). `dhk/wingman` is a **private** repo, so root needs
 either a credential of its own or a local install source — plain
 `git+https://…` fails with `fatal: could not read Username for
@@ -640,7 +640,7 @@ either a credential of its own or a local install source — plain
 one of those, in order of setup cost:
 
 **Zero setup — install from dhk's already-cloned checkout** (the same
-local-path pattern Trent's own upgrade uses below):
+local-path pattern Riley's own upgrade uses below):
 
 ```bash
 sudo -i                                            # or: sudo -u root -H bash
@@ -695,14 +695,14 @@ Description=Upgrade every wingman shape-B user (#125)
 
 [Service]
 Type=oneshot
-Environment=WINGMAN_UPGRADE_USERS=dhk,trent
-Environment=WINGMAN_UPGRADE_SOURCE_trent=/home/dhk/src/wingman
+Environment=WINGMAN_UPGRADE_USERS=dhk,riley
+Environment=WINGMAN_UPGRADE_SOURCE_riley=/home/dhk/src/wingman
 ExecStart=/root/.local/bin/wingman-upgrade-all
 ```
 
-Trent has no GitHub access of his own (#167) — omitting
-`WINGMAN_UPGRADE_SOURCE_trent` doesn't skip him, it silently falls back to
-the checkout-shape default (`git -C ~trent/src/wingman pull`), which fails
+Riley has no GitHub access of his own (#167) — omitting
+`WINGMAN_UPGRADE_SOURCE_riley` doesn't skip him, it silently falls back to
+the checkout-shape default (`git -C ~riley/src/wingman pull`), which fails
 outright since that checkout was never meant to exist. Any local-path-shape
 user needs their own `WINGMAN_UPGRADE_SOURCE_<username>` line, pointed at
 whichever checkout-shape user's already-pulled checkout they install from.
@@ -755,7 +755,7 @@ per person. RFC-048 adds a second shape for when per-account overhead
 stops paying for itself (a third-plus person, per `docs/RFC.md`'s own
 trigger) — one shared process, share-nothing data (one SQLite DB per
 tenant, unchanged), capability tokens per existing/operator tenant plus an
-optional OAuth bearer route for deliberately trusted identities. dhk and trent
+optional OAuth bearer route for deliberately trusted identities. dhk and riley
 are not required to move onto this — the two shapes coexist on the same box,
 each on its own port.
 
@@ -794,7 +794,7 @@ here so the reasoning survives, not as a checklist to retype:
 # once per box
 sudo scripts/wingman-provision-shared.sh
 # once per tenant
-sudo scripts/wingman-add-tenant.sh jason --telemetry
+sudo scripts/wingman-add-tenant.sh quinn --telemetry
 sudo scripts/wingman-add-tenant.sh bob --no-telemetry
 ```
 
@@ -999,7 +999,7 @@ For an existing tenant, preserve their workspace and add only the binding
 (one command covers both surfaces, as above):
 
 ```bash
-sudo -iu wingman-shared wingman tenant oauth-bind jason \
+sudo -iu wingman-shared wingman tenant oauth-bind quinn \
   --issuer https://your-project.authkit.app \
   --subject user_01EXAMPLE \
   --identities ~/.config/wingman/oauth-identities.toml \
@@ -1190,7 +1190,7 @@ Call `wingman` directly, not the `wg` alias (`wg` only exists in an
 interactive shell that's sourced its own `.bashrc`, per §1's setup step
 for a human's own account — `wingman-shared` was never given one, and
 a non-interactive `bash -c` wouldn't source it even if it had been).
-Found live migrating trent's account (RFC-048 Phase 3): the script's own
+Found live migrating riley's account (RFC-048 Phase 3): the script's own
 printed next-steps had this exact bug, since fixed.
 
 `--tunnel-prefix` must match `WINGMAN_SHARED_TAILSCALE_PATH` (default
@@ -1200,12 +1200,12 @@ prefix before forwarding and the shared process itself always runs with
 no `--prefix` of its own. Omitting it prints a URL that 404s at the
 tunnel, not at wingman — easy to mistake for a broken deployment.
 
-**`funnel`, never plain `serve`, for this mount.** Jason/Bob-style
+**`funnel`, never plain `serve`, for this mount.** Quinn/Bob-style
 tenants aren't on the owner's tailnet — the shared process needs public
 reach, not tailnet-only. This matters beyond correctness: `tailscale
 serve --set-path` for this path would silently drop Funnel for the
 **whole hostname**, demoting every other already-public mount (dhk's,
-trent's, alexandria's) back to tailnet-only as a side effect — funnel is
+riley's, alexandria's) back to tailnet-only as a side effect — funnel is
 a per-hostname toggle, not a per-path one. Hit live; see
 `wingman-provision-shared.sh`'s own comment at this step.
 
@@ -1414,8 +1414,8 @@ lists, and a tenant whose requests belong elsewhere carries their own:
 feature_repo = "dhk/wingman"        # every tenant, unless they say otherwise
 
 [[tenant]]
-slug = "trent"
-data_dir = "/home/wingman-shared/tenants/trent"
+slug = "riley"
+data_dir = "/home/wingman-shared/tenants/riley"
 feature_repo = "dhk/adventures-in-ai"   # this one tenant, instead
 ```
 
@@ -1485,8 +1485,8 @@ call at all, which is most of Wingman. Two ways out:
 
 ```toml
 [[tenant]]
-slug = "jason"
-data_dir = "/home/wingman-shared/tenants/jason"
+slug = "quinn"
+data_dir = "/home/wingman-shared/tenants/quinn"
 funded = true              # metered calls fall back to the operator's declared key
 ```
 
@@ -1581,8 +1581,8 @@ re-declares the host registry reservation (#288).
 Every tenant on the shared process is briefly interrupted by the restart.
 
 **Migrating an existing shape-B account onto the shared process** (RFC-048
-Phase 3 — dhk/trent's own accounts, once Phase 2 has run clean for a real
-operating period; not the jason/bob-style new-tenant path above). Dry-run
+Phase 3 — dhk/riley's own accounts, once Phase 2 has run clean for a real
+operating period; not the quinn/bob-style new-tenant path above). Dry-run
 by default, prints every step; pass `--apply` to actually do it:
 
 ```bash
@@ -1703,7 +1703,7 @@ wingman drive auth   # same command again — finishes the authorization
 
 The refresh token lands in `~/.config/wingman/gdrive-credentials.json`
 (mode 600), scoped to this Unix account exactly like `secrets.env` — dhk's
-and trent's authorizations are independent and isolated by construction.
+and riley's authorizations are independent and isolated by construction.
 From then on, `wingman backup` and `wingman overnight` push automatically
 (`--no-drive` skips it for one run); before authorizing, both commands are
 unaffected and print `Drive: not authorized yet...`.

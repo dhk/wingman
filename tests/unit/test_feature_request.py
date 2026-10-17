@@ -95,10 +95,10 @@ def test_stamp_operator_appends_submitted_by_when_set(tmp_path: Path) -> None:
     home = tmp_path / "home"
     path = wingman_env_path(home)
     path.parent.mkdir(parents=True)
-    path.write_text("WINGMAN_OPERATOR_NAME=Trent\n", encoding="utf-8")
+    path.write_text("WINGMAN_OPERATOR_NAME=Riley\n", encoding="utf-8")
 
-    assert stamp_operator("Because Y.", home=home) == "Because Y.\n\nSubmitted by: Trent"
-    assert stamp_operator("", home=home) == "Submitted by: Trent"
+    assert stamp_operator("Because Y.", home=home) == "Because Y.\n\nSubmitted by: Riley"
+    assert stamp_operator("", home=home) == "Submitted by: Riley"
 
 
 def test_stamp_operator_is_a_noop_when_unset(tmp_path: Path) -> None:
@@ -307,9 +307,9 @@ def test_stamp_operator_prefers_the_tenants_name_over_the_box_wide_setting(
     """#506: one shared PAT makes GitHub's 'opened by' say the operator for
     everybody, and WINGMAN_OPERATOR_NAME is one file per box — so without a
     per-tenant name every tenant's issue is indistinguishable."""
-    config = Config(data_dir=Path("/nonexistent"), data_dir_source="test", operator_name="jason")
+    config = Config(data_dir=Path("/nonexistent"), data_dir_source="test", operator_name="quinn")
     assert stamp_operator("Because Y.", home=tmp_path, config=config).endswith(
-        "Submitted by: jason"
+        "Submitted by: quinn"
     )
 
 
@@ -357,11 +357,11 @@ def test_mcp_tool_stamps_operator_name_into_the_preview(
     config = load_config()
     set_feature_repo(config, "dhk/wingman")
     monkeypatch.setattr(
-        feature_request_module.host_config, "operator_name", lambda home=None: "Trent"
+        feature_request_module.host_config, "operator_name", lambda home=None: "Riley"
     )
 
     preview = mcp_server.feature_request("Add X", "Because Y.", confirmed=False)
-    assert "Submitted by: Trent" in preview
+    assert "Submitted by: Riley" in preview
 
     calls: list[list[str]] = []
 
@@ -372,7 +372,7 @@ def test_mcp_tool_stamps_operator_name_into_the_preview(
     monkeypatch.setattr(feature_request_module, "_default_runner", fake_gh)
     mcp_server.feature_request("Add X", "Because Y.", confirmed=True)
     [argv] = calls
-    assert "Submitted by: Trent" in argv[argv.index("--body") + 1]
+    assert "Submitted by: Riley" in argv[argv.index("--body") + 1]
 
 
 def test_mcp_tool_gates_on_confirmation(workspace: Path) -> None:
