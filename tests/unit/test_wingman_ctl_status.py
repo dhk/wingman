@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from wingman.infrastructure.tenants import load_registry
+
 CTL = Path(__file__).resolve().parents[2] / "scripts" / "wingman-ctl"
 
 
@@ -18,6 +20,7 @@ def test_shared_status_without_personal_server(tmp_path: Path, personal: bool) -
     (etc / "tenants.toml").write_text(
         '[[tenant]]\nslug="private-slug"\ndata_dir="/private/workspace"\n'
     )
+    assert len(load_registry(etc / "tenants.toml")) == 1
     (etc / "oauth-config-path").write_text(str(etc / "oauth.env"))
     (etc / "oauth.env").write_text("WINGMAN_OAUTH_ARGS=--oauth-identities /absent/map.toml\n")
     secret = tmp_path / "shared/.config/wingman/secrets.env"
