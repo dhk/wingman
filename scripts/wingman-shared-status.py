@@ -171,6 +171,9 @@ def main() -> int:
     ):
         code = run(
             "curl",
+            "--disable",  # Must be first: ignore the operator's curlrc credentials/options.
+            "--noproxy",
+            "*",  # Loopback health checks must never leave via an inherited proxy.
             "--silent",
             "--max-time",
             "3",

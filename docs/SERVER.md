@@ -1789,5 +1789,7 @@ notifications are configured. It prints no tenant identifiers or credentials.
 Unreadable shared files or an inaccessible service-manager bus are labelled
 `(needs sudo)`; status does not prompt or elevate. The personal HTTP section
 appears only when that account has its own unit or pidfile (or there is no
-shared configuration). Probes use loopback port 8789 by default;
+shared configuration). Probes disable curl's user configuration and bypass
+proxy environment settings, so operator credentials cannot authenticate them
+and configured proxies cannot reroute them. Probes use loopback port 8789 by default;
 `WINGMAN_SHARED_PORT` selects another provisioned port.

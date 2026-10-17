@@ -84,3 +84,82 @@ def test_unreadable_shared_config_needs_sudo(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert "Tenants: (needs sudo)" in result.stdout
     assert "hidden" not in result.stdout
+
+
+@pytest.mark.parametrize("proxy_environment", [False, True])
+def test_health_probes_ignore_curl_credentials_and_proxies(tmp_path, proxy_environment):
+    """Exercise real curl: operator curlrc and proxies cannot authenticate or reroute probes."""
+    import shutil
+    import sys
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    if shutil.which("curl") is None:
+        pytest.skip("real curl is required for this integration probe")
+    requests = []
+    proxy_requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append((self.path, self.headers.get("Authorization")))
+            self.send_response(401 if self.path == "/mcp" else 200)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    class ProxyHandler(Handler):
+        def do_GET(self):
+            proxy_requests.append(self.path)
+            self.send_response(599)
+            self.end_headers()
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    proxy = ThreadingHTTPServer(("127.0.0.1", 0), ProxyHandler)
+    threads = [
+        threading.Thread(target=server.serve_forever, daemon=True) for server in (target, proxy)
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        home = tmp_path / "operator"
+        home.mkdir()
+        (home / ".curlrc").write_text('header = "Authorization: Bearer synthetic-test-only"\n')
+        unit = home / ".config/systemd/user/wingman-mcp.service"
+        unit.parent.mkdir(parents=True)
+        unit.write_text(f"[Service]\nExecStart=/synthetic/wingman --port {target.server_port}\n")
+        etc = tmp_path / "etc/wingman"
+        etc.mkdir(parents=True)
+        (etc / "tenants.toml").write_text("")
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+        }
+        env.update(
+            HOME=str(home),
+            CURL_HOME=str(home),
+            XDG_CONFIG_HOME=str(home / ".config"),
+            WINGMAN_HOST_ROOT=str(tmp_path),
+        )
+        if proxy_environment:
+            env.update(http_proxy=f"http://127.0.0.1:{proxy.server_port}", no_proxy="", NO_PROXY="")
+        result = subprocess.run(
+            [sys.executable, str(CTL.with_name("wingman-shared-status.py")), "--home", str(home)],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=20,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "PRM: 200" in result.stdout and "/mcp: 401" in result.stdout
+        assert requests == [("/.well-known/oauth-protected-resource/mcp", None), ("/mcp", None)]
+        assert proxy_requests == []
+        assert "synthetic-test-only" not in result.stdout + result.stderr
+    finally:
+        for server in (target, proxy):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
