@@ -90,3 +90,5 @@ def test_error_subjects_are_redacted_even_without_subject_label() -> None:
     output = safe("duplicate identity ('https://issuer.test', 'user_SYNTHETICFULLSUBJECT1234')")
     assert "user_SYNTHETICFULLSUBJECT1234" not in output
     assert "1234" in output
+    issuer = "https://api.workos.com/user_management/client_synthetic"
+    assert safe(issuer) == issuer
