@@ -3750,8 +3750,8 @@ def overnight(
     out: Path | None = typer.Option(
         None,
         "--out",
-        help="Where the digest lands (default: the workspace's reports/digests/). "
-        "Point it somewhere you actually look — Desktop, a synced folder.",
+        help="Write an additional digest copy here (Desktop or a synced folder). "
+        "The canonical copy always stays in the workspace's reports/digests/.",
     ),
     drive: bool = typer.Option(
         True,

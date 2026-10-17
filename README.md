@@ -105,10 +105,12 @@ everything followed into a dated digest ending in an action list
 (what / why / who / evidence) — schedule it and wake up to marching
 orders (RFC-018). `wingman digest` shows the newest one (`--open` pops
 it in your viewer), `latest.md` is a stable pointer for scripts and
-editor tabs, and digests in the workspace are searchable (`wingman search`).
-`wingman overnight --out ~/Desktop` chooses a different output directory;
-`wingman digest` has no `--out` option. Until [#597](https://github.com/dhk/wingman/issues/597) lands, runs written outside
-`reports/digests/` are not found by `digest` or search.
+editor tabs. `wingman overnight --out ~/Desktop` writes an additional copy
+where you look; the canonical digest always stays under `reports/digests/`,
+where `wingman digest`, `digest --open`, and search can find it.
+`wingman digest` has no `--out` option. A failed additional copy is reported
+separately after the run summary and any configured Drive push; the canonical
+digest remains available, and the command exits non-zero.
 
 **Search.** `wingman search "semantic layers"` answers "what does the
 workspace know about X" in one call — corpus, people's writing, POV

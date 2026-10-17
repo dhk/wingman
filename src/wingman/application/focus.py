@@ -821,7 +821,7 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
             ]
         )
 
-    digest_dir = (out_dir.expanduser() if out_dir else config.reports_dir / "digests").resolve()
+    digest_dir = (config.reports_dir / "digests").resolve()
     digest_dir.mkdir(parents=True, exist_ok=True)
     digest_path = digest_dir / f"overnight-{now.strftime('%Y%m%dT%H%M%SZ')}.md"
     content = "\n".join(lines) + "\n"
@@ -855,6 +855,21 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     structured = report.model_dump_json(indent=2)
     digest_path.with_suffix(".json").write_text(structured, encoding="utf-8")
     (digest_dir / "latest.json").write_text(structured, encoding="utf-8")
+    if out_dir is not None:
+        copy_dir = out_dir.expanduser().resolve()
+        if copy_dir != digest_dir:
+            try:
+                copy_dir.mkdir(parents=True, exist_ok=True)
+                for suffix in (".md", ".html", ".json"):
+                    source = digest_path.with_suffix(suffix)
+                    payload = source.read_bytes()
+                    (copy_dir / source.name).write_bytes(payload)
+                    (copy_dir / ("latest" + suffix)).write_bytes(payload)
+            except OSError as exc:
+                raise IngestError(
+                    f"additional digest copy failed: {exc}; canonical digest is preserved "
+                    f"at {digest_path}. Read it with 'wingman digest' or copy it manually."
+                ) from exc
     return report
 
 
