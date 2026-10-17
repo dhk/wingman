@@ -133,11 +133,16 @@ owner_of() {
 }
 
 cmd_status() {
-  say "wingman $(wingman --version 2>/dev/null | awk '{print $2}')"
-  say ""
-  say "HTTP server (yours):"
-  say "  $(wingman mcp status 2>/dev/null || say 'wingman not installed?')"
-  http_running && print_urls
+  local shared=0 shared_home personal_data
+  personal_data="${WINGMAN_DATA_DIR:-$HOME/.local/share/wingman}"
+  shared_home="$(_home_of "$SHARED_USER")"
+  python3 "$(dirname "$0")/wingman-shared-status.py" --home "$shared_home" && shared=1
+  if [ "$shared" -eq 0 ] || [ -f "$HOME/.config/systemd/user/wingman-mcp.service" ] || [ -f "$personal_data/mcp-http.pid" ] || [ -f "$HOME/Library/Application Support/wingman/mcp-http.pid" ]; then
+    say "wingman $(wingman --version 2>/dev/null | awk '{print $2}')"
+    say "HTTP server (yours):"
+    say "  $(wingman mcp status 2>/dev/null || say 'wingman not installed?')"
+    http_running && print_urls
+  fi
   say ""
   say "Client-owned stdio servers:"
   found=0
