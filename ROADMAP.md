@@ -10,7 +10,7 @@ Each phase must leave Wingman in a usable state.
 | 1 — Career Brain | **Delivered** (resume formats incl. PDF/DOCX/LaTeX/Google URLs with Markdown normalization RFC-026, LinkedIn import, career.md/json, profile manage RFC-027, document lineage & supersede-on-reingest RFC-028) |
 | 2 — Opportunity Inbox | **Delivered** (cited fit briefs via `wingman assess`, posting fetch via `assess --url`, application packs RFC-024) |
 | 3 — Company Research | **Delivered** (dossiers RFC-012, approved-source research RFC-015, synthesized themes RFC-016, company feeds RFC-029) |
-| 4 — Relationship Intelligence | **Partial** — connections import, warmth signal vector (RFC-020), POV cards, similarity; no interaction timeline / follow-up queue yet |
+| 4 — Relationship Intelligence | **Partial** — connections import, warmth signal vector (RFC-020), POV cards, similarity; logged/listed interactions, objective tickler and 45-day review nudges in digests; no standalone follow-up queue yet |
 | 5 — Daily Operator | **Partial** — `make-it-so`, watchlists, follow/overnight (RFC-018), and the morning digest with its what/why/who/evidence action list cover the daily loop, with persistent mute/snooze triage of digest actions (RFC-031); no scored three-action brief yet |
 | 6 — Drafting and Voice | **Partial** — purpose-shaped outreach briefs with evidence-validated talking points and intro bullets; the approval boundary (never sends, RFC-006) is structural; no per-message-type drafts or critic pass |
 | 7 — Interview Preparation | **Partial** — the application answer bank (RFC-030): refined Q+A+context accumulates and is recalled across applications; prep packets and mock interviews not started |
