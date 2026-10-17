@@ -1402,6 +1402,11 @@ above.) Logs: `sudo -u wingman-shared env XDG_RUNTIME_DIR=/run/user/$(id -u wing
 
 A one-off run any time: `sudo -iu wingman-shared bash -c 'export PATH="$HOME/.local/bin:$PATH"; wingman tenant overnight'`.
 
+An empty overnight watchlist is reported as `nothing enrolled yet — skipped` by
+`wingman tenant overnight` and does not fail the roster. Missing or unreadable
+workspaces still fail it; `--strict` also fails runs with failed targets. The
+single-workspace `wingman overnight` still reports an empty watchlist as an error.
+
 **Where tenants' feature requests go** (#371). A tenant has no terminal,
 so they cannot run `wingman feature repo` and must never be shown a
 repository chooser — the operator sets the destination once and it is

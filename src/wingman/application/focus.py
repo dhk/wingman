@@ -731,6 +731,10 @@ def _suggestions(storage: Storage, companies: list[str]) -> list[str]:
     return lines
 
 
+class NothingEnrolledError(IngestError):
+    """A valid workspace has no targets enrolled for overnight work."""
+
+
 def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None) -> OvernightReport:
     """Deep-refresh every enrolled target and write the dated digest.
 
@@ -740,7 +744,7 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     """
     members = storage.watchlist_members(OVERNIGHT_LIST)
     if not members:
-        raise IngestError(
+        raise NothingEnrolledError(
             "nothing is enrolled for overnight runs. Start with "
             "'wingman company follow \"<company>\"'."
         )
