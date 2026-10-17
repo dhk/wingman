@@ -105,6 +105,9 @@ class Tenant:
     #: the operator's invoice without anyone deciding to.
     funded: bool = False
 
+    #: Operator retirement disables capability authentication only (#616).
+    capability_url_retired: bool = False
+
     def token_path(self) -> Path:
         return self.data_dir / _TOKEN_FILENAME
 
@@ -355,6 +358,7 @@ def load_registry(path: Path) -> list[Tenant]:
     default_feature_repo = _registry_default_feature_repo(data, path)
     _refuse_privileged_default(data, path)
     _refuse_funded_default(data, path)
+    _refuse_shared_flag(data, path, "capability_url_retired", "retire one tenant at a time.")
     tenants: list[Tenant] = []
     seen_slugs: set[str] = set()
     for entry in entries:
@@ -378,6 +382,9 @@ def load_registry(path: Path) -> list[Tenant]:
                 default_feature_repo=default_feature_repo,
                 privileged=_bool_flag(entry.get("privileged"), "privileged", slug, path),
                 funded=_bool_flag(entry.get("funded"), "funded", slug, path),
+                capability_url_retired=_bool_flag(
+                    entry.get("capability_url_retired"), "capability_url_retired", slug, path
+                ),
             )
         )
     return tenants
@@ -403,6 +410,9 @@ class TenantIndex:
     """
 
     def __init__(self, tenants: list[Tenant]) -> None:
+        from wingman.infrastructure.capability_usage import CAPABILITY_USAGE
+
+        self.capability_usage = CAPABILITY_USAGE
         self._by_slug: dict[str, Tenant] = {}
         self._by_token_hash: dict[str, Tenant] = {}
         self._load(tenants)
@@ -458,7 +468,10 @@ class TenantIndex:
         single check every request-handling call site needs."""
         if not token:
             return None
-        return self._by_token_hash.get(_hash(token))
+        tenant = self._by_token_hash.get(_hash(token))
+        if tenant is None or tenant.capability_url_retired:
+            return None
+        return tenant
 
     def reload(self, path: Path) -> None:
         """Re-read the registry and every listed tenant's token file in

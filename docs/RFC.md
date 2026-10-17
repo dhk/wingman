@@ -1602,6 +1602,31 @@ trusts, on the same #582 evidence (one WorkOS user, one `sub`, both issuers).
 - **What it does not change.** Each binding is still an `(iss, sub)` key. Two
   pending rows with *different* subjects are still two people.
 
+### RFC-081 amendment (2026-10-17): retire migrated capability URLs (#616)
+
+**Durable decision.** An operator may mark an existing tenant's capability URL
+retired in the registry, atomically under the provisioning registry lock.
+Retirement disables capability authentication at the common tenant resolver;
+slug-based OAuth access remains available. Retired and unknown tokens receive
+the same route-specific status, body and headers. Tokens remain in duplicate
+collision detection even while retired, so retiring one tenant cannot silently
+grant a shared token to another. Registry reload applies retirement and undo
+without replacing the token. Absent flags mean active; invalid flags fail closed.
+
+The operator CLI inventories binding coverage from the same trusted-issuer
+configuration as `oauth-bind`. Retirement requires every trusted issuer bound
+and refuses privileged tenants unless an explicit warning-bearing `--force`
+overrides these guards. Undo restores the same URL. Human confirmation and one
+overnight cycle precede retirement; keep the identity-map backup through the
+next cycle. The independent operator installations-token is outside this policy.
+
+Capability requests queue a coarse UTC use date in the tenant's own workspace.
+No subject, email, token or request content is recorded. A bounded daemon queue
+keeps disk I/O off authentication's request thread; failures/drop/shutdown may
+lose updates, so dates are migration hints, never an audit or inactivity proof.
+Source-preserving TOML editing (`tomlkit`) retains unrelated fields/comments;
+replacement preserves ownership and permissions. Access-log redaction is unchanged.
+
 ## RFC-082: Client-owned artifact kinds (#503) — Durable decision
 
 Published view identities accept `custom:<slug>` alongside built-in kinds. Slugs are 1–64 lowercase ASCII letters/digits/underscores/hyphens, beginning with a letter or digit. Custom views retain the same local one-record-per-kind and HTTPS URL rules. Wingman does not know their rendering inputs: freshness is explicitly unchecked and reports the recording timestamp, never a synthetic current/stale verdict. This extends RFC-061’s closed built-in set without adding any publishing action.

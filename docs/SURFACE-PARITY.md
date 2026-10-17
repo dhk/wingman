@@ -171,6 +171,8 @@ counterpart. Both filing surfaces require the reviewed content hash.
 | cli | `tenant ingest-form` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
 | cli | `tenant keys` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
 | cli | `tenant oauth-approve` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
+| cli | `tenant migration` |  | Deliberately local operator migration inventory across tenants; no tenant tool may inspect other tenants. |
+| cli | `tenant retire-url` |  | Deliberately local operator credential retirement; tenant tools cannot change authentication policy. |
 | cli | `tenant oauth-bind` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
 | cli | `tenant oauth-invite` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
 | cli | `tenant oauth-invite-revoke` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |

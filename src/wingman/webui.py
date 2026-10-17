@@ -308,7 +308,10 @@ def _authorized(request: Request) -> Config | None:
     presented = str(request.path_params.get("token", ""))
     if _tenant_index is not None:
         tenant = _tenant_index.resolve(presented)
-        return tenant.config() if tenant is not None else None
+        if tenant is not None:
+            _tenant_index.capability_usage.note(tenant.data_dir)
+            return tenant.config()
+        return None
     config = load_config()
     token_path = config.data_dir / "mcp-http-token"
     if not token_path.exists():

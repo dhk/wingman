@@ -156,6 +156,28 @@ Retire an existing capability token only after all of these are true:
 - the operator has recorded a tested rollback path;
 - the user has been told that the old URL will stop working.
 
+### Capability retirement checklist (#616)
+
+1. Back up the identity map securely. Bind the person's verified identity to
+   their existing slug with one `tenant oauth-bind` (both trusted issuers).
+2. Have the person confirm the new connector reaches their existing workspace
+   and a real tool call succeeds. A yes/no binding alone does not prove this.
+3. Wait one overnight cycle. Run `wingman tenant migration --identities <map>`
+   to inspect binding coverage and coarse last-use dates, without secrets.
+4. Run `wingman tenant retire-url <slug> --identities <map>`, then
+   `wingman tenant reload` (SIGHUP). The old MCP/UI URL now gets exactly the
+   unknown-token response; OAuth remains enabled. No token is rotated/deleted.
+5. Keep the identity-map backup through the next successful cycle, then delete
+   it. Roll back with `tenant retire-url <slug> --undo --identities <map>` and
+   reload: the original capability URL works again.
+
+These commands use the same service env files/options as `oauth-bind`.
+Retirement refuses missing issuer bindings or a privileged tenant unless
+`--force`, which warns loudly. Undo needs only the registry and bypasses both guards. If the identity map is
+broken, restore its backup before reload, which validates both files together. Last-use records are best-effort UTC dates stored per
+workspace, not an audit trail; `never recorded` is not evidence of no use.
+The separate `/admin/<token>/installations` operator credential is unaffected.
+
 ## 4. New invitee policy
 
 First decide which path the person is on:

@@ -1731,3 +1731,51 @@ per-account secrets — the same client id identifies the app for every
 account on the box, so they live in `wingman.env`, not `secrets.env`.
 
 OAuth setup and workspace-summary headers display the workspace slug, never the server filesystem path (#581). The shared OAuth routes serve only setup, key entry, upload and logout; exported profile pages already hide paths. OAuth upload and key-store failures use safe recovery messages rather than raw exceptions containing server paths. Workspace headers use the registered tenant slug even when the directory basename differs.
+
+### Retire an existing tenant's capability URL (#616)
+
+Use the OAuth migration checklist in `docs/OAUTH-LAUNCH-RUNBOOK.md`: bind the
+existing workspace with one `tenant oauth-bind`, have the person confirm the
+new connector works, wait one overnight cycle, then retire the old URL. Keep
+the identity-map backup until the next cycle succeeds, then delete the backup.
+
+```bash
+sudo wingman tenant migration --identities /path/to/oauth-identities.toml
+sudo wingman tenant retire-url <slug> --identities /path/to/oauth-identities.toml
+wingman tenant reload
+```
+
+Both commands read trusted issuers from the same service env files as
+`oauth-bind`; `--oauth-config` and `--oauth-web-config` select nonstandard files,
+never issuer values. Migration lists each slug, yes/no bindings per configured
+issuer, active/retired status, and last capability use as a UTC date. It prints
+no subjects, email addresses or tokens, creates no workspace or usage file,
+and reports unreadable/invalid use records as `unavailable`.
+
+Retirement requires a binding under every trusted issuer and refuses privileged
+tenants. `--force` explicitly overrides these two guards with a warning. This
+checks configured bindings; the operator must still confirm the connector works.
+The per-tenant registry boolean `capability_url_retired = true` disables the
+legacy `/mcp/<token>` and `/ui/<token>/…` credentials after registry reload
+(SIGHUP), including new requests in existing MCP sessions. Rejected requests
+look exactly like unknown tokens. OAuth bearer and browser sessions still select
+the same workspace. An absent retirement field means active.
+
+Undo with `tenant retire-url <slug> --undo --identities /path/to/oauth-identities.toml`,
+then reload. Undo requires only the registry (`--identities` is optional), with no binding
+or privileged-tenant guard. If the identity map is broken, restore its backup
+before SIGHUP: reload validates both files together and retains the last good
+state if either is invalid. It restores the original token: retiring
+never deletes or rotates it. Registry replacement uses the existing provisioning
+lock and preserves other settings, ownership and permissions.
+
+Capability-authenticated requests queue a best-effort use date in the tenant's
+own `capability-url-last-used` file, at most once per UTC day. Request handling
+does not wait for disk I/O and write errors cannot fail authentication. The
+bounded background queue may drop updates under load or at shutdown, so `never
+recorded` means no recorded use, not proof the URL was never used. This is a
+migration hint, not an audit trail. No token is stored in that record.
+
+`/admin/<token>/installations` uses a separate operator `installations-token`,
+not a tenant capability token. Retirement leaves that independent credential
+unchanged; a tenant capability token does not grant access to it.
