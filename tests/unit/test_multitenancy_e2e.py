@@ -47,24 +47,24 @@ def test_two_tenants_key_forms_never_cross_contaminate(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setitem(webui_module.VALIDATORS, "anthropic", lambda value: None)  # accept any key
 
-    jason = _make_tenant(tmp_path, "jason", "tok-jason-e2e")
+    quinn = _make_tenant(tmp_path, "quinn", "tok-quinn-e2e")
     bob = _make_tenant(tmp_path, "bob", "tok-bob-e2e")
-    configure_tenant_index(TenantIndex([jason, bob]))
+    configure_tenant_index(TenantIndex([quinn, bob]))
     register_ui(server, prefix="/e2e-keys")
     client = TestClient(server.streamable_http_app())
 
     # Each tenant submits their OWN key through their OWN form.
-    jason_response = client.post(
-        "/e2e-keys/ui/tok-jason-e2e/keys", data={"anthropic": "sk-ant-jason-own"}
+    quinn_response = client.post(
+        "/e2e-keys/ui/tok-quinn-e2e/keys", data={"anthropic": "sk-ant-quinn-own"}
     )
     bob_response = client.post(
         "/e2e-keys/ui/tok-bob-e2e/keys", data={"anthropic": "sk-ant-bob-own"}
     )
-    assert "verified and live now" in jason_response.text
+    assert "verified and live now" in quinn_response.text
     assert "verified and live now" in bob_response.text
 
     # Each tenant's own workspace file has exactly its own key.
-    assert read_workspace_keys(jason.data_dir) == {"ANTHROPIC_API_KEY": "sk-ant-jason-own"}
+    assert read_workspace_keys(quinn.data_dir) == {"ANTHROPIC_API_KEY": "sk-ant-quinn-own"}
     assert read_workspace_keys(bob.data_dir) == {"ANTHROPIC_API_KEY": "sk-ant-bob-own"}
 
     # Neither submission touched the shared process's environment at all —
@@ -73,9 +73,9 @@ def test_two_tenants_key_forms_never_cross_contaminate(
 
     # A provider built for each tenant's OWN Config gets ITS OWN key, never
     # the other tenant's and never a process-env fallback (strict mode).
-    jason_provider = get_provider(CapabilityClass.EXTRACT_FAST, jason.config())
+    quinn_provider = get_provider(CapabilityClass.EXTRACT_FAST, quinn.config())
     bob_provider = get_provider(CapabilityClass.EXTRACT_FAST, bob.config())
-    assert jason_provider._client.api_key == "sk-ant-jason-own"
+    assert quinn_provider._client.api_key == "sk-ant-quinn-own"
     assert bob_provider._client.api_key == "sk-ant-bob-own"
 
 
@@ -86,17 +86,17 @@ def test_tenant_with_no_key_never_inherits_a_sibling_tenants_key(
     an operator mistake, or a leftover CLI export), a tenant with no key
     of their own must fail loud, never silently borrow it."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-leftover-from-somewhere")
-    jason = _make_tenant(tmp_path, "jason", "tok-jason-noleak")
+    quinn = _make_tenant(tmp_path, "quinn", "tok-quinn-noleak")
     bob = _make_tenant(tmp_path, "bob", "tok-bob-noleak")  # never configures a key
-    configure_tenant_index(TenantIndex([jason, bob]))
+    configure_tenant_index(TenantIndex([quinn, bob]))
 
     from wingman.infrastructure.keys import store_workspace_key
     from wingman.providers.base import ProviderError
 
-    store_workspace_key(jason.data_dir, "anthropic", "sk-ant-jason-real")
+    store_workspace_key(quinn.data_dir, "anthropic", "sk-ant-quinn-real")
 
-    jason_provider = get_provider(CapabilityClass.EXTRACT_FAST, jason.config())
-    assert jason_provider._client.api_key == "sk-ant-jason-real"
+    quinn_provider = get_provider(CapabilityClass.EXTRACT_FAST, quinn.config())
+    assert quinn_provider._client.api_key == "sk-ant-quinn-real"
     with pytest.raises(ProviderError, match="no Anthropic key configured"):
         get_provider(CapabilityClass.EXTRACT_FAST, bob.config())
 
@@ -107,10 +107,10 @@ def test_env_override_only_affects_single_tenant_mode_not_registered_tenants(
     """load_config(env=...) is the ordinary CLI/test escape hatch (Phase
     1b) — it must never accidentally resolve to a REGISTERED tenant's
     workspace just because that tenant's data_dir happens to match."""
-    jason = _make_tenant(tmp_path, "jason", "tok-jason-envcheck")
-    configure_tenant_index(TenantIndex([jason]))
+    quinn = _make_tenant(tmp_path, "quinn", "tok-quinn-envcheck")
+    configure_tenant_index(TenantIndex([quinn]))
     from wingman.infrastructure.config import load_config
 
-    config = load_config(env={ENV_DATA_DIR: str(jason.data_dir)})
-    assert config.data_dir == jason.data_dir
+    config = load_config(env={ENV_DATA_DIR: str(quinn.data_dir)})
+    assert config.data_dir == quinn.data_dir
     assert config.strict_provider_keys is False  # env path, not tenant.config()'s strict path

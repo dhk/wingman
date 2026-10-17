@@ -46,27 +46,27 @@ def _make_tenant(tmp_path: Path, slug: str, token: str) -> Tenant:
 
 @pytest.fixture
 def two_tenant_app(tmp_path: Path) -> tuple[Starlette, Tenant, Tenant]:
-    jason = _make_tenant(tmp_path, "jason", "tok-jason")
+    quinn = _make_tenant(tmp_path, "quinn", "tok-quinn")
     bob = _make_tenant(tmp_path, "bob", "tok-bob")
-    index = TenantIndex([jason, bob])
+    index = TenantIndex([quinn, bob])
     wrapped = TenantRoutingASGIApp(_EchoConfigApp(), index)
     app = Starlette(routes=[Route("/mcp/{token}", endpoint=wrapped)])
-    return app, jason, bob
+    return app, quinn, bob
 
 
 def test_request_resolves_to_the_matching_tenant(
     two_tenant_app: tuple[Starlette, Tenant, Tenant],
 ) -> None:
-    app, jason, bob = two_tenant_app
+    app, quinn, bob = two_tenant_app
     client = TestClient(app)
-    assert client.get("/mcp/tok-jason").text == str(jason.data_dir)
+    assert client.get("/mcp/tok-quinn").text == str(quinn.data_dir)
     assert client.get("/mcp/tok-bob").text == str(bob.data_dir)
 
 
 def test_unknown_token_is_rejected_before_reaching_the_inner_app(
     two_tenant_app: tuple[Starlette, Tenant, Tenant],
 ) -> None:
-    app, _jason, _bob = two_tenant_app
+    app, _quinn, _bob = two_tenant_app
     response = TestClient(app).get("/mcp/tok-nobody")
     assert response.status_code == 401
 
@@ -74,7 +74,7 @@ def test_unknown_token_is_rejected_before_reaching_the_inner_app(
 def test_empty_token_path_segment_is_rejected(
     two_tenant_app: tuple[Starlette, Tenant, Tenant],
 ) -> None:
-    app, _jason, _bob = two_tenant_app
+    app, _quinn, _bob = two_tenant_app
     # A trailing slash with nothing after it still matches Starlette's
     # {token} segment as an empty string on some route configs — confirm
     # it's rejected rather than accidentally matching every tenant.
@@ -88,18 +88,18 @@ def test_concurrent_requests_never_cross_tenant_context(
     """The end-to-end proof: two tenants' requests running concurrently
     through the real ASGI wrapper (not just the bare ContextVar) must
     never see each other's Config."""
-    app, jason, bob = two_tenant_app
+    app, quinn, bob = two_tenant_app
 
     async def run() -> tuple[str, str]:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
-            jason_task = http.get("/mcp/tok-jason")
+            quinn_task = http.get("/mcp/tok-quinn")
             bob_task = http.get("/mcp/tok-bob")
-            jason_response, bob_response = await asyncio.gather(jason_task, bob_task)
-            return jason_response.text, bob_response.text
+            quinn_response, bob_response = await asyncio.gather(quinn_task, bob_task)
+            return quinn_response.text, bob_response.text
 
-    jason_seen, bob_seen = asyncio.run(run())
-    assert jason_seen == str(jason.data_dir)
+    quinn_seen, bob_seen = asyncio.run(run())
+    assert quinn_seen == str(quinn.data_dir)
     assert bob_seen == str(bob.data_dir)
 
 
@@ -111,8 +111,8 @@ def test_bind_tenant_routing_wraps_a_real_fastmcp_app_without_disturbing_other_r
     route (the web UI's custom routes) untouched."""
     from wingman.webui import register_ui
 
-    jason = _make_tenant(tmp_path, "jason", "tok-jason-real")
-    index = TenantIndex([jason])
+    quinn = _make_tenant(tmp_path, "quinn", "tok-quinn-real")
+    index = TenantIndex([quinn])
 
     register_ui(server)
     server.settings.streamable_http_path = "/mcp/{token}"

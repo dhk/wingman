@@ -26,7 +26,7 @@ def test_every_criteria_area_is_asked() -> None:
     """The five RFC-035 areas drive opening scoring. A form that skips one
     leaves that filter unseeded, and the conversational path would have
     asked it."""
-    script = render_apps_script("jason")
+    script = render_apps_script("quinn")
     for name, prompt in INTERVIEW_AREAS:
         assert f"Job criteria — {name}" in script
         assert prompt.split(":")[0][:40] in script
@@ -80,9 +80,9 @@ def test_question_titles_are_unique() -> None:
 
 
 def test_manifest_routes_every_question_and_names_the_tenant() -> None:
-    manifest = json.loads(render_manifest("jason"))
-    assert manifest["tenant"] == "jason"
-    assert manifest["form_title"] == "Wingman interview — jason"
+    manifest = json.loads(render_manifest("quinn"))
+    assert manifest["tenant"] == "quinn"
+    assert manifest["form_title"] == "Wingman interview — quinn"
     assert len(manifest["questions"]) == len(form_questions())
     for entry in manifest["questions"]:
         assert entry["destination"] in {"criteria", "profile", "answers"}
@@ -90,19 +90,19 @@ def test_manifest_routes_every_question_and_names_the_tenant() -> None:
 
 
 def test_the_tenant_travels_with_the_form() -> None:
-    """'Jason's form, connected to Jason' — a generic questionnaire whose
+    """'Quinn's form, connected to Quinn' — a generic questionnaire whose
     answers have to be matched up afterwards is the thing to avoid."""
-    script = render_apps_script("jason")
-    assert "Wingman interview — jason" in script
-    assert "jason's own workspace" in script
-    assert "jason" in json.loads(render_manifest("jason"))["tenant"]
+    script = render_apps_script("quinn")
+    assert "Wingman interview — quinn" in script
+    assert "quinn's own workspace" in script
+    assert "quinn" in json.loads(render_manifest("quinn"))["tenant"]
 
 
 def test_prompts_with_apostrophes_and_dashes_survive_as_js_literals() -> None:
     """These prompts are full of apostrophes and em dashes. Naive quoting
     would produce a script that fails to parse when pasted — after the owner
     has already emailed the link."""
-    script = render_apps_script("jason")
+    script = render_apps_script("quinn")
     # 'Pepsi sells cola' is quoted inside a help string; an em dash is in the
     # description. Both must be escaped, not truncated.
     assert "Pepsi sells cola" in script
@@ -118,7 +118,7 @@ def test_generated_script_is_valid_javascript() -> None:
     """The whole artefact is pasted into an editor and run once. A syntax
     error surfaces to the owner, mid-flow, with no way to tell whose fault
     it is."""
-    script = render_apps_script("jason")
+    script = render_apps_script("quinn")
     result = subprocess.run(
         ["node", "--check", "-"], input=script, capture_output=True, text=True, check=False
     )
@@ -127,7 +127,7 @@ def test_generated_script_is_valid_javascript() -> None:
 
 def test_script_never_claims_wingman_holds_a_google_credential() -> None:
     """The whole point of this option over the Forms API (#287)."""
-    script = render_apps_script("jason")
+    script = render_apps_script("quinn")
     assert "wingman holds no Google credential" in script
     assert "YOUR Drive" in script
 
@@ -140,7 +140,7 @@ def test_header_names_the_two_steps_that_actually_break() -> None:
     parse refuses to save — so the first symptom is 'Attempted to execute
     myFunction, but could not save', which names neither cause.
     """
-    script = render_apps_script("jason")
+    script = render_apps_script("quinn")
     header = script.split("function createWingmanInterviewForm")[0]
     assert "SELECT ALL" in header
     assert "myFunction stub must be gone" in header
@@ -151,7 +151,7 @@ def test_header_names_the_two_steps_that_actually_break() -> None:
 def test_header_comment_cannot_terminate_itself() -> None:
     """The header quotes '/**' at the reader. A '*/' anywhere in it would end
     the comment early and leave prose as executable code."""
-    script = render_apps_script("jason")
+    script = render_apps_script("quinn")
     header = script.split("function createWingmanInterviewForm")[0]
     assert header.count("*/") == 1
     assert header.rstrip().endswith("*/")
@@ -167,7 +167,7 @@ def test_print_output_is_the_script_and_nothing_else(tmp_path) -> None:
 
     from wingman.cli.main import app
 
-    result = CliRunner().invoke(app, ["tenant", "form", "jason", "--print"])
+    result = CliRunner().invoke(app, ["tenant", "form", "quinn", "--print"])
 
     assert result.exit_code == 0
     assert result.stdout.lstrip().startswith("/**")

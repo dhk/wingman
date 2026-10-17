@@ -7,7 +7,7 @@ every user has the same install shape (#167):
   code-location convention recorded in this repo's CLAUDE.md). Updated by
   'git pull --ff-only' against their own checkout, then
   'uv tool install --reinstall' from it.
-- **Local-path shape** (Trent): deliberately has no GitHub access of his
+- **Local-path shape** (Riley): deliberately has no GitHub access of his
   own (the shared-tenant design in docs/SERVER.md) — he installs via
   'uv tool install <another user's already-updated checkout path>', never
   'git pull'. There is nothing of his own to pull.
@@ -380,7 +380,7 @@ def main(argv: list[str] | None = None) -> None:
             "Root-run: git pull + uv reinstall + systemctl --user restart for every "
             "configured shape-B user's wingman-mcp.service (#125). Checkout-shape users "
             "(their own '~/src/wingman') pull their own history; local-path-shape users "
-            "(#167 — no GitHub access of their own, e.g. Trent) install from another "
+            "(#167 — no GitHub access of their own, e.g. Riley) install from another "
             "user's checkout instead, named via WINGMAN_UPGRADE_SOURCE_<username>. One "
             "user's failure never blocks the others."
         ),

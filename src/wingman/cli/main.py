@@ -5584,7 +5584,7 @@ def tenant_rotate_token_cmd(
 
 @tenant_app.command("form")
 def tenant_form_cmd(
-    slug: str = typer.Argument(..., help="Tenant slug the form is for, e.g. 'jason'."),
+    slug: str = typer.Argument(..., help="Tenant slug the form is for, e.g. 'quinn'."),
     out: Path = typer.Option(
         Path("."), "--out", help="Directory to write the script and manifest into."
     ),
@@ -5705,8 +5705,8 @@ def tenant_ingest_form_cmd(
 
     Deliberately a CLI command and not an MCP tool, like 'tenant urls' and
     'tenant answers': the gate is shell access to this box. Run it as the
-    account that owns the workspace (e.g. 'sudo -u jason -H wingman tenant
-    ingest-form jason ...') so the files it writes belong to them.
+    account that owns the workspace (e.g. 'sudo -u quinn -H wingman tenant
+    ingest-form quinn ...') so the files it writes belong to them.
     """
     from wingman.application.form_ingest import (
         apply_plan,

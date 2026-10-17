@@ -225,8 +225,8 @@ def test_operator_name_reads_the_setting(tmp_path: Path) -> None:
 
     path = wingman_env_path(home)
     path.parent.mkdir(parents=True)
-    path.write_text("WINGMAN_OPERATOR_NAME=Trent\n", encoding="utf-8")
-    assert operator_name(home) == "Trent"
+    path.write_text("WINGMAN_OPERATOR_NAME=Riley\n", encoding="utf-8")
+    assert operator_name(home) == "Riley"
 
 
 def test_read_host_settings_recognizes_operator_name_alongside_repo(tmp_path: Path) -> None:

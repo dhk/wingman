@@ -17,7 +17,7 @@ watchlist, same everything they've already gathered — to run the same
 analyses (POV, job scoring, career profile) on behalf of other people they
 coach, not just themselves. Not a separate instance per person
 (`docs/MULTI-INSTANCE-DESIGN.md`'s Shape A) and not a separate Unix account
-per person (Shape B, built for lobster's dhk/Trent split) — one instance,
+per person (Shape B, built for lobster's dhk/Riley split) — one instance,
 one coach, multiple people's work kept properly separate within it, the
 same way a real coaching conversation naturally keeps one client's answers
 from bleeding into another's.

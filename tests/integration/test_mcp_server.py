@@ -654,13 +654,13 @@ def test_status_tells_an_unfunded_tenant_the_truth_about_an_ambient_key(
     from wingman.infrastructure.storage import Storage
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-the-operators-own")
-    data_dir = tmp_path / "tenants" / "jason"
+    data_dir = tmp_path / "tenants" / "quinn"
     for directory in (data_dir, data_dir / "inbox", data_dir / "reports"):
         directory.mkdir(parents=True)
     Storage(data_dir / "wingman.db").close()
     tenant = Config(
         data_dir=data_dir,
-        data_dir_source="tenant registry (jason)",
+        data_dir_source="tenant registry (quinn)",
         strict_provider_keys=True,
     )
 

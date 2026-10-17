@@ -133,7 +133,7 @@ def test_orphan_detection_is_port_and_transport_scoped(workspace: Config) -> Non
     def table() -> list[tuple[int, str]]:
         return [
             (101, "python /x/bin/wingman-mcp --http"),  # default port -> orphan
-            (102, "python /x/bin/wingman-mcp --http --port 8788"),  # Trent's -> not ours
+            (102, "python /x/bin/wingman-mcp --http --port 8788"),  # Riley's -> not ours
             (103, "python /x/bin/wingman-mcp"),  # stdio -> never
             # a shell whose script TEXT quotes the command: kill this and you
             # kill an innocent terminal — must never match
