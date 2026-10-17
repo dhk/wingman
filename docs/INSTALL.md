@@ -142,11 +142,13 @@ wingman overnight                   # deep-refresh everything followed → dated
 **Process management (RFC-032).** `wingman mcp status|stop` manages the
 HTTP server you start (pidfile-verified — it never touches the stdio
 servers Claude clients spawn for themselves). `scripts/wingman-ctl` is
-the full operator: `status` explains every running wingman process and
-what's safe to stop, `start`/`stop` handle the HTTP server, `stop-all`
-also stops client-owned servers (with consent — those clients then need
-a restart), and `upgrade` does pull → reinstall → stop-all → restart in
-the order that guarantees everything comes back on the new build.
+the operator wrapper: `status` explains every running wingman process and
+what's safe to stop, `stop-all` stops client-owned stdio servers (with
+consent — those clients then need a restart), and `upgrade` does pull →
+reinstall → stop-all so every client reconnects on the new build. Its old
+`start`/`stop`/`cycle` commands managed a per-account HTTP server and are
+retired (#617): a hosted install runs the shared multi-tenant service
+(`docs/SERVER.md`), updated with `wg redeploy-shared` or `wg upgrade-all`.
 
 **Scheduling (RFC-018).** Wingman runs no daemon; you own the schedule.
 Enrollment via `wingman company follow` is the standing consent record —

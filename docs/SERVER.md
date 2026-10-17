@@ -30,12 +30,10 @@ needs to push.
 
 `~/src/wingman` (not `~/wingman`, `~/code/wingman`, or anywhere else) is
 the code-location convention every other piece of tooling here assumes
-— `infrastructure/upgrade_all.py`'s `REPO_SUBPATH` looks for exactly this
-path when sweeping every configured account's checkout during the
-nightly cross-account upgrade (§7), and `scripts/wingman-ctl`'s own
-`WINGMAN_REPO` fallback (§2) is this same path. Deviating means either
-every future command needs an explicit override, or upgrade-all silently
-looks in the wrong place — not worth it for a install-time shortcut.
+— `scripts/wingman-ctl`'s own `WINGMAN_REPO` fallback (§2) and
+`wingman-redeploy-shared.sh`'s checkout for the shared service account
+(§9) are this same path. Deviating means every future command needs an
+explicit override — not worth it for a install-time shortcut.
 
 The workspace defaults to `~/.local/share/wingman` (XDG). Set
 `WINGMAN_DATA_DIR` before `wingman init` if you want it elsewhere —
@@ -368,7 +366,7 @@ one of `wingman.infrastructure.host_config`'s recognized names, so
 wingman's own Python ladder ignores it — only systemd's plain
 env-var-injection reads it). The startup banner prints a ready-to-paste
 https connector URL and web-UI URL (token included) for each tunnel
-hostname; `wingman-ctl start`/`status` echo them too.
+hostname; `wingman-ctl status` echoes them too.
 
 **Get the URLs any time** — whether or not you started the server
 yourself, and without hunting the token file: `wingman mcp url` (add
@@ -470,14 +468,12 @@ signal to revisit the hosted-tier assessment instead.
   unit state instead of printing `?`.
 
   The row to look for is `UNMANAGED` — listening, healthy, possibly on
-  the newest build, but with no active `wingman-mcp.service`. That
-  instance is invisible to `wingman-upgrade-all`, which reports
-  `'wingman-mcp.service' is not active for this user — build updated,
-  nothing to restart` and moves on: the build advances nightly while the
+  the newest build, but with no active `wingman-mcp.service`. Nothing
+  will restart that instance on an upgrade: the build advances while the
   live process never does, so a long-lived client stays on an old
-  instance indefinitely. It is what `wingman-ctl upgrade`'s `nohup` path
-  leaves behind on a systemd-managed account (RFC-042's own finding).
-  Recover with:
+  instance indefinitely. It is what the retired `wingman-ctl start`
+  `nohup` path left behind on a systemd-managed account (RFC-042's own
+  finding). Recover with:
 
   ```bash
   wingman mcp stop
@@ -619,145 +615,38 @@ users' home directories, no new cross-user read access. The page never
 shows anything from inside a workspace, only whether it's up and a link
 to it; each instance's own token remains the credential for its own data.
 
-**Keeping every instance current (#125).** Manual, per-user upgrades don't
-scale past two people either. `wingman-upgrade-all` is a separate,
-root-run tool (not part of the per-workspace `wingman` CLI, since it acts
-across accounts) that upgrades every configured shape-B user in one
-scheduled pass: `git pull --ff-only`, `uv tool install --reinstall`, then
-`systemctl --user restart wingman-mcp.service` for each — explicitly the
-systemd path, never `wingman-ctl`'s `nohup` path (running `wingman-ctl
-upgrade` under a systemd-managed account kills the process out from under
-systemd and relaunches it unmanaged; `Restart=on-failure` won't recover a
-graceful stop). One user's failed pull or reinstall is reported and
-skipped — it never blocks the others.
+**Keeping every instance current.** Every tenant is on the shared
+multi-tenant service (§9), so there is one process to keep current, not
+one per account: `wg redeploy-shared` updates it, and `wg upgrade-all`
+refreshes the operator's own CLI first and then does the same redeploy
+(#375).
 
-This needs its own, separate root-owned install (it never touches any
-workspace, never reads a key, and root should not share dhk's or Trent's
-own `uv tool` install). `dhk/wingman` is a **private** repo, so root needs
-either a credential of its own or a local install source — plain
-`git+https://…` fails with `fatal: could not read Username for
-'https://github.com': terminal prompts disabled`. Two ways to give root
-one of those, in order of setup cost:
-
-**Zero setup — install from dhk's already-cloned checkout** (the same
-local-path pattern Trent's own upgrade uses below):
+The per-account sweep that used to do this — the root-run
+`wingman-upgrade-all` tool with its `wingman-upgrade-all.service` and
+`.timer` system units and `WINGMAN_UPGRADE_USERS` list (#125) — upgraded
+shape-B accounts, and is retired with shape B (#617). A box that still
+has the units can remove them:
 
 ```bash
-sudo -i                                            # or: sudo -u root -H bash
-uv tool install /home/dhk/src/wingman
-command -v wingman-upgrade-all                     # note the path for the unit below
-```
-
-Re-run that same `uv tool install --reinstall /home/dhk/src/wingman`
-whenever `wingman-upgrade-all` itself needs upgrading (i.e. after a
-change to `src/wingman/infrastructure/upgrade_all.py` lands) — after
-dhk's own checkout has pulled that change, same as any local-path
-install below. Ties root's own upgrade path to a human account's
-checkout existing and staying current.
-
-**A few minutes' setup — give root its own read-only credential**, so a
-deployment/operation box like lobster can fetch on its own rather than
-depending on any human account's checkout:
-
-1. Create a **fine-grained** GitHub PAT (github.com → Settings → Developer
-   settings → Fine-grained tokens): repository access limited to just
-   `dhk/wingman`, permissions set to **Contents: Read-only** — nothing
-   else. Treat it exactly like any other secret; rotate it if it ever
-   leaks.
-2. Store it where git's HTTPS auth already looks, root-only-readable,
-   never on a command line or in a unit file (both land in `ps`/journal
-   output):
-   ```bash
-   sudo install -m 600 /dev/null /root/.netrc
-   sudo tee -a /root/.netrc >/dev/null <<'EOF'
-   machine github.com
-   login <your-github-username>
-   password <the-fine-grained-PAT>
-   EOF
-   ```
-3. Root's install line becomes the plain git URL, now that it has
-   credentials:
-   ```bash
-   sudo -i
-   uv tool install git+https://github.com/dhk/wingman.git
-   ```
-
-Either way root ends up with a working `wingman-upgrade-all`; pick
-whichever matches how much you want root's own upgrade path independent
-of any human account.
-
-`/etc/systemd/system/wingman-upgrade-all.service` (a **system** unit,
-root-run — not a `--user` unit like the ones above):
-
-```ini
-[Unit]
-Description=Upgrade every wingman shape-B user (#125)
-
-[Service]
-Type=oneshot
-Environment=WINGMAN_UPGRADE_USERS=dhk,trent
-Environment=WINGMAN_UPGRADE_SOURCE_trent=/home/dhk/src/wingman
-ExecStart=/root/.local/bin/wingman-upgrade-all
-```
-
-Trent has no GitHub access of his own (#167) — omitting
-`WINGMAN_UPGRADE_SOURCE_trent` doesn't skip him, it silently falls back to
-the checkout-shape default (`git -C ~trent/src/wingman pull`), which fails
-outright since that checkout was never meant to exist. Any local-path-shape
-user needs their own `WINGMAN_UPGRADE_SOURCE_<username>` line, pointed at
-whichever checkout-shape user's already-pulled checkout they install from.
-
-**Never list `wingman-shared`** (§9's shared multi-tenant account) here
-(#577). This sweep reinstalls each account and bare-restarts its
-`wingman-mcp.service`; for the shared process that is
-`wingman-redeploy-shared.sh`'s job, which stops it, waits for the port to
-free, then starts it (#415). Listed in both, one `wg upgrade-all`
-reinstalled under the running process and restarted it twice at once:
-`ImportError`s and an address-in-use restart loop that took every tenant
-down for about a minute. `wingman-upgrade-all` now skips that account with
-a `[skipped]` line even when it is listed (`WINGMAN_SHARED_USER` names it,
-same as the redeploy script). So the nightly timer does not upgrade the
-shared process — deliberately, since that restart interrupts every tenant;
-upgrade it with `wg redeploy-shared` or `wg upgrade-all`.
-
-`/etc/systemd/system/wingman-upgrade-all.timer`:
-
-```ini
-[Unit]
-Description=Run wingman-upgrade-all daily
-
-[Timer]
-OnCalendar=*-*-* 04:30
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-```bash
+sudo systemctl disable --now wingman-upgrade-all.timer
+sudo rm /etc/systemd/system/wingman-upgrade-all.service \
+        /etc/systemd/system/wingman-upgrade-all.timer
 sudo systemctl daemon-reload
-sudo systemctl enable --now wingman-upgrade-all.timer
+sudo uv tool uninstall wingman        # root's own install, if nothing else uses it
 ```
 
-Logs: `sudo journalctl -u wingman-upgrade-all.service`. Each user's
-account needs no configuration for this to work — `sudo -u <user> …` from
-root needs no password and grants no privilege that root didn't already
-have; this only automates what root could already do by hand for every
-file on the box. Assumes each listed user's checkout lives at
-`~/src/wingman` (this repo's own documented convention, §1) — a user who
-deviates isn't a candidate for automatic upgrade and should be upgraded
-by hand.
+Do that only once no account depends on a per-account `wingman-mcp`
+service; `wg hosts` lists every instance on the box.
 
 ## 9. Shared multi-tenant deployment (RFC-048, OAuth amendment RFC-081)
 
-Everything above is shape B: one Unix account, one workspace, one port,
-per person. RFC-048 adds a second shape for when per-account overhead
-stops paying for itself (a third-plus person, per `docs/RFC.md`'s own
-trigger) — one shared process, share-nothing data (one SQLite DB per
-tenant, unchanged), capability tokens per existing/operator tenant plus an
-optional OAuth bearer route for deliberately trusted identities. dhk and trent
-are not required to move onto this — the two shapes coexist on the same box,
-each on its own port.
+Sections 4–7 describe one person's own workspace on one account (shape
+B). RFC-048's shared shape is how a hosted box serves people: one shared
+process, share-nothing data (one SQLite DB per tenant, unchanged),
+capability tokens per existing/operator tenant plus an OAuth bearer route
+for deliberately trusted identities. Every tenant is on it; per-account
+shape-B servers, and the `wg start`/`stop`/`cycle` commands that managed
+them, are retired (#617).
 
 **Run the provisioning scripts, don't hand-type this.** The steps below
 were worked out live against a real box and hit exactly the pitfalls the
@@ -785,8 +674,7 @@ here so the reasoning survives, not as a checklist to retype:
 - **`systemctl --user` can't reach a fresh account's session bus at all**
   without `XDG_RUNTIME_DIR` pointed at `/run/user/<uid>` explicitly —
   `sudo -iu <user> ...` alone isn't enough, and fails with `Failed to
-  connect to bus: No medium found`. The same fix `upgrade_all.py` already
-  needed for this exact reason (RFC-042); `wingman-provision-shared.sh`
+  connect to bus: No medium found` (RFC-042); `wingman-provision-shared.sh`
   forces the user manager up first, then passes the var explicitly on
   every `systemctl --user` call.
 
@@ -1358,8 +1246,7 @@ registry in one process invocation — each tenant gets its own strict
 `Tenant.config()` (never a shared key, never a shell-out with
 `WINGMAN_DATA_DIR` set, which would use the full env ladder and risk one
 tenant's run spending a key that isn't theirs), and one tenant's failure
-(nothing enrolled, a fetch error) is reported without blocking the rest,
-mirroring §7's `wingman-upgrade-all` isolation.
+(nothing enrolled, a fetch error) is reported without blocking the rest.
 
 `~/.config/systemd/user/wingman-tenant-overnight.service` (as
 `wingman-shared`):

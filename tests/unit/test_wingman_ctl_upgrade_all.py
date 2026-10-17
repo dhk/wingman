@@ -1,12 +1,11 @@
-"""'wg upgrade-all' upgrades EVERYTHING on the box (#375).
+"""'wg upgrade-all' upgrades EVERYTHING on the box (#375, #617).
 
-There are two things on this machine that run wingman code and neither
-upgrades the other: each account's own CLI install (what an operator types
-— 'motd', 'qotd', 'tenant urls') and the RFC-048 shared multi-tenant
-process (what every tenant talks to). This command used to trigger the
-cross-account systemd unit and stop, and that unit's user list describes
-shape B, which is retired — so it upgraded the accounts serving nobody and
-skipped the one serving everybody.
+Two things on this machine run wingman code and neither upgrades the other:
+the operator's own CLI install (what an operator types — 'motd', 'qotd',
+'keys') and the RFC-048 shared multi-tenant process (what every tenant talks
+to). The cross-account systemd sweep that kept per-account (shape B) installs
+current is gone with shape B (#617), so upgrade-all is now this account's CLI
+refresh followed by 'redeploy-shared'.
 
 Driven as a subprocess against stub git/sudo/systemctl, like
 test_wingman_ctl_redeploy.py.
@@ -52,13 +51,14 @@ def rig(tmp_path: Path) -> dict[str, Path]:
     )
     _exe(bin_dir / "sudo", f'#!/usr/bin/env bash\necho "sudo $*" >> {log}\nexec "$@"\n')
     _exe(bin_dir / "wingman", "#!/usr/bin/env bash\nexit 0\n")
-    # Installed, and starting it succeeds.
     _exe(
         bin_dir / "systemctl",
         f'#!/usr/bin/env bash\necho "systemctl $*" >> {log}\nexit 0\n',
     )
     _exe(bin_dir / "journalctl", "#!/usr/bin/env bash\nexit 0\n")
     _exe(bin_dir / "uv", f'#!/usr/bin/env bash\necho "uv $*" >> {log}\nexit 0\n')
+    # No stdio servers running: 'upgrade' stops them, and must find none here.
+    _exe(bin_dir / "pgrep", "#!/usr/bin/env bash\nexit 1\n")
 
     return {
         "repo": repo,
@@ -88,60 +88,58 @@ def _calls(rig: dict[str, Path]) -> list[str]:
     return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
 
 
-def test_upgrade_all_upgrades_the_accounts_and_the_shared_process(rig: dict[str, Path]) -> None:
+def _install_index(calls: list[str]) -> int:
+    return next(i for i, c in enumerate(calls) if c.startswith("wingman-tool-install.sh"))
+
+
+def test_upgrade_all_upgrades_this_cli_and_the_shared_process(rig: dict[str, Path]) -> None:
     """The whole point of the name. Before #375 the second half never ran,
     so the shared process could ship a command hours before the operator's
     own CLI could run it — and all you saw was 'No such command'."""
     result = _run(rig, "upgrade-all")
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, result.stdout
     calls = _calls(rig)
-    assert any("systemctl start wingman-upgrade-all.service" in call for call in calls)
+    assert any(c.startswith("wingman-tool-install.sh") for c in calls)
     assert "redeployed" in calls
 
 
-def test_the_accounts_are_upgraded_before_the_process_that_serves_tenants(
-    rig: dict[str, Path],
-) -> None:
-    """Deliberate order: the per-account installs are cheap and interrupt
-    nobody, so they go first and prove the tree builds. The shared restart
-    briefly cuts every tenant off, so it goes last."""
+def test_the_retired_cross_account_sweep_is_never_triggered(rig: dict[str, Path]) -> None:
+    """#617: wingman-upgrade-all.service kept shape-B accounts current. Shape
+    B is retired, so upgrade-all must not start (or even look for) it, and
+    the CLI refresh runs as the caller, not through root's install."""
     _run(rig, "upgrade-all")
 
     calls = _calls(rig)
-    started = next(i for i, c in enumerate(calls) if "systemctl start" in c)
-    redeployed = calls.index("redeployed")
-    assert started < redeployed
+    assert not any("wingman-upgrade-all" in c for c in calls)
+    assert not any(c.startswith("systemctl") for c in calls)
+    assert not any(c.startswith("sudo") and "wingman-tool-install.sh" in c for c in calls)
 
 
-def test_a_missing_systemd_unit_still_redeploys_the_shared_process(rig: dict[str, Path]) -> None:
+def test_the_cli_is_refreshed_before_the_process_that_serves_tenants(
+    rig: dict[str, Path],
+) -> None:
+    """Deliberate order: the CLI refresh is cheap and interrupts nobody, so
+    it goes first and proves the tree builds. The shared restart briefly
+    cuts every tenant off, so it goes last."""
+    _run(rig, "upgrade-all")
+
+    calls = _calls(rig)
+    assert _install_index(calls) < calls.index("redeployed")
+
+
+def test_a_failed_cli_refresh_still_redeploys_the_shared_process(rig: dict[str, Path]) -> None:
     """The two halves are independent. Refusing to update the process that
-    serves every tenant because a personal CLI could not be reinstalled is
-    the wrong trade — but the run is still reported as incomplete."""
-    _exe(
-        rig["bin"] / "systemctl",
-        '#!/usr/bin/env bash\n[ "$1" = "list-unit-files" ] && exit 1\nexit 0\n',
-    )
+    serves every tenant because the operator's CLI could not be reinstalled
+    is the wrong trade — but the run is still reported as incomplete."""
+    _exe(rig["repo"] / "scripts" / "wingman-tool-install.sh", "#!/usr/bin/env bash\nexit 1\n")
 
     result = _run(rig, "upgrade-all")
 
     assert "redeployed" in _calls(rig)
+    assert "this account's CLI upgrade FAILED" in result.stdout
     assert "INCOMPLETE" in result.stdout
-    assert "per-account CLI upgrade did not run" in result.stdout
-    assert result.returncode != 0
-
-
-def test_a_failed_account_upgrade_is_reported_never_silent(rig: dict[str, Path]) -> None:
-    _exe(
-        rig["bin"] / "systemctl",
-        f'#!/usr/bin/env bash\necho "systemctl $*" >> {rig["log"]}\n'
-        '[ "$1" = "start" ] && exit 1\nexit 0\n',
-    )
-
-    result = _run(rig, "upgrade-all")
-
-    assert "per-account upgrade FAILED" in result.stdout
-    assert "INCOMPLETE" in result.stdout
+    assert "stale, not broken" in result.stdout
     assert result.returncode != 0
 
 
@@ -149,10 +147,10 @@ def test_a_failed_shared_redeploy_is_reported_as_a_possible_outage(rig: dict[str
     """This assertion used to demand the OPPOSITE, and it was wrong (#415).
 
     It required the wording "anything already running was left alone",
-    which is true of a failed per-account install and false of a failed
-    shared redeploy: by then the old process may already have been
-    stopped, so every tenant is DOWN rather than stale. That sentence is
-    the one an operator acts on at 3am, and it sent them back to bed.
+    which is true of a failed CLI install and false of a failed shared
+    redeploy: by then the old process may already have been stopped, so
+    every tenant is DOWN rather than stale. That sentence is the one an
+    operator acts on at 3am, and it sent them back to bed.
     """
     _exe(rig["redeploy"], "#!/usr/bin/env bash\nexit 1\n")
 
@@ -182,47 +180,22 @@ def test_a_registry_only_failure_is_never_reported_as_an_outage(rig: dict[str, P
 def test_a_clean_run_says_both_halves_are_current(rig: dict[str, Path]) -> None:
     result = _run(rig, "upgrade-all")
 
-    assert "per-account CLIs and the shared process are both current" in result.stdout
+    assert "this account's CLI and the shared process are both current" in result.stdout
     assert "INCOMPLETE" not in result.stdout
 
 
-def test_the_usage_text_no_longer_describes_only_the_cross_account_unit(
-    rig: dict[str, Path],
-) -> None:
-    """The old help said 'trigger the cross-account scheduled upgrade',
-    which is exactly the half-truth that made the gap invisible."""
+def test_the_usage_text_describes_both_halves(rig: dict[str, Path]) -> None:
     result = _run(rig, "not-a-command")
 
     assert "EVERYTHING on this box" in result.stdout
     assert "shared multi-tenant process" in result.stdout
 
 
-def test_the_orchestrator_itself_is_refreshed_before_the_unit_runs(rig: dict[str, Path]) -> None:
-    """The unit's ExecStart is root's own install, and root is not one of
-    the accounts it upgrades — so the component whose job is preventing
-    version skew was the one frozen at whenever it was installed (#407).
+def test_plain_upgrade_never_touches_the_shared_service(rig: dict[str, Path]) -> None:
+    """'upgrade' is this account's CLI only (#292): it must not redeploy the
+    process every tenant talks to, and it says where that lives instead."""
+    result = _run(rig, "upgrade")
 
-    Refreshed by the CALLER, before the trigger, rather than by the unit
-    refreshing itself: replacing site-packages under a running Python
-    process that imports lazily is a worse failure than the one it solves.
-    """
-    _run(rig, "upgrade-all")
-
-    calls = _calls(rig)
-    refreshed = next((i for i, c in enumerate(calls) if "wingman-tool-install.sh" in c), None)
-    started = next((i for i, c in enumerate(calls) if "systemctl start" in c), None)
-
-    assert refreshed is not None, "root's own install was never refreshed"
-    assert started is not None
-    assert refreshed < started, "it must be current BEFORE it is triggered"
-
-
-def test_refreshing_the_orchestrator_never_blocks_the_run(rig: dict[str, Path]) -> None:
-    """A stale orchestrator still upgrades everybody — it just explains
-    itself less well. So this must never be the thing that stops the run."""
-    _exe(rig["repo"] / "scripts" / "wingman-tool-install.sh", "#!/usr/bin/env bash\nexit 1\n")
-
-    result = _run(rig, "upgrade-all")
-
-    assert "redeployed" in _calls(rig)
     assert result.returncode == 0, result.stdout
+    assert "redeployed" not in _calls(rig)
+    assert "redeploy-shared" in result.stdout

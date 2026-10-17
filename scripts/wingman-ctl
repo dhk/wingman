@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-# wingman-ctl — manage wingman processes: what's running, start/stop, upgrade.
+# wingman-ctl — operate wingman on this box: what's running, upgrades, and
+# the shared multi-tenant service.
 #
-# The two kinds of wingman-mcp process, and why they're treated differently:
-#   * the HTTP server ('wingman-mcp --http'): YOURS. Started here, stopped
-#     here, tracked by a verified pidfile ('wingman mcp status|stop', RFC-032).
-#   * stdio servers (no --http): spawned by Claude Desktop / Claude CLI
-#     sessions, one each. They belong to those clients — killing one breaks
-#     its session's tools until the client restarts. stop-all does kill them
-#     (that's the point, at upgrade time), and says what must be restarted.
+# The shared-service model (RFC-048, #617): every person is a tenant of ONE
+# shared process ('wingman-mcp' under the wingman-shared account), reached
+# over OAuth. There is no per-account HTTP server any more — 'start', 'stop'
+# and 'cycle' managed one and are retired; 'redeploy-shared' updates the
+# process every tenant talks to, and 'upgrade' refreshes only this account's
+# own CLI.
+#
+# stdio servers (no --http) still exist: Claude Desktop / Claude CLI sessions
+# spawn one each for a local workspace. They belong to those clients —
+# killing one breaks its session's tools until the client restarts.
+# stop-all does kill them (that's the point, at upgrade time), and says what
+# must be restarted.
 set -u
 
 # $WINGMAN_REPO wins if already exported (unchanged). Otherwise, before
@@ -93,26 +99,6 @@ print_urls() {
   wingman mcp url 2>/dev/null | sed 's/^/  /'
 }
 
-check_tailscale() {
-  # Offers to bring Tailscale up when it's why 'wingman mcp url' has no
-  # tunnel hostname to print (#94) — reuses that exact detection (itself
-  # 'tailscale status --json', mcp_server._tailscale_dns_name) rather than
-  # a second, bash-side notion of "is Tailscale up." Never auto-runs —
-  # 'tailscale up' can prompt for interactive login, and #94 asks for an
-  # offer, not a silent action, same as cmd_stop_all's confirmation below.
-  command -v tailscale >/dev/null 2>&1 || return 0
-  wingman mcp url 2>/dev/null | grep -q 'no tunnel hostname detected' || return 0
-  say ""
-  say "Tailscale has no tunnel hostname for this box — wingman is only"
-  say "reachable at http://127.0.0.1:<port> until it's up."
-  say "Start it now with 'sudo tailscale up'? [y/N]"
-  read -r answer
-  case "$answer" in
-    y|Y) sudo tailscale up ;;
-    *)   say "Skipping — run 'sudo tailscale up' manually when ready." ;;
-  esac
-}
-
 stdio_pids() {
   # wingman-mcp processes WITHOUT --http: the client-owned stdio servers.
   pgrep -f 'wingman-mcp' 2>/dev/null | while read -r pid; do
@@ -147,35 +133,10 @@ cmd_status() {
   done
   [ "$found" = 0 ] && say "  none"
   say ""
-  say "Safe to stop? 'wingman mcp stop' / '$0 stop' touch only the HTTP server."
+  say "Safe to stop? 'wingman mcp stop' touches only a hand-started HTTP server."
   say "'$0 stop-all' also kills the client-owned ones — their sessions lose"
   say "wingman until you restart that client (Desktop: reopen app; CLI: /exit + relaunch)."
 }
-
-cmd_start() {
-  if http_running; then
-    wingman mcp status
-    print_urls
-    check_tailscale
-    return 0
-  fi
-  mkdir -p "$(dirname "$LOG")"
-  nohup wingman-mcp --http >"$LOG" 2>&1 &
-  disown 2>/dev/null || true
-  sleep 2
-  if ! http_running; then
-    say "START FAILED — last log lines:"
-    tail -8 "$LOG" | sed 's/^/  /'
-    say "(orphaned port-holder? 'wingman mcp status' names it; 'wingman mcp stop' clears it)"
-    return 1
-  fi
-  wingman mcp status
-  print_urls
-  check_tailscale
-  say "log: $LOG"
-}
-
-cmd_stop() { wingman mcp stop; }
 
 cmd_stop_all() {
   force="${1:-}"
@@ -185,7 +146,7 @@ cmd_stop_all() {
     for pid in $pids; do say "  pid $pid — $(owner_of "$pid")"; done
     say "Those clients lose wingman until restarted. Continue? [y/N]"
     read -r answer
-    case "$answer" in y|Y) ;; *) say "aborted; only run '$0 stop' for the HTTP server."; return 1 ;; esac
+    case "$answer" in y|Y) ;; *) say "aborted; nothing was stopped."; return 1 ;; esac
   fi
   wingman mcp stop 2>/dev/null || true
   if [ -n "$pids" ]; then
@@ -196,8 +157,10 @@ cmd_stop_all() {
   fi
 }
 
-cmd_upgrade() {
-  was_running=0; http_running && was_running=1
+refresh_own_cli() {
+  # This account's own CLI: what an operator actually types ('motd', 'qotd',
+  # 'keys'). Pull, regenerate the changelog, reinstall from the pinned lock.
+  # Touches no running process — callers decide what (if anything) to stop.
   say "→ refreshing $REPO from github…"
   # Discard any local regeneration of changelog_data.py left over from a
   # PRIOR run of this same command (below) — safe to drop unconditionally,
@@ -223,32 +186,32 @@ cmd_upgrade() {
     || { say "reinstall failed — nothing was killed"; return 1; }
   # The new build may expect a host surface this box does not have yet
   # (RFC-072, #212). Checked right after the install, so the answer is about
-  # the version now on disk, and printed rather than enforced — an upgrade
-  # that refused to finish over a missing systemd timer would strand the box
-  # mid-way for something nobody was waiting on.
+  # the version now on disk, and printed rather than enforced.
   say "→ checking the host against this build's manifest…"
   wingman host-check || say "  (operational drift above — 'wingman host-check --apply' for the safe ones)"
-  say "→ stopping everything on the old build…"
+}
+
+cmd_upgrade() {
+  # This account's CLI only. Local stdio servers are stopped afterwards
+  # because they are still running the old build; the shared service is
+  # NOT touched — that is 'redeploy-shared' (#292).
+  refresh_own_cli || return 1
+  say "→ stopping local stdio servers on the old build…"
   cmd_stop_all -y
-  if [ "$was_running" = 1 ]; then
-    say "→ restarting the HTTP server on the new build…"
-    cmd_start
-  fi
   say ""
   wingman --version
   say "Done. Restart Claude Desktop and any CLI sessions to reconnect on the new build."
+  say "(The shared service is separate: '$0 redeploy-shared' or '$0 upgrade-all'.)"
 }
 
-cmd_cycle() {
-  # stop / upgrade / start in one act: unlike 'upgrade' (which only restores
-  # the prior state), cycle ALWAYS ends with the HTTP server running on the
-  # new build — the one-command morning refresh. Ordered pull→reinstall→
-  # stop→start so a failed pull touches nothing and downtime stays minimal.
-  cmd_upgrade || return 1
-  if ! http_running; then
-    say "→ starting the HTTP server (it was not running before the upgrade)…"
-    cmd_start
-  fi
+cmd_retired() {
+  # start / stop / cycle managed a per-account HTTP server (shape B). Every
+  # tenant is on the shared service now (#617), so these say where to go
+  # instead of doing something that serves nobody.
+  say "$0 $1: per-account servers are retired — every tenant is served by the"
+  say "  shared multi-tenant service. Use '$0 redeploy-shared' to update it, or"
+  say "  '$0 upgrade-all' to refresh this account's CLI and then the shared service."
+  exit 2
 }
 
 cmd_redeploy_shared() {
@@ -279,73 +242,29 @@ cmd_redeploy_shared() {
 }
 
 cmd_upgrade_all() {
-  # Everything on this box that runs wingman code (#375) — which is TWO
-  # things, and naming only one of them was the bug. There is the
-  # per-account CLI install, which is what an operator actually types
-  # ('motd', 'qotd', 'tenant urls', 'tenant answers'), and there is the
-  # RFC-048 shared multi-tenant process, which is what every tenant talks
-  # to. They live in different checkouts under different accounts and
-  # neither upgrades the other.
+  # Everything on this box that runs wingman code (#375): this account's own
+  # CLI, then the RFC-048 shared process every tenant talks to. They live in
+  # different checkouts under different accounts and neither upgrades the
+  # other — upgrading only the shared process lets it ship a command hours
+  # before the operator's CLI can run it ("No such command").
   #
-  # This used to trigger the cross-account unit and stop. That unit's
-  # WINGMAN_UPGRADE_USERS list describes shape B, which is RETIRED — so
-  # "upgrade all" upgraded the accounts that serve nobody and skipped the
-  # one that serves everybody. The symptom is silent and confusing: the
-  # shared process ships a command hours before the operator's own CLI can
-  # run it, and all you see is "No such command".
+  # The cross-account systemd sweep (wingman-upgrade-all.service and its
+  # timer, WINGMAN_UPGRADE_USERS) kept per-account shape-B installs current.
+  # Shape B is retired (#617), so it is gone; on a host whose only service
+  # is the shared one, this is 'upgrade' for your CLI plus 'redeploy-shared'.
   #
-  # Order is deliberate. The per-account installs are cheap and interrupt
-  # nothing, so they go FIRST and prove the tree builds. The shared
-  # process restart briefly cuts every tenant off, so it goes LAST.
-  local accounts_ok=1 shared_ok=1
+  # Order is deliberate. The CLI refresh interrupts nothing and proves the
+  # tree builds, so it goes FIRST. The shared restart briefly cuts every
+  # tenant off, so it goes LAST.
+  local cli_ok=1 shared_ok=1 registry_stale=0 shared_rc=0
 
-  # [0/2] The orchestrator itself, first (#407).
-  #
-  # The unit's ExecStart is '/root/.local/bin/wingman-upgrade-all', and root
-  # is NOT one of the accounts it upgrades — so the component whose whole job
-  # is preventing version skew was the one component frozen at whenever it
-  # was installed. A reinstall failure was reported as "Resolved 44 packages
-  # in 873ms" because the diagnosis for it, shipped in #308, was not in the
-  # copy that was running.
-  #
-  # Refreshed HERE, by the caller, rather than by the unit refreshing itself:
-  # replacing site-packages under a running Python process that imports
-  # lazily is a genuinely nasty failure, and it would appear once a month at
-  # 3am. Doing it before the trigger means the unit that runs next is already
-  # the new one, with no self-modification anywhere.
-  #
-  # Best-effort. A stale orchestrator still upgrades everybody — it just
-  # explains itself less well — so this must never be the thing that stops
-  # the run. The nightly timer path is not covered by this; it announces its
-  # own version instead, which is what makes that gap visible.
-  # Through the pinned installer, never a raw 'uv tool install': an
-  # unconstrained resolve silently deploys versions nothing tested (#302,
-  # #319), and a test in this repo asserts no install path skips it.
-  if [ -x "$REPO/scripts/wingman-tool-install.sh" ]; then
-    say "→ [0/2] refreshing the upgrade orchestrator itself (root's own install)…"
-    sudo env PYTHONDONTWRITEBYTECODE=1 "$REPO/scripts/wingman-tool-install.sh" "$REPO" \
-      >/dev/null 2>&1 \
-      || say "  (could not refresh it — continuing; it may report an older diagnosis)"
-  fi
+  say "→ [1/2] refreshing this account's own CLI (nothing is interrupted)…"
+  refresh_own_cli || { cli_ok=0; say "  this account's CLI upgrade FAILED — see above"; }
 
-  if systemctl list-unit-files wingman-upgrade-all.service >/dev/null 2>&1; then
-    say "→ [1/2] upgrading each account's own CLI (nothing is interrupted)…"
-    if sudo systemctl start wingman-upgrade-all.service; then
-      sudo journalctl -u wingman-upgrade-all.service --no-pager -n 10
-    else
-      accounts_ok=0
-      say "  per-account upgrade FAILED — check: sudo systemctl status wingman-upgrade-all.service"
-    fi
-  else
-    accounts_ok=0
-    say "→ [1/2] wingman-upgrade-all.service isn't installed on this box — see docs/SERVER.md §7."
-  fi
-
-  # Attempted even when the accounts half failed: the two are independent,
-  # and refusing to update the process that serves every tenant because
-  # somebody's personal CLI could not be reinstalled is the wrong trade.
+  # Attempted even when the CLI half failed: the two are independent, and
+  # refusing to update the process that serves every tenant because the
+  # operator's own CLI could not be reinstalled is the wrong trade.
   say "→ [2/2] redeploying the shared multi-tenant process…"
-  local registry_stale=0 shared_rc=0
   cmd_redeploy_shared || shared_rc=$?
   # 3 = the redeploy script's "healthy, serving, registry ledger not updated":
   # a bookkeeping gap, not an outage, so it must not get the outage wording.
@@ -359,11 +278,11 @@ cmd_upgrade_all() {
   # exit non-zero so a caller can tell. The redeploy script's own failures
   # leave the running process alone ("nothing was killed"), so a partial
   # result here means stale, not broken.
-  if [ "$accounts_ok" = 1 ] && [ "$shared_ok" = 1 ] && [ "$registry_stale" = 0 ]; then
-    say "Done — per-account CLIs and the shared process are both current."
+  if [ "$cli_ok" = 1 ] && [ "$shared_ok" = 1 ] && [ "$registry_stale" = 0 ]; then
+    say "Done — this account's CLI and the shared process are both current."
     return 0
   fi
-  if [ "$accounts_ok" = 1 ] && [ "$shared_ok" = 1 ]; then
+  if [ "$cli_ok" = 1 ] && [ "$shared_ok" = 1 ]; then
     say "Done, except the host service registry: the shared process is current,"
     say "  healthy and serving every tenant, but its registry entry was not updated."
     say "  Nothing is down. The redeploy output above has the commands to fix it."
@@ -371,14 +290,13 @@ cmd_upgrade_all() {
   fi
   say ""
   # Two failures, two different truths — and saying the wrong one is worse
-  # than saying nothing (#415). A per-account CLI that failed to install
-  # leaves the previous one working: stale, nobody is down. A shared-process
-  # redeploy that failed may have stopped the old process already, in which
-  # case every tenant is DOWN. The old wording ("anything already running
-  # was left alone") was written for the first case and printed for both.
-  if [ "$accounts_ok" != 1 ]; then
-    say "INCOMPLETE: the per-account CLI upgrade did not run."
-    say "  Those accounts keep the build they already had — stale, not broken."
+  # than saying nothing (#415). A CLI that failed to install leaves the
+  # previous one working: stale, nobody is down. A shared-process redeploy
+  # that failed may have stopped the old process already, in which case
+  # every tenant is DOWN.
+  if [ "$cli_ok" != 1 ]; then
+    say "INCOMPLETE: this account's CLI upgrade did not finish."
+    say "  It keeps the build it already had — stale, not broken."
   fi
   if [ "$registry_stale" = 1 ]; then
     say "NOTE: the shared process is healthy and serving, but its host service"
@@ -438,7 +356,6 @@ require_no_args() {
   say "$0 $cmd: takes no arguments (got '$1')."
   case "$cmd" in
     upgrade) say "Did you mean '$0 upgrade-all'?" ;;
-    stop)    say "Did you mean '$0 stop-all'?" ;;
   esac
   exit 2
 }
@@ -623,11 +540,9 @@ cmd_tenant() {
 
 case "${1:-}" in
   status)      shift; require_no_args status "$@"; cmd_status ;;
-  start)       shift; require_no_args start "$@"; cmd_start ;;
-  stop)        shift; require_no_args stop "$@"; cmd_stop ;;
+  start|stop|cycle) cmd_retired "$1" ;;
   stop-all)    cmd_stop_all "${2:-}" ;;
   upgrade)     shift; require_no_args upgrade "$@"; cmd_upgrade ;;
-  cycle)       shift; require_no_args cycle "$@"; cmd_cycle ;;
   upgrade-all) shift; require_no_args upgrade-all "$@"; cmd_upgrade_all ;;
   redeploy-shared) shift; require_no_args redeploy-shared "$@"; cmd_redeploy_shared ;;
   hosts)       shift; cmd_hosts "$@" ;;
@@ -635,17 +550,14 @@ case "${1:-}" in
   reload)      shift; require_no_args reload "$@"; cmd_tenant reload ;;
   tenant)      shift; cmd_tenant "$@" ;;
   *)
-    say "usage: $0 status|hosts|keys|reload|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|redeploy-shared|tenant ..."
-    say "  status       what's running, who owns each process, what's safe to stop (YOU only)"
+    say "usage: $0 status|hosts|keys|reload|stop-all [-y]|upgrade|upgrade-all|redeploy-shared|tenant ..."
+    say "  status       what's running for YOU: local stdio servers and who owns each"
     say "  hosts        every wingman instance on this box: version, uptime, build drift,"
     say "               and whether any is running outside systemd's control (#263)"
-    say "  start        the HTTP server (wingman-mcp --http), backgrounded + logged;"
-    say "               offers to bring Tailscale up if it has no tunnel hostname (#94)"
-    say "  stop         the HTTP server only (pidfile-verified; never touches clients)"
-    say "  stop-all     HTTP + client-owned stdio servers (asks first; -y skips)"
-    say "  upgrade      pull → reinstall → stop-all → restart HTTP if it was running (YOU only)"
-    say "  cycle        stop / upgrade / start — always ends with the server running (YOU only)"
-    say "  upgrade-all  EVERYTHING on this box: each account's own CLI first (nothing is"
+    say "  stop-all     local client-owned stdio servers (asks first; -y skips)"
+    say "  upgrade      this account's CLI: pull → reinstall → stop local stdio servers."
+    say "               Does NOT touch the shared service"
+    say "  upgrade-all  EVERYTHING on this box: this account's CLI first (nothing is"
     say "               interrupted), then the shared multi-tenant process every tenant"
     say "               talks to. Needs sudo; says which half did not happen (#375)"
     say "  redeploy-shared  pull, then redeploy the RFC-048 shared multi-tenant process"
@@ -667,5 +579,6 @@ case "${1:-}" in
     say "  tenant rotate-token <slug>  invalidate + reissue a tenant's token in one step,"
     say "                              no restart, no drain (RFC-048, #210)"
     say "  every 'tenant' subcommand runs as the account owning the tenant files (#442)"
+    say "  start, stop and cycle are retired: per-account servers are gone (#617)"
     exit 2 ;;
 esac

@@ -56,7 +56,10 @@ Before changing the live service:
    account, and backed up. Permission denial is not a missing path.
 
 Deploy with `scripts/wingman-provision-shared.sh` or the existing shared
-redeploy procedure in [SERVER.md](SERVER.md). After deployment, read the live
+redeploy procedure in [SERVER.md](SERVER.md) (`wg redeploy-shared`, or
+`wg upgrade-all` to refresh the operator's own CLI first). The shared service
+is the only server a hosted box runs: the per-account `wg start`/`stop`/`cycle`
+commands are retired (#617). After deployment, read the live
 protected-resource metadata and confirm that its `resource` and
 `authorization_servers` exactly match the saved configuration.
 

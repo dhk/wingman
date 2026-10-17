@@ -1149,9 +1149,8 @@ def host_check(
     """Compare this host's operational surface against what this build expects
     (RFC-072, #212).
 
-    Host-level state — the RFC-046 config layout, the systemd units behind
-    the shared process and the cross-account upgrade, the 'wg' wrapper an
-    operator types — has shipped as one-off migrations and prose somebody had
+    Host-level state — the RFC-046 config layout, the systemd units a host
+    runs, the 'wg' wrapper an operator types — has shipped as one-off migrations and prose somebody had
     to notice. Drift was therefore found when something broke (#197, #198),
     usually by somebody else. This answers the question directly.
 
@@ -5880,8 +5879,8 @@ def tenant_overnight_cmd(
     that isn't theirs. One tenant's failure (nothing enrolled, a fetch
     error, a corrupt or locked database, a bad registry entry, whatever)
     is reported by slug and never blocks the rest — mirrors
-    'upgrade_all.py's same per-user isolation, and catches as broadly as
-    that does, because a roster this command abandons half way through is
+    the per-account isolation the retired upgrade sweep had, and catches as
+    broadly, because a roster this command abandons half way through is
     a night's work silently missing for everyone after the break.
 
     Exits non-zero when a tenant got NOTHING, not when a tenant's run

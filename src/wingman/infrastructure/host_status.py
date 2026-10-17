@@ -10,8 +10,9 @@ five days:
 
     listening on 8787, /health 200, newest build ... and
     'wingman-mcp.service' failed since Jul 31, so every nightly
-    'wingman-upgrade-all' logged "not active for this user — build
-    updated, nothing to restart" and never restarted the live process.
+    'wingman-upgrade-all' (the per-account sweep, retired with shape B in
+    #617) logged "not active for this user — build updated, nothing to
+    restart" and never restarted the live process.
 
 The build moved nightly; the process didn't. So this tool's headline job is
 not "is it up" — it is "is anything running outside the thing that is
@@ -20,8 +21,7 @@ supposed to restart it".
 Its own entry point rather than a 'wingman' subcommand, for RFC-042's
 reason: the 'wingman' CLI bootstraps exactly one workspace per invocation
 via WINGMAN_DATA_DIR and has no notion of "every instance on this box".
-'scripts/wingman-ctl hosts' is the thin wrapper, same shape as
-'cmd_upgrade_all'.
+'scripts/wingman-ctl hosts' is the thin wrapper.
 
 Privilege: everything here works as an ordinary unprivileged user, because
 /health needs no capability token (webui.ui_health is deliberately
@@ -234,8 +234,7 @@ def unit_state(
 
     'systemctl --user' driven from root needs XDG_RUNTIME_DIR pointed at
     the target account's own runtime directory or it cannot reach that
-    account's session bus at all — the same gotcha upgrade_all.py carries
-    on every one of its sudo calls (RFC-042).
+    account's session bus at all (RFC-042).
     """
     if user is None:
         return None
@@ -269,8 +268,8 @@ def service_column(running: bool, state: str | None, *, bound: bool = False) -> 
     """(service, note). The one row that must never read as fine.
 
     Listening with no active unit is the failure this whole tool is for:
-    nothing will restart it, and 'wingman-upgrade-all' says so in its log
-    every night while everyone reads the '[ok]' at the front of the line.
+    nothing will restart it — not a redeploy, not a reboot — while everyone
+    reads the '[ok]' at the front of the line.
 
     'bound' distinguishes the third state the first version couldn't say:
     something holds the socket but isn't answering yet. That is a restart
@@ -284,7 +283,7 @@ def service_column(running: bool, state: str | None, *, bound: bool = False) -> 
     if running and state != "active":
         return (
             "UNMANAGED",
-            f"unit is '{state}' — upgrade-all will not restart this instance",
+            f"unit is '{state}' — nothing will restart this instance",
         )
     if running:
         return "active", ""
@@ -443,11 +442,11 @@ def render(
     # PYTHONDONTWRITEBYTECODE is not decoration: running the uv-installed entry
     # point as root compiles .pyc files INTO THE INVOKING USER'S tool store,
     # owned by root. The next 'uv tool install --reinstall' runs as that user,
-    # cannot delete them, and upgrade-all reports [FAILED] for the account —
+    # cannot delete them, and the next upgrade fails for the account —
     # a permissions error during an unrelated later deploy, caused by a hint
     # printed here (#276). 'env' rather than a bare VAR=value because sudo's
     # default policy can refuse caller-set environment variables, and because
-    # it matches the form upgrade_all.py already uses everywhere.
+    # it matches the form the rest of the sudo calls here use.
     if any(row.service == "?" for row in rows) and (os.geteuid() if euid is None else euid) != 0:
         footers.append(
             "Service state is unknown for accounts other than yours — rerun as:\n"
