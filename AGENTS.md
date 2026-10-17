@@ -241,6 +241,13 @@ Durable architectural choices get an RFC entry marked **Durable decision** in `d
 
 Do not claim a capability is supported until implemented and tested.
 
+## Host operations
+
+`wg upgrade-all` refreshes configured per-account CLI installs through
+`wingman-upgrade-all.service`, then the shared multi-tenant process. The
+legacy shape-B servers are being retired; do not assume the per-account list
+is a fixed pair of named people (see CLAUDE.md).
+
 ## Git and Change Scope
 
 - Keep commits and PRs small.
