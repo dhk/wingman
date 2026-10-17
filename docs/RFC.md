@@ -1235,6 +1235,16 @@ Where this diverges from the issue's own suggestion: the issue wanted both views
 
 **Revisit if.** The consequential-interaction briefing (product strategy §4.1, not yet built) starts producing its own pre-meeting synthesis drafts — the same two-tier model should cover both directions rather than each feature inventing its own. Or `source_url` needs to distinguish more than one kind of external reference (a meeting-notes doc vs. an email thread vs. a call recording) — today it is a single opaque string, which is enough until something downstream needs to treat them differently.
 
+**Import follow-up (#626).** Transcript preview includes the exact composed,
+whitespace-normalized endorsed note, shared with filing. Refiling identical
+original bytes for the same person returns the original filing date without
+adding another note, source record, or archived original; renamed uploads
+count as the same bytes. Different bytes or a different recipient are new
+filings. This identity check uses original transcript provenance, not a
+synthesis hash. Full recipient matching and the review-hash check precede
+archiving. The hash binds approval to bytes; the client still obtains human
+approval. Native hosted attachment forwarding remains client-dependent.
+
 ## RFC-074: A judged example carries its reason, or it is not worth keeping (issue #438)
 
 **Context.** Wingman writes briefings, POVs, cover letters and outreach

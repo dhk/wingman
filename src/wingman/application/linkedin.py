@@ -234,9 +234,8 @@ def import_linkedin(export_path: Path, config: Config, storage: Storage) -> Link
         },
     )
     _logger.info(
-        "linkedin_import export=%s positions=%d skills=%d recommendations=%d accepted=%d"
+        "linkedin_import positions=%d skills=%d recommendations=%d accepted=%d"
         " skipped=%d merged=%d conflicts=%d sources_created=%d",
-        export_path,
         found[POSITIONS_CSV],
         found[SKILLS_CSV],
         found[RECOMMENDATIONS_CSV],

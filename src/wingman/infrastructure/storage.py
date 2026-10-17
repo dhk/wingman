@@ -1234,6 +1234,27 @@ class Storage:
             ) from exc
         self._conn.commit()
 
+    def find_transcript_filing(
+        self, person_id: str, content_hash: str
+    ) -> RelationshipLogEntry | None:
+        """Find a completed endorsement of these original bytes for this person.
+
+        Join original provenance, rather than the synthesized note's hash: two
+        transcripts can compose identical notes, and a renamed upload is the
+        same filing. Existing filings are covered without a schema migration.
+        """
+        row = self._conn.execute(
+            "SELECT log.payload FROM relationship_log AS log"
+            " JOIN source_records AS original"
+            " ON original.source_locator = json_extract(log.payload, '$.source_url')"
+            " WHERE log.person_id = ? AND original.content_hash = ?"
+            " AND original.source_type = 'transcript'"
+            " AND json_extract(log.payload, '$.evidence_tier') = 'endorsed'"
+            " ORDER BY log.happened_at LIMIT 1",
+            (person_id, content_hash),
+        ).fetchone()
+        return RelationshipLogEntry.model_validate_json(row[0]) if row else None
+
     def list_log_entries(self, person_id: str | None = None) -> list[RelationshipLogEntry]:
         if person_id is None:
             cursor = self._conn.execute(
