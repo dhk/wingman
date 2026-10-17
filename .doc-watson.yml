@@ -7,7 +7,7 @@
 schema: 1
 standard: 0.3.0 # standard version last audited against
 level: 2 # declared by the owner, 2026-09-28
-audience: The owner as operator, people whose Wingman is hosted for them, self-hosters, and agents that build it.
+audience: People who want to be intentional about their professional networking and the relationships they build in their public lives (owner, 2026-10-17); and, for operating and building it, the owner as operator, people whose Wingman is hosted for them, self-hosters, and agents that build it.
 
 # One decision per trigger rule, each with its reason.
 triggers:
@@ -22,7 +22,7 @@ triggers:
     reason: Layered agents, MCP and CLI surfaces, and a shared multi-tenant process do not fit one read; docs/DESIGN.md is the architecture document.
   adrs:
     applies: true
-    reason: docs/RFC.md is a ledger of 80 decisions with alternatives and consequences.
+    reason: docs/RFC.md is a ledger of decisions (RFC-001 to RFC-084) with alternatives and consequences.
   agent-memory:
     applies: true
     reason: Agents return across sessions; AGENTS.md and CLAUDE.md hold rules and deployment facts.
@@ -30,8 +30,8 @@ triggers:
     applies: true
     reason: MCP clients parse the tool interface served by src/wingman/mcp_server.py; host config files are parsed by scripts/wingman-ctl (docs/SERVER.md section 2).
   codeowners:
-    applies: false
-    reason: One owner authors all changes; review routing is not shared.
+    applies: true
+    reason: The repository is public and invites contributions; .github/CODEOWNERS names the owner as reviewer for every path (documentation of who approves, not a merge gate).
   contributing:
     applies: true
     reason: The repository is public and outside contributions are invited; every change merges only with the owner's approval (owner, 2026-10-07). CONTRIBUTING.md states this.
@@ -39,11 +39,11 @@ triggers:
     applies: false
     reason: One maintainer.
   roadmap:
-    applies: false
-    reason: No public audience; ROADMAP.md is the owner's plan.
+    applies: true
+    reason: The repository is public and has a public audience (owner, 2026-10-17); ROADMAP.md is the public plan.
   runbooks:
     applies: false
-    reason: No alerting that pages anyone is documented; docs/SERVER.md covers care, feeding and rollback.
+    reason: The operator Todoist notification (docs/SERVER.md) is a work-queue notice that someone is waiting for approval, not an alert that pages anyone about an outage; handling it is covered in docs/OAUTH-LAUNCH-RUNBOOK.md. docs/SERVER.md covers care, feeding and rollback.
   handover:
     applies: false
     reason: The second account holder uses their own Wingman as a tenant and operates nothing on lobster; no other party runs the box (owner, 2026-10-07, correcting 2026-09-28).

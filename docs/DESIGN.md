@@ -107,6 +107,33 @@ The pattern is fixed: deterministic ingestion and validation bracket every model
 - No remote persistence, no telemetry. Backups are dated tarballs (`wingman backup`/`restore`): a consistent SQLite snapshot plus inbox/reports, with retention pruning and a refuse-to-clobber restore.
 - API keys live in the macOS Keychain (`wingman keys`, RFC-019) and hydrate the environment at startup; an exported environment variable always wins.
 
+## Hosted Tenancy and Sign-in
+
+A host can serve many people from one shared process (RFC-048). Each person is a **tenant**: a slug in the tenant registry (`tenants.toml`) pointing at its own workspace directory, laid out exactly as in Storage above. Every request runs against one tenant's `Config`, bound for that request only; a tenant's API keys resolve from its own workspace and never fall through to another tier (`infrastructure/tenants.py`, `tenant_asgi.py`).
+
+A request reaches its tenant one of three ways:
+
+```text
+Claude connector ──► <prefix>/mcp          bearer token, verified against the MCP issuer
+                                           (iss, sub) ──► identity map ──► slug ──► workspace
+Browser          ──► <prefix>/login, /setup  WorkOS session, verified against the browser issuer
+                                           (iss, sub) ──► identity map ──► slug ──► workspace
+Legacy link      ──► <prefix>/mcp/<token>  capability token ──► slug (served until #616 retires it)
+```
+
+- **Identity map** (`oauth_bearer.IdentityMap`). Keyed on `(issuer, subject)`, never on an email address. Several identities may name one slug; that is how one person's Claude sign-in and browser sign-in reach the same workspace. The map is written under a lock and replaced atomically.
+- **Two trusted issuers, one subject.** The MCP issuer and the browser issuer are read from the service's own configuration (`oauth_service_issuers.py`). WorkOS gives one user the same subject on both, so binding a person writes their subject under every trusted issuer in one atomic replacement, and refuses if either key already belongs to another tenant.
+- **Bearer route** (`BearerRoutingASGIApp`). Anything that fails verification, or whose identity is not in the map, is answered before it reaches FastMCP or any tool: a 401 challenge with protected-resource metadata, or a 403 for a verified but unapproved identity.
+- **Browser surface** (`oauth_browser.py`). The cookie is an opaque, short-lived handle; the access token stays server-side and is revalidated on every setup request. The browser never receives a capability URL. Writes require a CSRF token.
+
+Admission (`oauth_onboarding.py`, `oauth_invite_claim.py`):
+
+1. **Pending queue.** A verified identity that is not in the map is recorded in a bounded pending queue and shown a short reference (`XXXX-XXXX`, a fingerprint of its own `(iss, sub)`) on whichever surface it used. The same refusal text is used on both surfaces.
+2. **Operator approval.** `wingman tenant oauth-approve` creates a new tenant from a pending identity; `wingman tenant oauth-bind` attaches an identity to an existing tenant. Either binds under every trusted issuer and clears the pending row. An optional operator notification (a Todoist task) fires the first time an identity is queued.
+3. **Email invites.** `wingman tenant oauth-invite` prepares a tenant for an address; the address is stored only as an HMAC under a per-install key. When an identity signs in with that address verified by the identity provider, it is bound to the prepared tenant without an operator step. Unverified or mismatched addresses fall back to the pending queue.
+
+Registry and identity-map changes take effect in the running process on `SIGHUP`, validated as one update (`tenant_process.register_reload_handler`).
+
 ## Approval Flow
 
 External actions (send, post, apply, schedule, contact-update) do not exist until late phases, but the gate they will pass through is built first (`policies` layer, Phase 0):
