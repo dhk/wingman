@@ -19,6 +19,19 @@ def read(path: Path) -> str | None:
         return None
 
 
+def configured_path_exists(path: Path) -> bool:
+    """Keep absent distinct from inaccessible on every supported Python.
+
+    Path.exists() suppresses all OSError exceptions from Python 3.14 onward.
+    Explicit stat lets main treat EACCES as shared configuration needing sudo.
+    """
+    try:
+        path.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
+
+
 def run(*args: str) -> str:
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=6, check=False)
@@ -49,7 +62,7 @@ def main() -> int:
     etc = root / "etc/wingman"
     try:
         configured = any(
-            p.exists()
+            configured_path_exists(p)
             for p in (
                 etc / "oauth-config-path",
                 etc / "tenants.toml",

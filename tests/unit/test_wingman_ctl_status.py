@@ -163,3 +163,98 @@ def test_health_probes_ignore_curl_credentials_and_proxies(tmp_path, proxy_envir
             server.server_close()
         for thread in threads:
             thread.join(timeout=2)
+
+
+def test_shared_detection_keeps_eacces_when_exists_suppresses_errors(tmp_path, monkeypatch, capsys):
+    """Python 3.14 exists() hides EACCES; stat/read must preserve the distinction."""
+    import errno
+    import runpy
+    import sys
+
+    helper = CTL.with_name("wingman-shared-status.py")
+    namespace = runpy.run_path(str(helper))
+    home = tmp_path / "shared"
+    etc = tmp_path / "etc/wingman"
+    original_stat = Path.stat
+    original_read = Path.read_text
+
+    def blocked(path):
+        return path.is_relative_to(etc) or path.is_relative_to(home)
+
+    def stat(path, *args, **kwargs):
+        if blocked(path):
+            raise PermissionError(errno.EACCES, "synthetic untraversable directory")
+        return original_stat(path, *args, **kwargs)
+
+    def read_text(path, *args, **kwargs):
+        if blocked(path):
+            raise PermissionError(errno.EACCES, "synthetic unreadable configuration")
+        return original_read(path, *args, **kwargs)
+
+    def python314_exists(path, *args, **kwargs):
+        try:
+            path.stat(*args, **kwargs)
+        except OSError:
+            return False
+        return True
+
+    monkeypatch.setattr(Path, "stat", stat)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(Path, "exists", python314_exists)
+    monkeypatch.setenv("WINGMAN_HOST_ROOT", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", [str(helper), "--home", str(home)])
+    namespace["main"].__globals__["run"] = lambda *args: "unavailable"
+    assert namespace["main"]() == 0
+    output = capsys.readouterr().out
+    assert "Shared HTTP service:" in output
+    assert "Tenants: (needs sudo)" in output
+    assert "not running" not in output
+
+
+def test_shared_detection_distinguishes_absent_and_untraversable_directories(tmp_path):
+    """Run the helper under the test interpreter with real directory permissions."""
+    import sys
+
+    helper = CTL.with_name("wingman-shared-status.py")
+    home = tmp_path / "shared"
+    home.mkdir()
+    etc = tmp_path / "etc/wingman"
+    etc.mkdir(parents=True)
+    (etc / "tenants.toml").write_text("")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for name in ("systemctl", "curl"):
+        command = bindir / name
+        command.write_text("#!/bin/sh\nexit 1\n")
+        command.chmod(0o700)
+    env = {
+        **os.environ,
+        "WINGMAN_HOST_ROOT": str(tmp_path),
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+    }
+    home.chmod(0)
+    etc.chmod(0)
+    try:
+        result = subprocess.run(
+            [sys.executable, str(helper), "--home", str(home)],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    finally:
+        home.chmod(0o700)
+        etc.chmod(0o700)
+    assert result.returncode == 0, result.stderr
+    assert "Shared HTTP service:" in result.stdout
+    assert "Tenants: (needs sudo)" in result.stdout
+    (etc / "tenants.toml").unlink()
+    absent = subprocess.run(
+        [sys.executable, str(helper), "--home", str(home)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert absent.returncode == 3
+    assert absent.stdout == ""

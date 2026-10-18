@@ -1787,7 +1787,10 @@ time, installed package version, unauthenticated PRM (expected 200) and MCP
 (expected 401) probes, tenant/pending/invite counts, and whether operator
 notifications are configured. It prints no tenant identifiers or credentials.
 Unreadable shared files or an inaccessible service-manager bus are labelled
-`(needs sudo)`; status does not prompt or elevate. The personal HTTP section
+`(needs sudo)`; status does not prompt or elevate. Configuration detection
+uses explicit filesystem stat calls so an untraversable shared directory
+remains distinct from an absent installation on Python 3.12 and later,
+including Python 3.14's changed `Path.exists()` behavior. The personal HTTP section
 appears only when that account has its own unit or pidfile (or there is no
 shared configuration). Probes disable curl's user configuration and bypass
 proxy environment settings, so operator credentials cannot authenticate them
