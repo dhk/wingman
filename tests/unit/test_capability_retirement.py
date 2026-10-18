@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
@@ -125,7 +126,7 @@ def test_atomic_failure_preserves_registry(setup: tuple[Path, Path, Path, Path])
     assert setup[0].read_bytes() == before
 
 
-@pytest.mark.parametrize("route", ["mcp", "ui", "admin"])
+@pytest.mark.parametrize("route", ["mcp", "ui"])
 def test_retired_response_equals_unknown(setup: tuple[Path, Path, Path, Path], route: str) -> None:
     result = command(setup, "retire-url", "alice")
     assert result.exit_code == 0, result.output
@@ -142,10 +143,9 @@ def test_retired_response_equals_unknown(setup: tuple[Path, Path, Path, Path], r
     else:
         configure_tenant_index(index)
         register_ui(server, prefix="/retirement-test")
-        register_admin(server)
         client = TestClient(server.streamable_http_app())
-        suffix = "/installations" if route == "admin" else "/"
-    prefix = "" if route in {"mcp", "admin"} else "/retirement-test"
+        suffix = "/"
+    prefix = "" if route == "mcp" else "/retirement-test"
     try:
         retired = client.get(f"{prefix}/{route}/synthetic-secret-token{suffix}")
         unknown = client.get(f"{prefix}/{route}/unknown{suffix}")
@@ -155,6 +155,35 @@ def test_retired_response_equals_unknown(setup: tuple[Path, Path, Path, Path], r
             unknown.content,
             unknown.headers,
         )
+    finally:
+        configure_tenant_index(None)
+
+
+def test_retirement_preserves_independent_admin_credential(
+    setup: tuple[Path, Path, Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operator_workspace = setup[0].parent / "admin-operator"
+    operator_workspace.mkdir()
+    (operator_workspace / "installations-token").write_text("synthetic-operator-token")
+    monkeypatch.setenv("WINGMAN_DATA_DIR", str(operator_workspace))
+    result = command(setup, "retire-url", "alice")
+    assert result.exit_code == 0, result.output
+    configure_tenant_index(tenants.TenantIndex.from_registry_path(setup[0]))
+    # Isolate registration: a route left by another test cannot hide its removal.
+    admin_server = FastMCP("retirement-admin-test")
+    # The production guard is process-wide; this fresh server needs its own registration.
+    monkeypatch.setattr("wingman.admin._registered", False)
+    register_admin(admin_server)
+    client = TestClient(admin_server.streamable_http_app())
+    try:
+        operator = client.get("/admin/synthetic-operator-token/installations")
+        assert operator.status_code == 200
+        retired = client.get("/admin/synthetic-secret-token/installations")
+        unknown = client.get("/admin/unknown/installations")
+        assert retired.status_code == unknown.status_code == 404
+        # Lowercase belongs to the real handler; an unmatched route says "Not Found".
+        assert retired.content == unknown.content == b"not found"
+        assert retired.headers == unknown.headers
     finally:
         configure_tenant_index(None)
 
