@@ -225,6 +225,7 @@ class OvernightReport(BaseModel):
     needs_attention: int = 0
     targets: list[OvernightTarget] = Field(default_factory=list)
     actions: list[ActionItem] = Field(default_factory=list)
+    additional_copy_error: str | None = None
 
 
 _MAX_ACTIONS = 10
@@ -856,20 +857,23 @@ def overnight_run(config: Config, storage: Storage, out_dir: Path | None = None)
     digest_path.with_suffix(".json").write_text(structured, encoding="utf-8")
     (digest_dir / "latest.json").write_text(structured, encoding="utf-8")
     if out_dir is not None:
-        copy_dir = out_dir.expanduser().resolve()
-        if copy_dir != digest_dir:
-            try:
+        try:
+            copy_dir = out_dir.expanduser().resolve()
+            if copy_dir != digest_dir:
                 copy_dir.mkdir(parents=True, exist_ok=True)
                 for suffix in (".md", ".html", ".json"):
                     source = digest_path.with_suffix(suffix)
                     payload = source.read_bytes()
                     (copy_dir / source.name).write_bytes(payload)
                     (copy_dir / ("latest" + suffix)).write_bytes(payload)
-            except OSError as exc:
-                raise IngestError(
-                    f"additional digest copy failed: {exc}; canonical digest is preserved "
-                    f"at {digest_path}. Read it with 'wingman digest' or copy it manually."
-                ) from exc
+        except (OSError, RuntimeError) as exc:
+            report.additional_copy_error = (
+                f"additional digest copy failed for {out_dir}: {exc}; canonical digest is "
+                f"preserved at {digest_path}. Read it with 'wingman digest' or copy it manually. "
+                "The additional output may contain incomplete or older copies."
+            )
+            # Delivery diagnostics stay on the returned report: rewriting the
+            # completed canonical artifacts could itself fail and hide the run.
     return report
 
 

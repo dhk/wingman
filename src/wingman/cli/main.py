@@ -3817,8 +3817,10 @@ def overnight(
             "Run completed; the failures above are recorded in the digest. "
             "(--strict exits non-zero on them instead.)"
         )
-        if strict:
-            raise typer.Exit(code=1)
+    if report.additional_copy_error:
+        typer.echo(report.additional_copy_error, err=True)
+    if report.additional_copy_error or (report.failed and strict):
+        raise typer.Exit(code=1)
 
 
 @app.command()
