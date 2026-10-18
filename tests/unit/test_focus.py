@@ -390,10 +390,35 @@ def test_latest_digest_and_out_dir(workspace: Path, monkeypatch: pytest.MonkeyPa
         add_person("Jane Author", storage, substack_url="https://jane.substack.com")
         storage.watchlist_add(OVERNIGHT_LIST, "person", "Jane Author")
         report = overnight_run(config, storage, out_dir=custom)
-    assert Path(report.digest_path).parent == custom.resolve()
+    assert Path(report.digest_path).parent == (config.reports_dir / "digests").resolve()
     assert (custom / "latest.md").exists()
-    # default-location helper ignores custom out_dirs (they are the user's copy)
-    assert latest_digest(config) is None
+    canonical = latest_digest(config)
+    assert canonical == Path(report.digest_path)
+    assert canonical.read_text() == (custom / canonical.name).read_text()
+    for suffix in (".md", ".html", ".json"):
+        assert (
+            canonical.with_suffix(suffix).read_bytes()
+            == (custom / canonical.with_suffix(suffix).name).read_bytes()
+        )
+        assert (custom / ("latest" + suffix)).exists()
+    from wingman.application.search import search_workspace
+
+    with Storage(config.db_path) as storage:
+        result = search_workspace("Jane Author", storage, config)
+    assert any(hit.kind == "digest" and hit.source == str(canonical) for hit in result.hits)
+    from typer.testing import CliRunner
+
+    import wingman.cli.main as cli_module
+
+    opened: list[str] = []
+    monkeypatch.setattr(cli_module.typer, "launch", lambda path: opened.append(path))
+    cli = CliRunner()
+    shown = cli.invoke(cli_module.app, ["digest"])
+    assert shown.exit_code == 0, shown.output
+    assert "Jane Author" in shown.output
+    shown = cli.invoke(cli_module.app, ["digest", "--open"])
+    assert shown.exit_code == 0, shown.output
+    assert opened == [str(canonical.with_suffix(".html"))]
 
 
 def test_tickler_fires_on_fresh_material_citing_objective(
@@ -831,3 +856,89 @@ def test_paused_source_does_not_score_carried_links(
         _company_deep("Acme", config, storage, actions)
         assert not any(action.key.startswith("opening:") for action in actions)
         assert storage.list_pending_job_links("acme", url) == ["https://acme.example/jobs/one"]
+
+
+def test_out_copy_failure_names_preserved_digest(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import wingman.application.people as people_module
+    from wingman.application.focus import latest_digest
+
+    config = load_config()
+    monkeypatch.setattr(people_module, "fetch_url", lambda url: FEED)
+    destination = workspace / "not-a-directory"
+    destination.write_text("preserve me")
+    original_write = Path.write_text
+    json_writes: dict[Path, int] = {}
+
+    def write(path: Path, *args, **kwargs):
+        if path.parent == config.reports_dir / "digests" and path.suffix == ".json":
+            json_writes[path] = json_writes.get(path, 0) + 1
+            if json_writes[path] > 1:
+                raise OSError("synthetic canonical metadata rewrite failure")
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", write)
+    with Storage(config.db_path) as storage:
+        add_person("Jane Author", storage, substack_url="https://jane.substack.com")
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Jane Author")
+        report = overnight_run(config, storage, out_dir=destination)
+    assert report.additional_copy_error is not None
+    assert "canonical digest is preserved" in report.additional_copy_error
+    assert latest_digest(config) is not None
+    assert destination.read_text() == "preserve me"
+
+
+@pytest.mark.parametrize("strict_args", [[], ["--strict"]])
+@pytest.mark.parametrize("resolve_failure", [False, True])
+def test_copy_failure_still_reports_run_and_pushes_drive(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, strict_args: list[str], resolve_failure: bool
+) -> None:
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    import wingman.cli.main as cli_module
+    from wingman.application.focus import latest_digest
+
+    config = load_config()
+    destination = workspace / "existing-file"
+    destination.write_text("preserve me")
+    with Storage(config.db_path) as storage:
+        add_person("Jane Author", storage, substack_url="https://jane.substack.com")
+        storage.watchlist_add(OVERNIGHT_LIST, "person", "Jane Author")
+    pushed: list[Path] = []
+
+    def push(path: Path):
+        pushed.append(path)
+        return SimpleNamespace(detail="Synthetic Drive push attempted")
+
+    monkeypatch.setattr(cli_module, "push_digest", push)
+    if resolve_failure:
+        original_resolve = Path.resolve
+
+        def resolve(path: Path, *args, **kwargs):
+            if path == destination:
+                raise OSError("synthetic destination resolution failure")
+            return original_resolve(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", resolve)
+    result = CliRunner().invoke(
+        cli_module.app, ["overnight", "--out", str(destination), *strict_args]
+    )
+    assert result.exit_code == 1, result.output
+    canonical = latest_digest(config)
+    assert canonical is not None
+    assert pushed == [canonical]
+    assert "1 targets" in result.output
+    assert f"Digest: {canonical}" in result.output
+    assert "Pretty:" in result.output
+    assert "overnight failed:" not in result.output
+    assert result.output.index("Digest:") < result.output.index("Synthetic Drive push attempted")
+    assert result.output.index("Synthetic Drive push attempted") < result.output.index(
+        "additional digest copy failed"
+    )
+    assert "canonical digest is preserved" in result.output
+    if resolve_failure:
+        assert "synthetic destination resolution failure" in result.output
+    assert destination.read_text() == "preserve me"
