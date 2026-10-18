@@ -622,6 +622,8 @@ cmd_tenant() {
 }
 
 case "${1:-}" in
+  invite|invites|revoke|pending|approve|bind)
+    python3 "$(dirname "$0")/wingman-oauth-operator.py" "$@" ;;
   status)      shift; require_no_args status "$@"; cmd_status ;;
   start)       shift; require_no_args start "$@"; cmd_start ;;
   stop)        shift; require_no_args stop "$@"; cmd_stop ;;
@@ -636,6 +638,8 @@ case "${1:-}" in
   tenant)      shift; cmd_tenant "$@" ;;
   *)
     say "usage: $0 status|hosts|keys|reload|start|stop|stop-all [-y]|upgrade|cycle|upgrade-all|redeploy-shared|tenant ..."
+    say "  invite <email> <slug> | invite --csv <file> | invites | revoke <slug>"
+    say "  pending | approve <REF> <slug> | bind <REF> <slug> (confirm, default No)"
     say "  status       what's running, who owns each process, what's safe to stop (YOU only)"
     say "  hosts        every wingman instance on this box: version, uptime, build drift,"
     say "               and whether any is running outside systemd's control (#263)"

@@ -60,6 +60,41 @@ redeploy procedure in [SERVER.md](SERVER.md). After deployment, read the live
 protected-resource metadata and confirm that its `resource` and
 `authorization_servers` exactly match the saved configuration.
 
+## Operator shortcuts (#614)
+
+On the shared host, use the repo's `wg` alias:
+
+```bash
+wg invite <email> <slug>
+wg invite --csv invites.csv
+wg invites
+wg revoke <slug>
+wg pending
+wg bind <REF> <existing-slug>
+wg approve <REF> <reserved-new-slug>
+```
+
+`REF` is the reference the person received after their verified sign-in.
+The wrappers resolve exactly one pending row, show only the last four subject
+characters, run `oauth-bind --preflight` across the service's trusted issuers,
+and ask `Proceed? [y/N]` before binding or approving. No answer means cancel.
+They invoke one admission operation covering every trusted issuer. They do
+not change admission policy. The long CLI forms below remain reference forms.
+
+Paths come from `/etc/wingman/oauth-config-path` (default `oauth.env`), its
+`--oauth-identities` setting, `/etc/wingman/tenants.toml`, and the shared
+account's home (`tenants/` beneath it). `WINGMAN_SHARED_USER`,
+`WINGMAN_TENANT_REGISTRY`, and `WINGMAN_SHARED_DATA_ROOT` override host
+locations. Config files are read as data, never executed. Commands use the
+shared account via `sudo -H -u` (which preserves argument boundaries), while
+workspace preparation uses the existing root-run CLI as required by its
+root-owned registry. Sudo authenticates visibly before captured command output; later commands use
+noninteractive sudo so an expired ticket fails rather than hiding a password
+prompt. Unreadable config files are read through the authenticated sudo path.
+
+`wg remove` is deferred by owner decision: there is no existing CLI removal
+operation to wrap, and migration retirement is handled separately in #616.
+
 ## 3. Existing-tenant migration window
 
 Do not revoke an existing tenant's capability URL merely because OAuth is now
