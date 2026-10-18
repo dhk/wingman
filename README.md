@@ -46,7 +46,8 @@ wingman demo        # guided tour on real public data, isolated workspace, no ke
 **Profile & corpus.** Resumes (Markdown, text, PDF, DOCX, LaTeX, Google
 Docs URLs) become a cited canonical profile; every accepted claim carries a
 verbatim quote, every unsupported one is rejected visibly. LinkedIn exports
-add positions, skills, recommendations — and seed the watchlist from your
+add positions, skills, and recommendations with `wingman ingest-linkedin`.
+Separately, `wingman people import-connections` seeds the watchlist from your
 connections (including private contact identifiers and emails; excluded from
 published person reports). Imports preserve existing canonical values and
 report ambiguous identities or contradictory values for review. Private
@@ -104,8 +105,10 @@ everything followed into a dated digest ending in an action list
 (what / why / who / evidence) — schedule it and wake up to marching
 orders (RFC-018). `wingman digest` shows the newest one (`--open` pops
 it in your viewer), `latest.md` is a stable pointer for scripts and
-editor tabs, `--out ~/Desktop` lands it where you look, and digests are
-searchable (`wingman search`).
+editor tabs, and digests in the workspace are searchable (`wingman search`).
+`wingman overnight --out ~/Desktop` chooses a different output directory;
+`wingman digest` has no `--out` option. Until [#597](https://github.com/dhk/wingman/issues/597) lands, runs written outside
+`reports/digests/` are not found by `digest` or search.
 
 **Search.** `wingman search "semantic layers"` answers "what does the
 workspace know about X" in one call — corpus, people's writing, POV
@@ -119,7 +122,8 @@ with the local `hashed` provider nothing leaves the machine (RFC-022).
 **Delivery.** Print-ready US-Letter exports styled by the site design
 system: career one-pager, company dossier, and a landscape 2×2 person
 briefing dock (brief | POV | background | news) with clickable sources;
-`--html` adds a tabbed on-screen page that still prints as the 2×2. Render
+`wingman export person --html` adds a tabbed on-screen page that still prints
+as the 2×2. Career and company exports produce Markdown. Render
 with `npx md-to-pdf` — every export prints its exact render command.
 
 **Plumbing.** `wingman keys` stores API keys in the macOS Keychain, and
