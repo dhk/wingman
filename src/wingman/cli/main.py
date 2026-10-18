@@ -16,6 +16,8 @@ import typer
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from wingman.infrastructure.oauth_bearer import IdentityMap
+    from wingman.infrastructure.oauth_service_issuers import ServiceIssuers
     from wingman.infrastructure.tenants import Tenant
 
 from wingman.agents.profile_curator import ProposalParseError
@@ -4718,6 +4720,115 @@ def _issuers_for_binding_or_exit(
     except ServiceIssuersError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
+
+
+def _migration_inputs(
+    identities: Path, oauth_config: Path | None, oauth_web_config: Path | None
+) -> tuple[IdentityMap, ServiceIssuers]:
+    """Read service configuration without echoing identity-map error contents."""
+    from wingman.infrastructure.oauth_bearer import IdentityMap, IdentityMapError
+    from wingman.infrastructure.oauth_service_issuers import (
+        ServiceIssuersError,
+        read_service_issuers,
+    )
+
+    try:
+        issuers = read_service_issuers(oauth_config, oauth_web_config)
+        mapping = IdentityMap.from_toml(identities)
+    except ServiceIssuersError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    except IdentityMapError:
+        typer.echo("Identity map could not be read or validated; nothing changed.", err=True)
+        raise typer.Exit(1) from None
+    return mapping, issuers
+
+
+@tenant_app.command("migration")
+def tenant_migration_cmd(
+    identities: Path = typer.Option(..., "--identities", help="Shared OAuth identity map."),
+    registry: Path | None = typer.Option(None, "--registry", help="Tenant registry."),
+    oauth_config: Path | None = typer.Option(None, "--oauth-config", help=_OAUTH_CONFIG_HELP),
+    oauth_web_config: Path | None = typer.Option(
+        None, "--oauth-web-config", help=_OAUTH_WEB_CONFIG_HELP
+    ),
+) -> None:
+    """Read migration status; prints no subjects, email addresses or capability tokens."""
+    from wingman.infrastructure.capability_usage import last_used
+    from wingman.infrastructure.tenant_migration import bound_issuers
+
+    mapping, issuers = _migration_inputs(identities, oauth_config, oauth_web_config)
+    tenants, _ = _load_registry_or_exit(registry)
+    typer.echo("slug | MCP bound | browser bound | capability URL | last capability use (UTC)")
+    for tenant in tenants:
+        bound = bound_issuers(mapping, tenant.slug)
+        mcp = "yes" if issuers.mcp in bound else "no"
+        browser = (
+            "not configured"
+            if issuers.browser is None
+            else "yes"
+            if issuers.browser in bound
+            else "no"
+        )
+        state = "retired" if tenant.capability_url_retired else "active"
+        typer.echo(f"{tenant.slug} | {mcp} | {browser} | {state} | {last_used(tenant.data_dir)}")
+
+
+@tenant_app.command("retire-url")
+def tenant_retire_url_cmd(
+    slug: str = typer.Argument(..., help="Tenant whose legacy capability routes change."),
+    identities: Path | None = typer.Option(
+        None, "--identities", help="Shared OAuth identity map (required unless --undo)."
+    ),
+    registry: Path | None = typer.Option(None, "--registry", help="Tenant registry."),
+    oauth_config: Path | None = typer.Option(None, "--oauth-config", help=_OAUTH_CONFIG_HELP),
+    oauth_web_config: Path | None = typer.Option(
+        None, "--oauth-web-config", help=_OAUTH_WEB_CONFIG_HELP
+    ),
+    undo: bool = typer.Option(False, "--undo", help="Re-enable the same capability URL."),
+    force: bool = typer.Option(
+        False, "--force", help="Override missing bindings or privileged guard."
+    ),
+) -> None:
+    """Retire capability routes after OAuth migration, or restore the original URL."""
+    from wingman.infrastructure.oauth_bearer import (
+        IdentityMap,
+        IdentityMapError,
+        _identity_map_lock,
+    )
+    from wingman.infrastructure.tenant_migration import MigrationError, retire_url
+
+    mapping = None
+    issuers = None
+    if not undo:
+        if identities is None:
+            raise typer.BadParameter("--identities is required unless --undo")
+        mapping, issuers = _migration_inputs(identities, oauth_config, oauth_web_config)
+    _, path = _load_registry_or_exit(registry)
+    if force and not undo:
+        typer.echo(
+            "WARNING: --force bypasses OAuth migration and privileged-tenant safeguards.", err=True
+        )
+    try:
+        if undo:
+            retire_url(path, None, None, slug, undo=True)
+        else:
+            assert identities is not None
+            with _identity_map_lock(identities):
+                # Re-read under lock: a waiting registry edit must not retire
+                # from an earlier snapshot after an operator removed a binding.
+                mapping = IdentityMap.from_toml(identities)
+                retire_url(path, mapping, issuers, slug, force=force)
+    except IdentityMapError:
+        typer.echo("Identity map could not be read or locked; nothing changed.", err=True)
+        raise typer.Exit(1) from None
+    except MigrationError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(
+        f"Capability URL {'re-enabled' if undo else 'retired'} for {slug}; token preserved. "
+        "The running service picks this up on registry reload (SIGHUP; wingman tenant reload)."
+    )
 
 
 @tenant_app.command("oauth-bind")

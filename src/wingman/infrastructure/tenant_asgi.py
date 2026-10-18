@@ -422,6 +422,7 @@ class TenantRoutingASGIApp:
             response = PlainTextResponse("Not Found", status_code=401)
             await response(scope, receive, send)
             return
+        self._index.capability_usage.note(tenant.data_dir)
         # A RESOLVER, not tenant.config() (#404). Under streamable HTTP the
         # tool body does not run in this request's task — the transport
         # creates a session task at initialize and delivers later messages

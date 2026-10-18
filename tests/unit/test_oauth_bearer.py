@@ -1074,3 +1074,17 @@ def test_bind_oauth_refuses_a_malformed_identity_map(
         _bind_oauth(app, args, "", world.index)
     assert raised.value.code == 1
     assert "ERROR" in capsys.readouterr().err
+
+
+def test_retirement_leaves_oauth_bearer_working(world: _World, tmp_path: Path) -> None:
+    """Retirement disables only capability authentication, not slug lookup."""
+    registry = tmp_path / "retired.toml"
+    registry.write_text(
+        f'[[tenant]]\nslug="jason"\ndata_dir="{world.jason.data_dir}"\n'
+        "capability_url_retired=true\n"
+    )
+    world.index.reload(registry)
+    assert world.index.resolve("tok-jason") is None
+    response = world.client.get("/mcp", headers={"Authorization": f"Bearer {_token()}"})
+    assert response.status_code == 200
+    assert response.text == str(world.jason.data_dir)
