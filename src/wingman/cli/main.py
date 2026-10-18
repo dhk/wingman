@@ -5877,20 +5877,22 @@ def tenant_overnight_cmd(
     from that tenant's own workspace file, never falls through to a
     shared tier) — never a shell-out with WINGMAN_DATA_DIR set, which
     would use the full ladder and risk one tenant's run spending a key
-    that isn't theirs. One tenant's failure (nothing enrolled, a fetch
+    that isn't theirs. Empty watchlists are skipped without failing the roster.
+    One tenant's failure (a fetch
     error, a corrupt or locked database, a bad registry entry, whatever)
     is reported by slug and never blocks the rest — mirrors
     'upgrade_all.py's same per-user isolation, and catches as broadly as
     that does, because a roster this command abandons half way through is
     a night's work silently missing for everyone after the break.
 
-    Exits non-zero when a tenant got NOTHING, not when a tenant's run
+    Exits non-zero when a workspace is missing/unreadable or a run could not
+    complete, not when a tenant's run
     completed with some failed targets — that tenant has their digest, and
     it says which parts are thin. Pass --strict to exit non-zero on those
     too.
     """
     configure_logging()
-    from wingman.application.focus import overnight_run
+    from wingman.application.focus import NothingEnrolledError, overnight_run
     from wingman.infrastructure.storage import Storage
 
     # The same load, refusal and exit as every other 'tenant' command —
@@ -5907,6 +5909,7 @@ def tenant_overnight_cmd(
     # work and a digest naming what is thin. Summing them is what made a
     # good night exit non-zero (#469), the same conflation fixed in
     # 'wingman overnight'.
+    skipped = 0
     unrunnable = 0
     degraded = 0
     for tenant in tenants:
@@ -5927,6 +5930,10 @@ def tenant_overnight_cmd(
                 continue
             with Storage(config.db_path) as storage:
                 report = overnight_run(config, storage)
+        except NothingEnrolledError:
+            typer.echo(f"{tenant.slug}: nothing enrolled yet — skipped")
+            skipped += 1
+            continue
         except Exception as exc:  # noqa: BLE001 — must never abort the whole roster
             # Reported by slug with the reason, never swallowed: this runs
             # unattended on other people's behalf, so a tenant who got
@@ -5945,7 +5952,8 @@ def tenant_overnight_cmd(
     # did complete, and the next line is where that gets said. Claiming
     # cleanliness for a roster with seven bad targets in it is the polished
     # fiction this codebase keeps choosing against.
-    typer.echo(f"{len(tenants) - unrunnable}/{len(tenants)} tenants completed.")
+    typer.echo(f"{len(tenants) - unrunnable - skipped}/{len(tenants)} tenants completed.")
+    typer.echo(f"{skipped} skipped, {unrunnable} failed.")
     if degraded:
         typer.echo(f"{degraded} of them had failed targets, recorded in that tenant's own digest.")
     if unrunnable or (degraded and strict):

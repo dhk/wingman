@@ -56,26 +56,26 @@ def test_malformed_registry_exits_nonzero(tmp_path: Path) -> None:
 
 def test_tenant_with_nothing_enrolled_is_reported_not_fatal(tmp_path: Path) -> None:
     """A fresh tenant workspace (nothing followed yet) must be reported
-    as a per-tenant failure, never crash the whole loop."""
+    as a normal skip, never fail the whole loop."""
     jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
     registry = _write_registry(tmp_path, ("jason", jason_dir))
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
-    assert result.exit_code == 1  # the one tenant failed
-    assert "jason: failed" in result.output
+    assert result.exit_code == 0
+    assert "jason: nothing enrolled yet — skipped" in result.output
     assert "0/1 tenants completed" in result.output
 
 
 def test_one_tenants_failure_never_blocks_another(tmp_path: Path) -> None:
-    """The core isolation property: jason has nothing enrolled (fails),
-    bob has a real workspace too (also nothing enrolled, also fails
+    """The core isolation property: jason has nothing enrolled (skips),
+    bob has a real workspace too (also nothing enrolled, also skips
     independently) — both must be attempted and reported, neither
     skipped because of the other."""
     jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
     bob_dir = _make_tenant(tmp_path, "bob", "tok-bob")
     registry = _write_registry(tmp_path, ("jason", jason_dir), ("bob", bob_dir))
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
-    assert "jason: failed" in result.output
-    assert "bob: failed" in result.output
+    assert "jason: nothing enrolled yet — skipped" in result.output
+    assert "bob: nothing enrolled yet — skipped" in result.output
     assert "0/2 tenants completed" in result.output
 
 
@@ -158,7 +158,9 @@ def test_a_bad_registry_entry_fails_only_its_own_tenant(tmp_path: Path, monkeypa
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
 
     assert "cursed: failed" in result.output
-    assert "jason: failed" in result.output  # reached at all — nothing enrolled
+    assert (
+        "jason: nothing enrolled yet — skipped" in result.output
+    )  # reached at all — nothing enrolled
     assert "0/2 tenants completed" in result.output
 
 
@@ -239,3 +241,32 @@ def test_strict_makes_failed_targets_fail_the_roster(tmp_path: Path, monkeypatch
 
     assert result.exit_code == 1, result.output
     assert "2/2 tenants completed" in result.output
+
+
+def test_empty_and_broken_tenants_count_separately(tmp_path: Path) -> None:
+    empty = _make_tenant(tmp_path, "empty", "tok-empty")
+    broken = _corrupt_tenant(tmp_path, "broken")
+    registry = _write_registry(tmp_path, ("empty", empty), ("broken", broken))
+    result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
+    assert result.exit_code == 1
+    assert "empty: nothing enrolled yet — skipped" in result.output
+    assert "broken: failed" in result.output
+    assert "1 skipped, 1 failed" in result.output
+
+
+def test_empty_and_healthy_tenants_succeed(tmp_path: Path, monkeypatch) -> None:
+    import wingman.application.research as research_module
+
+    monkeypatch.setattr(research_module, "fetch_url", lambda url: _CAREERS_PAGE)
+    empty = _make_tenant(tmp_path, "empty", "tok-empty")
+    healthy = _make_tenant(tmp_path, "healthy", "tok-healthy")
+    with Storage(healthy / "wingman.db") as storage:
+        follow_company(
+            "Acme", storage, url="https://acme.example.com", fetcher=lambda url: _CAREERS_PAGE
+        )
+    registry = _write_registry(tmp_path, ("empty", empty), ("healthy", healthy))
+    result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
+    assert result.exit_code == 0, result.output
+    assert "empty: nothing enrolled yet — skipped" in result.output
+    assert "1/2 tenants completed" in result.output
+    assert "1 skipped, 0 failed" in result.output
