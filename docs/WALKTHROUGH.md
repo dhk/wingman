@@ -204,3 +204,22 @@ anything.
 Every command's `--help` states what it touches and exactly what, if
 anything, leaves the machine. The rationale ledger behind all of it is
 [`RFC.md`](RFC.md).
+
+### Repeating a file import
+
+Hosted file-payload imports discard an extra inbox upload when its corpus
+content or resume source is already stored; existing evidence keeps its
+original source. LinkedIn import INFO logs contain counts, without upload
+paths or client filenames.
+
+Transcript previews show **Exact note to file [endorsed]**, the precise note
+that will be stored after review. Name the existing person in full and use
+the preview's review hash when filing. Filing the same original bytes for
+that person again reports **Already filed on YYYY-MM-DD** and creates no
+additional interaction, source record, or inbox copy. A changed transcript
+or a different named person is a new filing. Generic relationship-log notes
+still represent separate events even when their wording repeats.
+
+File-payload MCP imports require clients to supply actual bytes; native
+attachment forwarding in Claude.ai/Desktop remains unverified. These retry
+and preview fixes do not add a browser upload page or Unicode name matching.

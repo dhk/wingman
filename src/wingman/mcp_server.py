@@ -3064,6 +3064,8 @@ def ingest_resume_file(content_base64: str, filename: str) -> str:
             report = ingest_resume(
                 path, config, storage, get_provider(CapabilityClass.EXTRACT_FAST, config)
             )
+            if report.source_reused:
+                discard_upload(path)
     except IngestError as exc:
         # The file's content was rejected before anything was persisted;
         # keeping the copy would only pile up private uploads on retry.
@@ -3161,7 +3163,7 @@ def corpus_add(content_base64: str, filename: str, source_type: str = "writing")
     except OSError:
         return _file_import_failure(stored)
     kept = ""
-    if not report.added and not report.skipped_duplicates:
+    if not report.added:
         # Nothing landed in the corpus (add_to_corpus keeps its own copy of
         # each document it does add), so this upload is not lineage for anything.
         discard_upload(path)

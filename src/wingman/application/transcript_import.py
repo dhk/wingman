@@ -22,6 +22,17 @@ from wingman.infrastructure.config import Config
 from wingman.infrastructure.storage import Storage
 
 
+def transcript_note(transcript: Transcript) -> str:
+    """Compose the exact, whitespace-normalized note that log_interaction stores."""
+    summary = f"Call: {transcript.title or 'transcript'}"
+    if transcript.date:
+        summary += f" ({transcript.date})"
+    summary += f". {len(transcript.turns)} turns transcribed by Gemini."
+    if transcript.next_steps:
+        summary += f" Next steps (Gemini-generated, user-endorsed): {transcript.next_steps}"
+    return " ".join(summary.split())
+
+
 def preview_transcript(raw: bytes, name: str) -> tuple[Transcript, str, str]:
     """Parse without persistent writes; bind the preview to the exact upload bytes."""
     with TemporaryDirectory(prefix="wingman-transcript-") as directory:
@@ -35,7 +46,12 @@ def preview_transcript(raw: bytes, name: str) -> tuple[Transcript, str, str]:
             ) from None
     digest = hashlib.sha256(raw).hexdigest()
     preview = render_transcript(transcript, match_speakers(transcript))
-    return transcript, preview + f"\nReview hash: {digest}\n", digest
+    return (
+        transcript,
+        preview
+        + f"\nExact note to file [endorsed]:\n{transcript_note(transcript)}\nReview hash: {digest}\n",
+        digest,
+    )
 
 
 def file_transcript(
@@ -60,12 +76,10 @@ def file_transcript(
     person = storage.find_person_by_name_key(" ".join(person_name.lower().split()))
     if person is None:
         raise IngestError("Nothing was filed: name an existing person in full; see people_list.")
-    summary = f"Call: {transcript.title or 'transcript'}"
-    if transcript.date:
-        summary += f" ({transcript.date})"
-    summary += f". {len(transcript.turns)} turns transcribed by Gemini."
-    if transcript.next_steps:
-        summary += f" Next steps (Gemini-generated, user-endorsed): {transcript.next_steps}"
+    previous = storage.find_transcript_filing(person.person_id, reviewed_hash)
+    if previous is not None:
+        return f"Already filed on {previous.happened_at.date().isoformat()} against {person.name}."
+    summary = transcript_note(transcript)
     path = archive_file(Path(name).name, raw, config)
     locator = str(path.relative_to(config.data_dir))
     storage.add_source_record(
