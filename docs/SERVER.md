@@ -1779,3 +1779,20 @@ migration hint, not an audit trail. No token is stored in that record.
 `/admin/<token>/installations` uses a separate operator `installations-token`,
 not a tenant capability token. Retirement leaves that independent credential
 unchanged; a tenant capability token does not grant access to it.
+
+### Inspecting shared-service status (#615)
+
+`wg status` reports the configured shared service first: unit state and activation
+time, installed package version, unauthenticated PRM (expected 200) and MCP
+(expected 401) probes, tenant/pending/invite counts, and whether operator
+notifications are configured. It prints no tenant identifiers or credentials.
+Unreadable shared files or an inaccessible service-manager bus are labelled
+`(needs sudo)`; status does not prompt or elevate. Configuration detection
+uses explicit filesystem stat calls so an untraversable shared directory
+remains distinct from an absent installation on Python 3.12 and later,
+including Python 3.14's changed `Path.exists()` behavior. The personal HTTP section
+appears only when that account has its own unit or pidfile (or there is no
+shared configuration). Probes disable curl's user configuration and bypass
+proxy environment settings, so operator credentials cannot authenticate them
+and configured proxies cannot reroute them. Probes use loopback port 8789 by default;
+`WINGMAN_SHARED_PORT` selects another provisioned port.
