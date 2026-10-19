@@ -107,7 +107,7 @@ class _SessionInner:
 
 
 def _token(
-    sub: str | None = "sub-jason",
+    sub: str | None = "sub-jordan",
     *,
     key: Any = _KEY,
     algorithm: str = "RS256",
@@ -145,15 +145,15 @@ class _World:
     ) -> None:
         tmp_path.mkdir(parents=True, exist_ok=True)
         self.inner = inner or _Inner()
-        self.jason = _tenant(tmp_path, "jason", "tok-jason")
-        self.bob = _tenant(tmp_path, "bob", "tok-bob")
-        self.index = TenantIndex([self.jason, self.bob])
+        self.jordan = _tenant(tmp_path, "jordan", "tok-jordan")
+        self.casey = _tenant(tmp_path, "casey", "tok-casey")
+        self.index = TenantIndex([self.jordan, self.casey])
         self.identities = IdentityMap(
             {
-                (ISSUER, "sub-jason"): "jason",
-                (ISSUER, "sub-bob"): "bob",
+                (ISSUER, "sub-jordan"): "jordan",
+                (ISSUER, "sub-casey"): "casey",
                 # A second sign-in method for the same person, linked by hand.
-                (ISSUER, "sub-jason-second-login"): "jason",
+                (ISSUER, "sub-jordan-second-login"): "jordan",
                 # Provisioned to a tenant that is not in the registry.
                 (ISSUER, "sub-ghost"): "ghost",
             }
@@ -194,8 +194,8 @@ def world(tmp_path: Path) -> _World:
 
 
 def test_a_valid_token_reaches_the_tenant_its_identity_names(world: _World) -> None:
-    assert world.get(_token("sub-jason")).text == str(world.jason.data_dir)
-    assert world.get(_token("sub-bob")).text == str(world.bob.data_dir)
+    assert world.get(_token("sub-jordan")).text == str(world.jordan.data_dir)
+    assert world.get(_token("sub-casey")).text == str(world.casey.data_dir)
 
 
 def test_verified_unknown_identity_is_recorded_but_still_receives_no_access(
@@ -254,10 +254,10 @@ def test_oauth_calls_preserve_truthful_http_origin_guidance(tmp_path: Path) -> N
             await PlainTextResponse(my_urls())(scope, receive, send)
 
     world = _World(tmp_path, inner=_CallMyUrls())
-    Storage(world.jason.data_dir / "wingman.db").close()
+    Storage(world.jordan.data_dir / "wingman.db").close()
 
     response = world.get(
-        _token("sub-jason"),
+        _token("sub-jordan"),
         headers={"Host": "wingman.example.com", "X-Forwarded-Proto": "https"},
     )
 
@@ -268,7 +268,7 @@ def test_oauth_calls_preserve_truthful_http_origin_guidance(tmp_path: Path) -> N
 
 
 def test_two_identities_of_one_person_reach_the_same_tenant(world: _World) -> None:
-    assert world.get(_token("sub-jason-second-login")).text == str(world.jason.data_dir)
+    assert world.get(_token("sub-jordan-second-login")).text == str(world.jordan.data_dir)
 
 
 def test_concurrent_identities_never_see_each_others_config(tmp_path: Path) -> None:
@@ -284,24 +284,24 @@ def test_concurrent_identities_never_see_each_others_config(tmp_path: Path) -> N
                 )
                 return sub, response.text
 
-            subs = ["sub-jason", "sub-bob"] * 25
+            subs = ["sub-jordan", "sub-casey"] * 25
             return list(await asyncio.gather(*(call(sub) for sub in subs)))
 
-    expected = {"sub-jason": str(world.jason.data_dir), "sub-bob": str(world.bob.data_dir)}
+    expected = {"sub-jordan": str(world.jordan.data_dir), "sub-casey": str(world.casey.data_dir)}
     results = asyncio.run(run())
     assert len(results) == 50
     assert all(body == expected[sub] for sub, body in results)
 
 
 def test_the_capability_token_route_is_unchanged(world: _World) -> None:
-    assert world.client.get("/mcp/tok-jason").text == str(world.jason.data_dir)
+    assert world.client.get("/mcp/tok-jordan").text == str(world.jordan.data_dir)
     assert world.client.get("/mcp/tok-nobody").status_code == 401
 
 
 def test_a_bearer_header_does_not_authenticate_the_token_route(world: _World) -> None:
     """The two credentials never mix: the token route trusts its path alone."""
     response = world.client.get(
-        "/mcp/tok-nobody", headers={"Authorization": f"Bearer {_token('sub-jason')}"}
+        "/mcp/tok-nobody", headers={"Authorization": f"Bearer {_token('sub-jordan')}"}
     )
     assert response.status_code == 401
     assert world.inner.calls == 0
@@ -309,10 +309,10 @@ def test_a_bearer_header_does_not_authenticate_the_token_route(world: _World) ->
 
 def test_an_oauth_tenant_cannot_resume_a_capability_tenants_session(tmp_path: Path) -> None:
     world = _World(tmp_path, inner=_SessionInner())
-    opened = world.client.get("/mcp/tok-jason")
+    opened = world.client.get("/mcp/tok-jordan")
     session_id = opened.headers["mcp-session-id"]
 
-    crossed = world.get(_token("sub-bob"), headers={"Mcp-Session-Id": session_id})
+    crossed = world.get(_token("sub-casey"), headers={"Mcp-Session-Id": session_id})
 
     assert crossed.status_code == 403
     assert "session" in crossed.text.lower()
@@ -320,10 +320,10 @@ def test_an_oauth_tenant_cannot_resume_a_capability_tenants_session(tmp_path: Pa
 
 def test_a_capability_tenant_cannot_resume_an_oauth_tenants_session(tmp_path: Path) -> None:
     world = _World(tmp_path, inner=_SessionInner())
-    opened = world.get(_token("sub-jason"))
+    opened = world.get(_token("sub-jordan"))
     session_id = opened.headers["mcp-session-id"]
 
-    crossed = world.client.get("/mcp/tok-bob", headers={"Mcp-Session-Id": session_id})
+    crossed = world.client.get("/mcp/tok-casey", headers={"Mcp-Session-Id": session_id})
 
     assert crossed.status_code == 403
     assert "session" in crossed.text.lower()
@@ -339,12 +339,12 @@ def test_expired_session_bindings_fail_closed_instead_of_crossing_tenants(
         monotonic=lambda: clock[0],
     )
     world = _World(tmp_path, inner=_SessionInner(), session_bindings=bindings)
-    opened = world.client.get("/mcp/tok-jason")
+    opened = world.client.get("/mcp/tok-jordan")
     session_id = opened.headers["mcp-session-id"]
     clock[0] += 31.0
 
-    owner_resume = world.client.get("/mcp/tok-jason", headers={"Mcp-Session-Id": session_id})
-    crossed_resume = world.get(_token("sub-bob"), headers={"Mcp-Session-Id": session_id})
+    owner_resume = world.client.get("/mcp/tok-jordan", headers={"Mcp-Session-Id": session_id})
+    crossed_resume = world.get(_token("sub-casey"), headers={"Mcp-Session-Id": session_id})
 
     assert owner_resume.status_code == 404
     assert crossed_resume.status_code == 404
@@ -363,8 +363,8 @@ def test_session_binding_table_refuses_new_sessions_at_its_hard_limit(
     bindings = TenantSessionBindings(ttl_seconds=300.0, max_bindings=1)
     world = _World(tmp_path, inner=_SessionInner(), session_bindings=bindings)
 
-    assert world.client.get("/mcp/tok-jason").status_code == 200
-    refused = world.client.get("/mcp/tok-jason")
+    assert world.client.get("/mcp/tok-jordan").status_code == 200
+    refused = world.client.get("/mcp/tok-jordan")
 
     assert refused.status_code == 503
     assert "session capacity" in refused.text.lower()
@@ -372,11 +372,11 @@ def test_session_binding_table_refuses_new_sessions_at_its_hard_limit(
 
 def test_successful_session_delete_releases_the_outer_tenant_binding(tmp_path: Path) -> None:
     world = _World(tmp_path, inner=_SessionInner())
-    opened = world.client.get("/mcp/tok-jason")
+    opened = world.client.get("/mcp/tok-jordan")
     session_id = opened.headers["mcp-session-id"]
 
-    deleted = world.client.delete("/mcp/tok-jason", headers={"Mcp-Session-Id": session_id})
-    after_delete = world.get(_token("sub-bob"), headers={"Mcp-Session-Id": session_id})
+    deleted = world.client.delete("/mcp/tok-jordan", headers={"Mcp-Session-Id": session_id})
+    after_delete = world.get(_token("sub-casey"), headers={"Mcp-Session-Id": session_id})
 
     assert deleted.status_code == 200
     assert after_delete.status_code == 404
@@ -420,7 +420,7 @@ def test_the_algorithm_allowlist_alone_refuses_hmac_even_with_a_matching_secret(
     secret = "a-resolver-that-returns-a-raw-secret-32b"
     world = _World(tmp_path, resolve_key=lambda _token: secret)
     forged = jwt.encode(
-        {"iss": ISSUER, "aud": AUDIENCE, "sub": "sub-jason", "exp": int(time.time()) + 300},
+        {"iss": ISSUER, "aud": AUDIENCE, "sub": "sub-jordan", "exp": int(time.time()) + 300},
         secret,
         algorithm="HS256",
     )
@@ -449,7 +449,7 @@ def test_the_public_key_as_hmac_secret_attack_is_refused(tmp_path: Path) -> None
         return base64.urlsafe_b64encode(data).rstrip(b"=")
 
     header = b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-    claims = {"iss": ISSUER, "aud": AUDIENCE, "sub": "sub-jason", "exp": int(time.time()) + 300}
+    claims = {"iss": ISSUER, "aud": AUDIENCE, "sub": "sub-jordan", "exp": int(time.time()) + 300}
     payload = b64(json.dumps(claims).encode())
     signing_input = header + b"." + payload
     signature = b64(hmac.new(pem, signing_input, hashlib.sha256).digest())
@@ -462,7 +462,7 @@ def test_the_public_key_as_hmac_secret_attack_is_refused(tmp_path: Path) -> None
 
 def test_an_audience_list_containing_this_server_is_accepted(world: _World) -> None:
     token = _token(aud=["https://another.example.com", AUDIENCE])
-    assert world.get(token).text == str(world.jason.data_dir)
+    assert world.get(token).text == str(world.jordan.data_dir)
 
 
 def test_a_failing_key_lookup_fails_closed_not_500(tmp_path: Path) -> None:
@@ -479,7 +479,7 @@ def test_a_failing_key_lookup_fails_closed_not_500(tmp_path: Path) -> None:
         lambda _token: (_ for _ in ()).throw(RuntimeError("jwks unreachable")),
     )
     response = TestClient(world.app).get(
-        "/mcp", headers={"Authorization": f"Bearer {_token('sub-jason')}"}
+        "/mcp", headers={"Authorization": f"Bearer {_token('sub-jordan')}"}
     )
     assert response.status_code == 401
     assert world.inner.calls == 0
@@ -491,7 +491,7 @@ def test_a_malformed_scope_claim_is_refused_before_the_inner_app_runs(
 ) -> None:
     world = _World(tmp_path, raise_server_exceptions=False)
 
-    response = world.get(_token("sub-jason", scope=scope))
+    response = world.get(_token("sub-jordan", scope=scope))
 
     assert response.status_code == 401
     assert 'error="invalid_token"' in response.headers["www-authenticate"]
@@ -513,7 +513,7 @@ def test_supported_scope_claim_shapes_are_normalized(
     from wingman.infrastructure.oauth_bearer import validate_access_token
 
     identity = validate_access_token(
-        _token("sub-jason", **claim), SETTINGS, lambda _token: _KEY.public_key()
+        _token("sub-jordan", **claim), SETTINGS, lambda _token: _KEY.public_key()
     )
 
     assert identity.scopes == expected
@@ -575,11 +575,11 @@ def test_the_production_jwks_resolver_accepts_supported_keys_end_to_end(
         world = _World(tmp_path, settings=settings, resolve_key=jwks_key_resolver(uri))
 
         response = world.get(
-            _token("sub-jason", key=key, algorithm=algorithm, headers={"kid": kid})
+            _token("sub-jordan", key=key, algorithm=algorithm, headers={"kid": kid})
         )
 
     assert response.status_code == 200
-    assert response.text == str(world.jason.data_dir)
+    assert response.text == str(world.jordan.data_dir)
     assert state.requests == 1
 
 
@@ -711,7 +711,7 @@ def test_a_stripping_front_keeps_the_metadata_url_inside_its_public_mount(
 
 
 def test_a_token_in_the_query_string_is_never_read(world: _World) -> None:
-    token = _token("sub-jason")
+    token = _token("sub-jordan")
     assert world.get(params={"access_token": token}).status_code == 401
     assert world.get(params={"token": token}).status_code == 401
     assert world.inner.calls == 0
@@ -728,7 +728,7 @@ def test_a_malformed_authorization_header_is_refused(world: _World, header: str)
 
 
 def test_two_authorization_headers_are_refused(world: _World) -> None:
-    good = f"Bearer {_token('sub-jason')}"
+    good = f"Bearer {_token('sub-jordan')}"
     response = world.client.get(
         "/mcp",
         headers=[("Authorization", good), ("Authorization", good)],
@@ -738,8 +738,8 @@ def test_two_authorization_headers_are_refused(world: _World) -> None:
 
 
 def test_the_scheme_is_case_insensitive(world: _World) -> None:
-    response = world.client.get("/mcp", headers={"Authorization": f"bEaReR {_token('sub-jason')}"})
-    assert response.text == str(world.jason.data_dir)
+    response = world.client.get("/mcp", headers={"Authorization": f"bEaReR {_token('sub-jordan')}"})
+    assert response.text == str(world.jordan.data_dir)
 
 
 # --- authenticated but not provisioned ---------------------------------------------
@@ -877,18 +877,18 @@ def test_identity_map_loads_and_links(tmp_path: Path) -> None:
 [[identity]]
 iss = "{ISSUER}"
 sub = "a"
-slug = "jason"
+slug = "jordan"
 
 [[identity]]
 iss = "{ISSUER}"
 sub = "b"
-slug = "jason"
+slug = "jordan"
 """,
         encoding="utf-8",
     )
     identities = IdentityMap.from_toml(path)
     assert len(identities) == 2
-    assert identities.slug_for(ISSUER, "a") == identities.slug_for(ISSUER, "b") == "jason"
+    assert identities.slug_for(ISSUER, "a") == identities.slug_for(ISSUER, "b") == "jordan"
     assert identities.slug_for(ISSUER, "c") is None
     assert identities.slug_for("https://other.example.com", "a") is None
 
@@ -1008,7 +1008,7 @@ def test_bind_oauth_adds_routes_when_everything_lines_up(
 
     world = _World(tmp_path / "w")
     app = Starlette(routes=[Route("/mcp/{token}", endpoint=world.inner)])
-    args = _namespace(tmp_path, f'[[identity]]\niss = "{ISSUER}"\nsub = "a"\nslug = "jason"\n')
+    args = _namespace(tmp_path, f'[[identity]]\niss = "{ISSUER}"\nsub = "a"\nslug = "jordan"\n')
     _bind_oauth(app, args, "", world.index)
     paths = {getattr(route, "path", None) for route in app.routes}
     assert "/mcp" in paths
@@ -1025,7 +1025,7 @@ def test_bind_oauth_uses_separate_workos_session_jwks_for_browser_tokens(
 
     world = _World(tmp_path / "w")
     app = Starlette(routes=[Route("/mcp/{token}", endpoint=world.inner)])
-    args = _namespace(tmp_path, f'[[identity]]\niss = "{ISSUER}"\nsub = "a"\nslug = "jason"\n')
+    args = _namespace(tmp_path, f'[[identity]]\niss = "{ISSUER}"\nsub = "a"\nslug = "jordan"\n')
     args.oauth_web_client_id = "client_123"
     args.oauth_web_authorize_url = "https://api.workos.com/user_management/authorize"
     args.oauth_web_token_url = "https://api.workos.com/user_management/authenticate"
@@ -1080,11 +1080,11 @@ def test_retirement_leaves_oauth_bearer_working(world: _World, tmp_path: Path) -
     """Retirement disables only capability authentication, not slug lookup."""
     registry = tmp_path / "retired.toml"
     registry.write_text(
-        f'[[tenant]]\nslug="jason"\ndata_dir="{world.jason.data_dir}"\n'
+        f'[[tenant]]\nslug="jordan"\ndata_dir="{world.jordan.data_dir}"\n'
         "capability_url_retired=true\n"
     )
     world.index.reload(registry)
-    assert world.index.resolve("tok-jason") is None
+    assert world.index.resolve("tok-jordan") is None
     response = world.client.get("/mcp", headers={"Authorization": f"Bearer {_token()}"})
     assert response.status_code == 200
-    assert response.text == str(world.jason.data_dir)
+    assert response.text == str(world.jordan.data_dir)

@@ -47,7 +47,7 @@ def test_backup_packs_workspace_and_restore_roundtrips(workspace: Config, tmp_pa
 
     # mutate, then restore: the snapshot's state comes back
     with Storage(workspace.db_path) as storage:
-        add_person("Bob Later", storage)
+        add_person("Casey Later", storage)
     (workspace.inbox_dir / "resume.md").write_text("mutated")
     restore = restore_backup(archive, workspace, force=True)
     assert restore.files == 4

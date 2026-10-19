@@ -117,22 +117,22 @@ def test_unit_state_asks_directly_when_running_as_that_account(monkeypatch) -> N
 
 
 def test_unit_state_for_another_account_is_unknown_without_root(monkeypatch) -> None:
-    _fake_passwd(monkeypatch, {"dhk": 1000, "trent": 1001})
+    _fake_passwd(monkeypatch, {"dhk": 1000, "riley": 1001})
     run = _runner({("systemctl",): (0, "active\n")})
-    assert unit_state("trent", run=run, euid=1000) is None
+    assert unit_state("riley", run=run, euid=1000) is None
     assert run.calls == []  # type: ignore[attr-defined]
 
 
 def test_unit_state_for_another_account_carries_xdg_runtime_dir_as_root(monkeypatch) -> None:
     """Without XDG_RUNTIME_DIR the call cannot reach that account's session
     bus at all — the gotcha upgrade_all.py carries on every sudo call."""
-    _fake_passwd(monkeypatch, {"trent": 1001})
+    _fake_passwd(monkeypatch, {"riley": 1001})
     run = _runner({("sudo",): (0, "active\n")})
-    assert unit_state("trent", run=run, euid=0) == "active"
+    assert unit_state("riley", run=run, euid=0) == "active"
     assert run.calls[0][:5] == [  # type: ignore[attr-defined]
         "sudo",
         "-u",
-        "trent",
+        "riley",
         "env",
         "XDG_RUNTIME_DIR=/run/user/1001",
     ]
@@ -328,10 +328,10 @@ def test_installation_names_are_read_without_touching_tokens(tmp_path: Path) -> 
     path = tmp_path / "installations.toml"
     path.write_text(
         '[[instance]]\nname = "dhk"\nport = 8787\ntoken = "secret-value"\n'
-        '[[instance]]\nname = "trent"\nport = 8788\ntoken = "another-secret"\n',
+        '[[instance]]\nname = "riley"\nport = 8788\ntoken = "another-secret"\n',
         encoding="utf-8",
     )
-    assert read_installation_names(path) == {8787: "dhk", 8788: "trent"}
+    assert read_installation_names(path) == {8787: "dhk", 8788: "riley"}
 
 
 def test_unparseable_installations_file_does_not_break_status(tmp_path: Path) -> None:
@@ -372,7 +372,7 @@ def test_collect_flags_the_unmanaged_instance_and_leaves_the_others_alone(
     )
     rows = collect(
         [8787, 8788, 8789],
-        {8787: "dhk", 8788: "trent", 8789: "wingman-shared"},
+        {8787: "dhk", 8788: "riley", 8789: "wingman-shared"},
         repo=tmp_path,
         health=_health(payloads),
         run=run,
@@ -398,7 +398,7 @@ def test_collect_keeps_a_configured_instance_that_answers_nothing(tmp_path: Path
     """A registered instance that vanished is a finding, not an absence."""
     rows = collect(
         [8788],
-        {8788: "trent"},
+        {8788: "riley"},
         repo=tmp_path,
         health=_health({}),
         run=_runner({}),
@@ -406,7 +406,7 @@ def test_collect_keeps_a_configured_instance_that_answers_nothing(tmp_path: Path
     )
     assert len(rows) == 1
     assert rows[0].running is False
-    assert rows[0].name == "trent"
+    assert rows[0].name == "riley"
 
 
 def test_collect_ignores_an_unconfigured_port_that_answers_nothing(tmp_path: Path) -> None:
@@ -428,7 +428,7 @@ def test_render_puts_the_unmanaged_row_in_a_needs_attention_block() -> None:
         ),
         InstanceRow(
             port=8788,
-            name="trent",
+            name="riley",
             running=True,
             version="0.4.1.dev116+gc5fcdc275",
             started_at="2026-08-05T19:44:38+00:00",
@@ -510,7 +510,7 @@ def test_render_shows_a_stopped_instance_as_stopped() -> None:
     rows = [
         InstanceRow(
             port=8788,
-            name="trent",
+            name="riley",
             running=False,
             version=None,
             started_at=None,

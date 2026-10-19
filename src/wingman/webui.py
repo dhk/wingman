@@ -46,7 +46,7 @@ _logger = get_logger("webui")
 
 # Set only by the shared multi-tenant HTTP server (RFC-048) at startup.
 # None (the default) preserves today's single-workspace token-file
-# compare exactly — the still-separate shape-B processes (dhk, trent)
+# compare exactly — the still-separate shape-B processes (dhk, riley)
 # that stay on that model through the phased migration are unaffected.
 _tenant_index: TenantIndex | None = None
 
@@ -357,7 +357,7 @@ async def ui_home_redirect(request: Request) -> Response:
     """Canonicalize to the trailing-slash landing with a RELATIVE Location.
 
     Every URL this UI emits is relative, so it works unchanged behind a
-    path-mounting reverse proxy (e.g. 'tailscale serve --set-path /trent'),
+    path-mounting reverse proxy (e.g. 'tailscale serve --set-path /riley'),
     which strips the mount prefix before forwarding: the server never needs
     to know its public prefix. That only holds if the landing URL ends in
     '/', and only a relative redirect ('<token>/', resolved by the browser
@@ -442,7 +442,7 @@ def _group_name(section: str) -> str:
 
 def _header(config: Config, show_path: bool = True, label: str = "") -> str:
     # show_path=False for anything that leaves the server. The workspace
-    # path names the host account ('/home/trent/.local/share/wingman'),
+    # path names the host account ('/home/riley/.local/share/wingman'),
     # which is a disclosure in a file that gets saved to a laptop and
     # sometimes forwarded — the same argument the token check already makes.
     text = str(config.data_dir) if show_path else label
@@ -647,7 +647,7 @@ def _upload_panel(step: str = "", *, csrf_token: str = "") -> str:
 
 
 def _own_prefix(request: Request, token: str) -> str:
-    """The mount prefix this request actually arrived under ('' or '/trent').
+    """The mount prefix this request actually arrived under ('' or '/riley').
 
     Read back from the matched path rather than threaded through as state,
     so it is always the prefix this instance is really mounted at — the
@@ -1663,7 +1663,7 @@ async def ui_completeness(request: Request) -> Response:
 
 
 def normalize_prefix(prefix: str) -> str:
-    """'' stays root; 'trent', '/trent', '/trent/' all become '/trent'."""
+    """'' stays root; 'riley', '/riley', '/riley/' all become '/riley'."""
     cleaned = prefix.strip().strip("/")
     return f"/{cleaned}" if cleaned else ""
 
@@ -1671,7 +1671,7 @@ def normalize_prefix(prefix: str) -> str:
 def register_ui(server: FastMCP, prefix: str = "") -> None:
     """Mount the read surface, optionally under a native path prefix.
 
-    With prefix='/trent' the server itself listens on /trent/ui/… — for
+    With prefix='/riley' the server itself listens on /riley/ui/… — for
     pass-through fronts (nginx, Caddy, direct tailnet access) that forward
     the full path. A stripping proxy (tailscale serve --set-path) must NOT
     be combined with a prefix: it removes the mount segment before

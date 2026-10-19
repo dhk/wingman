@@ -234,10 +234,10 @@ Resolved 2026-08-29 from a scoping discussion:
   to eventually get their own Woven presence, but never by silently
   merging them into an existing combined graph — a new tenant gets their
   own separate single-user graph. Combining specific people's networks
-  (today: dave and trent) stays a deliberate, separate, manual action.
+  (today: dave and riley) stays a deliberate, separate, manual action.
 - ~~**Local vs. remote dispatch.**~~ **Resolved, and this reframed the
   whole shape of Phase 4 — see below.** Wingman is never local: every
-  tenant (dave, trent, jason, bob) lives on lobster's one shared
+  tenant (dave, riley, jordan, casey) lives on lobster's one shared
   multi-tenant instance (RFC-048), addressed by tenant slug/data_dir, not
   a separate login per person. Woven stays local to the operator's own
   machine. **wingman and Woven stay architecturally separate — no
@@ -265,7 +265,7 @@ Resolved 2026-08-29 from a scoping discussion:
 - **Phase 3 (woven).** The headless Node upsert script, net-new. Tracked:
   [dhk/woven#92](https://github.com/dhk/woven/issues/92). Still needs to
   correctly preserve dual-owner nodes in the *existing* combined
-  `graph/seed.json` (dave+trent) even though this phase never performs a
+  `graph/seed.json` (dave+riley) even though this phase never performs a
   fresh combine of its own — the file it's upserting into already merges
   two contributors' data today.
 - **No automated Phase 4.** Originally scoped as a unifying dispatch

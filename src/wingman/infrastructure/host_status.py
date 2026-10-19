@@ -59,7 +59,7 @@ from wingman.infrastructure.portcheck import find_port_owner, is_port_bound
 
 SYSTEMD_UNIT = "wingman-mcp.service"
 
-# Where wingman instances live on a shape-B/RFC-048 box: dhk 8787, trent
+# Where wingman instances live on a shape-B/RFC-048 box: dhk 8787, riley
 # 8788, the shared multi-tenant process 8789, with room to grow. Scanned
 # rather than configured so an instance nobody registered still shows up —
 # an unregistered instance is precisely the kind this tool exists to find.

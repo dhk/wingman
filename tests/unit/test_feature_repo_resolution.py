@@ -34,12 +34,12 @@ def _registry(path: Path, body: str) -> Path:
 def test_a_tenant_gets_a_destination_without_ever_choosing_one(tmp_path: Path) -> None:
     """The whole point. A tenant cannot run `wingman feature repo`, and must
     never be handed a repository chooser instead."""
-    data_dir = tmp_path / "tenants" / "trent"
+    data_dir = tmp_path / "tenants" / "riley"
     data_dir.mkdir(parents=True)
     Storage(data_dir / "wingman.db").close()
     registry = _registry(
         tmp_path / "tenants.toml",
-        f'[[tenant]]\nslug = "trent"\ndata_dir = "{data_dir}"\nfeature_repo = "dhk/wingman"\n',
+        f'[[tenant]]\nslug = "riley"\ndata_dir = "{data_dir}"\nfeature_repo = "dhk/wingman"\n',
     )
 
     tenant = load_registry(registry)[0]
@@ -52,10 +52,10 @@ def test_the_host_setting_covers_every_tenant_that_names_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The normal case: one destination for the whole box, set once."""
-    data_dir = tmp_path / "tenants" / "jason"
+    data_dir = tmp_path / "tenants" / "jordan"
     data_dir.mkdir(parents=True)
     Storage(data_dir / "wingman.db").close()
-    config = Tenant(slug="jason", data_dir=data_dir).config()
+    config = Tenant(slug="jordan", data_dir=data_dir).config()
     assert config.feature_repo is None
 
     monkeypatch.setattr(
@@ -107,14 +107,14 @@ def test_one_registry_line_gives_every_tenant_the_same_destination(
 ) -> None:
     """The all-account default: the operator names the repo once, in the
     same file that lists the tenants, and nobody is asked anything."""
-    jason = _tenant_dir(tmp_path, "jason")
-    bob = _tenant_dir(tmp_path, "bob")
+    jordan = _tenant_dir(tmp_path, "jordan")
+    casey = _tenant_dir(tmp_path, "casey")
     registry = _registry(
         tmp_path / "tenants.toml",
         "[defaults]\n"
         'feature_repo = "dhk/wingman"\n\n'
-        f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason}"\n\n'
-        f'[[tenant]]\nslug = "bob"\ndata_dir = "{bob}"\n',
+        f'[[tenant]]\nslug = "jordan"\ndata_dir = "{jordan}"\n\n'
+        f'[[tenant]]\nslug = "casey"\ndata_dir = "{casey}"\n',
     )
     # No host setting anywhere: the registry alone has to answer this.
     monkeypatch.setattr(
@@ -131,12 +131,12 @@ def test_one_registry_line_gives_every_tenant_the_same_destination(
 
 def test_a_tenants_own_repo_outranks_the_all_account_default(tmp_path: Path) -> None:
     """The per-user line is the exception to the box-wide one, so it wins."""
-    data_dir = _tenant_dir(tmp_path, "trent")
+    data_dir = _tenant_dir(tmp_path, "riley")
     registry = _registry(
         tmp_path / "tenants.toml",
         "[defaults]\n"
         'feature_repo = "dhk/wingman"\n\n'
-        f'[[tenant]]\nslug = "trent"\ndata_dir = "{data_dir}"\n'
+        f'[[tenant]]\nslug = "riley"\ndata_dir = "{data_dir}"\n'
         'feature_repo = "dhk/adventures-in-ai"\n',
     )
 
@@ -185,10 +185,10 @@ def test_the_registry_default_outranks_the_host_setting(
 def test_a_bare_top_level_default_is_read_the_same_way(tmp_path: Path) -> None:
     """An operator will reasonably write the line without a table header
     when it sits above the tenants; TOML makes that the same key."""
-    data_dir = _tenant_dir(tmp_path, "jason")
+    data_dir = _tenant_dir(tmp_path, "jordan")
     registry = _registry(
         tmp_path / "tenants.toml",
-        f'feature_repo = "dhk/wingman"\n\n[[tenant]]\nslug = "jason"\ndata_dir = "{data_dir}"\n',
+        f'feature_repo = "dhk/wingman"\n\n[[tenant]]\nslug = "jordan"\ndata_dir = "{data_dir}"\n',
     )
 
     assert load_registry(registry)[0].default_feature_repo == "dhk/wingman"
@@ -224,10 +224,10 @@ def test_an_unreadable_workspace_falls_through_to_the_default(
     of that rung and nothing else. Raising would take out the tenant's
     feature request over a file they never wrote and cannot write, with a
     perfectly good default sitting one rung down."""
-    data_dir = _tenant_dir(tmp_path, "jason")
+    data_dir = _tenant_dir(tmp_path, "jordan")
     registry = _registry(
         tmp_path / "tenants.toml",
-        f'[defaults]\nfeature_repo = "dhk/wingman"\n\n[[tenant]]\nslug = "jason"\ndata_dir = "{data_dir}"\n',
+        f'[defaults]\nfeature_repo = "dhk/wingman"\n\n[[tenant]]\nslug = "jordan"\ndata_dir = "{data_dir}"\n',
     )
     real_exists = Path.exists
 

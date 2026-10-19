@@ -47,25 +47,25 @@ def test_two_tenants_key_forms_never_cross_contaminate(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setitem(webui_module.VALIDATORS, "anthropic", lambda value: None)  # accept any key
 
-    jason = _make_tenant(tmp_path, "jason", "tok-jason-e2e")
-    bob = _make_tenant(tmp_path, "bob", "tok-bob-e2e")
-    configure_tenant_index(TenantIndex([jason, bob]))
+    jordan = _make_tenant(tmp_path, "jordan", "tok-jordan-e2e")
+    casey = _make_tenant(tmp_path, "casey", "tok-casey-e2e")
+    configure_tenant_index(TenantIndex([jordan, casey]))
     register_ui(server, prefix="/e2e-keys")
     client = TestClient(server.streamable_http_app())
 
     # Each tenant submits their OWN key through their OWN form.
-    jason_response = client.post(
-        "/e2e-keys/ui/tok-jason-e2e/keys", data={"anthropic": "sk-ant-jason-own"}
+    jordan_response = client.post(
+        "/e2e-keys/ui/tok-jordan-e2e/keys", data={"anthropic": "sk-ant-jordan-own"}
     )
-    bob_response = client.post(
-        "/e2e-keys/ui/tok-bob-e2e/keys", data={"anthropic": "sk-ant-bob-own"}
+    casey_response = client.post(
+        "/e2e-keys/ui/tok-casey-e2e/keys", data={"anthropic": "sk-ant-casey-own"}
     )
-    assert "verified and live now" in jason_response.text
-    assert "verified and live now" in bob_response.text
+    assert "verified and live now" in jordan_response.text
+    assert "verified and live now" in casey_response.text
 
     # Each tenant's own workspace file has exactly its own key.
-    assert read_workspace_keys(jason.data_dir) == {"ANTHROPIC_API_KEY": "sk-ant-jason-own"}
-    assert read_workspace_keys(bob.data_dir) == {"ANTHROPIC_API_KEY": "sk-ant-bob-own"}
+    assert read_workspace_keys(jordan.data_dir) == {"ANTHROPIC_API_KEY": "sk-ant-jordan-own"}
+    assert read_workspace_keys(casey.data_dir) == {"ANTHROPIC_API_KEY": "sk-ant-casey-own"}
 
     # Neither submission touched the shared process's environment at all —
     # the exact cross-tenant leak Phase 0 (keys.store_workspace_key) closed.
@@ -73,10 +73,10 @@ def test_two_tenants_key_forms_never_cross_contaminate(
 
     # A provider built for each tenant's OWN Config gets ITS OWN key, never
     # the other tenant's and never a process-env fallback (strict mode).
-    jason_provider = get_provider(CapabilityClass.EXTRACT_FAST, jason.config())
-    bob_provider = get_provider(CapabilityClass.EXTRACT_FAST, bob.config())
-    assert jason_provider._client.api_key == "sk-ant-jason-own"
-    assert bob_provider._client.api_key == "sk-ant-bob-own"
+    jordan_provider = get_provider(CapabilityClass.EXTRACT_FAST, jordan.config())
+    casey_provider = get_provider(CapabilityClass.EXTRACT_FAST, casey.config())
+    assert jordan_provider._client.api_key == "sk-ant-jordan-own"
+    assert casey_provider._client.api_key == "sk-ant-casey-own"
 
 
 def test_tenant_with_no_key_never_inherits_a_sibling_tenants_key(
@@ -86,19 +86,19 @@ def test_tenant_with_no_key_never_inherits_a_sibling_tenants_key(
     an operator mistake, or a leftover CLI export), a tenant with no key
     of their own must fail loud, never silently borrow it."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-leftover-from-somewhere")
-    jason = _make_tenant(tmp_path, "jason", "tok-jason-noleak")
-    bob = _make_tenant(tmp_path, "bob", "tok-bob-noleak")  # never configures a key
-    configure_tenant_index(TenantIndex([jason, bob]))
+    jordan = _make_tenant(tmp_path, "jordan", "tok-jordan-noleak")
+    casey = _make_tenant(tmp_path, "casey", "tok-casey-noleak")  # never configures a key
+    configure_tenant_index(TenantIndex([jordan, casey]))
 
     from wingman.infrastructure.keys import store_workspace_key
     from wingman.providers.base import ProviderError
 
-    store_workspace_key(jason.data_dir, "anthropic", "sk-ant-jason-real")
+    store_workspace_key(jordan.data_dir, "anthropic", "sk-ant-jordan-real")
 
-    jason_provider = get_provider(CapabilityClass.EXTRACT_FAST, jason.config())
-    assert jason_provider._client.api_key == "sk-ant-jason-real"
+    jordan_provider = get_provider(CapabilityClass.EXTRACT_FAST, jordan.config())
+    assert jordan_provider._client.api_key == "sk-ant-jordan-real"
     with pytest.raises(ProviderError, match="no Anthropic key configured"):
-        get_provider(CapabilityClass.EXTRACT_FAST, bob.config())
+        get_provider(CapabilityClass.EXTRACT_FAST, casey.config())
 
 
 def test_env_override_only_affects_single_tenant_mode_not_registered_tenants(
@@ -107,10 +107,10 @@ def test_env_override_only_affects_single_tenant_mode_not_registered_tenants(
     """load_config(env=...) is the ordinary CLI/test escape hatch (Phase
     1b) — it must never accidentally resolve to a REGISTERED tenant's
     workspace just because that tenant's data_dir happens to match."""
-    jason = _make_tenant(tmp_path, "jason", "tok-jason-envcheck")
-    configure_tenant_index(TenantIndex([jason]))
+    jordan = _make_tenant(tmp_path, "jordan", "tok-jordan-envcheck")
+    configure_tenant_index(TenantIndex([jordan]))
     from wingman.infrastructure.config import load_config
 
-    config = load_config(env={ENV_DATA_DIR: str(jason.data_dir)})
-    assert config.data_dir == jason.data_dir
+    config = load_config(env={ENV_DATA_DIR: str(jordan.data_dir)})
+    assert config.data_dir == jordan.data_dir
     assert config.strict_provider_keys is False  # env path, not tenant.config()'s strict path

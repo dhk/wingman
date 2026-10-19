@@ -120,7 +120,7 @@ def test_keys_set_rejects_tenant_without_workspace_scope() -> None:
     """--tenant names a workspace; pairing it with a box-wide tier would
     silently write somewhere other than where the operator meant."""
     result = runner.invoke(
-        app, ["keys", "set", "anthropic", "--value", "x", "--scope", "host", "--tenant", "bob"]
+        app, ["keys", "set", "anthropic", "--value", "x", "--scope", "host", "--tenant", "casey"]
     )
     assert result.exit_code == 1
     assert "--tenant only applies to --scope workspace" in result.output

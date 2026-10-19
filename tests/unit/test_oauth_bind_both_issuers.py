@@ -263,15 +263,15 @@ def test_bind_with_a_quoted_client_id_binds_the_real_browser_issuer(
         service_config,
         f"--oauth-web-client-id '{CLIENT_ID}' --oauth-web-redirect-uri https://x.example/cb",
     )
-    registry = _registry(tmp_path, "trent")
+    registry = _registry(tmp_path, "riley")
     identities = tmp_path / "oauth-identities.toml"
 
-    result = cli.invoke(app, _bind("trent", identities, registry, issuer=MCP_ISSUER))
+    result = cli.invoke(app, _bind("riley", identities, registry, issuer=MCP_ISSUER))
 
     assert result.exit_code == 0, result.output
     assert IdentityMap.from_toml(identities).entries() == {
-        (MCP_ISSUER, SUB): "trent",
-        (BROWSER_ISSUER, SUB): "trent",
+        (MCP_ISSUER, SUB): "riley",
+        (BROWSER_ISSUER, SUB): "riley",
     }
 
 
@@ -281,29 +281,29 @@ def test_bind_with_a_quoted_client_id_binds_the_real_browser_issuer(
 def test_existing_tenant_migration_binds_both_surfaces_in_one_command(
     service_config: Path, tmp_path: Path
 ) -> None:
-    registry = _registry(tmp_path, "trent")
+    registry = _registry(tmp_path, "riley")
     identities = tmp_path / "oauth-identities.toml"
 
-    result = cli.invoke(app, _bind("trent", identities, registry))
+    result = cli.invoke(app, _bind("riley", identities, registry))
 
     assert result.exit_code == 0, result.output
     assert IdentityMap.from_toml(identities).entries() == {
-        (BROWSER_ISSUER, SUB): "trent",
-        (MCP_ISSUER, SUB): "trent",
+        (BROWSER_ISSUER, SUB): "riley",
+        (MCP_ISSUER, SUB): "riley",
     }
     assert MCP_ISSUER in result.output and BROWSER_ISSUER in result.output
     assert SUB not in result.output
 
 
 def test_bind_clears_pending_rows_on_both_surfaces(service_config: Path, tmp_path: Path) -> None:
-    registry = _registry(tmp_path, "trent")
+    registry = _registry(tmp_path, "riley")
     identities = tmp_path / "oauth-identities.toml"
     store = OAuthOnboardingStore(onboarding_path_for(identities))
     store.record_pending(MCP_ISSUER, SUB, now=1.0)
     store.record_pending(BROWSER_ISSUER, SUB, now=2.0)
     store.record_pending(MCP_ISSUER, "someone_else", now=3.0)
 
-    result = cli.invoke(app, _bind("trent", identities, registry, issuer=MCP_ISSUER))
+    result = cli.invoke(app, _bind("riley", identities, registry, issuer=MCP_ISSUER))
 
     assert result.exit_code == 0, result.output
     assert [(row.issuer, row.subject) for row in store.pending()] == [(MCP_ISSUER, "someone_else")]
@@ -312,16 +312,16 @@ def test_bind_clears_pending_rows_on_both_surfaces(service_config: Path, tmp_pat
 def test_rerunning_a_single_surface_binding_adds_the_other_and_then_is_idempotent(
     service_config: Path, tmp_path: Path
 ) -> None:
-    registry = _registry(tmp_path, "trent")
+    registry = _registry(tmp_path, "riley")
     identities = tmp_path / "oauth-identities.toml"
-    bind_trusted_identity(identities, BROWSER_ISSUER, SUB, "trent")  # pre-#618 state
+    bind_trusted_identity(identities, BROWSER_ISSUER, SUB, "riley")  # pre-#618 state
 
-    first = cli.invoke(app, _bind("trent", identities, registry))
+    first = cli.invoke(app, _bind("riley", identities, registry))
     before = identities.read_text(encoding="utf-8")
-    second = cli.invoke(app, _bind("trent", identities, registry))
+    second = cli.invoke(app, _bind("riley", identities, registry))
 
     assert first.exit_code == 0, first.output
-    assert IdentityMap.from_toml(identities).slug_for(MCP_ISSUER, SUB) == "trent"
+    assert IdentityMap.from_toml(identities).slug_for(MCP_ISSUER, SUB) == "riley"
     assert second.exit_code == 0, second.output
     assert "already existed" in second.output
     assert identities.read_text(encoding="utf-8") == before
@@ -330,12 +330,12 @@ def test_rerunning_a_single_surface_binding_adds_the_other_and_then_is_idempoten
 def test_bind_refuses_when_the_other_surface_belongs_to_another_tenant(
     service_config: Path, tmp_path: Path
 ) -> None:
-    registry = _registry(tmp_path, "trent", "someone")
+    registry = _registry(tmp_path, "riley", "someone")
     identities = tmp_path / "oauth-identities.toml"
     bind_trusted_identity(identities, MCP_ISSUER, SUB, "someone")
     before = identities.read_text(encoding="utf-8")
 
-    result = cli.invoke(app, _bind("trent", identities, registry))
+    result = cli.invoke(app, _bind("riley", identities, registry))
 
     assert result.exit_code == 1
     assert "already bound to 'someone'" in result.output
@@ -345,11 +345,11 @@ def test_bind_refuses_when_the_other_surface_belongs_to_another_tenant(
 def test_bind_refuses_an_issuer_the_service_does_not_trust(
     service_config: Path, tmp_path: Path
 ) -> None:
-    registry = _registry(tmp_path, "trent")
+    registry = _registry(tmp_path, "riley")
     identities = tmp_path / "oauth-identities.toml"
 
     result = cli.invoke(
-        app, _bind("trent", identities, registry, issuer="https://attacker.example")
+        app, _bind("riley", identities, registry, issuer="https://attacker.example")
     )
 
     assert result.exit_code == 1
@@ -361,10 +361,10 @@ def test_bind_refuses_when_the_service_config_cannot_be_found(
     service_config: Path, tmp_path: Path
 ) -> None:
     (service_config / "oauth.env").unlink()
-    registry = _registry(tmp_path, "trent")
+    registry = _registry(tmp_path, "riley")
     identities = tmp_path / "oauth-identities.toml"
 
-    result = cli.invoke(app, _bind("trent", identities, registry))
+    result = cli.invoke(app, _bind("riley", identities, registry))
 
     assert result.exit_code == 1
     assert "nothing was bound" in result.output
@@ -374,13 +374,13 @@ def test_bind_refuses_when_the_service_config_cannot_be_found(
 def test_explicit_config_paths_override_the_defaults(tmp_path: Path) -> None:
     oauth = _write_oauth_env(tmp_path / "odd" / "oauth.env")
     web = _write_oauth_web_env(tmp_path / "odd" / "oauth-web.env")
-    registry = _registry(tmp_path, "trent")
+    registry = _registry(tmp_path, "riley")
     identities = tmp_path / "oauth-identities.toml"
 
     result = cli.invoke(
         app,
         _bind(
-            "trent",
+            "riley",
             identities,
             registry,
             "--oauth-config",
@@ -398,10 +398,10 @@ def test_preflight_reports_both_surfaces_without_writing(
     service_config: Path, tmp_path: Path
 ) -> None:
     identities = tmp_path / "oauth-identities.toml"
-    bind_trusted_identity(identities, BROWSER_ISSUER, SUB, "trent")
+    bind_trusted_identity(identities, BROWSER_ISSUER, SUB, "riley")
     before = identities.read_text(encoding="utf-8")
 
-    result = cli.invoke(app, _bind("trent", identities, None, "--preflight"))
+    result = cli.invoke(app, _bind("riley", identities, None, "--preflight"))
 
     assert result.exit_code == 0, result.output
     assert f"would bind under {MCP_ISSUER}" in result.output

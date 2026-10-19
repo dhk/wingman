@@ -5653,7 +5653,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--prefix",
         default="",
-        help="Native path prefix for --http (e.g. /trent): the server itself listens on "
+        help="Native path prefix for --http (e.g. /riley): the server itself listens on "
         "<prefix>/mcp/… and <prefix>/ui/…. For pass-through fronts (nginx, Caddy, direct "
         "access); do NOT combine with a stripping proxy like 'tailscale serve --set-path'.",
     )

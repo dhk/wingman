@@ -80,7 +80,7 @@ def test_every_classification_carries_the_evidence_it_keyed_on() -> None:
 
 
 def test_an_unplaceable_drop_says_so_rather_than_being_guessed() -> None:
-    result = classify(_item("call the person Trent mentioned"))
+    result = classify(_item("call the person Riley mentioned"))
 
     assert result.kind is DropKind.UNKNOWN
     assert "nothing to key on" in result.evidence

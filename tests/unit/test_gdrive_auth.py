@@ -284,10 +284,10 @@ def test_clear_credentials_removes_the_file(tmp_path: Path) -> None:
 
 
 def test_two_accounts_have_fully_isolated_credentials(tmp_path: Path) -> None:
-    """Home-dir scoping (RFC-046's own pattern) is what gives dhk/trent
+    """Home-dir scoping (RFC-046's own pattern) is what gives dhk/riley
     isolation for free — proven directly, not assumed."""
     dhk_home = tmp_path / "dhk"
-    trent_home = tmp_path / "trent"
+    riley_home = tmp_path / "riley"
 
     drive_auth(
         home=dhk_home,
@@ -303,11 +303,11 @@ def test_two_accounts_have_fully_isolated_credentials(tmp_path: Path) -> None:
     )
 
     assert is_authorized(dhk_home)
-    assert not is_authorized(trent_home)
+    assert not is_authorized(riley_home)
     dhk_creds = read_credentials(dhk_home)
     assert dhk_creds is not None
     assert dhk_creds["refresh_token"] == "rt-dhk"
-    assert read_credentials(trent_home) is None
+    assert read_credentials(riley_home) is None
 
 
 def test_access_token_raises_when_never_authorized(tmp_path: Path) -> None:
