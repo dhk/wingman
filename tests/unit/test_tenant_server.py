@@ -53,9 +53,9 @@ def test_tenant_url_tool_refuses_from_a_tenant_session(tmp_path: Path) -> None:
     from wingman.infrastructure.config import tenant_config_scope
     from wingman.infrastructure.tenants import Tenant
 
-    tenant = Tenant(slug="jason", data_dir=tmp_path / "jason")
+    tenant = Tenant(slug="jordan", data_dir=tmp_path / "jordan")
     with tenant_config_scope(tenant.config()):
-        result = tenant_url_tool("jason")
+        result = tenant_url_tool("jordan")
     assert "operator-only" in result
 
 
@@ -63,13 +63,13 @@ def test_tenant_url_tool_works_outside_tenant_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("WINGMAN_DATA_DIR", raising=False)
-    data_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    registry = _write_registry(tmp_path, ("jason", data_dir))
+    data_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    registry = _write_registry(tmp_path, ("jordan", data_dir))
     monkeypatch.setattr(
         "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
     )
-    result = tenant_url_tool("jason", port=9921)
-    assert "tok-jason" in result
+    result = tenant_url_tool("jordan", port=9921)
+    assert "tok-jordan" in result
     assert "9921" in result
 
 
@@ -79,13 +79,13 @@ def test_tenant_url_tool_defaults_connector_name_to_wingman_slug(
     """Issue #253: the MCP tool auto-derives 'wingman-<slug>' with no
     argument needed, matching the CLI's own default."""
     monkeypatch.delenv("WINGMAN_DATA_DIR", raising=False)
-    data_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    registry = _write_registry(tmp_path, ("jason", data_dir))
+    data_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    registry = _write_registry(tmp_path, ("jordan", data_dir))
     monkeypatch.setattr(
         "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
     )
-    result = tenant_url_tool("jason", port=9921)
-    assert "claude mcp add --transport http wingman-jason " in result
+    result = tenant_url_tool("jordan", port=9921)
+    assert "claude mcp add --transport http wingman-jordan " in result
 
 
 def test_tenant_url_tool_reports_unknown_slug(
@@ -108,7 +108,7 @@ def test_tenant_urls_tool_refuses_from_a_tenant_session(tmp_path: Path) -> None:
     from wingman.infrastructure.tenants import Tenant
     from wingman.mcp_server import tenant_urls as tenant_urls_tool
 
-    tenant = Tenant(slug="jason", data_dir=tmp_path / "jason")
+    tenant = Tenant(slug="jordan", data_dir=tmp_path / "jordan")
     with tenant_config_scope(tenant.config()):
         result = tenant_urls_tool()
     assert "operator-only" in result
@@ -120,13 +120,13 @@ def test_tenant_urls_tool_with_slug_matches_tenant_url_tool(
     from wingman.mcp_server import tenant_urls as tenant_urls_tool
 
     monkeypatch.delenv("WINGMAN_DATA_DIR", raising=False)
-    data_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    registry = _write_registry(tmp_path, ("jason", data_dir))
+    data_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    registry = _write_registry(tmp_path, ("jordan", data_dir))
     monkeypatch.setattr(
         "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
     )
-    singular = tenant_url_tool("jason", port=9921)
-    plural = tenant_urls_tool("jason", port=9921)
+    singular = tenant_url_tool("jordan", port=9921)
+    plural = tenant_urls_tool("jordan", port=9921)
     assert singular == plural
 
 
@@ -150,18 +150,18 @@ def test_tenant_urls_tool_without_slug_lists_every_tenant(
     from wingman.mcp_server import tenant_urls as tenant_urls_tool
 
     monkeypatch.delenv("WINGMAN_DATA_DIR", raising=False)
-    connected = _make_tenant(tmp_path, "jason", "tok-jason")
-    not_connected = tmp_path / "bob"
+    connected = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    not_connected = tmp_path / "casey"
     not_connected.mkdir()
     Storage(not_connected / "wingman.db").close()  # no token file written
-    registry = _write_registry(tmp_path, ("jason", connected), ("bob", not_connected))
+    registry = _write_registry(tmp_path, ("jordan", connected), ("casey", not_connected))
     monkeypatch.setattr(
         "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
     )
     result = tenant_urls_tool(port=9921)
-    assert "jason:" in result
-    assert "tok-jason" in result
-    assert "bob: not yet connected (no token minted)" in result
+    assert "jordan:" in result
+    assert "tok-jordan" in result
+    assert "casey: not yet connected (no token minted)" in result
 
 
 def test_tenant_urls_tool_without_slug_derives_a_name_per_tenant(
@@ -172,15 +172,15 @@ def test_tenant_urls_tool_without_slug_derives_a_name_per_tenant(
     from wingman.mcp_server import tenant_urls as tenant_urls_tool
 
     monkeypatch.delenv("WINGMAN_DATA_DIR", raising=False)
-    jason = _make_tenant(tmp_path, "jason", "tok-jason")
-    bob = _make_tenant(tmp_path, "bob", "tok-bob")
-    registry = _write_registry(tmp_path, ("jason", jason), ("bob", bob))
+    jordan = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    casey = _make_tenant(tmp_path, "casey", "tok-casey")
+    registry = _write_registry(tmp_path, ("jordan", jordan), ("casey", casey))
     monkeypatch.setattr(
         "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
     )
     result = tenant_urls_tool()
-    assert "claude mcp add --transport http wingman-jason " in result
-    assert "claude mcp add --transport http wingman-bob " in result
+    assert "claude mcp add --transport http wingman-jordan " in result
+    assert "claude mcp add --transport http wingman-casey " in result
 
 
 def test_tenant_urls_tool_without_slug_and_empty_registry(

@@ -140,7 +140,7 @@ def _ingest(
 ) -> tuple[IngestPlan, IngestOutcome]:
     """plan then apply, exactly as the CLI does it."""
     plan = plan_ingest(
-        "jason",
+        "jordan",
         parse_responses(path),
         source=str(path),
         questions=QUESTIONS,
@@ -216,7 +216,7 @@ def test_a_bulleted_line_and_a_url_survive_the_split() -> None:
     )
     answer = "* https://www.linkedin.com/in/rk — she told me the unwelcome thing, in private"
     plan = plan_ingest(
-        "jason",
+        "jordan",
         [FormResponse(answers={question.title: answer})],
         source="responses.csv",
         questions=[question],
@@ -235,7 +235,7 @@ ADMIRED = FormQuestion(
 
 def _admired(answer: str) -> IngestPlan:
     return plan_ingest(
-        "jason",
+        "jordan",
         [FormResponse(answers={ADMIRED.title: answer})],
         source="responses.csv",
         questions=[ADMIRED],
@@ -369,12 +369,12 @@ def test_a_run_without_apply_writes_absolutely_nothing(tmp_path: Path) -> None:
     first is the whole design — RFC-025's confirmation gate and the dry-run
     default of wingman-migrate-tenant.sh, in the one place where the writer
     and the subject are different people."""
-    data_dir = _tenant(tmp_path, "jason")
-    registry = _registry(tmp_path, ("jason", data_dir))
+    data_dir = _tenant(tmp_path, "jordan")
+    registry = _registry(tmp_path, ("jordan", data_dir))
     responses = _shipped_form_csv(tmp_path)
 
     result = cli.invoke(
-        app, ["tenant", "ingest-form", "jason", str(responses), "--registry", str(registry)]
+        app, ["tenant", "ingest-form", "jordan", str(responses), "--registry", str(registry)]
     )
 
     assert result.exit_code == 0
@@ -391,19 +391,19 @@ def test_a_run_without_apply_writes_absolutely_nothing(tmp_path: Path) -> None:
 def test_apply_writes_only_into_the_named_tenants_workspace(tmp_path: Path) -> None:
     """#333 from the other direction: the target is named on the command
     line, and no other workspace on the box is touched."""
-    jason = _tenant(tmp_path, "jason")
+    jordan = _tenant(tmp_path, "jordan")
     taylor = _tenant(tmp_path, "taylor")
-    registry = _registry(tmp_path, ("jason", jason), ("taylor", taylor))
+    registry = _registry(tmp_path, ("jordan", jordan), ("taylor", taylor))
     responses = _shipped_form_csv(tmp_path)
 
     result = cli.invoke(
         app,
-        ["tenant", "ingest-form", "jason", str(responses), "--registry", str(registry), "--apply"],
+        ["tenant", "ingest-form", "jordan", str(responses), "--registry", str(registry), "--apply"],
     )
 
     assert result.exit_code == 0
-    assert (jason / "job-criteria.md").exists()
-    with Storage(jason / "wingman.db") as storage:
+    assert (jordan / "job-criteria.md").exists()
+    with Storage(jordan / "wingman.db") as storage:
         assert storage.list_profile_items()
     assert not (taylor / "job-criteria.md").exists()
     with Storage(taylor / "wingman.db") as storage:
@@ -411,7 +411,7 @@ def test_apply_writes_only_into_the_named_tenants_workspace(tmp_path: Path) -> N
 
 
 def test_an_unknown_slug_never_writes_anywhere(tmp_path: Path) -> None:
-    registry = _registry(tmp_path, ("jason", _tenant(tmp_path, "jason")))
+    registry = _registry(tmp_path, ("jordan", _tenant(tmp_path, "jordan")))
     responses = _shipped_form_csv(tmp_path)
     result = cli.invoke(
         app,
@@ -522,20 +522,20 @@ def test_five_answers_become_one_document_under_the_five_headings() -> None:
     wingman's opinion of their criteria, and RFC-035 scores every opening
     they ever see against this text."""
     areas = [(name, f"{name} answer, in their words.") for name, _prompt in INTERVIEW_AREAS]
-    document = compose_criteria_document("jason", areas, [], "2026-08-11 14:02:31", "2026-08-12")
+    document = compose_criteria_document("jordan", areas, [], "2026-08-11 14:02:31", "2026-08-12")
 
     headings = [line[3:] for line in document.splitlines() if line.startswith("## ")]
     assert headings == [name for name, _prompt in INTERVIEW_AREAS]
     for name, _prompt in INTERVIEW_AREAS:
         assert f"{name} answer, in their words." in document
-    assert document.startswith("# Job criteria — jason")
+    assert document.startswith("# Job criteria — jordan")
 
 
 def test_a_blank_area_is_absent_from_the_document_and_named_in_its_header() -> None:
     """An empty '## Anti-signals' heading reads to the judge as 'no
     anti-signals', which is a claim the person never made."""
     document = compose_criteria_document(
-        "jason", [("Hard filters", HARD_FILTERS)], ["Anti-signals"], "", "2026-08-12"
+        "jordan", [("Hard filters", HARD_FILTERS)], ["Anti-signals"], "", "2026-08-12"
     )
     assert "## Anti-signals" not in document
     assert "Left blank in the form, and so absent here: Anti-signals." in document
@@ -635,14 +635,14 @@ def test_the_unasked_fields_are_named_rather_than_defaulted(workspace: Config) -
 def test_a_json_export_reads_the_same_as_a_csv(workspace: Config) -> None:
     path = workspace.data_dir / "responses.json"
     path.write_text(json.dumps({"responses": [_full_row()]}), encoding="utf-8")
-    plan = plan_ingest("jason", parse_responses(path), source=str(path), questions=QUESTIONS)
+    plan = plan_ingest("jordan", parse_responses(path), source=str(path), questions=QUESTIONS)
     assert plan.criteria_areas and plan.captures
 
 
 def test_a_shipped_manifest_routes_the_shipped_questions() -> None:
     """The manifest 'wingman tenant form' writes IS the routing table this
     reads — the two halves are one feature or neither works."""
-    questions = questions_from_manifest(render_manifest("jason"))
+    questions = questions_from_manifest(render_manifest("jordan"))
     assert [question.title for question in questions] == [q.title for q in form_questions()]
     assert {question.destination for question in questions} == {"criteria", "profile"}
 
@@ -655,6 +655,6 @@ def test_a_title_that_survived_a_spreadsheet_still_routes() -> None:
     question = form_questions()[0]
     mangled = question.title.replace("—", "-").upper() + "  "
     plan = plan_ingest(
-        "jason", [FormResponse(answers={mangled: HARD_FILTERS})], source="responses.csv"
+        "jordan", [FormResponse(answers={mangled: HARD_FILTERS})], source="responses.csv"
     )
     assert plan.criteria_areas and plan.criteria_areas[0][1] == HARD_FILTERS

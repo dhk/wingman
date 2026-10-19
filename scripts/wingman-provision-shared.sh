@@ -325,7 +325,7 @@ say "7/8 tailscale mount (stripping proxy — the shared process itself runs wit
 # 'funnel', never plain 'serve': funnel is a per-HOSTNAME toggle, not a
 # per-path one — a bare 'tailscale serve --set-path ...' silently drops
 # Funnel for the WHOLE hostname (every other mounted path too, not just
-# this one), demoting dhk/trent/alexandria's already-public instances
+# this one), demoting dhk/riley/alexandria's already-public instances
 # back to tailnet-only as a side effect. Hit live twice on the same box:
 # once by hand, then again because this exact line still said 'serve'
 # when this script was first written, and a later re-run of the

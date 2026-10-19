@@ -225,16 +225,16 @@ def test_a_question_for_one_slug_does_not_reach_another_tenant(
     one person something and having everybody on the box read it is a
     privacy breach, not a delivery bug."""
     alice = _tenant_workspace(tmp_path / "tenants", "alice")
-    bob = _tenant_workspace(tmp_path / "tenants", "bob")
-    _register(registry, {"alice": alice.data_dir, "bob": bob.data_dir})
+    casey = _tenant_workspace(tmp_path / "tenants", "casey")
+    _register(registry, {"alice": alice.data_dir, "casey": casey.data_dir})
     _ask(qotd, to="alice")
 
     with Storage(alice.db_path) as storage:
         assert pending_question(alice, storage) is not None
-    with Storage(bob.db_path) as storage:
-        assert pending_question(bob, storage) is None
+    with Storage(casey.db_path) as storage:
+        assert pending_question(casey, storage) is None
 
-    assert [a.origin for a in next_actions(_report(bob))].count("operator_question") == 0
+    assert [a.origin for a in next_actions(_report(casey))].count("operator_question") == 0
 
 
 def test_an_account_with_no_slug_gets_nothing_addressed_to_a_slug(
@@ -360,8 +360,8 @@ def test_an_answer_lands_in_the_answering_tenants_workspace_and_nowhere_else(
     answer is in the answerer's own database; the other tenant's database
     and the shared question file are untouched."""
     alice = _tenant_workspace(tmp_path / "tenants", "alice")
-    bob = _tenant_workspace(tmp_path / "tenants", "bob")
-    _register(registry, {"alice": alice.data_dir, "bob": bob.data_dir})
+    casey = _tenant_workspace(tmp_path / "tenants", "casey")
+    _register(registry, {"alice": alice.data_dir, "casey": casey.data_dir})
     _ask(qotd)
     before = qotd.read_text(encoding="utf-8")
 
@@ -370,7 +370,7 @@ def test_an_answer_lands_in_the_answering_tenants_workspace_and_nowhere_else(
 
     with Storage(alice.db_path) as storage:
         mine = list_operator_answers(storage)
-    with Storage(bob.db_path) as storage:
+    with Storage(casey.db_path) as storage:
         theirs = list_operator_answers(storage)
 
     assert [record.answer for record in mine] == ["Interviews I cannot schedule."]
@@ -439,12 +439,12 @@ def test_answering_a_question_addressed_to_somebody_else_is_refused(
     workspace: Path, qotd: Path, registry: Path, tmp_path: Path
 ) -> None:
     alice = _tenant_workspace(tmp_path / "tenants", "alice")
-    bob = _tenant_workspace(tmp_path / "tenants", "bob")
-    _register(registry, {"alice": alice.data_dir, "bob": bob.data_dir})
+    casey = _tenant_workspace(tmp_path / "tenants", "casey")
+    _register(registry, {"alice": alice.data_dir, "casey": casey.data_dir})
     _ask(qotd, to="alice")
 
-    with Storage(bob.db_path) as storage, pytest.raises(IngestError, match="somebody else"):
-        save_operator_answer("Not my question.", bob, storage)
+    with Storage(casey.db_path) as storage, pytest.raises(IngestError, match="somebody else"):
+        save_operator_answer("Not my question.", casey, storage)
 
 
 def test_answering_when_nothing_was_asked_is_refused(workspace: Path, qotd: Path) -> None:
@@ -684,8 +684,8 @@ def test_the_operator_reads_answers_across_workspaces(
     from wingman.cli.main import tenant_answers_cmd
 
     alice = _tenant_workspace(tmp_path / "tenants", "alice")
-    bob = _tenant_workspace(tmp_path / "tenants", "bob")
-    _register(registry, {"alice": alice.data_dir, "bob": bob.data_dir})
+    casey = _tenant_workspace(tmp_path / "tenants", "casey")
+    _register(registry, {"alice": alice.data_dir, "casey": casey.data_dir})
     _ask(qotd)
     with Storage(alice.db_path) as storage:
         save_operator_answer("Interviews I cannot schedule.", alice, storage)
@@ -694,7 +694,7 @@ def test_the_operator_reads_answers_across_workspaces(
 
     out = capsys.readouterr().out
     assert "Interviews I cannot schedule." in out
-    assert "alice" in out and "bob" in out
+    assert "alice" in out and "casey" in out
     assert "each person's own words" in out
     assert "1 answer across 2 of 2 tenants" in out
 

@@ -83,13 +83,13 @@ def test_render_urls_is_pure_formatting_over_given_inputs() -> None:
         "MCP over HTTP: http://127.0.0.1:8787/mcp/TOK",
         "Web UI (read + upload): http://127.0.0.1:8787/ui/TOK",
     ]
-    tunneled = render_urls("TOK", ["lobster.tail.ts.net"], port=9911, prefix="trent/")
+    tunneled = render_urls("TOK", ["lobster.tail.ts.net"], port=9911, prefix="riley/")
     assert tunneled == [
-        "MCP over HTTP: http://127.0.0.1:9911/trent/mcp/TOK",
-        "Web UI (read + upload): http://127.0.0.1:9911/trent/ui/TOK",
-        "Tunnel MCP connector: https://lobster.tail.ts.net/trent/mcp/TOK",
-        "Tunnel web UI: https://lobster.tail.ts.net/trent/ui/TOK/",
-    ]  # prefix normalization ("trent/" -> "/trent") applies here too
+        "MCP over HTTP: http://127.0.0.1:9911/riley/mcp/TOK",
+        "Web UI (read + upload): http://127.0.0.1:9911/riley/ui/TOK",
+        "Tunnel MCP connector: https://lobster.tail.ts.net/riley/mcp/TOK",
+        "Tunnel web UI: https://lobster.tail.ts.net/riley/ui/TOK/",
+    ]  # prefix normalization ("riley/" -> "/riley") applies here too
 
 
 def test_render_urls_honors_an_explicit_tunnel_port() -> None:
@@ -97,13 +97,13 @@ def test_render_urls_honors_an_explicit_tunnel_port() -> None:
     Tailscale hostname on distinct funnel ports) only changes the tunnel
     lines — the loopback lines still reflect the local --port, unrelated."""
     lines = render_urls(
-        "TOK", ["lobster.tail.ts.net"], port=8788, prefix="/trent", tunnel_port=8443
+        "TOK", ["lobster.tail.ts.net"], port=8788, prefix="/riley", tunnel_port=8443
     )
     assert lines == [
-        "MCP over HTTP: http://127.0.0.1:8788/trent/mcp/TOK",
-        "Web UI (read + upload): http://127.0.0.1:8788/trent/ui/TOK",
-        "Tunnel MCP connector: https://lobster.tail.ts.net:8443/trent/mcp/TOK",
-        "Tunnel web UI: https://lobster.tail.ts.net:8443/trent/ui/TOK/",
+        "MCP over HTTP: http://127.0.0.1:8788/riley/mcp/TOK",
+        "Web UI (read + upload): http://127.0.0.1:8788/riley/ui/TOK",
+        "Tunnel MCP connector: https://lobster.tail.ts.net:8443/riley/mcp/TOK",
+        "Tunnel web UI: https://lobster.tail.ts.net:8443/riley/ui/TOK/",
     ]
     assert render_urls("TOK", ["lobster.tail.ts.net"])[2] == (
         "Tunnel MCP connector: https://lobster.tail.ts.net/mcp/TOK"
@@ -132,13 +132,13 @@ def test_render_urls_tunnel_prefix_only_touches_tunnel_lines() -> None:
     assert render_urls("TOK", ["h"])[2] == "Tunnel MCP connector: https://h/mcp/TOK"
     # left at its default, the tunnel line falls BACK to 'prefix' -- the
     # pass-through-front case (nginx/Caddy) this parameter didn't change
-    assert render_urls("TOK", ["h"], prefix="/trent")[2] == (
-        "Tunnel MCP connector: https://h/trent/mcp/TOK"
+    assert render_urls("TOK", ["h"], prefix="/riley")[2] == (
+        "Tunnel MCP connector: https://h/riley/mcp/TOK"
     )
     # given, 'tunnel_prefix' OVERRIDES 'prefix' for the tunnel line only --
     # the loopback line keeps using 'prefix' unchanged
-    overridden = render_urls("TOK", ["h"], prefix="/trent", tunnel_prefix="/shared")
-    assert overridden[0] == "MCP over HTTP: http://127.0.0.1:8787/trent/mcp/TOK"
+    overridden = render_urls("TOK", ["h"], prefix="/riley", tunnel_prefix="/shared")
+    assert overridden[0] == "MCP over HTTP: http://127.0.0.1:8787/riley/mcp/TOK"
     assert overridden[2] == "Tunnel MCP connector: https://h/shared/mcp/TOK"
 
 
@@ -239,7 +239,7 @@ def test_mcp_url_command_honors_explicit_tunnel_port(
             "--port",
             "8788",
             "--prefix",
-            "/trent",
+            "/riley",
             "--allowed-host",
             "lobster.tail.ts.net",
             "--tunnel-port",
@@ -249,9 +249,9 @@ def test_mcp_url_command_honors_explicit_tunnel_port(
     assert result.exit_code == 0
     token = _http_token(load_config())
     assert (
-        f"Tunnel MCP connector: https://lobster.tail.ts.net:8443/trent/mcp/{token}" in result.output
+        f"Tunnel MCP connector: https://lobster.tail.ts.net:8443/riley/mcp/{token}" in result.output
     )
-    assert f"Tunnel web UI: https://lobster.tail.ts.net:8443/trent/ui/{token}/" in result.output
+    assert f"Tunnel web UI: https://lobster.tail.ts.net:8443/riley/ui/{token}/" in result.output
 
 
 def test_mcp_url_command_prints_the_capability_urls(
@@ -335,11 +335,11 @@ def test_mcp_url_command_connector_name_override_and_suppression(
 def test_prefix_serves_natively_on_the_folder(
     workspace: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--prefix /trent: the server itself owns the path segment (no proxy strip needed)."""
+    """--prefix /riley: the server itself owns the path segment (no proxy strip needed)."""
     monkeypatch.setattr(server, "run", RunRecorder())
-    main(["--http", "--port", "9913", "--prefix", "trent/"])  # normalized either way
+    main(["--http", "--port", "9913", "--prefix", "riley/"])  # normalized either way
     token = _http_token(load_config())
-    assert server.settings.streamable_http_path == f"/trent/mcp/{token}"
+    assert server.settings.streamable_http_path == f"/riley/mcp/{token}"
     out = capsys.readouterr().out
-    assert f"http://127.0.0.1:9913/trent/mcp/{token}" in out
-    assert f"http://127.0.0.1:9913/trent/ui/{token}" in out
+    assert f"http://127.0.0.1:9913/riley/mcp/{token}" in out
+    assert f"http://127.0.0.1:9913/riley/ui/{token}" in out

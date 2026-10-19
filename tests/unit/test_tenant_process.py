@@ -107,18 +107,20 @@ def test_signal_reload_sends_sighup_to_the_verified_pid(tmp_path: Path) -> None:
 def test_register_reload_handler_reloads_the_index_on_sighup(tmp_path: Path) -> None:
     import signal
 
-    jason_dir = tmp_path / "jason"
-    jason_dir.mkdir()
-    (jason_dir / "mcp-http-token").write_text("tok-old", encoding="utf-8")
+    jordan_dir = tmp_path / "jordan"
+    jordan_dir.mkdir()
+    (jordan_dir / "mcp-http-token").write_text("tok-old", encoding="utf-8")
     registry = tmp_path / "tenants.toml"
-    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n', encoding="utf-8")
+    registry.write_text(
+        f'[[tenant]]\nslug = "jordan"\ndata_dir = "{jordan_dir}"\n', encoding="utf-8"
+    )
     index = TenantIndex.from_registry_path(registry)
     assert index.resolve("tok-old") is not None
 
     old_handler = signal.signal(signal.SIGHUP, signal.SIG_DFL)
     try:
         register_reload_handler(index, registry)
-        (jason_dir / "mcp-http-token").write_text("tok-new", encoding="utf-8")
+        (jordan_dir / "mcp-http-token").write_text("tok-new", encoding="utf-8")
         os.kill(os.getpid(), signal.SIGHUP)
         assert index.resolve("tok-old") is None
         assert index.resolve("tok-new") is not None
@@ -129,17 +131,19 @@ def test_register_reload_handler_reloads_the_index_on_sighup(tmp_path: Path) -> 
 def test_sighup_reloads_registry_and_oauth_map_together(tmp_path: Path) -> None:
     import signal
 
-    jason_dir = tmp_path / "jason"
-    jason_dir.mkdir()
-    (jason_dir / "mcp-http-token").write_text("tok-old", encoding="utf-8")
+    jordan_dir = tmp_path / "jordan"
+    jordan_dir.mkdir()
+    (jordan_dir / "mcp-http-token").write_text("tok-old", encoding="utf-8")
     taylor_dir = tmp_path / "taylor"
     taylor_dir.mkdir()
     (taylor_dir / "mcp-http-token").write_text("tok-taylor", encoding="utf-8")
     registry = tmp_path / "tenants.toml"
-    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n', encoding="utf-8")
+    registry.write_text(
+        f'[[tenant]]\nslug = "jordan"\ndata_dir = "{jordan_dir}"\n', encoding="utf-8"
+    )
     identity_path = tmp_path / "identities.toml"
     identity_path.write_text(
-        '[[identity]]\niss = "https://issuer.example"\nsub = "old"\nslug = "jason"\n',
+        '[[identity]]\niss = "https://issuer.example"\nsub = "old"\nslug = "jordan"\n',
         encoding="utf-8",
     )
     index = TenantIndex.from_registry_path(registry)
@@ -148,22 +152,22 @@ def test_sighup_reloads_registry_and_oauth_map_together(tmp_path: Path) -> None:
     try:
         register_reload_handler(index, registry, identities, identity_path)
         registry.write_text(
-            f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n\n'
+            f'[[tenant]]\nslug = "jordan"\ndata_dir = "{jordan_dir}"\n\n'
             f'[[tenant]]\nslug = "taylor"\ndata_dir = "{taylor_dir}"\n',
             encoding="utf-8",
         )
-        (jason_dir / "mcp-http-token").write_text("tok-new", encoding="utf-8")
+        (jordan_dir / "mcp-http-token").write_text("tok-new", encoding="utf-8")
         identity_path.write_text(
-            '[[identity]]\niss = "https://issuer.example"\nsub = "new"\nslug = "jason"\n\n'
+            '[[identity]]\niss = "https://issuer.example"\nsub = "new"\nslug = "jordan"\n\n'
             '[[identity]]\niss = "https://issuer.example"\nsub = "taylor"\nslug = "taylor"\n',
             encoding="utf-8",
         )
         os.kill(os.getpid(), signal.SIGHUP)
         assert index.resolve("tok-old") is None
-        assert index.resolve("tok-new").slug == "jason"  # type: ignore[union-attr]
+        assert index.resolve("tok-new").slug == "jordan"  # type: ignore[union-attr]
         assert index.resolve("tok-taylor").slug == "taylor"  # type: ignore[union-attr]
         assert identities.slug_for("https://issuer.example", "old") is None
-        assert identities.slug_for("https://issuer.example", "new") == "jason"
+        assert identities.slug_for("https://issuer.example", "new") == "jordan"
         assert identities.slug_for("https://issuer.example", "taylor") == "taylor"
     finally:
         signal.signal(signal.SIGHUP, old_handler)
@@ -174,17 +178,19 @@ def test_failed_oauth_reload_keeps_both_previous_snapshots(
 ) -> None:
     import signal
 
-    jason_dir = tmp_path / "jason"
-    jason_dir.mkdir()
-    (jason_dir / "mcp-http-token").write_text("tok-old", encoding="utf-8")
+    jordan_dir = tmp_path / "jordan"
+    jordan_dir.mkdir()
+    (jordan_dir / "mcp-http-token").write_text("tok-old", encoding="utf-8")
     taylor_dir = tmp_path / "taylor"
     taylor_dir.mkdir()
     (taylor_dir / "mcp-http-token").write_text("tok-taylor", encoding="utf-8")
     registry = tmp_path / "tenants.toml"
-    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n', encoding="utf-8")
+    registry.write_text(
+        f'[[tenant]]\nslug = "jordan"\ndata_dir = "{jordan_dir}"\n', encoding="utf-8"
+    )
     identity_path = tmp_path / "identities.toml"
     identity_path.write_text(
-        '[[identity]]\niss = "https://issuer.example"\nsub = "old"\nslug = "jason"\n',
+        '[[identity]]\niss = "https://issuer.example"\nsub = "old"\nslug = "jordan"\n',
         encoding="utf-8",
     )
     index = TenantIndex.from_registry_path(registry)
@@ -193,17 +199,17 @@ def test_failed_oauth_reload_keeps_both_previous_snapshots(
     try:
         register_reload_handler(index, registry, identities, identity_path)
         registry.write_text(
-            f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n\n'
+            f'[[tenant]]\nslug = "jordan"\ndata_dir = "{jordan_dir}"\n\n'
             f'[[tenant]]\nslug = "taylor"\ndata_dir = "{taylor_dir}"\n',
             encoding="utf-8",
         )
-        (jason_dir / "mcp-http-token").write_text("tok-new", encoding="utf-8")
+        (jordan_dir / "mcp-http-token").write_text("tok-new", encoding="utf-8")
         identity_path.write_text("[[identity]\n", encoding="utf-8")
         os.kill(os.getpid(), signal.SIGHUP)
-        assert index.resolve("tok-old").slug == "jason"  # type: ignore[union-attr]
+        assert index.resolve("tok-old").slug == "jordan"  # type: ignore[union-attr]
         assert index.resolve("tok-new") is None
         assert index.by_slug("taylor") is None
-        assert identities.slug_for("https://issuer.example", "old") == "jason"
+        assert identities.slug_for("https://issuer.example", "old") == "jordan"
         assert len(identities) == 1
         assert "retaining the previous tenant registry" in caplog.text
         assert "and OAuth identity map" in caplog.text
@@ -215,26 +221,26 @@ def test_failed_oauth_reload_keeps_both_previous_snapshots(
 
 def test_tenant_index_still_isolated_after_reload(tmp_path: Path) -> None:
     """Sanity check that reload doesn't accidentally merge tenants."""
-    jason = Tenant(slug="jason", data_dir=tmp_path / "jason")
-    (tmp_path / "jason").mkdir()
-    (tmp_path / "jason" / "mcp-http-token").write_text("tok-jason", encoding="utf-8")
-    index = TenantIndex([jason])
-    assert index.resolve("tok-jason") is not None
+    jordan = Tenant(slug="jordan", data_dir=tmp_path / "jordan")
+    (tmp_path / "jordan").mkdir()
+    (tmp_path / "jordan" / "mcp-http-token").write_text("tok-jordan", encoding="utf-8")
+    index = TenantIndex([jordan])
+    assert index.resolve("tok-jordan") is not None
     registry = tmp_path / "tenants.toml"
     registry.write_text(
-        f'[[tenant]]\nslug = "jason"\ndata_dir = "{tmp_path / "jason"}"\n', encoding="utf-8"
+        f'[[tenant]]\nslug = "jordan"\ndata_dir = "{tmp_path / "jordan"}"\n', encoding="utf-8"
     )
     index.reload(registry)
-    assert index.resolve("tok-jason").slug == "jason"  # type: ignore[union-attr]
+    assert index.resolve("tok-jordan").slug == "jordan"  # type: ignore[union-attr]
 
 
 def test_sighup_reloads_the_oauth_identity_map_too(tmp_path: Path) -> None:
     import signal
 
-    data_dir = tmp_path / "jason"
+    data_dir = tmp_path / "jordan"
     data_dir.mkdir()
     registry = tmp_path / "tenants.toml"
-    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{data_dir}"\n', encoding="utf-8")
+    registry.write_text(f'[[tenant]]\nslug = "jordan"\ndata_dir = "{data_dir}"\n', encoding="utf-8")
     identity_path = tmp_path / "oauth-identities.toml"
     identity_path.write_text("", encoding="utf-8")
     index = TenantIndex.from_registry_path(registry)
@@ -244,11 +250,11 @@ def test_sighup_reloads_the_oauth_identity_map_too(tmp_path: Path) -> None:
     try:
         register_reload_handler(index, registry, identities, identity_path)
         identity_path.write_text(
-            '[[identity]]\niss = "https://issuer.example"\nsub = "user_123"\nslug = "jason"\n',
+            '[[identity]]\niss = "https://issuer.example"\nsub = "user_123"\nslug = "jordan"\n',
             encoding="utf-8",
         )
         os.kill(os.getpid(), signal.SIGHUP)
-        assert identities.slug_for("https://issuer.example", "user_123") == "jason"
+        assert identities.slug_for("https://issuer.example", "user_123") == "jordan"
     finally:
         signal.signal(signal.SIGHUP, old_handler)
 
@@ -265,17 +271,19 @@ def test_a_malformed_registry_does_not_take_the_shared_process_down(
     """
     import signal
 
-    jason_dir = tmp_path / "jason"
-    jason_dir.mkdir()
-    (jason_dir / "mcp-http-token").write_text("tok-jason", encoding="utf-8")
+    jordan_dir = tmp_path / "jordan"
+    jordan_dir.mkdir()
+    (jordan_dir / "mcp-http-token").write_text("tok-jordan", encoding="utf-8")
     registry = tmp_path / "tenants.toml"
-    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n', encoding="utf-8")
+    registry.write_text(
+        f'[[tenant]]\nslug = "jordan"\ndata_dir = "{jordan_dir}"\n', encoding="utf-8"
+    )
     index = TenantIndex.from_registry_path(registry)
-    assert index.resolve("tok-jason") is not None
+    assert index.resolve("tok-jordan") is not None
 
     # Somebody adds a tenant and fats-fingers the key.
     registry.write_text(
-        f'[[tenant]]\nslug = "jason"\ndata_dir = "{jason_dir}"\n\n'
+        f'[[tenant]]\nslug = "jordan"\ndata_dir = "{jordan_dir}"\n\n'
         '[[tenant]]\nslugg = "taylor"\ndata_dir = "/tmp/taylor"\n',
         encoding="utf-8",
     )
@@ -288,7 +296,7 @@ def test_a_malformed_registry_does_not_take_the_shared_process_down(
         signal.signal(signal.SIGHUP, old)
 
     # Still serving, from the registry that was already loaded.
-    assert index.resolve("tok-jason") is not None
+    assert index.resolve("tok-jordan") is not None
 
 
 def test_a_process_that_exits_before_the_signal_is_simply_not_found(

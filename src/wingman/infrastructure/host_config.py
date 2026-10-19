@@ -42,7 +42,7 @@ WINGMAN_ENV_FILENAME = "wingman.env"
 # Non-secret settings this codebase actually reads from wingman.env today.
 # Table-driven and easy to extend (mirrors KNOWN_KEYS's shape). WINGMAN_REPO
 # is scripts/wingman-ctl's host-file fallback; WINGMAN_OPERATOR_NAME is the
-# per-account label (e.g. "Trent") that feature_request.py stamps into a
+# per-account label (e.g. "Riley") that feature_request.py stamps into a
 # filed issue's body when the same GitHub credential is shared across
 # accounts (issue #205's follow-up) — attribution the token itself can no
 # longer provide once it's shared, so the app supplies it in the body
@@ -58,7 +58,7 @@ WINGMAN_ENV_FILENAME = "wingman.env"
 # WINGMAN_GDRIVE_CLIENT_ID / WINGMAN_GDRIVE_CLIENT_SECRET (RFC-053, #205)
 # identify wingman's own OAuth client to Google's device-authorization
 # flow — one shared client for every account on a box, the same value on
-# dhk's and trent's Drive pushes alike, not a per-account secret (the same
+# dhk's and riley's Drive pushes alike, not a per-account secret (the same
 # reasoning `gh`/`rclone` ship their own public client id/secret: it
 # names the app, not any one server or user). That makes it a host
 # SETTING, not a KNOWN_KEYS secret — it belongs here rather than in
@@ -92,7 +92,7 @@ def woven_clutters(home: Path | None = None) -> tuple[str, ...]:
 
     A **clutter** — the collective noun for spiders, Woven being a web — is
     a working group whose members pooled their LinkedIn exports into one
-    Woven graph: Dave's and Trent's connections in one snapshot, say. Woven itself has no notion of this: one running
+    Woven graph: Dave's and Riley's connections in one snapshot, say. Woven itself has no notion of this: one running
     Woven serves exactly one `WOVEN_GRAPH_PATH`, its nodes carry no group
     label, and a warm path it returns says nothing about whose pooled data
     produced it. That is fine while a single graph exists and everyone in

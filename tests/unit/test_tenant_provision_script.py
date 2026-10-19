@@ -527,7 +527,7 @@ def test_shared_provisioner_never_tells_the_operator_to_add_it_to_the_upgrade_sw
 
     assert "by hand: add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS" not in body
     assert "Do NOT add '$SERVICE_USER' to WINGMAN_UPGRADE_USERS" in body
-    assert "WINGMAN_UPGRADE_USERS=dhk,trent,wingman-shared" not in server_doc
+    assert "WINGMAN_UPGRADE_USERS=dhk,riley,wingman-shared" not in server_doc
 
 
 def test_every_oauth_bind_call_reads_the_same_service_config_the_script_resolved() -> None:

@@ -46,27 +46,27 @@ def _make_tenant(tmp_path: Path, slug: str, token: str) -> Tenant:
 
 @pytest.fixture
 def two_tenant_app(tmp_path: Path) -> tuple[Starlette, Tenant, Tenant]:
-    jason = _make_tenant(tmp_path, "jason", "tok-jason")
-    bob = _make_tenant(tmp_path, "bob", "tok-bob")
-    index = TenantIndex([jason, bob])
+    jordan = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    casey = _make_tenant(tmp_path, "casey", "tok-casey")
+    index = TenantIndex([jordan, casey])
     wrapped = TenantRoutingASGIApp(_EchoConfigApp(), index)
     app = Starlette(routes=[Route("/mcp/{token}", endpoint=wrapped)])
-    return app, jason, bob
+    return app, jordan, casey
 
 
 def test_request_resolves_to_the_matching_tenant(
     two_tenant_app: tuple[Starlette, Tenant, Tenant],
 ) -> None:
-    app, jason, bob = two_tenant_app
+    app, jordan, casey = two_tenant_app
     client = TestClient(app)
-    assert client.get("/mcp/tok-jason").text == str(jason.data_dir)
-    assert client.get("/mcp/tok-bob").text == str(bob.data_dir)
+    assert client.get("/mcp/tok-jordan").text == str(jordan.data_dir)
+    assert client.get("/mcp/tok-casey").text == str(casey.data_dir)
 
 
 def test_unknown_token_is_rejected_before_reaching_the_inner_app(
     two_tenant_app: tuple[Starlette, Tenant, Tenant],
 ) -> None:
-    app, _jason, _bob = two_tenant_app
+    app, _jordan, _casey = two_tenant_app
     response = TestClient(app).get("/mcp/tok-nobody")
     assert response.status_code == 401
 
@@ -74,7 +74,7 @@ def test_unknown_token_is_rejected_before_reaching_the_inner_app(
 def test_empty_token_path_segment_is_rejected(
     two_tenant_app: tuple[Starlette, Tenant, Tenant],
 ) -> None:
-    app, _jason, _bob = two_tenant_app
+    app, _jordan, _casey = two_tenant_app
     # A trailing slash with nothing after it still matches Starlette's
     # {token} segment as an empty string on some route configs — confirm
     # it's rejected rather than accidentally matching every tenant.
@@ -88,19 +88,19 @@ def test_concurrent_requests_never_cross_tenant_context(
     """The end-to-end proof: two tenants' requests running concurrently
     through the real ASGI wrapper (not just the bare ContextVar) must
     never see each other's Config."""
-    app, jason, bob = two_tenant_app
+    app, jordan, casey = two_tenant_app
 
     async def run() -> tuple[str, str]:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
-            jason_task = http.get("/mcp/tok-jason")
-            bob_task = http.get("/mcp/tok-bob")
-            jason_response, bob_response = await asyncio.gather(jason_task, bob_task)
-            return jason_response.text, bob_response.text
+            jordan_task = http.get("/mcp/tok-jordan")
+            casey_task = http.get("/mcp/tok-casey")
+            jordan_response, casey_response = await asyncio.gather(jordan_task, casey_task)
+            return jordan_response.text, casey_response.text
 
-    jason_seen, bob_seen = asyncio.run(run())
-    assert jason_seen == str(jason.data_dir)
-    assert bob_seen == str(bob.data_dir)
+    jordan_seen, casey_seen = asyncio.run(run())
+    assert jordan_seen == str(jordan.data_dir)
+    assert casey_seen == str(casey.data_dir)
 
 
 def test_bind_tenant_routing_wraps_a_real_fastmcp_app_without_disturbing_other_routes(
@@ -111,8 +111,8 @@ def test_bind_tenant_routing_wraps_a_real_fastmcp_app_without_disturbing_other_r
     route (the web UI's custom routes) untouched."""
     from wingman.webui import register_ui
 
-    jason = _make_tenant(tmp_path, "jason", "tok-jason-real")
-    index = TenantIndex([jason])
+    jordan = _make_tenant(tmp_path, "jordan", "tok-jordan-real")
+    index = TenantIndex([jordan])
 
     register_ui(server)
     server.settings.streamable_http_path = "/mcp/{token}"
@@ -256,7 +256,7 @@ def test_a_tenant_dropped_from_the_registry_mid_request_does_not_crash(tmp_path:
     assert client.get("/mcp/tok-dhk").status_code == 200
 
     # dhk leaves the registry; the index keeps serving whoever is left.
-    other = _make_tenant(tmp_path, "bob", "tok-bob")
+    other = _make_tenant(tmp_path, "casey", "tok-casey")
     index._load([other])  # noqa: SLF001 — simulating a reload that dropped dhk
 
     assert client.get("/mcp/tok-dhk").status_code == 401

@@ -158,7 +158,7 @@ def test_companies_dedup_by_key_not_raw_string(workspace: Path) -> None:
         _settled(storage)
         storage.watchlist_add("overnight", "company", "Acme")
         storage.watchlist_add("targets", "company", "ACME")
-        for name, company in (("Alice", "Acme"), ("Bob", "ACME")):
+        for name, company in (("Alice", "Acme"), ("Casey", "ACME")):
             person, _ = add_person(name, storage, company=company)
             follow_person(storage, person)
         report = compute_completeness(storage, config)

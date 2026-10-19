@@ -244,10 +244,10 @@ Everything below is a sentence to Claude, not a command to remember:
   required.
 - **See what's new** — "what's changed in wingman lately?" (`changelog`) —
   answers even with no workspace set up yet.
-- **Coach someone else** — "act as coach for Trent" scopes every
+- **Coach someone else** — "act as coach for Riley" scopes every
   interview/POV call to a named persona inside your own workspace, no
   separate login for them (`coach_persona`); once it's worth splitting
-  off, "carve off Trent's persona into his own workspace" seeds a
+  off, "carve off Riley's persona into his own workspace" seeds a
   brand-new workspace from everything captured (`carve_off_persona`).
   Lighter than a fully separate instance per person — for that, add them
   as their own tenant ([`SERVER.md`](SERVER.md)) and hand them

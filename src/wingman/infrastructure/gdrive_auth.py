@@ -23,7 +23,7 @@ long-blocking one:
 
 Both files are scoped under the caller's home directory exactly like
 RFC-046's `secrets.env`/`wingman.env` split, so isolation between accounts
-(dhk, trent, ...) on a shared box is free — each account's own
+(dhk, riley, ...) on a shared box is free — each account's own
 `~/.config/wingman/` only ever holds its own tokens.
 
 One shared OAuth client (client ID + "secret" — not really secret for an

@@ -33,7 +33,7 @@ def test_tenant_config_scope_overrides_load_config(tmp_path: Path) -> None:
     """RFC-048: every 'load_config()' call inside the scope — the exact
     call every MCP tool/webui handler already makes — returns the bound
     tenant Config instead of resolving WINGMAN_DATA_DIR from env."""
-    tenant_config = Config(data_dir=tmp_path / "jason", data_dir_source="tenant registry (jason)")
+    tenant_config = Config(data_dir=tmp_path / "jordan", data_dir_source="tenant registry (jordan)")
     assert load_config().data_dir != tenant_config.data_dir  # outside: ordinary resolution
     with tenant_config_scope(tenant_config):
         assert load_config() is tenant_config
@@ -43,7 +43,7 @@ def test_tenant_config_scope_overrides_load_config(tmp_path: Path) -> None:
 def test_explicit_env_bypasses_tenant_config_scope(tmp_path: Path) -> None:
     """An explicit 'env=' is a deliberate escape hatch — used by tests and
     any caller wanting env-based resolution regardless of tenant context."""
-    tenant_config = Config(data_dir=tmp_path / "jason", data_dir_source="tenant registry (jason)")
+    tenant_config = Config(data_dir=tmp_path / "jordan", data_dir_source="tenant registry (jordan)")
     with tenant_config_scope(tenant_config):
         config = load_config(env={ENV_DATA_DIR: str(tmp_path / "elsewhere")})
     assert config.data_dir == tmp_path / "elsewhere"
@@ -54,8 +54,8 @@ def test_tenant_config_scope_is_isolated_across_concurrent_asyncio_tasks(tmp_pat
     concurrently on the same shared process's event loop must never see
     each other's Config, even with no thread involved (a ContextVar is
     copied per asyncio Task, not shared like 'os.environ' would be)."""
-    jason_config = Config(data_dir=tmp_path / "jason", data_dir_source="tenant registry (jason)")
-    bob_config = Config(data_dir=tmp_path / "bob", data_dir_source="tenant registry (bob)")
+    jordan_config = Config(data_dir=tmp_path / "jordan", data_dir_source="tenant registry (jordan)")
+    casey_config = Config(data_dir=tmp_path / "casey", data_dir_source="tenant registry (casey)")
 
     async def resolve_as(tenant_config: Config, delay: float) -> Path:
         with tenant_config_scope(tenant_config):
@@ -64,10 +64,10 @@ def test_tenant_config_scope_is_isolated_across_concurrent_asyncio_tasks(tmp_pat
 
     async def run() -> tuple[Path, Path]:
         return await asyncio.gather(
-            resolve_as(jason_config, 0.02),
-            resolve_as(bob_config, 0.01),
+            resolve_as(jordan_config, 0.02),
+            resolve_as(casey_config, 0.01),
         )
 
-    jason_seen, bob_seen = asyncio.run(run())
-    assert jason_seen == jason_config.data_dir
-    assert bob_seen == bob_config.data_dir
+    jordan_seen, casey_seen = asyncio.run(run())
+    assert jordan_seen == jordan_config.data_dir
+    assert casey_seen == casey_config.data_dir

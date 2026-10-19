@@ -57,25 +57,25 @@ def test_malformed_registry_exits_nonzero(tmp_path: Path) -> None:
 def test_tenant_with_nothing_enrolled_is_reported_not_fatal(tmp_path: Path) -> None:
     """A fresh tenant workspace (nothing followed yet) must be reported
     as a normal skip, never fail the whole loop."""
-    jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    registry = _write_registry(tmp_path, ("jason", jason_dir))
+    jordan_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    registry = _write_registry(tmp_path, ("jordan", jordan_dir))
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
     assert result.exit_code == 0
-    assert "jason: nothing enrolled yet — skipped" in result.output
+    assert "jordan: nothing enrolled yet — skipped" in result.output
     assert "0/1 tenants completed" in result.output
 
 
 def test_one_tenants_failure_never_blocks_another(tmp_path: Path) -> None:
-    """The core isolation property: jason has nothing enrolled (skips),
-    bob has a real workspace too (also nothing enrolled, also skips
+    """The core isolation property: jordan has nothing enrolled (skips),
+    casey has a real workspace too (also nothing enrolled, also skips
     independently) — both must be attempted and reported, neither
     skipped because of the other."""
-    jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    bob_dir = _make_tenant(tmp_path, "bob", "tok-bob")
-    registry = _write_registry(tmp_path, ("jason", jason_dir), ("bob", bob_dir))
+    jordan_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    casey_dir = _make_tenant(tmp_path, "casey", "tok-casey")
+    registry = _write_registry(tmp_path, ("jordan", jordan_dir), ("casey", casey_dir))
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
-    assert "jason: nothing enrolled yet — skipped" in result.output
-    assert "bob: nothing enrolled yet — skipped" in result.output
+    assert "jordan: nothing enrolled yet — skipped" in result.output
+    assert "casey: nothing enrolled yet — skipped" in result.output
     assert "0/2 tenants completed" in result.output
 
 
@@ -110,20 +110,20 @@ def test_a_corrupt_workspace_does_not_abort_the_tenants_after_it(
     monkeypatch.setattr(research_module, "fetch_url", lambda url: _CAREERS_PAGE)
 
     broken_dir = _corrupt_tenant(tmp_path, "broken")
-    jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    with Storage(jason_dir / "wingman.db") as storage:
+    jordan_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    with Storage(jordan_dir / "wingman.db") as storage:
         add_person("Jane Author", storage, company="Acme")
         follow_company(
             "Acme", storage, url="https://acme.example.com", fetcher=lambda url: _CAREERS_PAGE
         )
 
-    # broken is FIRST, so an escaping exception takes jason down with it.
-    registry = _write_registry(tmp_path, ("broken", broken_dir), ("jason", jason_dir))
+    # broken is FIRST, so an escaping exception takes jordan down with it.
+    registry = _write_registry(tmp_path, ("broken", broken_dir), ("jordan", jordan_dir))
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
 
     assert "broken: failed" in result.output
-    assert "jason: 1 targets" in result.output
-    assert (jason_dir / "reports" / "digests").exists()
+    assert "jordan: 1 targets" in result.output
+    assert (jordan_dir / "reports" / "digests").exists()
     assert "1/2 tenants completed" in result.output
     assert result.exit_code == 1
 
@@ -144,7 +144,7 @@ def test_a_bad_registry_entry_fails_only_its_own_tenant(tmp_path: Path, monkeypa
     that fails to resolve took the whole roster with it."""
     import wingman.infrastructure.tenants as tenants_module
 
-    jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
+    jordan_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
     original = tenants_module.Tenant.config
 
     def explode(self):  # noqa: ANN001, ANN202 — test double
@@ -154,12 +154,12 @@ def test_a_bad_registry_entry_fails_only_its_own_tenant(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(tenants_module.Tenant, "config", explode)
 
-    registry = _write_registry(tmp_path, ("cursed", tmp_path / "cursed"), ("jason", jason_dir))
+    registry = _write_registry(tmp_path, ("cursed", tmp_path / "cursed"), ("jordan", jordan_dir))
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
 
     assert "cursed: failed" in result.output
     assert (
-        "jason: nothing enrolled yet — skipped" in result.output
+        "jordan: nothing enrolled yet — skipped" in result.output
     )  # reached at all — nothing enrolled
     assert "0/2 tenants completed" in result.output
 
@@ -172,10 +172,10 @@ def test_tenant_with_enrolled_target_produces_a_real_digest(tmp_path: Path, monk
 
     monkeypatch.setattr(research_module, "fetch_url", lambda url: _CAREERS_PAGE)
 
-    jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    registry = _write_registry(tmp_path, ("jason", jason_dir))
+    jordan_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    registry = _write_registry(tmp_path, ("jordan", jordan_dir))
 
-    with Storage(jason_dir / "wingman.db") as storage:
+    with Storage(jordan_dir / "wingman.db") as storage:
         add_person("Jane Author", storage, company="Acme")
         follow_company(
             "Acme", storage, url="https://acme.example.com", fetcher=lambda url: _CAREERS_PAGE
@@ -183,9 +183,9 @@ def test_tenant_with_enrolled_target_produces_a_real_digest(tmp_path: Path, monk
 
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
     assert result.exit_code == 0
-    assert "jason: 1 targets" in result.output
+    assert "jordan: 1 targets" in result.output
     assert "1/1 tenants completed" in result.output
-    assert (jason_dir / "reports" / "digests").exists()
+    assert (jordan_dir / "reports" / "digests").exists()
 
 
 def _partly_failed_run(failing_dir: Path):  # noqa: ANN202 — test double factory
@@ -213,17 +213,17 @@ def test_a_tenants_failed_targets_do_not_fail_the_roster(tmp_path: Path, monkeyp
     conflation put the single-workspace unit into 'failed' on 2026-08-05."""
     import wingman.application.focus as focus_module
 
-    jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    bob_dir = _make_tenant(tmp_path, "bob", "tok-bob")
-    registry = _write_registry(tmp_path, ("jason", jason_dir), ("bob", bob_dir))
-    monkeypatch.setattr(focus_module, "overnight_run", _partly_failed_run(jason_dir))
+    jordan_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    casey_dir = _make_tenant(tmp_path, "casey", "tok-casey")
+    registry = _write_registry(tmp_path, ("jordan", jordan_dir), ("casey", casey_dir))
+    monkeypatch.setattr(focus_module, "overnight_run", _partly_failed_run(jordan_dir))
 
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry)])
 
     assert result.exit_code == 0, result.output
     assert "2/2 tenants completed" in result.output
     # Still named, still counted: succeeding quietly is the opposite error.
-    assert "jason: 3 targets, 2 failed" in result.output
+    assert "jordan: 3 targets, 2 failed" in result.output
     assert "1 of them had failed targets" in result.output
 
 
@@ -232,10 +232,10 @@ def test_strict_makes_failed_targets_fail_the_roster(tmp_path: Path, monkeypatch
     flag on 'wingman overnight'."""
     import wingman.application.focus as focus_module
 
-    jason_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    bob_dir = _make_tenant(tmp_path, "bob", "tok-bob")
-    registry = _write_registry(tmp_path, ("jason", jason_dir), ("bob", bob_dir))
-    monkeypatch.setattr(focus_module, "overnight_run", _partly_failed_run(jason_dir))
+    jordan_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    casey_dir = _make_tenant(tmp_path, "casey", "tok-casey")
+    registry = _write_registry(tmp_path, ("jordan", jordan_dir), ("casey", casey_dir))
+    monkeypatch.setattr(focus_module, "overnight_run", _partly_failed_run(jordan_dir))
 
     result = cli.invoke(app, ["tenant", "overnight", "--registry", str(registry), "--strict"])
 

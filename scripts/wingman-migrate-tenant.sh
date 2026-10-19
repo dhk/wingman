@@ -6,13 +6,13 @@
 #
 # Run as root on lobster, once per account:
 #   sudo ./wingman-migrate-tenant.sh dhk
-#   sudo ./wingman-migrate-tenant.sh trent
+#   sudo ./wingman-migrate-tenant.sh riley
 #
 # Dry-run by default — prints every step without changing anything.
 # Pass --apply to actually do it.
 #
 # Assumes: <slug> is both the existing Unix account name AND the tenant
-# slug to register it under (matches jason/bob's convention). The
+# slug to register it under (matches jordan/casey's convention). The
 # account's own checkout/workspace already exists per docs/SERVER.md's
 # shape-B layout (~/.config/wingman/{wingman.env,secrets.env},
 # XDG-default data dir).

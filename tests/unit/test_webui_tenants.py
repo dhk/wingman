@@ -34,16 +34,16 @@ def _make_tenant(tmp_path: Path, slug: str, token: str) -> Tenant:
 
 
 def test_authorized_resolves_via_tenant_index_when_configured(tmp_path: Path) -> None:
-    jason = _make_tenant(tmp_path, "jason", "tok-jason")
-    bob = _make_tenant(tmp_path, "bob", "tok-bob")
-    configure_tenant_index(TenantIndex([jason, bob]))
+    jordan = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    casey = _make_tenant(tmp_path, "casey", "tok-casey")
+    configure_tenant_index(TenantIndex([jordan, casey]))
     register_ui(server, prefix="/idx-test-a")
     client = TestClient(server.streamable_http_app())
 
-    jason_page = client.get("/idx-test-a/ui/tok-jason/")
-    bob_page = client.get("/idx-test-a/ui/tok-bob/")
-    assert jason_page.status_code == 200
-    assert bob_page.status_code == 200
+    jordan_page = client.get("/idx-test-a/ui/tok-jordan/")
+    casey_page = client.get("/idx-test-a/ui/tok-casey/")
+    assert jordan_page.status_code == 200
+    assert casey_page.status_code == 200
     # Each request resolved to ITS OWN workspace, not the other tenant's.
     unknown = client.get("/idx-test-a/ui/not-a-real-token/")
     assert unknown.status_code == 404
@@ -54,7 +54,7 @@ def test_authorized_falls_back_to_single_file_when_no_index_configured(
 ) -> None:
     """Default (no 'configure_tenant_index' call) is exactly today's
     single-tenant behavior — the still-separate shape-B processes (dhk,
-    trent) that stay on this model through the phased migration: this
+    riley) that stay on this model through the phased migration: this
     process's OWN 'WINGMAN_DATA_DIR'-resolved token file, not a registry."""
     assert webui_module._tenant_index is None
     monkeypatch.setenv("WINGMAN_DATA_DIR", str(tmp_path / "ws"))
@@ -70,11 +70,11 @@ def test_authorized_falls_back_to_single_file_when_no_index_configured(
 
 
 def test_restart_route_is_not_mounted_under_tenant_index(tmp_path: Path) -> None:
-    tenant = _make_tenant(tmp_path, "jason", "tok-jason-restart")
+    tenant = _make_tenant(tmp_path, "jordan", "tok-jordan-restart")
     configure_tenant_index(TenantIndex([tenant]))
     register_ui(server, prefix="/idx-test-restart")
     client = TestClient(server.streamable_http_app())
-    response = client.post("/idx-test-restart/ui/tok-jason-restart/restart")
+    response = client.post("/idx-test-restart/ui/tok-jordan-restart/restart")
     assert response.status_code == 404  # route was never mounted, not just refused
 
 
@@ -88,11 +88,11 @@ def test_restart_panel_explains_ops_action_instead_of_offering_the_button() -> N
 def test_restart_handler_refuses_even_if_directly_reached(tmp_path: Path) -> None:
     """Second, independent layer of defense (belt and suspenders) beyond
     'register_ui' not mounting the route at all."""
-    tenant = _make_tenant(tmp_path, "jason", "tok-jason-direct")
+    tenant = _make_tenant(tmp_path, "jordan", "tok-jordan-direct")
     configure_tenant_index(TenantIndex([tenant]))
 
     class _FakeRequest:
-        path_params = {"token": "tok-jason-direct"}  # a genuinely valid token
+        path_params = {"token": "tok-jordan-direct"}  # a genuinely valid token
 
     import asyncio
 

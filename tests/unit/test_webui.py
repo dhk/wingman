@@ -380,7 +380,7 @@ def test_manage_panel_shows_restart_button_when_systemd_managed(
 
 
 def test_ui_is_path_mount_agnostic(client: tuple[TestClient, str]) -> None:
-    """Behind 'tailscale serve --set-path /trent' the prefix is stripped before
+    """Behind 'tailscale serve --set-path /riley' the prefix is stripped before
     the backend: everything must work with zero prefix knowledge — a RELATIVE
     redirect to the slash landing, and only relative URLs in the page."""
     http, token = client
@@ -397,22 +397,22 @@ def test_ui_is_path_mount_agnostic(client: tuple[TestClient, str]) -> None:
 
 
 def test_native_prefix_serves_and_root_unaffected(client: tuple[TestClient, str]) -> None:
-    """--prefix /trent: the server itself listens on the folder (RFC-033 addendum)."""
+    """--prefix /riley: the server itself listens on the folder (RFC-033 addendum)."""
     _http, token = client
-    register_ui(server, prefix="/trent")  # coexists with the root registration
+    register_ui(server, prefix="/riley")  # coexists with the root registration
     http2 = TestClient(server.streamable_http_app())
-    page = http2.get(f"/trent/ui/{token}/")
+    page = http2.get(f"/riley/ui/{token}/")
     assert page.status_code == 200 and "Wingman" in page.text
     assert 'href="/' not in page.text  # still only relative URLs
-    bare = http2.get(f"/trent/ui/{token}", follow_redirects=False)
+    bare = http2.get(f"/riley/ui/{token}", follow_redirects=False)
     assert bare.status_code == 307 and bare.headers["location"] == f"{token}/"
-    assert http2.get("/trent/ui/wrong-token/").status_code == 404
+    assert http2.get("/riley/ui/wrong-token/").status_code == 404
     assert http2.get(f"/ui/{token}/").status_code == 200  # root registration intact
 
     from wingman.webui import normalize_prefix
 
-    assert normalize_prefix("trent") == "/trent"
-    assert normalize_prefix("/trent/") == "/trent"
+    assert normalize_prefix("riley") == "/riley"
+    assert normalize_prefix("/riley/") == "/riley"
     assert normalize_prefix("") == "" and normalize_prefix("/") == ""
 
 
@@ -535,7 +535,7 @@ def test_connect_tab_honors_wingman_tunnel_port_env(
     client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Two instances sharing one Tailscale hostname on distinct funnel ports
-    (issue: dhk's and Trent's funnel commands collided on the default 443
+    (issue: dhk's and Riley's funnel commands collided on the default 443
     root) — WINGMAN_TUNNEL_PORT lets each instance's Connect tab print its
     own tunnel's actual external port."""
     monkeypatch.setattr(
@@ -552,11 +552,11 @@ def test_connect_tab_honors_wingman_tunnel_port_env(
 def test_connect_tab_respects_native_prefix(client: tuple[TestClient, str]) -> None:
     _http, token = client
     host, port = server.settings.host, server.settings.port
-    register_ui(server, prefix="/trent")
+    register_ui(server, prefix="/riley")
     http2 = TestClient(server.streamable_http_app())
-    page = http2.get(f"/trent/ui/{token}/").text
-    assert f'value="http://{host}:{port}/trent/mcp/{token}"' in page
-    assert f'value="http://{host}:{port}/trent/ui/{token}"' in page
+    page = http2.get(f"/riley/ui/{token}/").text
+    assert f'value="http://{host}:{port}/riley/mcp/{token}"' in page
+    assert f'value="http://{host}:{port}/riley/ui/{token}"' in page
 
 
 def test_connect_panel_appears_in_fresh_setup_state(

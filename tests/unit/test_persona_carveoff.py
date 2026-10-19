@@ -821,7 +821,7 @@ def test_a_tenant_cannot_carve_a_persona_into_another_tenants_workspace(
     from wingman.infrastructure.tenants import Tenant
 
     theirs = tmp_path / "tenants" / "dhk"
-    mine = tmp_path / "tenants" / "trent"
+    mine = tmp_path / "tenants" / "riley"
     for directory in (theirs, mine):
         directory.mkdir(parents=True)
         Storage(directory / "wingman.db").close()
@@ -829,14 +829,14 @@ def test_a_tenant_cannot_carve_a_persona_into_another_tenants_workspace(
     registry = tmp_path / "tenants.toml"
     registry.write_text(
         f'[[tenant]]\nslug = "dhk"\ndata_dir = "{theirs}"\n\n'
-        f'[[tenant]]\nslug = "trent"\ndata_dir = "{mine}"\n',
+        f'[[tenant]]\nslug = "riley"\ndata_dir = "{mine}"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(
         "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
     )
 
-    my_config = Tenant(slug="trent", data_dir=mine).config()
+    my_config = Tenant(slug="riley", data_dir=mine).config()
     with Storage(my_config.db_path) as storage:
         _seed_persona_capture(my_config, "Mike Chen")
         with pytest.raises(IngestError, match="belongs to the tenant 'dhk'"):
@@ -855,21 +855,21 @@ def test_a_directory_inside_another_tenants_workspace_is_refused_too(
     from wingman.infrastructure.tenants import Tenant
 
     theirs = tmp_path / "tenants" / "dhk"
-    mine = tmp_path / "tenants" / "trent"
+    mine = tmp_path / "tenants" / "riley"
     for directory in (theirs, mine):
         directory.mkdir(parents=True)
         Storage(directory / "wingman.db").close()
     registry = tmp_path / "tenants.toml"
     registry.write_text(
         f'[[tenant]]\nslug = "dhk"\ndata_dir = "{theirs}"\n\n'
-        f'[[tenant]]\nslug = "trent"\ndata_dir = "{mine}"\n',
+        f'[[tenant]]\nslug = "riley"\ndata_dir = "{mine}"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(
         "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
     )
 
-    my_config = Tenant(slug="trent", data_dir=mine).config()
+    my_config = Tenant(slug="riley", data_dir=mine).config()
     with Storage(my_config.db_path) as storage:
         _seed_persona_capture(my_config, "Mike Chen")
         with pytest.raises(IngestError, match="belongs to the tenant 'dhk'"):
@@ -885,16 +885,16 @@ def test_a_brand_new_directory_outside_the_registry_is_still_the_normal_flow(
     registers it. Containment must not break that."""
     from wingman.infrastructure.tenants import Tenant
 
-    mine = tmp_path / "tenants" / "trent"
+    mine = tmp_path / "tenants" / "riley"
     mine.mkdir(parents=True)
     Storage(mine / "wingman.db").close()
     registry = tmp_path / "tenants.toml"
-    registry.write_text(f'[[tenant]]\nslug = "trent"\ndata_dir = "{mine}"\n', encoding="utf-8")
+    registry.write_text(f'[[tenant]]\nslug = "riley"\ndata_dir = "{mine}"\n', encoding="utf-8")
     monkeypatch.setattr(
         "wingman.infrastructure.tenants.tenant_registry_path", lambda home=None: registry
     )
 
-    my_config = Tenant(slug="trent", data_dir=mine).config()
+    my_config = Tenant(slug="riley", data_dir=mine).config()
     fresh = tmp_path / "somewhere-new"
     with Storage(my_config.db_path) as storage:
         _seed_persona_capture(my_config, "Mike Chen")

@@ -30,9 +30,9 @@ def _write(path: Path, text: str) -> Path:
 @pytest.mark.parametrize(
     ("argv", "expected"),
     [
-        (["keys", "where", "--tenant", "trent"], "wingman tenant keys --tenant trent"),
+        (["keys", "where", "--tenant", "riley"], "wingman tenant keys --tenant riley"),
         (["keys", "where", "--all-tenants"], "wingman tenant keys --all"),
-        (["keys", "validate", "--tenant", "trent"], "wingman tenant validate --tenant trent"),
+        (["keys", "validate", "--tenant", "riley"], "wingman tenant validate --tenant riley"),
         (["keys", "validate", "--all-tenants"], "wingman tenant validate --all"),
     ],
 )
@@ -54,20 +54,20 @@ def test_keys_set_for_a_tenant_never_takes_the_hydrated_operator_key(tmp_path, m
     and printed 'Stored'. The write must come from the prompt instead."""
     from wingman.infrastructure import tenants as tenants_mod
 
-    data_dir = tmp_path / "trent"
+    data_dir = tmp_path / "riley"
     data_dir.mkdir()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-operator-hydrated")
     monkeypatch.setattr(tenants_mod, "tenant_registry_path", lambda *a, **k: tmp_path / "reg.toml")
     monkeypatch.setattr(
         tenants_mod,
         "load_registry",
-        lambda path: [tenants_mod.Tenant(slug="trent", data_dir=data_dir)],
+        lambda path: [tenants_mod.Tenant(slug="riley", data_dir=data_dir)],
     )
 
     from wingman.cli.main import keys_set
 
     monkeypatch.setattr("typer.prompt", lambda text, **kw: "sk-ant-typed-by-hand")
-    keys_set(name="anthropic", value="", scope="workspace", tenant="trent")
+    keys_set(name="anthropic", value="", scope="workspace", tenant="riley")
 
     stored = keys_mod.read_workspace_keys(data_dir)["ANTHROPIC_API_KEY"]
     assert stored == "sk-ant-typed-by-hand"

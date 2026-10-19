@@ -35,7 +35,7 @@ instances never open each other's databases.
 
 ## What is deliberately NOT shared
 
-- **The graphs.** Trent's connections are Trent's data. There is no
+- **The graphs.** Riley's connections are Riley's data. There is no
   cross-workspace query, no shared people table, no merged corpus —
   RFC-002's local-first privacy posture applies per person, and the
   boundary between two friends' workspaces is exactly as hard as the
@@ -53,7 +53,7 @@ instances never open each other's databases.
 
 ### Shape A — own machine each (recommended; zero build)
 
-Trent clones the repo, `uv tool install .`, `wingman init`, imports his
+Riley clones the repo, `uv tool install .`, `wingman init`, imports his
 LinkedIn export, configures his own keys (Keychain on macOS, env vars on
 Linux), points his own Claude Desktop/Woven at his own MCP server.
 Total isolation by geography. INSTALL.md and WALKTHROUGH.md already
@@ -74,7 +74,7 @@ Requires: distinct `--port` per user (exists), nothing else.
 
 ### Shape C — one Unix user, N workspaces (discouraged, works)
 
-`WINGMAN_DATA_DIR=/srv/wingman/trent wingman-mcp --http --port 8788`.
+`WINGMAN_DATA_DIR=/srv/wingman/riley wingman-mcp --http --port 8788`.
 Same binary, same account, env-var-switched workspaces. Acceptable for
 a household machine where both parties trust each other with root
 anyway; unacceptable wherever "trusted friend" shouldn't mean "can read
@@ -92,7 +92,7 @@ discouraged.
 
 1. **`wingman doctor` prints whose workspace it's in.** It reports the
    data dir today; it should also make the active-workspace fact loud
-   ("workspace: /srv/wingman/trent — set by WINGMAN_DATA_DIR") so shape
+   ("workspace: /srv/wingman/riley — set by WINGMAN_DATA_DIR") so shape
    B/C operators can't act on the wrong instance silently.
 2. **`wingman-ctl` takes the environment it's given.** It already honors
    `WINGMAN_REPO`/`WINGMAN_LOG`; it should pass `WINGMAN_DATA_DIR`
@@ -102,12 +102,12 @@ discouraged.
    instances, `wingman mcp status` should say which port this
    workspace's server holds.
 4. **A `--workspace` global CLI flag** as sugar for `WINGMAN_DATA_DIR`
-   (`wingman --workspace ~/w/trent status`). Nice for shape C, pure
+   (`wingman --workspace ~/w/riley status`). Nice for shape C, pure
    convenience — env var stays the mechanism.
 5. **INSTALL.md one-liner** stating the invariant: one person, one
    workspace, never shared.
 
-None of these block Trent starting today on shape A.
+None of these block Riley starting today on shape A.
 
 ## Onboarding checklist for the second user (shape A)
 

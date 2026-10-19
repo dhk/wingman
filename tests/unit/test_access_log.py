@@ -213,10 +213,10 @@ def test_shared_server_serves_its_app_through_the_access_log(
 
     from wingman import mcp_server
 
-    data_dir = tmp_path / "jason"
+    data_dir = tmp_path / "jordan"
     data_dir.mkdir()
     registry = tmp_path / "tenants.toml"
-    registry.write_text(f'[[tenant]]\nslug = "jason"\ndata_dir = "{data_dir}"\n', encoding="utf-8")
+    registry.write_text(f'[[tenant]]\nslug = "jordan"\ndata_dir = "{data_dir}"\n', encoding="utf-8")
     served: list[Any] = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **_kwargs: served.append(app))
     # _run_tenant_server configures the module-global FastMCP instance and

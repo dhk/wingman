@@ -66,10 +66,10 @@ def test_a_hosted_tenant_is_not_told_to_schedule_what_already_runs(
     """The most common wrong answer, and it sends them after somebody else's
     job. A tenant-bound config is self-identifying, so this is checkable."""
     monkeypatch.delenv(ENV_DATA_DIR, raising=False)
-    data_dir = tmp_path / "tenants" / "trent"
+    data_dir = tmp_path / "tenants" / "riley"
     data_dir.mkdir(parents=True)
     Storage(data_dir / "wingman.db").close()
-    config = Tenant(slug="trent", data_dir=data_dir).config()
+    config = Tenant(slug="riley", data_dir=data_dir).config()
 
     guide = _guide(config)
 

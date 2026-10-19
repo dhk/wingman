@@ -32,13 +32,13 @@ def _write_registry(tmp_path: Path, *entries: tuple[str, Path]) -> Path:
 
 
 def test_tenant_url_prints_connector_urls(tmp_path: Path) -> None:
-    data_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    registry = _write_registry(tmp_path, ("jason", data_dir))
+    data_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    registry = _write_registry(tmp_path, ("jordan", data_dir))
     result = cli.invoke(
-        app, ["tenant", "url", "jason", "--registry", str(registry), "--port", "9920"]
+        app, ["tenant", "url", "jordan", "--registry", str(registry), "--port", "9920"]
     )
     assert result.exit_code == 0
-    assert "tok-jason" in result.output
+    assert "tok-jordan" in result.output
     assert "9920" in result.output
 
 
@@ -48,14 +48,14 @@ def test_tenant_url_tunnel_prefix_reaches_the_tunnel_line(tmp_path: Path) -> Non
     needs that prefix even though the loopback URL never does. Found
     live migrating dhk's own account to the shared process (Phase 3):
     the un-prefixed URL 404'd at the tunnel, not at wingman."""
-    data_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    registry = _write_registry(tmp_path, ("jason", data_dir))
+    data_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    registry = _write_registry(tmp_path, ("jordan", data_dir))
     result = cli.invoke(
         app,
         [
             "tenant",
             "url",
-            "jason",
+            "jordan",
             "--registry",
             str(registry),
             "--port",
@@ -67,8 +67,8 @@ def test_tenant_url_tunnel_prefix_reaches_the_tunnel_line(tmp_path: Path) -> Non
         ],
     )
     assert result.exit_code == 0
-    assert "http://127.0.0.1:8789/mcp/tok-jason" in result.output  # loopback: no prefix
-    assert "https://lobster.tail.ts.net/shared/mcp/tok-jason" in result.output  # tunnel: has it
+    assert "http://127.0.0.1:8789/mcp/tok-jordan" in result.output  # loopback: no prefix
+    assert "https://lobster.tail.ts.net/shared/mcp/tok-jordan" in result.output  # tunnel: has it
 
 
 def test_tenant_url_defaults_connector_name_to_wingman_slug(tmp_path: Path) -> None:
@@ -110,9 +110,9 @@ def test_tenant_url_unknown_slug_exits_nonzero(tmp_path: Path) -> None:
 
 
 def test_tenant_url_missing_token_exits_nonzero(tmp_path: Path) -> None:
-    data_dir = _make_tenant(tmp_path, "jason", token=None)  # no token file yet
-    registry = _write_registry(tmp_path, ("jason", data_dir))
-    result = cli.invoke(app, ["tenant", "url", "jason", "--registry", str(registry)])
+    data_dir = _make_tenant(tmp_path, "jordan", token=None)  # no token file yet
+    registry = _write_registry(tmp_path, ("jordan", data_dir))
+    result = cli.invoke(app, ["tenant", "url", "jordan", "--registry", str(registry)])
     assert result.exit_code == 1
     assert "has no token yet" in result.output
 
@@ -120,15 +120,15 @@ def test_tenant_url_missing_token_exits_nonzero(tmp_path: Path) -> None:
 def test_tenant_url_malformed_registry_exits_nonzero(tmp_path: Path) -> None:
     registry = tmp_path / "tenants.toml"
     registry.write_text("not [ valid toml", encoding="utf-8")
-    result = cli.invoke(app, ["tenant", "url", "jason", "--registry", str(registry)])
+    result = cli.invoke(app, ["tenant", "url", "jordan", "--registry", str(registry)])
     assert result.exit_code == 1
     assert "malformed" in result.output
 
 
 def test_tenant_rotate_token_invalidates_old_and_issues_new(tmp_path: Path) -> None:
-    data_dir = _make_tenant(tmp_path, "jason", "tok-old")
-    registry = _write_registry(tmp_path, ("jason", data_dir))
-    result = cli.invoke(app, ["tenant", "rotate-token", "jason", "--registry", str(registry)])
+    data_dir = _make_tenant(tmp_path, "jordan", "tok-old")
+    registry = _write_registry(tmp_path, ("jordan", data_dir))
+    result = cli.invoke(app, ["tenant", "rotate-token", "jordan", "--registry", str(registry)])
     assert result.exit_code == 0
     assert "No running shared process found" in result.output  # nothing running in this test
     new_token = (data_dir / "mcp-http-token").read_text(encoding="utf-8").strip()
@@ -137,11 +137,11 @@ def test_tenant_rotate_token_invalidates_old_and_issues_new(tmp_path: Path) -> N
 
 
 def test_tenant_rotate_token_defaults_connector_name_to_wingman_slug(tmp_path: Path) -> None:
-    data_dir = _make_tenant(tmp_path, "jason", "tok-old")
-    registry = _write_registry(tmp_path, ("jason", data_dir))
-    result = cli.invoke(app, ["tenant", "rotate-token", "jason", "--registry", str(registry)])
+    data_dir = _make_tenant(tmp_path, "jordan", "tok-old")
+    registry = _write_registry(tmp_path, ("jordan", data_dir))
+    result = cli.invoke(app, ["tenant", "rotate-token", "jordan", "--registry", str(registry)])
     assert result.exit_code == 0
-    assert "claude mcp add --transport http wingman-jason " in result.output
+    assert "claude mcp add --transport http wingman-jordan " in result.output
 
 
 def test_tenant_rotate_token_tunnel_prefix_reaches_the_tunnel_line(
@@ -151,14 +151,14 @@ def test_tenant_rotate_token_tunnel_prefix_reaches_the_tunnel_line(
     # it only ever sees a tunnel host via WINGMAN_ALLOWED_HOSTS/Tailscale
     # auto-detection, so that's how this test supplies one.
     monkeypatch.setenv("WINGMAN_ALLOWED_HOSTS", "lobster.tail.ts.net")
-    data_dir = _make_tenant(tmp_path, "jason", "tok-old")
-    registry = _write_registry(tmp_path, ("jason", data_dir))
+    data_dir = _make_tenant(tmp_path, "jordan", "tok-old")
+    registry = _write_registry(tmp_path, ("jordan", data_dir))
     result = cli.invoke(
         app,
         [
             "tenant",
             "rotate-token",
-            "jason",
+            "jordan",
             "--registry",
             str(registry),
             "--tunnel-prefix",
@@ -191,13 +191,13 @@ def test_tenant_rotate_token_unknown_slug_exits_nonzero(tmp_path: Path) -> None:
 
 def test_tenant_urls_with_slug_matches_tenant_url(tmp_path: Path) -> None:
     """A slug given to 'urls' behaves exactly like the singular 'url'."""
-    data_dir = _make_tenant(tmp_path, "jason", "tok-jason")
-    registry = _write_registry(tmp_path, ("jason", data_dir))
+    data_dir = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    registry = _write_registry(tmp_path, ("jordan", data_dir))
     singular = cli.invoke(
-        app, ["tenant", "url", "jason", "--registry", str(registry), "--port", "9920"]
+        app, ["tenant", "url", "jordan", "--registry", str(registry), "--port", "9920"]
     )
     plural = cli.invoke(
-        app, ["tenant", "urls", "jason", "--registry", str(registry), "--port", "9920"]
+        app, ["tenant", "urls", "jordan", "--registry", str(registry), "--port", "9920"]
     )
     assert singular.exit_code == plural.exit_code == 0
     assert singular.output == plural.output
@@ -211,34 +211,34 @@ def test_tenant_urls_with_unknown_slug_exits_nonzero(tmp_path: Path) -> None:
 
 
 def test_tenant_urls_with_slug_missing_token_exits_nonzero(tmp_path: Path) -> None:
-    data_dir = _make_tenant(tmp_path, "jason", token=None)
-    registry = _write_registry(tmp_path, ("jason", data_dir))
-    result = cli.invoke(app, ["tenant", "urls", "jason", "--registry", str(registry)])
+    data_dir = _make_tenant(tmp_path, "jordan", token=None)
+    registry = _write_registry(tmp_path, ("jordan", data_dir))
+    result = cli.invoke(app, ["tenant", "urls", "jordan", "--registry", str(registry)])
     assert result.exit_code == 1
     assert "has no token yet" in result.output
 
 
 def test_tenant_urls_without_slug_lists_every_tenant(tmp_path: Path) -> None:
-    connected = _make_tenant(tmp_path, "jason", "tok-jason")
-    not_connected = _make_tenant(tmp_path, "bob", token=None)
-    registry = _write_registry(tmp_path, ("jason", connected), ("bob", not_connected))
+    connected = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    not_connected = _make_tenant(tmp_path, "casey", token=None)
+    registry = _write_registry(tmp_path, ("jordan", connected), ("casey", not_connected))
     result = cli.invoke(app, ["tenant", "urls", "--registry", str(registry), "--port", "9920"])
     assert result.exit_code == 0
-    assert "jason:" in result.output
-    assert "tok-jason" in result.output
-    assert "bob: not yet connected (no token minted)" in result.output
+    assert "jordan:" in result.output
+    assert "tok-jordan" in result.output
+    assert "casey: not yet connected (no token minted)" in result.output
 
 
 def test_tenant_urls_without_slug_derives_a_name_per_tenant(tmp_path: Path) -> None:
     """Issue #253: the roster view can't apply one fixed connector name
     to every tenant, so each gets its own 'wingman-<slug>' automatically."""
-    jason = _make_tenant(tmp_path, "jason", "tok-jason")
-    bob = _make_tenant(tmp_path, "bob", "tok-bob")
-    registry = _write_registry(tmp_path, ("jason", jason), ("bob", bob))
+    jordan = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    casey = _make_tenant(tmp_path, "casey", "tok-casey")
+    registry = _write_registry(tmp_path, ("jordan", jordan), ("casey", casey))
     result = cli.invoke(app, ["tenant", "urls", "--registry", str(registry)])
     assert result.exit_code == 0
-    assert "claude mcp add --transport http wingman-jason " in result.output
-    assert "claude mcp add --transport http wingman-bob " in result.output
+    assert "claude mcp add --transport http wingman-jordan " in result.output
+    assert "claude mcp add --transport http wingman-casey " in result.output
 
 
 def test_tenant_urls_without_slug_and_empty_registry(tmp_path: Path) -> None:
@@ -257,8 +257,8 @@ def test_tenant_urls_without_slug_malformed_registry_exits_nonzero(tmp_path: Pat
 
 
 def test_tenant_urls_tunnel_prefix_reaches_every_tenant(tmp_path: Path) -> None:
-    connected = _make_tenant(tmp_path, "jason", "tok-jason")
-    registry = _write_registry(tmp_path, ("jason", connected))
+    connected = _make_tenant(tmp_path, "jordan", "tok-jordan")
+    registry = _write_registry(tmp_path, ("jordan", connected))
     result = cli.invoke(
         app,
         [
@@ -275,8 +275,8 @@ def test_tenant_urls_tunnel_prefix_reaches_every_tenant(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 0
-    assert "http://127.0.0.1:8789/mcp/tok-jason" in result.output  # loopback: no prefix
-    assert "https://lobster.tail.ts.net/shared/mcp/tok-jason" in result.output  # tunnel: has it
+    assert "http://127.0.0.1:8789/mcp/tok-jordan" in result.output  # loopback: no prefix
+    assert "https://lobster.tail.ts.net/shared/mcp/tok-jordan" in result.output  # tunnel: has it
 
 
 def test_tenant_urls_unreadable_registry_diagnoses_rather_than_says_malformed(
@@ -314,7 +314,7 @@ def test_tenant_keys_by_key_groups_tenants_sharing_one_credential(
 
     shared = tmp_path / "global.env"
     shared.write_text("ANTHROPIC_API_KEY=sk-ant-shared-operator\n", encoding="utf-8")
-    for slug in ("jason", "bob", "dave", "newbie"):
+    for slug in ("jordan", "casey", "dave", "newbie"):
         (tmp_path / slug).mkdir()
     (tmp_path / "dave" / "keys.env").write_text(
         "ANTHROPIC_API_KEY=sk-ant-daves-own\n", encoding="utf-8"
@@ -323,8 +323,8 @@ def test_tenant_keys_by_key_groups_tenants_sharing_one_credential(
     registry.write_text(
         "".join(
             f'[[tenant]]\nslug = "{slug}"\ndata_dir = "{tmp_path / slug}"\n'
-            + ("funded = true\n" if slug in ("jason", "bob") else "")
-            for slug in ("jason", "bob", "dave", "newbie")
+            + ("funded = true\n" if slug in ("jordan", "casey") else "")
+            for slug in ("jordan", "casey", "dave", "newbie")
         ),
         encoding="utf-8",
     )
@@ -335,8 +335,8 @@ def test_tenant_keys_by_key_groups_tenants_sharing_one_credential(
 
     # The two funded tenants appear as ONE group; dave's own key is its own.
     assert "2 tenants" in out
-    jason_line = next(line for line in out.splitlines() if "jason" in line)
-    assert "bob" in jason_line and "dave" not in jason_line
+    jordan_line = next(line for line in out.splitlines() if "jordan" in line)
+    assert "casey" in jordan_line and "dave" not in jordan_line
     # A tenant with nothing is visible rather than absent.
     assert "(not configured)" in out
     assert "newbie" in out

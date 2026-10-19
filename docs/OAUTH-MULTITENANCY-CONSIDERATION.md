@@ -1,8 +1,8 @@
 # OAuth and multi-tenant server support — a considered "not yet"
 
 **Superseded first by RFC-048 and now, for authentication, by RFC-081**
-(`docs/RFC.md`). RFC-048 acted as of the fourth tenant (`jason`, `bob` joining
-`dhk`/`trent`) — exactly this document's own named trigger,
+(`docs/RFC.md`). RFC-048 acted as of the fourth tenant (`jordan`, `casey` joining
+`dhk`/`riley`) — exactly this document's own named trigger,
 *"a third user appears… three friends is a product,"* now real and acted
 on explicitly rather than inferred from operational pain. RFC-048 did
 not overturn this document's reasoning about the tenant-count-vs-overhead
@@ -89,7 +89,7 @@ four argue that per-account isolation itself is the problem.
 ## Why not build it anyway, given the direction seems plausible eventually
 
 **The isolation is currently free, and multi-tenancy would make wingman
-respinsible for a boundary the OS gives away for nothing.** Today, Trent
+respinsible for a boundary the OS gives away for nothing.** Today, Riley
 reading dhk's job search requires a bug in the *kernel's* UID separation.
 Under one shared process serving both, it requires a bug in *wingman's own*
 authorization code — a strictly larger, self-authored attack surface, for
@@ -125,7 +125,7 @@ explicitly parked, not made.** `docs/SERVER.md`'s opening line: *"local-first
 with a longer extension cord, not hosting (RFC-002 holds; the hosted tiers
 remain a separate, parked decision)."* Building multi-tenant infrastructure
 now would be pre-building for a business decision nobody has made, for the
-benefit of zero current users (dhk and Trent are both already served, each
+benefit of zero current users (dhk and Riley are both already served, each
 by their own isolated instance).
 
 ## Alternatives considered
