@@ -1,8 +1,9 @@
 """Opportunity summaries: everything assessed, one row each (#312).
 
-A read-only view over opportunities already saved by application.assess —
-no new storage, no pipeline-stage tracking, and no link from answer_bank
-to an opportunity_id (all explicitly out of scope for #312).
+A read-only view over opportunities already saved by application.assess,
+plus each one's current stage from the opportunity journal (RFC-076) —
+an exact fact, set only by an explicit human update. There is still no
+link from answer_bank to an opportunity_id (out of scope for #312).
 
 Two of the summary's fields are best-effort approximations rather than
 derived facts, per AGENTS.md invariant 9 ("partial truth over polished
@@ -25,6 +26,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from wingman.application.opportunity_lifecycle import current_stage
 from wingman.application.pack import _slug
 from wingman.application.similarity import company_key, infer_company_from_title
 from wingman.domain.answer import AnswerRecord
@@ -37,7 +39,8 @@ class OpportunitySummary(BaseModel):
     """One row of the opportunity list.
 
     See the module docstring for which fields are exact
-    (opportunity_id, title, verdict_counts, next_action, assessed_at) and
+    (opportunity_id, title, verdict_counts, next_action, assessed_at,
+    stage, stage_set_at) and
     which are best-effort approximations (company, pack_composed,
     answers_matched).
     """
@@ -48,6 +51,8 @@ class OpportunitySummary(BaseModel):
     verdict_counts: dict[str, int]
     next_action: str
     assessed_at: datetime
+    stage: str
+    stage_set_at: datetime | None
     pack_composed: bool
     answers_matched: int
 
@@ -100,6 +105,8 @@ def list_opportunity_summaries(storage: Storage, config: Config) -> list[Opportu
         answers_matched = sum(
             1 for record in answers if _answer_matches(record, opportunity, company)
         )
+        events = storage.list_opportunity_events(opportunity.opportunity_id)
+        staged = [event for event in events if event.stage is not None]
         summaries.append(
             OpportunitySummary(
                 opportunity_id=opportunity.opportunity_id,
@@ -108,6 +115,8 @@ def list_opportunity_summaries(storage: Storage, config: Config) -> list[Opportu
                 verdict_counts=verdict_counts,
                 next_action=opportunity.next_action,
                 assessed_at=opportunity.created_at,
+                stage=current_stage(events).value,
+                stage_set_at=staged[-1].happened_at if staged else None,
                 pack_composed=_pack_composed(opportunity, config),
                 answers_matched=answers_matched,
             )
@@ -131,8 +140,10 @@ def render_opportunity_listing(summaries: list[OpportunitySummary]) -> str:
         where = f" @ {summary.company}" if summary.company else ""
         counts = " ".join(f"{key}:{value}" for key, value in summary.verdict_counts.items())
         pack = "pack composed (best-effort)" if summary.pack_composed else "no pack found"
+        since = f" since {summary.stage_set_at.date().isoformat()}" if summary.stage_set_at else ""
         lines.append(
-            f"{summary.title}{where}  [{counts}]  next: {summary.next_action}"
+            f"{summary.title}{where}  stage: {summary.stage}{since}  [{counts}]"
+            f"  next: {summary.next_action}"
             f"  assessed {summary.assessed_at.date().isoformat()}  {pack}"
             f"  answers~{summary.answers_matched} (approx)"
             f"  ({summary.opportunity_id[:8]})"

@@ -183,10 +183,11 @@ Two honest ways forward, and the design takes both:
    carrying `confidence: "inferred"` plus a `basis` string saying exactly what
    was and was not observed. A surface can then say "no pursuit state exists"
    rather than implying one was checked.
-2. **Add the lifecycle separately** (RFC-076, not written): `OpportunityStatus`
-   grows `PURSUING` / `APPLIED` / `DECLINED` / `CLOSED`, set only by an explicit
-   human act, never inferred. Then `confidence` becomes `"known"` and the ledger
-   means what it says.
+2. **Add the lifecycle separately** (RFC-076, now written): `OpportunityStatus`
+   grows `shortlisted` / `applied` / `interviewing` / `offer` / `rejected` /
+   `withdrawn`, appended to the opportunity journal only by an explicit human
+   act, never inferred. When `dashboard_state()` ships, `pursuit` reads that
+   journal, `confidence` becomes `"known"` and the ledger means what it says.
 
 The contract must not wait on the lifecycle, and the lifecycle must not be
 faked inside the contract.

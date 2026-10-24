@@ -16,6 +16,7 @@ import typer
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from wingman.domain.subject import SubjectRef
     from wingman.infrastructure.oauth_bearer import IdentityMap
     from wingman.infrastructure.oauth_service_issuers import ServiceIssuers
     from wingman.infrastructure.tenants import Tenant
@@ -233,8 +234,12 @@ from wingman.version import wingman_version
 app = typer.Typer(help="Wingman: local-first career intelligence.")
 corpus_app = typer.Typer(help="Manage the corpus: your writing as citable evidence.")
 app.add_typer(corpus_app, name="corpus")
-opportunities_app = typer.Typer(help="Inspect assessed opportunities.")
+opportunities_app = typer.Typer(help="Inspect assessed opportunities and record their stage.")
 app.add_typer(opportunities_app, name="opportunities")
+subjects_app = typer.Typer(
+    help="Initiatives and content pieces, and the timeline of any subject (RFC-085)."
+)
+app.add_typer(subjects_app, name="subjects")
 people_app = typer.Typer(help="Watchlist of people and their public writing.")
 app.add_typer(people_app, name="people")
 company_app = typer.Typer(help="Companies, seen through the writing of their people and blogs.")
@@ -3027,16 +3032,23 @@ def people_log(
     """
     configure_logging()
     from wingman.application.relationship import list_log, render_log
+    from wingman.application.subjects import render_linked_for_person, resolve_subject
+    from wingman.domain.subject import SubjectKind
 
     config = load_config()
     _require_workspace(config, "listed")
     try:
         with Storage(config.db_path) as storage:
             person, entries = list_log(name, storage)
+            linked = render_linked_for_person(
+                resolve_subject(SubjectKind.PERSON, person.name, storage), storage
+            )
     except IngestError as exc:
         typer.echo(f"people log failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(render_log(person, entries))
+    if linked:
+        typer.echo(linked)
 
 
 @people_app.command("evidence")
@@ -6578,27 +6590,56 @@ def perspectives() -> None:
 
 @app.command("log")
 def log_interaction_cmd(
-    person: str = typer.Argument(..., help="Who this happened with."),
+    person: str = typer.Argument(
+        ..., help="Who (or, with --kind, which company/opportunity/initiative/content)."
+    ),
     note: str = typer.Argument(..., help="What happened — stored verbatim as evidence."),
+    kind: str = typer.Option(
+        "person",
+        "--kind",
+        help="What the first argument names: person, company, opportunity, initiative, content.",
+    ),
+    link: list[str] = typer.Option(  # noqa: B008
+        [],
+        "--link",
+        help="Another subject this event concerns, as kind:name (repeatable).",
+    ),
 ) -> None:
     """Record an interaction with a watched person (RFC-037): 'coffee with
     R., discussed the eval harness role'. Deterministic, zero model calls
     — the note becomes citable evidence for future briefs and objective
     reviews. See 'wingman people log <person>' to list past entries.
+
+    --kind logs against a company, opportunity, initiative or content piece
+    instead (RFC-085); --link puts the same entry in other subjects'
+    timelines ('wingman subjects show' lists them).
     """
     configure_logging()
-    from wingman.application.relationship import log_interaction
+    from wingman.application.subjects import log_for_subject, parse_kind
+    from wingman.domain.subject import SubjectKind
 
     config = load_config()
     _require_workspace(config, "logged")
     try:
+        subject_kind = parse_kind(kind)
         with Storage(config.db_path) as storage:
-            report = log_interaction(person, note, config, storage)
+            report = log_for_subject(subject_kind, person, note, config, storage, links=link)
     except IngestError as exc:
         typer.echo(f"log failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(f"Logged for {report.person}: {report.entry.note}")
-    typer.echo(f"evidence file: {report.source_path}")
+    where = (
+        report.subject.label
+        if subject_kind is SubjectKind.PERSON
+        else f"{subject_kind.value} {report.subject.label}"
+    )
+    typer.echo(f"Logged for {where}: {report.note}")
+    if report.source_path:
+        typer.echo(f"evidence file: {report.source_path}")
+    if report.links:
+        typer.echo(
+            "also in the timeline of: "
+            + ", ".join(f"{ref.kind.value} {ref.label}" for ref in report.links)
+        )
 
 
 @criteria_app.command("show")
@@ -6656,16 +6697,45 @@ def criteria_save(
     typer.echo(f"Saved {path} — overnight runs now score new openings against it.")
 
 
+_OBJECTIVE_KIND_HELP = "What the name refers to: person, company, opportunity, initiative, content."
+
+
+def _non_person_subject(kind: str, name: str, storage: Storage) -> SubjectRef | None:
+    """The SubjectRef for a non-person --kind, or None for a person (RFC-085)."""
+    from wingman.application.subjects import parse_kind, resolve_subject
+    from wingman.domain.subject import SubjectKind
+
+    subject_kind = parse_kind(kind)
+    if subject_kind is SubjectKind.PERSON:
+        return None
+    return resolve_subject(subject_kind, name, storage)
+
+
 @objective_app.command("show")
 def objective_show(
     person: str = typer.Argument(..., help="The person the objective is for."),
+    kind: str = typer.Option("person", "--kind", help=_OBJECTIVE_KIND_HELP),
 ) -> None:
     """Print the relationship objective for one person: goal, thesis, next move."""
     configure_logging()
     from wingman.application.relationship import load_objective, render_objective
+    from wingman.application.subjects import load_subject_objective, render_subject_objective
 
     config = load_config()
     _require_workspace(config, "shown")
+    try:
+        with Storage(config.db_path) as storage:
+            subject = _non_person_subject(kind, person, storage)
+            if subject is not None:
+                view = load_subject_objective(subject, storage)
+                if view is None:
+                    typer.echo(f"No objective for {subject.kind.value} {subject.label} yet.")
+                    raise typer.Exit(code=1)
+                typer.echo(render_subject_objective(view))
+                return
+    except IngestError as exc:
+        typer.echo(f"objective show failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     try:
         with Storage(config.db_path) as storage:
             who, objective = load_objective(person, storage)
@@ -6685,6 +6755,7 @@ def objective_show(
 @objective_app.command("review")
 def objective_review(
     person: str = typer.Argument(..., help="The person to seed or revise an objective for."),
+    kind: str = typer.Option("person", "--kind", help=_OBJECTIVE_KIND_HELP),
 ) -> None:
     """Print the interview packet: current objective (if any) plus the three areas.
 
@@ -6692,11 +6763,16 @@ def objective_review(
     """
     configure_logging()
     from wingman.application.relationship import render_interview
+    from wingman.application.subjects import render_subject_interview
 
     config = load_config()
     _require_workspace(config, "reviewed")
     try:
         with Storage(config.db_path) as storage:
+            subject = _non_person_subject(kind, person, storage)
+            if subject is not None:
+                typer.echo(render_subject_interview(subject, storage))
+                return
             typer.echo(render_interview(person, storage))
     except IngestError as exc:
         typer.echo(f"objective review failed: {exc}", err=True)
@@ -6711,15 +6787,22 @@ def objective_save(
     next_move: str = typer.Option(
         ..., "--next-move", help="The next intended action, concrete enough to act on."
     ),
+    kind: str = typer.Option("person", "--kind", help=_OBJECTIVE_KIND_HELP),
 ) -> None:
     """Replace the relationship objective for one person — your confirmed words."""
     configure_logging()
     from wingman.application.relationship import render_objective, save_objective
+    from wingman.application.subjects import render_subject_objective, save_subject_objective
 
     config = load_config()
     _require_workspace(config, "saved")
     try:
         with Storage(config.db_path) as storage:
+            subject = _non_person_subject(kind, person, storage)
+            if subject is not None:
+                view = save_subject_objective(subject, goal, thesis, next_move, storage)
+                typer.echo(f"Saved.\n{render_subject_objective(view)}")
+                return
             objective = save_objective(person, goal, thesis, next_move, storage)
             who = storage.get_person(objective.person_id)
     except IngestError as exc:
@@ -7372,6 +7455,173 @@ def opportunities_list() -> None:
     with Storage(config.db_path) as storage:
         summaries = list_opportunity_summaries(storage, config)
     typer.echo(render_opportunity_listing(summaries))
+
+
+@opportunities_app.command("update")
+def opportunities_update(
+    opportunity: str = typer.Argument(
+        ..., help="Opportunity id (the 8 characters the list prints) or a unique title fragment."
+    ),
+    stage: str = typer.Option(
+        "",
+        "--stage",
+        help="New stage: assessed, shortlisted, applied, interviewing, offer, rejected, withdrawn.",
+    ),
+    note: str = typer.Option("", "--note", help="A working note, stored verbatim."),
+) -> None:
+    """Record a stage change and/or a working note (RFC-076). Append-only:
+    the journal keeps every entry, and the latest stage is what lists show.
+    A note is yours to keep, never career evidence."""
+    configure_logging()
+    from wingman.application.opportunity_lifecycle import render_update, update_opportunity
+
+    config = load_config()
+    _require_workspace(config, "updated")
+    try:
+        with Storage(config.db_path) as storage:
+            # Typed here by the user, so the note is already their own words.
+            outcome = update_opportunity(
+                opportunity, storage, stage=stage, note=note, note_confirmed=True
+            )
+    except IngestError as exc:
+        typer.echo(f"opportunities update failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_update(outcome))
+
+
+@opportunities_app.command("history")
+def opportunities_history(
+    opportunity: str = typer.Argument(
+        ..., help="Opportunity id (the 8 characters the list prints) or a unique title fragment."
+    ),
+) -> None:
+    """Show one opportunity's journal, oldest first, and its current stage."""
+    configure_logging()
+    from wingman.application.opportunity_lifecycle import render_journal, resolve_opportunity
+
+    config = load_config()
+    _require_workspace(config, "shown")
+    try:
+        with Storage(config.db_path) as storage:
+            found = resolve_opportunity(opportunity, storage)
+            events = storage.list_opportunity_events(found.opportunity_id)
+    except IngestError as exc:
+        typer.echo(f"opportunities history failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_journal(found, events))
+
+
+_SUBJECT_KIND_HELP = "initiative or content."
+
+
+@subjects_app.command("add")
+def subjects_add(
+    name: str = typer.Argument(..., help="Its name."),
+    kind: str = typer.Option("initiative", "--kind", help=_SUBJECT_KIND_HELP),
+    description: str = typer.Option("", "--description", help="One line on what it is."),
+    url: str = typer.Option("", "--url", help="Where it lives, if anywhere."),
+) -> None:
+    """Add an initiative (a project you run) or a content piece (something you
+    write or teach). Companies, people and opportunities are not added here."""
+    configure_logging()
+    from wingman.application.subjects import add_subject, parse_kind
+
+    config = load_config()
+    _require_workspace(config, "added")
+    try:
+        with Storage(config.db_path) as storage:
+            created = add_subject(parse_kind(kind), name, storage, description=description, url=url)
+    except IngestError as exc:
+        typer.echo(f"subjects add failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Added {created.kind.value}: {created.name}")
+
+
+@subjects_app.command("list")
+def subjects_list(
+    kind: str = typer.Option("", "--kind", help=f"Only this kind: {_SUBJECT_KIND_HELP}"),
+) -> None:
+    """List initiatives and content pieces."""
+    configure_logging()
+    from wingman.application.subjects import parse_kind, render_subject_list
+
+    config = load_config()
+    _require_workspace(config, "listed")
+    try:
+        with Storage(config.db_path) as storage:
+            found = storage.list_subjects(parse_kind(kind) if kind.strip() else None)
+    except IngestError as exc:
+        typer.echo(f"subjects list failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_subject_list(found))
+
+
+@subjects_app.command("show")
+def subjects_show(
+    name: str = typer.Argument(..., help="The subject's name (an opportunity's id)."),
+    kind: str = typer.Option(
+        "person",
+        "--kind",
+        help="person, company, opportunity, initiative or content.",
+    ),
+) -> None:
+    """Show one subject: its objective, what it is aimed at or what content is
+    aimed at it, and its whole timeline, including entries linked to it."""
+    configure_logging()
+    from wingman.application.subjects import parse_kind, render_subject, resolve_subject
+
+    config = load_config()
+    _require_workspace(config, "shown")
+    try:
+        with Storage(config.db_path) as storage:
+            subject = resolve_subject(parse_kind(kind), name, storage)
+            typer.echo(render_subject(subject, storage))
+    except IngestError as exc:
+        typer.echo(f"subjects show failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _aim(action: str, content: str, target: str) -> None:
+    from wingman.application.subjects import aim_content, unaim_content
+
+    config = load_config()
+    _require_workspace(config, "updated")
+    try:
+        with Storage(config.db_path) as storage:
+            aim = aim_content if action == "target" else unaim_content
+            piece, aimed, changed = aim(content, target, storage)
+    except IngestError as exc:
+        typer.echo(f"subjects {action} failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    where = f"{aimed.kind.value} {aimed.label}"
+    if action == "target":
+        typer.echo(
+            f"{piece.label} {'now aimed at' if changed else 'was already aimed at'} {where}."
+        )
+    else:
+        typer.echo(
+            f"{piece.label} {'no longer aimed at' if changed else 'was not aimed at'} {where}."
+        )
+
+
+@subjects_app.command("target")
+def subjects_target(
+    content: str = typer.Argument(..., help="The content piece's name."),
+    target: str = typer.Argument(..., help="Who it is aimed at: person:<name> or company:<name>."),
+) -> None:
+    """Aim a content piece at a person or company."""
+    configure_logging()
+    _aim("target", content, target)
+
+
+@subjects_app.command("untarget")
+def subjects_untarget(
+    content: str = typer.Argument(..., help="The content piece's name."),
+    target: str = typer.Argument(..., help="person:<name> or company:<name>."),
+) -> None:
+    """Stop aiming a content piece at a person or company."""
+    configure_logging()
+    _aim("untarget", content, target)
 
 
 if __name__ == "__main__":

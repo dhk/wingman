@@ -23,7 +23,7 @@ from wingman.domain.examples import Example
 from wingman.domain.heap import HeapItem
 from wingman.domain.model_usage import ModelUsage
 from wingman.domain.operator_answer import OperatorAnswer
-from wingman.domain.opportunity import Opportunity
+from wingman.domain.opportunity import Opportunity, OpportunityEvent
 from wingman.domain.outreach import OutreachBrief
 from wingman.domain.person import ExternalDocument, NewsItem, Person, PersonDossier, PersonOrigin
 from wingman.domain.persona import Persona
@@ -32,6 +32,13 @@ from wingman.domain.profile import ItemStatus, ProfileItem, ProfileItemKind
 from wingman.domain.relationship import RelationshipLogEntry, RelationshipObjective
 from wingman.domain.research import CompanySource, NewLinkEvent, ResearchSnapshot
 from wingman.domain.source_record import derive_document_key
+from wingman.domain.subject import (
+    Subject,
+    SubjectKind,
+    SubjectLogEntry,
+    SubjectObjective,
+    SubjectRef,
+)
 from wingman.domain.values import ValueProfile, ValueView
 from wingman.infrastructure.usage_ledger import (
     MODEL_USAGE_INDEX_SQL,
@@ -213,6 +220,65 @@ CREATE TABLE IF NOT EXISTS relationship_log (
     happened_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_relationship_log_person ON relationship_log (person_id);
+-- The opportunity journal (RFC-076, #496): append-only stage changes and
+-- working notes. Rows are never updated or deleted by any write path; the
+-- latest row with a stage is the opportunity's current stage.
+CREATE TABLE IF NOT EXISTS opportunity_journal (
+    event_id TEXT PRIMARY KEY,
+    opportunity_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    happened_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_journal_opportunity
+    ON opportunity_journal (opportunity_id);
+-- Subjects beyond people (RFC-085, #647). Initiatives and content pieces are
+-- records of their own; companies (company_key), opportunities
+-- (opportunity_id) and people (person_id) are referenced, never copied.
+CREATE TABLE IF NOT EXISTS subjects (
+    subject_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    name_key TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (kind, name_key)
+);
+CREATE TABLE IF NOT EXISTS subject_log (
+    entry_id TEXT PRIMARY KEY,
+    subject_kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    source_record_id TEXT NOT NULL UNIQUE,
+    payload TEXT NOT NULL,
+    happened_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_subject_log_subject ON subject_log (subject_kind, subject_id);
+-- One event, several timelines: a log entry (relationship_log, subject_log
+-- or opportunity_journal) linked to further subjects.
+CREATE TABLE IF NOT EXISTS log_links (
+    entry_id TEXT NOT NULL,
+    subject_kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    PRIMARY KEY (entry_id, subject_kind, subject_id)
+);
+CREATE INDEX IF NOT EXISTS idx_log_links_subject ON log_links (subject_kind, subject_id);
+CREATE TABLE IF NOT EXISTS subject_objectives (
+    objective_id TEXT PRIMARY KEY,
+    subject_kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (subject_kind, subject_id)
+);
+-- Which people or companies a content piece is aimed at.
+CREATE TABLE IF NOT EXISTS content_targets (
+    content_id TEXT NOT NULL,
+    target_kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (content_id, target_kind, target_id)
+);
+CREATE INDEX IF NOT EXISTS idx_content_targets_target ON content_targets (target_kind, target_id);
 CREATE TABLE IF NOT EXISTS embeddings (
     doc_id TEXT PRIMARY KEY,
     scope TEXT NOT NULL,
@@ -680,6 +746,232 @@ class Storage:
         count: int = cursor.fetchone()[0]
         return count
 
+    def get_opportunity(self, opportunity_id: str) -> Opportunity | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM opportunities WHERE opportunity_id = ?", (opportunity_id,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return Opportunity.model_validate_json(row[0]) if row else None
+
+    def add_opportunity_event(self, event: OpportunityEvent) -> None:
+        """Append one journal event (RFC-076). There is no update or delete."""
+        try:
+            self._conn.execute(
+                "INSERT INTO opportunity_journal (event_id, opportunity_id, payload, happened_at)"
+                " VALUES (?, ?, ?, ?)",
+                (
+                    event.event_id,
+                    event.opportunity_id,
+                    event.model_dump_json(),
+                    event.happened_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRecordError(f"journal event {event.event_id} already exists") from exc
+        self._conn.commit()
+
+    def list_opportunity_events(self, opportunity_id: str | None = None) -> list[OpportunityEvent]:
+        """Journal events, oldest first — one opportunity's, or every one."""
+        if opportunity_id is None:
+            cursor = self._conn.execute(
+                "SELECT payload FROM opportunity_journal ORDER BY happened_at, rowid"
+            )
+        else:
+            cursor = self._conn.execute(
+                "SELECT payload FROM opportunity_journal WHERE opportunity_id = ?"
+                " ORDER BY happened_at, rowid",
+                (opportunity_id,),
+            )
+        return [OpportunityEvent.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def get_opportunity_event(self, event_id: str) -> OpportunityEvent | None:
+        row = self._conn.execute(
+            "SELECT payload FROM opportunity_journal WHERE event_id = ?", (event_id,)
+        ).fetchone()
+        return OpportunityEvent.model_validate_json(row[0]) if row else None
+
+    def add_subject(self, subject: Subject) -> None:
+        try:
+            self._conn.execute(
+                "INSERT INTO subjects (subject_id, kind, name_key, payload, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    subject.subject_id,
+                    subject.kind.value,
+                    subject.name_key,
+                    subject.model_dump_json(),
+                    subject.created_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRecordError(
+                f"a {subject.kind.value} named {subject.name!r} already exists"
+            ) from exc
+        self._conn.commit()
+
+    def find_subject(self, kind: SubjectKind, name_key: str) -> Subject | None:
+        row = self._conn.execute(
+            "SELECT payload FROM subjects WHERE kind = ? AND name_key = ?",
+            (kind.value, name_key),
+        ).fetchone()
+        return Subject.model_validate_json(row[0]) if row else None
+
+    def list_subjects(self, kind: SubjectKind | None = None) -> list[Subject]:
+        if kind is None:
+            cursor = self._conn.execute("SELECT payload FROM subjects ORDER BY kind, name_key")
+        else:
+            cursor = self._conn.execute(
+                "SELECT payload FROM subjects WHERE kind = ? ORDER BY name_key", (kind.value,)
+            )
+        return [Subject.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def add_subject_log_entry(self, entry: SubjectLogEntry) -> None:
+        try:
+            self._conn.execute(
+                "INSERT INTO subject_log"
+                " (entry_id, subject_kind, subject_id, source_record_id, payload, happened_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    entry.entry_id,
+                    entry.subject.kind.value,
+                    entry.subject.subject_id,
+                    entry.source_record_id,
+                    entry.model_dump_json(),
+                    entry.happened_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRecordError(
+                f"log entry for source {entry.source_record_id} already exists"
+            ) from exc
+        self._conn.commit()
+
+    def list_subject_log_entries(self, ref: SubjectRef | None = None) -> list[SubjectLogEntry]:
+        if ref is None:
+            cursor = self._conn.execute(
+                "SELECT payload FROM subject_log ORDER BY happened_at, entry_id"
+            )
+        else:
+            cursor = self._conn.execute(
+                "SELECT payload FROM subject_log WHERE subject_kind = ? AND subject_id = ?"
+                " ORDER BY happened_at, entry_id",
+                ref.key(),
+            )
+        return [SubjectLogEntry.model_validate_json(row[0]) for row in cursor.fetchall()]
+
+    def get_subject_log_entry(self, entry_id: str) -> SubjectLogEntry | None:
+        row = self._conn.execute(
+            "SELECT payload FROM subject_log WHERE entry_id = ?", (entry_id,)
+        ).fetchone()
+        return SubjectLogEntry.model_validate_json(row[0]) if row else None
+
+    def get_log_entry(self, entry_id: str) -> RelationshipLogEntry | None:
+        row = self._conn.execute(
+            "SELECT payload FROM relationship_log WHERE entry_id = ?", (entry_id,)
+        ).fetchone()
+        return RelationshipLogEntry.model_validate_json(row[0]) if row else None
+
+    def add_log_links(self, entry_id: str, refs: Iterable[SubjectRef]) -> None:
+        self._conn.executemany(
+            "INSERT OR IGNORE INTO log_links (entry_id, subject_kind, subject_id, label)"
+            " VALUES (?, ?, ?, ?)",
+            [(entry_id, ref.kind.value, ref.subject_id, ref.label) for ref in refs],
+        )
+        self._conn.commit()
+
+    def list_links_from(self, entry_id: str) -> list[SubjectRef]:
+        cursor = self._conn.execute(
+            "SELECT subject_kind, subject_id, label FROM log_links WHERE entry_id = ?"
+            " ORDER BY rowid",
+            (entry_id,),
+        )
+        return [
+            SubjectRef(kind=SubjectKind(kind), subject_id=subject_id, label=label)
+            for kind, subject_id, label in cursor.fetchall()
+        ]
+
+    def list_entries_linked_to(self, ref: SubjectRef) -> list[str]:
+        cursor = self._conn.execute(
+            "SELECT entry_id FROM log_links WHERE subject_kind = ? AND subject_id = ?"
+            " ORDER BY rowid",
+            ref.key(),
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+    def save_subject_objective(self, objective: SubjectObjective) -> None:
+        self._conn.execute(
+            "INSERT INTO subject_objectives"
+            " (objective_id, subject_kind, subject_id, payload, updated_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(subject_kind, subject_id) DO UPDATE SET"
+            " payload = excluded.payload, updated_at = excluded.updated_at",
+            (
+                objective.objective_id,
+                objective.subject.kind.value,
+                objective.subject.subject_id,
+                objective.model_dump_json(),
+                objective.updated_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def get_subject_objective(self, ref: SubjectRef) -> SubjectObjective | None:
+        row = self._conn.execute(
+            "SELECT payload FROM subject_objectives WHERE subject_kind = ? AND subject_id = ?",
+            ref.key(),
+        ).fetchone()
+        return SubjectObjective.model_validate_json(row[0]) if row else None
+
+    def add_content_target(self, content_id: str, target: SubjectRef) -> bool:
+        """Aim a content piece at a subject; False when it already was."""
+        cursor = self._conn.execute(
+            "INSERT OR IGNORE INTO content_targets"
+            " (content_id, target_kind, target_id, label, added_at) VALUES (?, ?, ?, ?, ?)",
+            (
+                content_id,
+                target.kind.value,
+                target.subject_id,
+                target.label,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def remove_content_target(self, content_id: str, target: SubjectRef) -> bool:
+        cursor = self._conn.execute(
+            "DELETE FROM content_targets WHERE content_id = ? AND target_kind = ? AND target_id = ?",
+            (content_id, *target.key()),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def list_content_targets(self, content_id: str) -> list[SubjectRef]:
+        cursor = self._conn.execute(
+            "SELECT target_kind, target_id, label FROM content_targets WHERE content_id = ?"
+            " ORDER BY added_at, rowid",
+            (content_id,),
+        )
+        return [
+            SubjectRef(kind=SubjectKind(kind), subject_id=target_id, label=label)
+            for kind, target_id, label in cursor.fetchall()
+        ]
+
+    def list_content_aimed_at(self, target: SubjectRef) -> list[str]:
+        """Content ids aimed at this subject, oldest link first."""
+        cursor = self._conn.execute(
+            "SELECT content_id FROM content_targets WHERE target_kind = ? AND target_id = ?"
+            " ORDER BY added_at, rowid",
+            target.key(),
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+    def get_subject(self, subject_id: str) -> Subject | None:
+        row = self._conn.execute(
+            "SELECT payload FROM subjects WHERE subject_id = ?", (subject_id,)
+        ).fetchone()
+        return Subject.model_validate_json(row[0]) if row else None
+
     def add_corpus_document(self, document: CorpusDocument, body: str) -> None:
         try:
             self._conn.execute(
@@ -798,7 +1090,20 @@ class Storage:
         self._conn.execute("DELETE FROM news_items WHERE person_id = ?", (person_id,))
         self._conn.execute("DELETE FROM outreach_briefs WHERE person_id = ?", (person_id,))
         self._conn.execute("DELETE FROM relationship_objectives WHERE person_id = ?", (person_id,))
+        self._conn.execute(
+            "DELETE FROM log_links WHERE entry_id IN"
+            " (SELECT entry_id FROM relationship_log WHERE person_id = ?)",
+            (person_id,),
+        )
         self._conn.execute("DELETE FROM relationship_log WHERE person_id = ?", (person_id,))
+        for table, kind_col, id_col in (
+            ("log_links", "subject_kind", "subject_id"),
+            ("content_targets", "target_kind", "target_id"),
+        ):
+            self._conn.execute(
+                f"DELETE FROM {table} WHERE {kind_col} = 'person' AND {id_col} = ?",  # noqa: S608
+                (person_id,),
+            )
         self._conn.execute("DELETE FROM people WHERE person_id = ?", (person_id,))
         self._conn.commit()
         self.watchlist_delete_member("person", person.name)
@@ -969,6 +1274,21 @@ class Storage:
         self._conn.execute(
             "UPDATE relationship_log SET person_id = ? WHERE person_id = ?", (keep_id, absorb_id)
         )
+        for table, kind_col, id_col in (
+            ("log_links", "subject_kind", "subject_id"),
+            ("content_targets", "target_kind", "target_id"),
+        ):
+            # OR IGNORE: a row already pointing at the kept person stays; the
+            # absorbed duplicate is then dropped.
+            self._conn.execute(
+                f"UPDATE OR IGNORE {table} SET {id_col} = ?, label = ?"  # noqa: S608
+                f" WHERE {kind_col} = 'person' AND {id_col} = ?",
+                (keep_id, keep.name, absorb_id),
+            )
+            self._conn.execute(
+                f"DELETE FROM {table} WHERE {kind_col} = 'person' AND {id_col} = ?",  # noqa: S608
+                (absorb_id,),
+            )
         self._conn.execute("DELETE FROM people WHERE person_id = ?", (absorb_id,))
         self._conn.commit()
         self.watchlist_delete_member("person", absorb.name)
