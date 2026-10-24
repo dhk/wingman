@@ -23,7 +23,7 @@ from wingman.domain.examples import Example
 from wingman.domain.heap import HeapItem
 from wingman.domain.model_usage import ModelUsage
 from wingman.domain.operator_answer import OperatorAnswer
-from wingman.domain.opportunity import Opportunity
+from wingman.domain.opportunity import Opportunity, OpportunityEvent
 from wingman.domain.outreach import OutreachBrief
 from wingman.domain.person import ExternalDocument, NewsItem, Person, PersonDossier, PersonOrigin
 from wingman.domain.persona import Persona
@@ -213,6 +213,17 @@ CREATE TABLE IF NOT EXISTS relationship_log (
     happened_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_relationship_log_person ON relationship_log (person_id);
+-- The opportunity journal (RFC-076, #496): append-only stage changes and
+-- working notes. Rows are never updated or deleted by any write path; the
+-- latest row with a stage is the opportunity's current stage.
+CREATE TABLE IF NOT EXISTS opportunity_journal (
+    event_id TEXT PRIMARY KEY,
+    opportunity_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    happened_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_journal_opportunity
+    ON opportunity_journal (opportunity_id);
 CREATE TABLE IF NOT EXISTS embeddings (
     doc_id TEXT PRIMARY KEY,
     scope TEXT NOT NULL,
@@ -679,6 +690,44 @@ class Storage:
         cursor = self._conn.execute("SELECT COUNT(*) FROM opportunities")
         count: int = cursor.fetchone()[0]
         return count
+
+    def get_opportunity(self, opportunity_id: str) -> Opportunity | None:
+        cursor = self._conn.execute(
+            "SELECT payload FROM opportunities WHERE opportunity_id = ?", (opportunity_id,)
+        )
+        row: tuple[str] | None = cursor.fetchone()
+        return Opportunity.model_validate_json(row[0]) if row else None
+
+    def add_opportunity_event(self, event: OpportunityEvent) -> None:
+        """Append one journal event (RFC-076). There is no update or delete."""
+        try:
+            self._conn.execute(
+                "INSERT INTO opportunity_journal (event_id, opportunity_id, payload, happened_at)"
+                " VALUES (?, ?, ?, ?)",
+                (
+                    event.event_id,
+                    event.opportunity_id,
+                    event.model_dump_json(),
+                    event.happened_at.isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateRecordError(f"journal event {event.event_id} already exists") from exc
+        self._conn.commit()
+
+    def list_opportunity_events(self, opportunity_id: str | None = None) -> list[OpportunityEvent]:
+        """Journal events, oldest first — one opportunity's, or every one."""
+        if opportunity_id is None:
+            cursor = self._conn.execute(
+                "SELECT payload FROM opportunity_journal ORDER BY happened_at, rowid"
+            )
+        else:
+            cursor = self._conn.execute(
+                "SELECT payload FROM opportunity_journal WHERE opportunity_id = ?"
+                " ORDER BY happened_at, rowid",
+                (opportunity_id,),
+            )
+        return [OpportunityEvent.model_validate_json(row[0]) for row in cursor.fetchall()]
 
     def add_corpus_document(self, document: CorpusDocument, body: str) -> None:
         try:

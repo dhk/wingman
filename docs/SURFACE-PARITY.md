@@ -115,7 +115,9 @@ counterpart. Both filing surfaces require the reviewed content hash.
 | cli | `objective review` | `relationship_objective` |  |
 | cli | `objective save` | `relationship_objective` |  |
 | cli | `objective show` | `relationship_objective` |  |
+| cli | `opportunities history` | `opportunity_update` |  |
 | cli | `opportunities list` | `opportunities_list` |  |
+| cli | `opportunities update` | `opportunity_update` |  |
 | cli | `overnight` | `overnight` |  |
 | cli | `pack` | `pack` |  |
 | cli | `people add` | `people_add` |  |
@@ -246,6 +248,7 @@ counterpart. Both filing surfaces require the reviewed content hash.
 | mcp | `my_urls` | `mcp url` |  |
 | mcp | `my_values` | `values` |  |
 | mcp | `opportunities_list` | `opportunities list` |  |
+| mcp | `opportunity_update` | `opportunities history`, `opportunities update` |  |
 | mcp | `overnight` | `overnight` |  |
 | mcp | `pack` | `pack` |  |
 | mcp | `people_add` | `people add` |  |

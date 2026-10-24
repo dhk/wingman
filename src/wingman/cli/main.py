@@ -233,7 +233,7 @@ from wingman.version import wingman_version
 app = typer.Typer(help="Wingman: local-first career intelligence.")
 corpus_app = typer.Typer(help="Manage the corpus: your writing as citable evidence.")
 app.add_typer(corpus_app, name="corpus")
-opportunities_app = typer.Typer(help="Inspect assessed opportunities.")
+opportunities_app = typer.Typer(help="Inspect assessed opportunities and record their stage.")
 app.add_typer(opportunities_app, name="opportunities")
 people_app = typer.Typer(help="Watchlist of people and their public writing.")
 app.add_typer(people_app, name="people")
@@ -7372,6 +7372,60 @@ def opportunities_list() -> None:
     with Storage(config.db_path) as storage:
         summaries = list_opportunity_summaries(storage, config)
     typer.echo(render_opportunity_listing(summaries))
+
+
+@opportunities_app.command("update")
+def opportunities_update(
+    opportunity: str = typer.Argument(
+        ..., help="Opportunity id (the 8 characters the list prints) or a unique title fragment."
+    ),
+    stage: str = typer.Option(
+        "",
+        "--stage",
+        help="New stage: assessed, shortlisted, applied, interviewing, offer, rejected, withdrawn.",
+    ),
+    note: str = typer.Option("", "--note", help="A working note, stored verbatim."),
+) -> None:
+    """Record a stage change and/or a working note (RFC-076). Append-only:
+    the journal keeps every entry, and the latest stage is what lists show.
+    A note is yours to keep, never career evidence."""
+    configure_logging()
+    from wingman.application.opportunity_lifecycle import render_update, update_opportunity
+
+    config = load_config()
+    _require_workspace(config, "updated")
+    try:
+        with Storage(config.db_path) as storage:
+            # Typed here by the user, so the note is already their own words.
+            outcome = update_opportunity(
+                opportunity, storage, stage=stage, note=note, note_confirmed=True
+            )
+    except IngestError as exc:
+        typer.echo(f"opportunities update failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_update(outcome))
+
+
+@opportunities_app.command("history")
+def opportunities_history(
+    opportunity: str = typer.Argument(
+        ..., help="Opportunity id (the 8 characters the list prints) or a unique title fragment."
+    ),
+) -> None:
+    """Show one opportunity's journal, oldest first, and its current stage."""
+    configure_logging()
+    from wingman.application.opportunity_lifecycle import render_journal, resolve_opportunity
+
+    config = load_config()
+    _require_workspace(config, "shown")
+    try:
+        with Storage(config.db_path) as storage:
+            found = resolve_opportunity(opportunity, storage)
+            events = storage.list_opportunity_events(found.opportunity_id)
+    except IngestError as exc:
+        typer.echo(f"opportunities history failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render_journal(found, events))
 
 
 if __name__ == "__main__":

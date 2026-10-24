@@ -4428,6 +4428,63 @@ def opportunities_list() -> str:
 
 
 @server.tool()
+def opportunity_update(
+    opportunity: str,
+    stage: str = "",
+    note: str = "",
+    confirmed: bool = False,
+    action: str = "update",
+) -> str:
+    """Record where a pursuit stands (RFC-076, #496), or read its journal.
+
+    opportunity is the 8-character id opportunities_list prints (or a
+    unique title fragment). action is 'update' (default) or 'history'
+    (the journal, oldest first, with the current stage).
+
+    stage is one of: assessed, shortlisted, applied, interviewing, offer,
+    rejected (they said no), withdrawn (the user said no). Any stage may
+    follow any other — a revived role simply gets a new event; nothing is
+    ever overwritten.
+
+    Set a stage ONLY when the user has said it happened, in this
+    conversation. Never infer one: not from a pack existing, not from how
+    long ago a role was assessed, not from an email you read — "I applied
+    to PG&E" is a stage; "they probably applied by now" is not.
+
+    A stage is the user's own process decision (#505), so it is saved
+    without an echo. A note is stored verbatim, so it has a gate: show the
+    user the exact note text first; a call carrying a note without
+    confirmed=true saves NOTHING (not even its stage) and returns the text
+    to show. Notes are working notes, never career evidence — never use
+    this for an achievement (that is qa_capture) or for what happened with
+    a person (that is relationship_log).
+    """
+    from wingman.application.opportunity_lifecycle import (
+        render_journal,
+        render_update,
+        resolve_opportunity,
+        update_opportunity,
+    )
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "history":
+                found = resolve_opportunity(opportunity, storage)
+                return render_journal(found, storage.list_opportunity_events(found.opportunity_id))
+            if action == "update":
+                outcome = update_opportunity(
+                    opportunity, storage, stage=stage, note=note, note_confirmed=confirmed
+                )
+                return render_update(outcome)
+    except IngestError as exc:
+        return f"opportunity {action} failed: {exc}"
+    return f"unknown action {action!r}; use update or history."
+
+
+@server.tool()
 def pack(query: str, company: str = "", out_dir: str = "") -> str:
     """Compose the application pack for an assessed role (RFC-024): cited fit
     summary, cover-letter fodder quoting the user's own evidence verbatim (they
