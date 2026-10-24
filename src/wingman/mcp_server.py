@@ -1913,10 +1913,20 @@ def carve_off_persona(persona: str, target_dir: str) -> str:
 
 @server.tool()
 def relationship_objective(
-    action: str, person: str, goal: str = "", thesis: str = "", next_move: str = ""
+    action: str,
+    person: str,
+    goal: str = "",
+    thesis: str = "",
+    next_move: str = "",
+    subject_kind: str = "person",
 ) -> str:
     """The relationship objective for one watched person (RFC-037): goal,
     thesis, next move — the user's own confirmed words.
+
+    Beyond people (RFC-085): subject_kind 'company', 'opportunity',
+    'initiative' or 'content' sets the same triple for that subject, with
+    `person` as its name (see relationship_log for how each kind is named).
+    The interview protocol below applies unchanged.
 
     action is 'show' (the current triple), 'review' (the interview packet:
     current triple, if any, plus the three question areas), or 'save'
@@ -1945,12 +1955,38 @@ def relationship_objective(
         render_objective,
         save_objective,
     )
+    from wingman.application.subjects import (
+        load_subject_objective,
+        parse_kind,
+        render_subject_interview,
+        render_subject_objective,
+        resolve_subject,
+        save_subject_objective,
+    )
+    from wingman.domain.subject import SubjectKind
 
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
     try:
+        kind = parse_kind(subject_kind)
         with Storage(config.db_path) as storage:
+            if kind is not SubjectKind.PERSON:
+                subject = resolve_subject(kind, person, storage)
+                if action == "show":
+                    view = load_subject_objective(subject, storage)
+                    if view is None:
+                        return (
+                            f"No objective for {kind.value} {subject.label} yet. Call this "
+                            "tool with action='review' for the seeding interview."
+                        )
+                    return render_subject_objective(view)
+                if action == "review":
+                    return render_subject_interview(subject, storage)
+                if action == "save":
+                    view = save_subject_objective(subject, goal, thesis, next_move, storage)
+                    return f"Saved.\n{render_subject_objective(view)}"
+                return f"unknown action {action!r}; use show, review, or save."
             if action == "show":
                 who, objective = load_objective(person, storage)
                 if objective is None:
@@ -1982,11 +2018,26 @@ def relationship_log(
     action: str = "add",
     evidence_tier: str = "observed",
     source_url: str = "",
+    subject_kind: str = "person",
+    links: list[str] | None = None,
 ) -> str:
     """Record what actually happened with a watched person (RFC-037):
     'coffee with R., discussed the eval harness role' — the qa_capture
     way (#96, RFC-036). action is 'add' (log `note` for `person`) or
     'list' (show the person's interaction log, oldest first).
+
+    Beyond people (RFC-085): subject_kind is 'person' (default), 'company',
+    'opportunity', 'initiative' or 'content', and `person` is then that
+    subject's name (a company name; an opportunity's 8-character id from
+    opportunities_list; an initiative or content piece added with the
+    subjects tool). links are further subjects the same event concerns, as
+    'kind:name' strings — ['company:Sage', 'initiative:AI-leadership
+    practice'] — and the entry appears in each one's timeline. Log one
+    event ONCE with links rather than once per subject. Every subject and
+    link is resolved before anything is written; one unknown name writes
+    nothing. An opportunity note goes into its journal (RFC-076) and is
+    always 'observed'. 'list' on any kind shows its whole timeline,
+    including entries linked to it from elsewhere.
 
     evidence_tier (RFC-073) is 'observed' (default) or 'endorsed'.
 
@@ -2024,13 +2075,23 @@ def relationship_log(
     (evidence_tier='endorsed') — never paraphrase without confirmation,
     either way.
     """
-    from wingman.application.relationship import list_log, log_interaction, render_log
+    from wingman.application.relationship import list_log, render_log
+    from wingman.application.subjects import (
+        log_for_subject,
+        parse_kind,
+        render_linked_for_person,
+        render_timeline,
+        resolve_subject,
+        timeline,
+    )
     from wingman.domain.relationship import EvidenceTier
+    from wingman.domain.subject import SubjectKind
 
     config = _ready_config()
     if config is None:
         return _NOT_INITIALIZED
     try:
+        kind = parse_kind(subject_kind)
         with Storage(config.db_path) as storage:
             if action == "add":
                 try:
@@ -2038,20 +2099,115 @@ def relationship_log(
                 except ValueError:
                     valid = ", ".join(entry.value for entry in EvidenceTier)
                     return f"unknown evidence_tier {evidence_tier!r}; use one of: {valid}."
-                report = log_interaction(
-                    person, note, config, storage, evidence_tier=tier, source_url=source_url
+                report = log_for_subject(
+                    kind,
+                    person,
+                    note,
+                    config,
+                    storage,
+                    evidence_tier=tier,
+                    source_url=source_url,
+                    links=links,
                 )
                 tier_note = f" [{tier.value}]" if tier is EvidenceTier.ENDORSED else ""
-                return (
-                    f"Logged for {report.person}{tier_note}: {report.entry.note}\n"
-                    f"Evidence file: {report.source_path}"
+                where = (
+                    report.subject.label
+                    if kind is SubjectKind.PERSON
+                    else f"{kind.value} {report.subject.label}"
                 )
+                lines = [f"Logged for {where}{tier_note}: {report.note}"]
+                if report.source_path:
+                    lines.append(f"Evidence file: {report.source_path}")
+                if report.links:
+                    linked = ", ".join(f"{ref.kind.value} {ref.label}" for ref in report.links)
+                    lines.append(f"Also in the timeline of: {linked}")
+                return "\n".join(lines)
             if action == "list":
-                who, entries = list_log(person, storage)
-                return render_log(who, entries)
+                if kind is SubjectKind.PERSON:
+                    who, entries = list_log(person, storage)
+                    linked = render_linked_for_person(
+                        resolve_subject(kind, who.name, storage), storage
+                    )
+                    rendered = render_log(who, entries)
+                    return f"{rendered}\n{linked}" if linked else rendered
+                subject = resolve_subject(kind, person, storage)
+                return render_timeline(subject, timeline(subject, storage))
     except IngestError as exc:
         return f"relationship log {action} failed: {exc}"
     return f"unknown action {action!r}; use add or list."
+
+
+@server.tool()
+def subjects(
+    action: str = "list",
+    kind: str = "",
+    name: str = "",
+    description: str = "",
+    url: str = "",
+    target: str = "",
+) -> str:
+    """Initiatives, content pieces, and what they are aimed at (RFC-085, #647).
+
+    An initiative is a project the user runs (a practice, a class they are
+    building); a content piece is something they write, teach or present.
+    Both can carry a log and an objective through relationship_log and
+    relationship_objective (subject_kind='initiative' / 'content').
+    Companies, people and opportunities are NOT added here — they are
+    referenced where they already live.
+
+    action:
+    - 'add': create one (kind 'initiative' or 'content', name, optional
+      description and url). Add only what the user named; never invent one.
+    - 'list': every initiative and content piece (kind narrows it).
+    - 'show': one subject of ANY kind — its objective, what it is aimed at
+      (content) or what content is aimed at it (person, company), and its
+      whole timeline including entries linked to it.
+    - 'target' / 'untarget': aim a content piece (name) at a person or
+      company (target, as 'company:Sage' or 'person:Trent Lowe'), or stop.
+    """
+    from wingman.application.subjects import (
+        add_subject,
+        aim_content,
+        parse_kind,
+        render_subject,
+        render_subject_list,
+        resolve_subject,
+        unaim_content,
+    )
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    try:
+        with Storage(config.db_path) as storage:
+            if action == "add":
+                created = add_subject(
+                    parse_kind(kind or "initiative"),
+                    name,
+                    storage,
+                    description=description,
+                    url=url,
+                )
+                return f"Added {created.kind.value}: {created.name}"
+            if action == "list":
+                return render_subject_list(
+                    storage.list_subjects(parse_kind(kind) if kind.strip() else None)
+                )
+            if action == "show":
+                subject = resolve_subject(parse_kind(kind), name, storage)
+                return render_subject(subject, storage)
+            if action in {"target", "untarget"}:
+                aim = aim_content if action == "target" else unaim_content
+                piece, aimed, changed = aim(name, target, storage)
+                where = f"{aimed.kind.value} {aimed.label}"
+                if action == "target":
+                    verb = "now aimed at" if changed else "was already aimed at"
+                else:
+                    verb = "no longer aimed at" if changed else "was not aimed at"
+                return f"{piece.label} {verb} {where}."
+    except IngestError as exc:
+        return f"subjects {action} failed: {exc}"
+    return f"unknown action {action!r}; use add, list, show, target, or untarget."
 
 
 @server.tool()

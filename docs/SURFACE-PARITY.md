@@ -160,6 +160,11 @@ counterpart. Both filing surfaces require the reviewed content hash.
 | cli | `search` | `search` |  |
 | cli | `setup-guide` | `setup_guide` |  |
 | cli | `status` | `status` |  |
+| cli | `subjects add` | `subjects` |  |
+| cli | `subjects list` | `subjects` |  |
+| cli | `subjects show` | `subjects` |  |
+| cli | `subjects target` | `subjects` |  |
+| cli | `subjects untarget` | `subjects` |  |
 | cli | `sync` | `sync` |  |
 | cli | `telemetry export` |  | Deliberately local telemetry-file export; no remotely readable private transcript archive. |
 | cli | `telemetry harvest-transcript` |  | Deliberately local transcript-file access and privacy boundary. |
@@ -279,6 +284,7 @@ counterpart. Both filing surfaces require the reviewed content hash.
 | mcp | `search` | `search` |  |
 | mcp | `setup_guide` | `setup-guide` |  |
 | mcp | `status` | `status` |  |
+| mcp | `subjects` | `subjects add`, `subjects list`, `subjects show`, `subjects target`, `subjects untarget` |  |
 | mcp | `sync` | `sync` |  |
 | mcp | `telemetry` | `telemetry show`, `telemetry status`, `telemetry summary` |  |
 | mcp | `tenant_url` | `tenant url` |  |

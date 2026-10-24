@@ -122,6 +122,7 @@ def test_all_tools_are_registered() -> None:
         "pack",
         "opportunities_list",
         "opportunity_update",
+        "subjects",
         "feature_request",
         "changelog",
         "woven_warm_path",

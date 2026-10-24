@@ -210,6 +210,15 @@ Everything below is a sentence to Claude, not a command to remember:
   "log that I had coffee with Jane, we discussed X" records what actually
   happened (`relationship_log`) — both become citable evidence for future
   briefs.
+- **Track companies, projects and content too** — "log that Trent got me an
+  interview at Sage, and link it to Sage and my practice" logs one event into
+  every timeline it concerns (`relationship_log` with `subject_kind` and
+  `links`); `subjects` adds an initiative or content piece, shows any
+  subject's timeline, and records which people or companies a piece of
+  content is aimed at.
+- **Record where a role stands** — "I applied to PG&E" or "Google turned me
+  down" sets the stage you name, never a guessed one (`opportunity_update`);
+  `opportunities_list` shows each role's current stage.
 - **Find a warm intro** — "who do I know who could introduce me to Jane /
   at Acme?" (`woven_warm_path`) — a live, uncached call to your network
   graph, cited as its own source.
