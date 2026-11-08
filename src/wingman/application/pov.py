@@ -27,7 +27,7 @@ from wingman.domain.corpus import CorpusDocument
 from wingman.domain.interview import InterviewDocument
 from wingman.domain.person import ExternalDocument
 from wingman.domain.persona import Persona
-from wingman.domain.pov import PovCard, PovProposal, Stance, StanceDimension
+from wingman.domain.pov import PovCard, PovDocumentReference, PovProposal, Stance, StanceDimension
 from wingman.infrastructure.logs import get_logger
 from wingman.infrastructure.storage import Storage
 from wingman.providers.base import ModelProvider, ModelRequest
@@ -103,17 +103,24 @@ def _newest[DocT: (ExternalDocument, CorpusDocument)](
 
 
 def _newest_mixed(documents: Sequence[PovDocument], limit: int) -> list[PovDocument]:
-    """Same newest-first cap as _newest, for build_own_pov's one genuinely
-    heterogeneous call: a per-call-constrained generic binds to exactly one
-    concrete type, so it can't express a list mixing CorpusDocument and
-    InterviewDocument together — this is the plain-union equivalent, used
-    only where the mix is real."""
+    """Own-POV recency: publication date, or corpus ingestion date if unknown.
 
-    def key(document: PovDocument) -> tuple[bool, datetime]:
+    Capture dates remain authoritative. Equal effective dates break by doc_id,
+    independent of storage order. Do not invent publication metadata.
+    """
+
+    def key(document: PovDocument) -> tuple[datetime, str]:
         when = document.published_at
-        if when is None:
-            return (False, datetime.min.replace(tzinfo=UTC))
-        return (True, when if when.tzinfo else when.replace(tzinfo=UTC))
+        if when is None and isinstance(document, CorpusDocument):
+            when = document.added_at
+        normalized = (
+            datetime.min.replace(tzinfo=UTC)
+            if when is None
+            else when.astimezone(UTC)
+            if when.tzinfo
+            else when.replace(tzinfo=UTC)
+        )
+        return normalized, document.doc_id
 
     return sorted(documents, key=key, reverse=True)[:limit]
 
@@ -226,6 +233,10 @@ def build_pov_card(name: str, storage: Storage, provider: ModelProvider) -> PovR
         stances=stances,
         topics=[topic.strip() for topic in proposal.topics if topic.strip()][:8],
         documents_used=len(documents),
+        documents_supplied=[
+            PovDocumentReference(doc_id=document.doc_id, title=document.title)
+            for document in documents
+        ],
         provider=response.provider,
         model=response.model,
         prompt_version=PROMPT_VERSION,
@@ -330,6 +341,10 @@ def build_own_pov(
         stances=stances,
         topics=[topic.strip() for topic in proposal.topics if topic.strip()][:8],
         documents_used=len(documents),
+        documents_supplied=[
+            PovDocumentReference(doc_id=document.doc_id, title=document.title)
+            for document in documents
+        ],
         provider=response.provider,
         model=response.model,
         prompt_version=PROMPT_VERSION,
@@ -440,6 +455,10 @@ def build_company_pov(name: str, storage: Storage, provider: ModelProvider) -> P
         stances=stances,
         topics=[topic.strip() for topic in proposal.topics if topic.strip()][:8],
         documents_used=len(documents),
+        documents_supplied=[
+            PovDocumentReference(doc_id=document.doc_id, title=document.title)
+            for document in attributed
+        ],
         provider=response.provider,
         model=response.model,
         prompt_version=PROMPT_VERSION,
@@ -476,4 +495,11 @@ def render_pov_card(card: PovCard) -> str:
     if card.topics:
         lines.append("")
         lines.append("Writes about: " + ", ".join(card.topics))
+    lines.extend(["", "Documents supplied to synthesis (excerpts; not necessarily cited):"])
+    if card.documents_supplied is None:
+        lines.append("- input list unavailable — rebuild to record it")
+    else:
+        lines.extend(
+            f"- {document.doc_id}: {document.title}" for document in card.documents_supplied
+        )
     return "\n".join(lines)

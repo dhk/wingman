@@ -554,3 +554,177 @@ def test_own_pov_never_sees_the_stimulus_only_the_users_own_why(workspace: Path)
         )
         with pytest.raises(IngestError, match="no stance survived validation"):
             build_own_pov(storage, dishonest)
+
+
+def test_own_pov_recent_undated_import_survives_large_dated_pool(workspace: Path) -> None:
+    """#649: real file ingestion leaves published_at unset; search is not selection."""
+    from datetime import UTC, datetime
+
+    from wingman.application.corpus import add_to_corpus, find_evidence
+    from wingman.application.interview import capture_interview_reaction
+    from wingman.application.pov import build_own_pov
+    from wingman.domain import SourceRecord
+    from wingman.domain.corpus import CorpusDocument
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        for index in range(100):
+            record = SourceRecord(
+                source_type="writing", source_locator=f"old-{index}.md", content_hash=f"old-{index}"
+            )
+            storage.add_source_record(record)
+            storage.add_corpus_document(
+                CorpusDocument(
+                    source_record_id=record.record_id,
+                    source_type="writing",
+                    title=f"Old essay {index}",
+                    word_count=5,
+                    published_at=datetime(2020, 1, 1, tzinfo=UTC),
+                ),
+                "Older writing has real evidence.",
+            )
+        capture_interview_reaction(
+            "values_pro", "Example scientist", "Persistent curiosity matters.", config, storage
+        )
+        essay = workspace / "new-essay.md"
+        essay.write_text("# Decision systems\nDecision systems must expose their evidence.")
+        add_to_corpus(essay, "writing", config, storage)
+        doc = find_evidence("Decision", storage)[0].document
+        assert doc.published_at is None
+        provider = ScriptedProvider(
+            {
+                "stances": [
+                    {
+                        "statement": "The author values inspectable decisions.",
+                        "quote": "Decision systems must expose their evidence.",
+                        "doc_id": doc.doc_id,
+                    }
+                ]
+            }
+        )
+        report = build_own_pov(storage, provider)
+        assert report.card.documents_used == 20
+        assert provider.last_prompt and f"--- doc_id: {doc.doc_id}\n" in provider.last_prompt
+        assert report.card.stances[0].doc_id == doc.doc_id
+
+
+def test_own_pov_date_fallback_and_ties_are_deterministic() -> None:
+    from datetime import UTC, datetime, timedelta, timezone
+
+    from wingman.application.pov import _newest_mixed
+    from wingman.domain.corpus import CorpusDocument
+    from wingman.domain.interview import InterviewDocument
+
+    def corpus(doc_id, published_at, added_at):
+        return CorpusDocument(
+            doc_id=doc_id,
+            source_record_id=doc_id,
+            source_type="writing",
+            title=doc_id,
+            word_count=1,
+            published_at=published_at,
+            added_at=added_at,
+        )
+
+    now = datetime(2026, 11, 8, tzinfo=UTC)
+    a = corpus("a", None, now.replace(tzinfo=None))
+    b = corpus("b", None, now.astimezone(timezone(timedelta(hours=-8))))
+    old = corpus("old", now - timedelta(days=10), now + timedelta(days=1))
+    capture = InterviewDocument(
+        doc_id="capture",
+        title="Reaction",
+        body="My words",
+        source_record_id="capture",
+        published_at=now - timedelta(days=1),
+    )
+    undated = capture.model_copy(update={"doc_id": "undated", "published_at": None})
+    expected = ["b", "a", "capture", "old", "undated"]
+    for documents in ([a, b, old, capture, undated], [undated, capture, old, b, a]):
+        assert [doc.doc_id for doc in _newest_mixed(documents, 20)] == expected
+
+
+def test_own_pov_manifest_matches_prompt_and_survives_surface_reads(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import re
+
+    from typer.testing import CliRunner
+
+    import wingman.mcp_server as mcp_module
+    from wingman.application.corpus import add_to_corpus
+    from wingman.application.pov import CORPUS_PERSON_ID
+    from wingman.cli.main import app
+    from wingman.domain import SourceRecord
+    from wingman.domain.corpus import CorpusDocument
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        for name in ("cited", "uncited"):
+            essay = workspace / f"{name}.md"
+            essay.write_text(f"# {name}\nEvidence should be inspectable.")
+            add_to_corpus(essay, "writing", config, storage)
+        record = SourceRecord(
+            source_type="writing", source_locator="empty.md", content_hash="empty"
+        )
+        storage.add_source_record(record)
+        empty = CorpusDocument(
+            source_record_id=record.record_id, source_type="writing", title="empty", word_count=0
+        )
+        storage.add_corpus_document(empty, "   ")
+        cited = next(doc for doc in storage.list_corpus_documents() if doc.title == "cited")
+    provider = ScriptedProvider(
+        {
+            "stances": [
+                {
+                    "statement": "The author values evidence.",
+                    "quote": "Evidence should be inspectable.",
+                    "doc_id": cited.doc_id,
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(mcp_module, "get_provider", lambda *args: provider)
+    refreshed = mcp_module.my_pov(refresh=True)
+    assert "Documents supplied to synthesis" in refreshed
+    with Storage(config.db_path) as storage:
+        card = storage.get_pov_card(CORPUS_PERSON_ID)
+        assert card is not None
+        supplied = card.documents_supplied
+        assert supplied is not None
+        assert [doc.doc_id for doc in supplied] == re.findall(
+            r"^--- doc_id: (.+)$", provider.last_prompt, re.MULTILINE
+        )
+        assert {doc.title for doc in supplied} == {"cited", "uncited"}
+        assert card.documents_used == len(supplied) == 2
+
+    def unexpected_provider(*args):
+        pytest.fail("Stored card read must not request a model provider")
+
+    monkeypatch.setattr(mcp_module, "get_provider", unexpected_provider)
+    assert "Documents supplied to synthesis" in mcp_module.my_pov()
+    result = CliRunner().invoke(app, ["pov"])
+    assert result.exit_code == 0
+    for doc in supplied:
+        assert doc.doc_id in result.output and doc.title in result.output
+
+
+def test_legacy_pov_card_has_unknown_manifest(workspace: Path) -> None:
+    from wingman.domain.pov import PovCard
+
+    config = load_config()
+    with Storage(config.db_path) as storage:
+        card = PovCard.model_validate(
+            {
+                "person_id": "__corpus__",
+                "person_name": "Your corpus",
+                "documents_used": 20,
+                "provider": "scripted",
+                "model": "scripted-1",
+                "prompt_version": "v0",
+            }
+        )
+        storage.save_pov_card(card)
+        loaded = storage.get_pov_card("__corpus__")
+        assert loaded is not None
+        assert loaded.documents_supplied is None
+        assert "input list unavailable" in render_pov_card(loaded)
