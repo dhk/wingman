@@ -1684,3 +1684,30 @@ privileged (operator-gated, owner-approved 2026-10-16) read-only accounting exce
 It checks operator_only_refusal before registry or workspace access, reads no
 prompts, credentials or responses, and cannot migrate or modify another tenant's
 DB. The same CLI --all-tenants gate applies. This grants no provisioning authority.
+
+
+## RFC-085: Inspectable POV inputs and own-corpus date fallback (#649) — Durable decision
+
+**Decision.** Own-POV selection keeps its 20-document mixed corpus/interview
+budget. Corpus documents use publication date when known, otherwise their
+existing ingestion timestamp; interview captures retain their capture date.
+Dates normalize to UTC (naive dates mean UTC), with descending document ID
+as a deterministic tie-breaker. Publication metadata is never rewritten.
+Person/company selection retains its existing publication-date rule.
+
+All new POV cards persist the ordered IDs and titles of the nonempty documents
+actually supplied to synthesis, separate from surviving stance citations.
+The shared CLI/MCP text renderer displays this list on both refresh and stored
+reads. Missing manifests on older JSON payloads mean unknown, not zero inputs;
+no database migration or reconstruction from stance citations is needed.
+
+**Boundaries.** The 6,000-character excerpts, six validated stances, eight topics,
+quote validation, interview bootstrap, persona isolation, and replacement-on-build
+lifecycle are unchanged. The manifest describes supplied excerpts, not proof that
+the model relied on each input. No explicit include-list, source quotas, larger
+budget, stance carry-forward, or change to evidence-search ranking is introduced.
+
+**Why.** Ordinary file imports have no publication date and previously sorted
+behind every dated essay or capture, even immediately after import. Raising a cap
+only postpones that failure; changing stored publication dates invents metadata.
+A persisted manifest makes selection inspectable without another model call.

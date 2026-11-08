@@ -44,6 +44,13 @@ class Stance(BaseModel):
     dimension: StanceDimension | None = None
 
 
+class PovDocumentReference(BaseModel):
+    """One nonempty document supplied to synthesis, whether or not cited."""
+
+    doc_id: str
+    title: str
+
+
 class PovCard(BaseModel):
     """The current point-of-view summary for one person; rebuilt on demand."""
 
@@ -53,6 +60,8 @@ class PovCard(BaseModel):
     stances: list[Stance] = Field(default_factory=list)
     topics: list[str] = Field(default_factory=list)
     documents_used: int
+    # None means an older card did not record its inputs, not an empty input set.
+    documents_supplied: list[PovDocumentReference] | None = None
     provider: str
     model: str
     prompt_version: str

@@ -56,6 +56,17 @@ them too (`backup --no-drive` / MCP `drive=False` keeps a backup local).
 Your own writing becomes
 a searchable evidence corpus (`wingman evidence "kafka migration"`).
 
+Your POV card (`wingman pov --refresh` / MCP `my_pov(refresh=True)`)
+uses up to 20 corpus documents and active interview captures. Corpus writing
+is ordered by publication date, falling back to ingestion date when no publication
+date is known; interview captures use their capture date. Equal dates break by
+document ID. Each card lists the IDs and titles supplied to synthesis, including
+documents that produced no cited stance. Stored reads retain that input list;
+older cards show “input list unavailable” until rebuilt. Inputs are excerpts
+(up to 6,000 characters each), not a guarantee of a stance or exhaustive corpus
+coverage. Rebuilds replace the previous card and retain at most six validated
+stances. Evidence search still searches independently of this selection.
+
 **Opportunity assessment.** `wingman assess job.md` — or `wingman assess
 --url <posting>` straight from a careers page — extracts requirements with
 verbatim quotes and judges each met / partial / gap / unknown, citing only
