@@ -123,7 +123,12 @@ The host's permissions for unrelated connectors are outside this engine.
 Scope follows the existing active `coach_persona`. Shared non-operator
 workspaces cannot use coaching. Persona answers default to
 `coach_inference`; set `persona_authored=True` only when the person supplied
-the exact words. `owner="coach"` is allowed only in coaching mode.
+the exact words. A committed action retains the confirmed first step's
+authorship and classification, with a reference to that step's capture. The
+deadline's authorship and classification are recorded separately in the action
+details and shown in the write preview. Supplying a deadline or confirming a
+coach's suggestion does not make the suggestion the person's original words.
+`owner="coach"` is allowed only in coaching mode.
 No delegated access or writes to another person's workspace are introduced.
 
 `loop_answer(..., action="rescue", answer="What intervention was needed")`

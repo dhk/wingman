@@ -293,6 +293,7 @@ def _preview(
     persona_authored: bool,
     owner: str,
     rescue: bool = False,
+    step_source: Capture | None = None,
 ) -> tuple[LoopSession, list[Capture]]:
     next_session = session.model_copy(deep=True)
     card = session.definition.cards[session.index]
@@ -366,9 +367,16 @@ def _preview(
             raise ValueError("due date must be YYYY-MM-DD; nothing saved") from None
         if owner not in {"user", "coach"} or (owner == "coach" and session.subject == "self"):
             raise ValueError("owner must be user, or coach in coaching mode")
+        if step_source is None:
+            raise ValueError(
+                "confirmed first-step record unavailable; skip this commitment and start again"
+            )
         capture.kind, capture.text = "action", session.step
         capture.details.update(
             {
+                "step_capture_id": step_source.capture_id,
+                "deadline_authorship": capture.authorship,
+                "deadline_classification": capture.classification,
                 "due_date": answer,
                 "owner": owner,
                 "status": "committed",
@@ -377,6 +385,8 @@ def _preview(
                 else [session.definition.playbook[int(i)].move for i in session.selected_moves[1:]],
             }
         )
+        capture.authorship = step_source.authorship
+        capture.classification = step_source.classification
         _advance(next_session)
     elif phase == "reentry_friction":
         if not answer.strip():
@@ -501,8 +511,29 @@ def answer_loop(
         }
     if action not in {"answer", "rescue"}:
         raise ValueError("unknown action; use answer, confirm, skip, pause, route, show or rescue")
+    step_source = None
+    if session.phase == "due" and action == "answer":
+        # Read the already-confirmed step, including for sessions created by an
+        # older server. The deadline's author cannot relabel those earlier words.
+        step_source = next(
+            (
+                record
+                for record in reversed(storage.list_goals_plan(subject))
+                if record.session_id == session_id
+                and record.card_id == session.definition.cards[session.index].id
+                and record.kind == "answer"
+                and record.text == session.step
+            ),
+            None,
+        )
     next_session, captures = _preview(
-        session, answer, choices or [], persona_authored, owner, rescue=action == "rescue"
+        session,
+        answer,
+        choices or [],
+        persona_authored,
+        owner,
+        rescue=action == "rescue",
+        step_source=step_source,
     )
     if captures[0].kind == "action_status" and captures[0].text == "done":
         previous = _active_action(storage, subject, session.definition.id)

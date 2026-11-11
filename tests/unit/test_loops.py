@@ -328,3 +328,36 @@ def test_invalid_deadline_does_not_leak_or_commit(ws: Config) -> None:
         call(ws, sid, answer="PRIVATE WRONG DEADLINE")
     assert "PRIVATE" not in str(error.value)
     assert not [r for r in records(ws) if r.kind == "action"]
+
+
+@pytest.mark.parametrize("step_by_person,deadline_by_person", [(False, True), (True, False)])
+def test_action_keeps_step_authorship_and_separate_deadline_provenance(
+    ws: Config, step_by_person: bool, deadline_by_person: bool
+) -> None:
+    subject = "persona-a"
+    sid = start(ws, subject)["session_id"]
+    for _ in range(8):
+        call(ws, sid, subject, action="skip")
+    preview = call(
+        ws, sid, subject, answer="Contact three former colleagues", persona_authored=step_by_person
+    )
+    step = call(ws, sid, subject, action="confirm", confirmation=preview["confirmation"])["saved"][
+        0
+    ]
+    # Every call reopens the database: provenance must survive interruption.
+    preview = call(ws, sid, subject, answer="2026-12-01", persona_authored=deadline_by_person)
+    action = preview["preview"][0]
+    assert action["authorship"] == step["authorship"]
+    assert action["classification"] == step["classification"]
+    assert action["details"]["step_capture_id"] == step["capture_id"]
+    assert action["details"]["deadline_authorship"] == (
+        "person" if deadline_by_person else "coach_inference"
+    )
+    assert action["details"]["deadline_classification"] == (
+        "own_words" if deadline_by_person else "inference"
+    )
+    assert not [r for r in records(ws, subject) if r.kind == "action"]
+    saved = call(ws, sid, subject, action="confirm", confirmation=preview["confirmation"])
+    assert saved["saved"][0] == action
+    stored = next(r for r in records(ws, subject) if r.kind == "action")
+    assert stored.authorship == step["authorship"]
