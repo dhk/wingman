@@ -150,3 +150,69 @@ def test_harvest_transcript(workspace: Path, tmp_path: Path) -> None:
     assert events["wingman-mcp-call"]["payload"]["tool"] == "mcp__wingman__people_pov"
     with pytest.raises(IngestError, match="does not exist"):
         harvest_transcript(tmp_path / "missing.jsonl", config)
+
+
+@pytest.mark.parametrize(
+    "tool,inputs",
+    [
+        ("mcp__wingman__loop_answer", {"answer": "PRIVATE DRAFT", "confirmation": "PRIVATE TOKEN"}),
+        ("Bash", {"command": "uv run wingman loop answer id --answer 'PRIVATE DRAFT'"}),
+        ("Bash", {"command": "uv run 'wingman' 'loop' answer id --confirmation 'PRIVATE TOKEN'"}),
+    ],
+)
+def test_harvest_loop_transcript_keeps_only_metadata(
+    workspace: Path, tmp_path: Path, tool: str, inputs: dict[str, str]
+) -> None:
+    config = load_config()
+    set_enabled(config, True)
+    # The user's answer can precede the loop call. The preview can be plain
+    # assistant text, and unrelated tool inputs can repeat sensitive words.
+    lines = [
+        {
+            "type": "user",
+            "timestamp": "2026-11-11T20:00:00Z",
+            "message": {"content": "PRIVATE USER WORDS"},
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "PRIVATE PREVIEW"},
+                    {
+                        "type": "tool_use",
+                        "name": "mcp__wingman__people_pov",
+                        "input": {"name": "PRIVATE REPEATED WORDS"},
+                    },
+                    {"type": "tool_use", "name": tool, "input": inputs},
+                ]
+            },
+        },
+        {"type": "user", "message": {"content": "PRIVATE DECLINED ANSWER"}},
+    ]
+    path = tmp_path / "loop-session.jsonl"
+    path.write_text("\n".join(json.dumps(line) for line in lines))
+    report = harvest_transcript(path, config)
+    events = list_events(config)
+    assert "PRIVATE" not in json.dumps(events)
+    assert report.content_withheld
+    assert report.imported == 5
+    assert {e["name"] for e in events} >= {"user-message", "assistant-message", "wingman-mcp-call"}
+    assert any(e["ts"] == "2026-11-11T20:00:00Z" for e in events)
+    # The harvester must not edit the user's original chat archive.
+    assert "PRIVATE USER WORDS" in path.read_text()
+
+
+@pytest.mark.parametrize(
+    "name,payload",
+    [
+        ("wingman-mcp-call", {"tool": "mcp__wingman__loop_answer", "input": {"answer": "PRIVATE"}}),
+        ("wingman-cli-invocation", {"command": "wingman loop answer id --answer PRIVATE"}),
+    ],
+)
+def test_wrapped_loop_events_are_redacted_at_the_journal_boundary(
+    workspace: Path, name: str, payload: dict
+) -> None:
+    config = load_config()
+    set_enabled(config, True)
+    assert record_event(config, "transcript", name, payload)
+    assert "PRIVATE" not in json.dumps(list_events(config))

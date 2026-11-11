@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import sqlite3
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from itertools import pairwise
+from pathlib import Path
 from typing import Any, Self
 from uuid import uuid4
 
@@ -99,6 +102,19 @@ def _clip(value: Any) -> Any:
     return value
 
 
+def is_loop_operation(tool: str = "", command: str = "") -> bool:
+    """Recognize live/imported loop calls, including quoted CLI executable names."""
+    if tool.rsplit("__", 1)[-1] in {"loop_list", "loop_start", "loop_answer"}:
+        return True
+    if re.search(r"(?:^|[/\s])wingman\s+loop\b", command):
+        return True
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    return any(Path(left).name == "wingman" and right == "loop" for left, right in pairwise(tokens))
+
+
 def record_event(
     config: Config,
     surface: str,
@@ -111,7 +127,13 @@ def record_event(
     """Append one event when telemetry is enabled; never raises."""
     # Loop drafts are not captures until confirmed. This also withholds the
     # signed preview token, which carries the draft and earlier answers.
-    if name in {"loop", "loop_start", "loop_answer"}:
+    wrapped_loop = (
+        name == "wingman-mcp-call" and is_loop_operation(tool=str(payload.get("tool", "")))
+    ) or (
+        name == "wingman-cli-invocation"
+        and is_loop_operation(command=str(payload.get("command", "")))
+    )
+    if name in {"loop", "loop_start", "loop_answer"} or wrapped_loop:
         payload = {"content": "[loop answers and confirmation tokens withheld]"}
     try:
         if not is_enabled(config) or not config.db_path.exists():

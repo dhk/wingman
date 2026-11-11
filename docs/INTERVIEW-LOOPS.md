@@ -42,7 +42,15 @@ wingman loop answer SESSION_ID --action pause
 Do not paste private confirmation tokens into issues or logs. They contain
 an encoded draft, not encrypted text. Wingman's loop telemetry withholds
 arguments and output, even when the existing usage journal is enabled.
-The host/chat client still sees what the person types and the returned preview.
+Transcript harvesting scans for loop activity before importing any events. If
+found, the **whole transcript** contributes event kinds, timestamps and source
+metadata only: no user/assistant text, tool inputs, shell commands or tokens.
+This conservative rule avoids guessing where an interview's private turns begin
+and end. The CLI explicitly reports when content was withheld. Ordinary
+transcripts without loop activity retain the existing opt-in import behavior.
+This applies to new imports; it does not edit previously harvested events or
+the original conversation file. The host/chat client still sees what the person
+types and the returned preview.
 
 ## Goals & Friction 0.3.0
 

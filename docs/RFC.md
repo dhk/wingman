@@ -1707,3 +1707,13 @@ inference, and uses no model or network calls. Coaching uses existing persona
 scope and authorship; rescue notes are confirmed local coach inferences.
 Dossier flows, reviewed-community distribution/revocation, contribution CI,
 and migration of old interview entry points remain separate rollout stages.
+
+
+**RFC-085 privacy clarification (PR #653; maintainer-confirmed).** Loop capture
+confirmation also governs Wingman's diagnostic copies. Transcript harvesting
+pre-scans for loop activity and imports only content-free event metadata for
+the entire transcript when found, including messages before the first loop
+call and unrelated tool arguments that might repeat an answer. Wrapped MCP/CLI
+loop events are also redacted at the journal write boundary. This is a
+conservative import rule, not encryption of chat archives; existing harvested
+events and the host's original conversation files are not rewritten.
