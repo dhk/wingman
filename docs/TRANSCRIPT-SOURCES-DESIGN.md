@@ -2,19 +2,20 @@
 
 Status: draft for owner review. Nothing here is implemented.
 Decided by owner (2026-11-11): the scheduled sweep stages proposals; nothing is filed until a human approves.
+Scope decided by owner (2026-11-11): v1 covers Gemini notes and Wispr Flow only. Twilio is out; Zoom is deferred.
 
 ## Problem
 
 Real conversations are the richest career signal Wingman never sees. Today
 `ingest_transcript` takes one Gemini export, one file at a time, with the
 client supplying the bytes. The user wants Wingman to go and *find* new call
-transcripts in the apps they already use (Wispr Flow, Gemini meeting notes in
-Drive, Zoom, ...), summarize them, and pull out what matters — and to say once,
+transcripts in the apps they already use (Wispr Flow and Gemini meeting notes in
+Drive; others later), summarize them, and pull out what matters — and to say once,
 in configuration, where their transcripts come from.
 
 ## The constraint that shapes everything
 
-Connectors (Wispr Flow, Google Drive, Zoom) are authenticated **in the Claude
+Connectors (Wispr Flow, Google Drive) are authenticated **in the Claude
 client**. The Wingman server (lobster, the shared multi-tenant process) has no
 credentials for them, and AGENTS.md invariants 3 and 4 (local-first, least
 privilege) argue against giving it any in v1. So the feature splits:
@@ -36,7 +37,7 @@ sources ...` in the CLI (surface parity: docs/SURFACE-PARITY.md).
 ```yaml
 transcript_sources:
   - id: wispr-main
-    kind: wispr_flow            # wispr_flow | gemini_drive | zoom | file_drop
+    kind: wispr_flow            # v1: wispr_flow | gemini_drive (| file_drop for tests); later: zoom
     enabled: true
     lookback_days: 14           # first-run window; afterwards the cursor wins
     locator:                    # kind-specific, never a secret
@@ -46,9 +47,6 @@ transcript_sources:
     enabled: true
     locator:
       drive_query: "title contains 'Notes by Gemini'"
-  - id: zoom-cloud
-    kind: zoom
-    enabled: false              # v2
 ```
 
 - No credentials in config. Connector auth stays in the client.
@@ -68,7 +66,7 @@ transcript_sources:
 - `wispr_flow` — `get_meeting` returns transcript text, attendee list and
   calendar link; prefer the transcript over the auto-summary (the Wispr
   tool descriptions say the same: summaries are lossy).
-- `zoom` — VTT/cloud transcript (v2).
+- Zoom (VTT/cloud transcript) is deferred; not in v1.
 
 Carry forward the existing hard rules: only transcript turns are anybody's
 words; notes/summaries are the tool's paraphrase and stay labelled as such;
@@ -81,8 +79,8 @@ New table `transcript_sources_ledger(source_id, external_id, content_hash,
 fetched_at, status, person_ids)`. Dedupe key is `(source_id, external_id)`,
 with `content_hash` detecting an edited upstream transcript (re-propose, never
 silently overwrite — AGENTS.md data rule). Reuses `SourceRecord` and the
-`find_transcript_filing` check so a call that arrives via two sources (Zoom
-call that Gemini also noted) is flagged as a probable duplicate by
+`find_transcript_filing` check so a call that arrives via two sources (a call recorded by Wispr Flow
+that Gemini also noted) is flagged as a probable duplicate by
 participants + start time.
 
 ## Extraction
@@ -143,14 +141,13 @@ recording-consent norms.
 2. Generalized `Transcript` + Wispr Flow adapter + extractor + proposal queue.
 3. Gemini-in-Drive discovery through the same path.
 4. `transcript-sweep` skill + scheduled staging task + digest line.
-5. Zoom adapter.
+
+Deferred: Zoom adapter. Out of scope: Twilio call recordings.
 
 Each slice ships something usable alone.
 
 ## Open questions
 
-- Phone calls proper (Twilio recordings) vs. meeting recorders: in or out for
-  v1? This draft assumes out.
 - Review UX: one batch card per sweep, or per-transcript preview using the
   existing `reviewed_hash` flow? This draft assumes per-transcript hash, batched
   presentation.
