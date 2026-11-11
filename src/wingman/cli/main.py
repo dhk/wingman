@@ -155,6 +155,7 @@ from wingman.application.triage import (
     snooze_action,
     unmute_action,
 )
+from wingman.cli.loops import loop_app
 from wingman.domain.model_usage import Payer
 from wingman.domain.outreach import OutreachPurpose
 from wingman.domain.person import Person
@@ -231,6 +232,8 @@ from wingman.reporting.export import (
 from wingman.version import wingman_version
 
 app = typer.Typer(help="Wingman: local-first career intelligence.")
+
+app.add_typer(loop_app, name="loop")
 corpus_app = typer.Typer(help="Manage the corpus: your writing as citable evidence.")
 app.add_typer(corpus_app, name="corpus")
 opportunities_app = typer.Typer(help="Inspect assessed opportunities.")

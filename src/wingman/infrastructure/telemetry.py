@@ -109,6 +109,10 @@ def record_event(
     ts: str | None = None,
 ) -> bool:
     """Append one event when telemetry is enabled; never raises."""
+    # Loop drafts are not captures until confirmed. This also withholds the
+    # signed preview token, which carries the draft and earlier answers.
+    if name in {"loop", "loop_start", "loop_answer"}:
+        payload = {"content": "[loop answers and confirmation tokens withheld]"}
     try:
         if not is_enabled(config) or not config.db_path.exists():
             return False
