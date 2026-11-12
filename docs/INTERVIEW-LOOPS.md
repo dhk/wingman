@@ -86,6 +86,24 @@ the write preview; old records remain available in the local history.
 Bundled files live at `src/wingman/loops/*.md`, separate from the corpus.
 Local files may be placed in `DATA_DIR/loops/*.md`; they are labelled
 **local**, cannot shadow a bundled id, and pass the same schema checks.
+Validation is an admission gate: only passing files enter the runnable
+catalogue. `loop_list` returns `invalid_loops` separately, with filename and
+field/syntax problems. One rejected file cannot block valid loops; starting
+that draft returns its own error without creating a session. Open sessions
+continue from their pinned definitions, even if a source becomes invalid.
+Each workspace scans only its own local directory.
+
+Authors can check a file or directory before installing it:
+
+```sh
+wingman loop validate path/to/my-loop.md
+wingman loop validate src/wingman/loops
+```
+
+The command returns a nonzero exit for rejected files or an empty/missing
+source. CI runs the directory form against every bundled loop, using the
+same checks as runtime admission. This is a mechanical validity gate;
+community trust/review and publication approval remain a later workflow.
 The bundled tier is **official**. Reviewed-community distribution,
 commit approval manifests, revocation UI, a full UX lint command and PR
 review automation are deferred with the contribution workflow.
@@ -111,8 +129,9 @@ stays on the current card with nothing saved.
 A session keeps its original definition and content hash even if its loop
 file changes or disappears. Subsequent sessions use the installed version.
 The fixed schema rejects unknown fields, undeclared stores, arbitrary
-routes, missing explainers, free-text presets/examples (including `e.g.` with punctuation or capitalization variants), obvious references
-to an agent/assistant/model, and unmarked card links. Duplicate YAML keys
+routes, missing explainers, free-text presets/examples (including `e.g.` with
+punctuation or capitalization variants), obvious references to an
+agent/assistant/model, and unmarked card links. Duplicate YAML keys
 and aliases are rejected. These are mechanical checks, not a claim to
 understand every malicious sentence; human review is still necessary.
 

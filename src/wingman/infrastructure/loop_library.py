@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import re
+import stat
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 
 from wingman.domain.loops import LoopDefinition
 
@@ -69,15 +72,102 @@ def parse_loop(raw: str, filename: str) -> LoopDefinition:
     return definition
 
 
-def catalogue(local_dir: Path) -> list[tuple[LoopDefinition, str, str]]:
-    result = []
-    seen: set[str] = set()
-    for directory, tier in [(BUNDLED, "official"), (local_dir, "local")]:
-        for path in sorted(directory.glob("*.md")):
-            raw = path.read_text(encoding="utf-8")
-            definition = parse_loop(raw, path.name)
+@dataclass
+class LoopCatalogue:
+    entries: list[tuple[LoopDefinition, str, str]] = field(default_factory=list)
+    invalid_loops: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _problems(exc: Exception) -> list[str]:
+    """Actionable diagnostics without echoing card prose or invalid input values."""
+    if isinstance(exc, ValidationError):
+        return [
+            f"{'.'.join(str(part) for part in error['loc']) or 'loop'}: {error['msg']}"
+            for error in exc.errors(include_input=False, include_context=False, include_url=False)
+        ]
+    if isinstance(exc, UnicodeError):
+        return ["loop file must be UTF-8 text"]
+    if isinstance(exc, yaml.YAMLError):
+        mark = getattr(exc, "problem_mark", None)
+        location = f" near line {mark.line + 1}, column {mark.column + 1}" if mark else ""
+        return [f"invalid YAML{location}"]
+    if isinstance(exc, OSError):
+        return [f"cannot read loop source ({type(exc).__name__})"]
+    if isinstance(exc, RecursionError):
+        return ["loop nesting is too deep"]
+    return [str(exc)]
+
+
+def _reject(result: LoopCatalogue, path: Path, tier: str, problems: list[str]) -> None:
+    result.invalid_loops.append(
+        {
+            "filename": path.name,
+            "loop_id": path.stem,
+            "tier": tier,
+            "status": "rejected",
+            "problems": problems,
+        }
+    )
+
+
+def _admit_files(result: LoopCatalogue, paths: list[Path], tier: str) -> None:
+    seen = {entry[0].id for entry in result.entries} | {
+        item["loop_id"] for item in result.invalid_loops if item["tier"] == "official"
+    }
+    for path in paths:
+        try:
+            if path.suffix != ".md":
+                raise ValueError("loop files must use the .md extension")
+            with path.open("rb") as handle:
+                raw = handle.read(64_001)
+            if len(raw) > 64_000:
+                raise ValueError("loop file exceeds 64 KB")
+            definition = parse_loop(raw.decode("utf-8"), path.name)
             if definition.id in seen:
-                raise ValueError("local loops cannot shadow bundled loops")
+                raise ValueError(
+                    "local loops cannot shadow bundled loops or duplicate accepted ids"
+                )
             seen.add(definition.id)
-            result.append((definition, hashlib.sha256(raw.encode()).hexdigest(), tier))
+            # Only this successful gate admits a definition to the runnable set.
+            result.entries.append((definition, hashlib.sha256(raw).hexdigest(), tier))
+        except (ValueError, yaml.YAMLError, OSError, RecursionError) as exc:
+            _reject(result, path, tier, _problems(exc))
+
+
+def _admit_directory(
+    result: LoopCatalogue, directory: Path, tier: str, *, optional: bool = False
+) -> None:
+    try:
+        paths = sorted(path for path in directory.iterdir() if path.suffix == ".md")
+    except FileNotFoundError as exc:
+        if not optional:
+            _reject(result, directory, tier, _problems(exc))
+        return
+    except OSError as exc:
+        _reject(result, directory, tier, _problems(exc))
+        return
+    if not paths and not optional:
+        _reject(result, directory, tier, ["no loop markdown files found"])
+    _admit_files(result, paths, tier)
+
+
+def catalogue(local_dir: Path) -> LoopCatalogue:
+    result = LoopCatalogue()
+    _admit_directory(result, BUNDLED, "official")
+    _admit_directory(result, local_dir, "local", optional=True)
+    return result
+
+
+def validate_loop_source(path: Path) -> LoopCatalogue:
+    """Local author/CI gate, using exactly the same admission checks as runtime."""
+    result = LoopCatalogue()
+    try:
+        is_directory = stat.S_ISDIR(path.stat().st_mode)
+    except OSError as exc:
+        _reject(result, path, "local", _problems(exc))
+        return result
+    if is_directory:
+        _admit_directory(result, path, "local")
+    else:
+        _admit_files(result, [path], "local")
     return result

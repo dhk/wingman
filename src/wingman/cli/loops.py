@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -53,3 +54,24 @@ def answer_card(
             owner=owner,
         )
     )
+
+
+@loop_app.command("validate")
+def validate(path: Path = typer.Argument(..., help="A loop markdown file or directory.")) -> None:
+    """Author/CI gate: reject invalid files before they enter the runnable library."""
+    from wingman.infrastructure.loop_library import validate_loop_source
+
+    library = validate_loop_source(path.expanduser())
+    valid = bool(library.entries) and not library.invalid_loops
+    typer.echo(
+        json.dumps(
+            {
+                "valid": valid,
+                "accepted": [d.id for d, _, _ in library.entries],
+                "invalid_loops": library.invalid_loops,
+            },
+            ensure_ascii=False,
+        )
+    )
+    if not valid:
+        raise typer.Exit(1)

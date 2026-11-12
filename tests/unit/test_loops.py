@@ -414,3 +414,74 @@ def test_free_text_rejects_punctuation_ending_example_terms(example: str) -> Non
     raw = raw.replace("ask: What do you care about?", f"ask: {prompt}")
     with pytest.raises(ValueError, match="cannot contain example answers"):
         parse_loop(raw, "goals-friction.md")
+
+
+@pytest.mark.parametrize("contents", ["---\nid: [broken\n---", "not a loop", "\xff"])
+def test_invalid_local_draft_is_rejected_without_blocking_valid_loops(
+    ws: Config, contents: str
+) -> None:
+    local = ws.data_dir / "loops"
+    local.mkdir()
+    (local / "broken.md").write_bytes(contents.encode("latin-1"))
+    listing = list_loops(ws)
+    assert [entry["id"] for entry in listing["loops"]] == ["goals-friction"]
+    assert listing["invalid_loops"][0]["filename"] == "broken.md"
+    assert listing["invalid_loops"][0]["problems"]
+    assert start(ws)["card"]["id"] == "care"
+    with Storage(ws.db_path) as storage:
+        with pytest.raises(ValueError, match="not accepted"):
+            start_loop(ws, storage, "broken")
+        assert storage.open_loop_session("self", "broken") is None
+
+
+def test_local_override_is_rejected_without_displacing_official_loop(ws: Config) -> None:
+    local = ws.data_dir / "loops"
+    local.mkdir()
+    (local / "goals-friction.md").write_text((BUNDLED / "goals-friction.md").read_text())
+    listing = list_loops(ws)
+    assert len(listing["loops"]) == 1
+    assert listing["loops"][0]["tier"] == "official"
+    assert "shadow" in " ".join(listing["invalid_loops"][0]["problems"])
+    assert start(ws)["tier"] == "official"
+
+
+def test_invalid_draft_and_diagnostics_stay_in_own_workspace(ws: Config) -> None:
+    local = ws.data_dir / "loops"
+    local.mkdir()
+    (local / "private-draft.md").write_text("not a loop")
+    other = Config(data_dir=ws.data_dir / "other", data_dir_source="test")
+    assert not list_loops(other)["invalid_loops"]
+    assert list_loops(ws)["invalid_loops"][0]["filename"] == "private-draft.md"
+
+
+def test_pinned_session_resumes_when_its_source_becomes_invalid(ws: Config) -> None:
+    local = ws.data_dir / "loops"
+    local.mkdir()
+    path = local / "my-loop.md"
+    path.write_text(
+        (BUNDLED / "goals-friction.md").read_text().replace("id: goals-friction", "id: my-loop")
+    )
+    with Storage(ws.db_path) as storage:
+        original = start_loop(ws, storage, "my-loop")
+    path.write_text("not a loop")
+    with Storage(ws.db_path) as storage:
+        assert start_loop(ws, storage, "my-loop") == original
+
+
+def test_invalid_schema_reports_field_without_echoing_card_text(ws: Config) -> None:
+    local = ws.data_dir / "loops"
+    local.mkdir()
+    raw = (BUNDLED / "goals-friction.md").read_text().replace("id: goals-friction", "id: draft")
+    raw = raw.replace("explain: Next, what makes things hard. There are no right answers.", "")
+    raw = raw.replace("ask: What do you care about?", "ask: PRIVATE_DRAFT_TEXT")
+    (local / "draft.md").write_text(raw)
+    good = raw.replace("id: draft", "id: good").replace(
+        "## card: hard\n\ntype:", "## card: hard\nexplain: A valid explanation.\ntype:"
+    )
+    (local / "good.md").write_text(good)
+    listing = list_loops(ws)
+    assert {entry["id"] for entry in listing["loops"]} == {"goals-friction", "good"}
+    assert "cards.1.explain" in " ".join(listing["invalid_loops"][0]["problems"])
+    assert "PRIVATE_DRAFT_TEXT" not in json.dumps(listing["invalid_loops"])
+    with Storage(ws.db_path) as storage:
+        assert start_loop(ws, storage, "good")["tier"] == "local"

@@ -34,6 +34,7 @@ CATEGORIES = {
 
 
 def list_loops(config: Config) -> dict[str, Any]:
+    library = catalogue(config.data_dir / "loops")
     return {
         "loops": [
             {
@@ -46,8 +47,9 @@ def list_loops(config: Config) -> dict[str, Any]:
                 "sensitivity": d.sensitivity,
                 "writes": d.writes,
             }
-            for d, digest, tier in catalogue(config.data_dir / "loops")
-        ]
+            for d, digest, tier in library.entries
+        ],
+        "invalid_loops": library.invalid_loops,
     }
 
 
@@ -74,8 +76,16 @@ def start_loop(
     existing = storage.open_loop_session(subject, loop_id)
     if existing:
         return _with_previous(storage, existing)
-    entry = next((e for e in catalogue(config.data_dir / "loops") if e[0].id == loop_id), None)
+    library = catalogue(config.data_dir / "loops")
+    entry = next((e for e in library.entries if e[0].id == loop_id), None)
     if entry is None:
+        rejected = next(
+            (item for item in library.invalid_loops if item["loop_id"] == loop_id), None
+        )
+        if rejected:
+            raise ValueError(
+                f"loop not accepted: {rejected['filename']}: {'; '.join(rejected['problems'])}"
+            )
         raise ValueError("unknown loop; use loop_list")
     definition, digest, tier = entry
     previous = _active_action(storage, subject, loop_id)

@@ -53,3 +53,19 @@ def test_cli_same_three_operations(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         app, ["loop", "answer", sid, "--action", "confirm", "--confirmation", "bad"]
     )
     assert invalid.exit_code == 1
+
+
+def test_local_authoring_validation_gate(tmp_path: Path) -> None:
+    from wingman.infrastructure.loop_library import BUNDLED
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["loop", "validate", str(BUNDLED)])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["valid"]
+    bad = tmp_path / "broken.md"
+    bad.write_text("not a loop")
+    result = runner.invoke(app, ["loop", "validate", str(bad)])
+    assert result.exit_code == 1, result.output
+    result = json.loads(result.output)
+    assert not result["valid"]
+    assert result["invalid_loops"][0]["filename"] == "broken.md"

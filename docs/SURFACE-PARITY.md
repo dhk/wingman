@@ -319,3 +319,5 @@ are mechanically checked; their semantic accuracy still needs review.
 | mcp | `loop_list` | `loop list` | Same catalogue and trust metadata. |
 | mcp | `loop_start` | `loop start` | Same version-pinned start/resume card. |
 | mcp | `loop_answer` | `loop answer` | Same preview, confirm and exit transitions. |
+
+| cli | `loop validate` |  | Deliberately local authoring and CI validation of files; no remote arbitrary-path read tool. |
