@@ -19,6 +19,8 @@ from wingman.infrastructure.config import Config
 from wingman.infrastructure.loop_library import catalogue
 from wingman.infrastructure.storage import Storage
 
+MAX_CONFIRMATION_CHARS = 200_000
+
 CATEGORIES = {
     "getting_started": "Getting started",
     "too_much": "Too many competing demands",
@@ -433,12 +435,17 @@ def _preview(
 def _encode(session: LoopSession, data: dict[str, Any]) -> str:
     payload = base64.urlsafe_b64encode(json.dumps(data, ensure_ascii=False).encode()).decode()
     signature = hmac.new(session.secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}.{signature}"
+    token = f"{payload}.{signature}"
+    if len(token) > MAX_CONFIRMATION_CHARS:
+        raise ValueError(
+            "answer is too large to confirm; shorten it and answer this card again. Nothing saved."
+        )
+    return token
 
 
 def _decode(session: LoopSession, token: str) -> dict[str, Any]:
     try:
-        if len(token) > 200_000:
+        if len(token) > MAX_CONFIRMATION_CHARS:
             raise ValueError("oversized confirmation")
         payload, signature = token.rsplit(".", 1)
         expected = hmac.new(session.secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
@@ -500,7 +507,10 @@ def answer_loop(
         data = _decode(session, confirmation)
         state = session.model_dump(mode="json")
         state.update(data["next"])
-        state["answers"] = {**session.answers, **data["answers"]}
+        # Retain support for pending previews from the earlier full-list format.
+        state["answers"] = {**session.answers, **data.get("answers", {})}
+        for key, additions in data.get("answers_append", {}).items():
+            state["answers"][key] = session.answers.get(key, []) + additions
         next_session = LoopSession.model_validate(state)
         captures = [Capture.model_validate(c) for c in data["captures"]]
         # The signed next state is scoped and version-pinned, never supplied by a loop.
@@ -565,8 +575,8 @@ def answer_loop(
             for key, value in after.items()
             if key not in {"secret", "definition", "answers"} and value != before[key]
         },
-        "answers": {
-            key: value
+        "answers_append": {
+            key: value[len(session.answers.get(key, [])) :]
             for key, value in next_session.answers.items()
             if value != session.answers.get(key)
         },

@@ -102,7 +102,11 @@ only in the returned signed preview token. The token survives a server
 restart, but confirmation must supply it again. Without it, resume repeats
 the current question. A per-session secret signs the snapshot; revision
 checks reject tampering, stale confirmations and replays. Captures and the
-new session position commit in one SQLite transaction.
+new session position commit in one SQLite transaction. Tokens carry only
+new answers, reusing confirmed history from storage. Their serialized size is
+checked against the same 200,000-character limit before offering confirmation;
+if a preview would exceed it, the person is asked to shorten the answer and
+stays on the current card with nothing saved.
 
 A session keeps its original definition and content hash even if its loop
 file changes or disappears. Subsequent sessions use the installed version.

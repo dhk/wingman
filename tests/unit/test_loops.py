@@ -361,3 +361,37 @@ def test_action_keeps_step_authorship_and_separate_deadline_provenance(
     assert saved["saved"][0] == action
     stored = next(r for r in records(ws, subject) if r.kind == "action")
     assert stored.authorship == step["authorship"]
+
+
+def test_long_unicode_ladder_answers_can_all_be_confirmed(ws: Config) -> None:
+    sid = start(ws)["session_id"]
+    for _ in range(4):
+        call(ws, sid, action="skip")
+    save(ws, sid, "A goal")
+    save(ws, sid, "goal")
+    words = ["🙂" * 10_000, "🚀" * 10_000, "🌍" * 10_000]
+    for index, text in enumerate(words):
+        preview = call(ws, sid, answer=text)
+        assert len(preview["confirmation"]) <= 200_000
+        call(ws, sid, action="confirm", confirmation=preview["confirmation"])
+        if index < 2:
+            save(ws, sid, "continue")
+    with Storage(ws.db_path) as storage:
+        session = storage.get_loop_session(sid, "self")
+        assert session
+        assert session.answers["ladder"] == words
+    assert start(ws)["card"]["id"] == "pick"
+
+
+def test_oversized_preview_is_rejected_before_confirmation_offer(
+    ws: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.application import loops
+
+    sid = start(ws)["session_id"]
+    # Exercise the same serialization-size guard without enormous fixtures.
+    monkeypatch.setattr(loops, "MAX_CONFIRMATION_CHARS", 200, raising=False)
+    with pytest.raises(ValueError, match="shorten"):
+        call(ws, sid, answer="An answer that exceeds this test's token budget")
+    assert not records(ws)
+    assert start(ws)["card"]["id"] == "care"
