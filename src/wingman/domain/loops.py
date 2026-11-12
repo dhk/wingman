@@ -101,7 +101,7 @@ class LoopDefinition(LoopData):
             if re.search(r"https?://", prose) and not card.display_only:
                 raise ValueError("links must be marked display_only")
             if card.type == "free_text" and re.search(
-                r"\b(for example|e\.g\.|such as|example answer)\b", prose, re.IGNORECASE
+                r"\b(?:for example\b|e\.g\.|such as\b|example answer\b)", prose, re.IGNORECASE
             ):
                 raise ValueError("free-text cards cannot contain example answers")
         return self

@@ -395,3 +395,22 @@ def test_oversized_preview_is_rejected_before_confirmation_offer(
         call(ws, sid, answer="An answer that exceeds this test's token budget")
     assert not records(ws)
     assert start(ws)["card"]["id"] == "care"
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        "e.g. leadership",
+        "E.G. independence",
+        "e.g., teamwork",
+        "e.g.: creativity",
+        "e.g.(growth)",
+        "e.g.",
+    ],
+)
+def test_free_text_rejects_punctuation_ending_example_terms(example: str) -> None:
+    raw = (BUNDLED / "goals-friction.md").read_text()
+    prompt = json.dumps(f"What matters to you? {example}")
+    raw = raw.replace("ask: What do you care about?", f"ask: {prompt}")
+    with pytest.raises(ValueError, match="cannot contain example answers"):
+        parse_loop(raw, "goals-friction.md")

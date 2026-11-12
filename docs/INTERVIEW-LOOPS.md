@@ -111,7 +111,7 @@ stays on the current card with nothing saved.
 A session keeps its original definition and content hash even if its loop
 file changes or disappears. Subsequent sessions use the installed version.
 The fixed schema rejects unknown fields, undeclared stores, arbitrary
-routes, missing explainers, free-text presets/examples, obvious references
+routes, missing explainers, free-text presets/examples (including `e.g.` with punctuation or capitalization variants), obvious references
 to an agent/assistant/model, and unmarked card links. Duplicate YAML keys
 and aliases are rejected. These are mechanical checks, not a claim to
 understand every malicious sentence; human review is still necessary.
