@@ -312,3 +312,12 @@ upload exists (Beads `wingman-m4l`). Transcript preview is read-only, and
 filing requires the preview's review hash and the person's full name. Opportunity
 listing shares its application renderer across CLI and MCP. Reciprocal mappings
 are mechanically checked; their semantic accuracy still needs review.
+
+| cli | `loop list` | `loop_list` | Same catalogue and trust metadata. |
+| cli | `loop start` | `loop_start` | Same version-pinned start/resume card. |
+| cli | `loop answer` | `loop_answer` | Same preview, confirm and exit transitions. |
+| mcp | `loop_list` | `loop list` | Same catalogue and trust metadata. |
+| mcp | `loop_start` | `loop start` | Same version-pinned start/resume card. |
+| mcp | `loop_answer` | `loop answer` | Same preview, confirm and exit transitions. |
+
+| cli | `loop validate` |  | Deliberately local authoring and CI validation of files; no remote arbitrary-path read tool. |

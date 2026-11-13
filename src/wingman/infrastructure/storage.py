@@ -21,6 +21,7 @@ from wingman.domain.corpus import CorpusDocument
 from wingman.domain.delivered_message import DeliveredMessage
 from wingman.domain.examples import Example
 from wingman.domain.heap import HeapItem
+from wingman.domain.loops import Capture, LoopSession
 from wingman.domain.model_usage import ModelUsage
 from wingman.domain.operator_answer import OperatorAnswer
 from wingman.domain.opportunity import Opportunity
@@ -42,6 +43,24 @@ from wingman.infrastructure.usage_ledger import (
 
 _SCHEMA = (
     """
+CREATE TABLE IF NOT EXISTS loop_sessions (
+    session_id TEXT PRIMARY KEY,
+    subject TEXT NOT NULL,
+    loop_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_loop_open ON loop_sessions(subject, loop_id)
+    WHERE status = 'open';
+CREATE TABLE IF NOT EXISTS goals_plan (
+    capture_id TEXT PRIMARY KEY,
+    subject TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    card_id TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS source_records (
     record_id TEXT PRIMARY KEY,
     source_type TEXT NOT NULL,
@@ -447,6 +466,75 @@ class Storage:
         tb: TracebackType | None,
     ) -> None:
         self.close()
+
+    def get_loop_session(self, session_id: str, subject: str) -> LoopSession | None:
+        row = self._conn.execute(
+            "SELECT payload FROM loop_sessions WHERE session_id = ? AND subject = ?",
+            (session_id, subject),
+        ).fetchone()
+        return LoopSession.model_validate_json(row[0]) if row else None
+
+    def open_loop_session(self, subject: str, loop_id: str) -> LoopSession | None:
+        row = self._conn.execute(
+            "SELECT payload FROM loop_sessions WHERE subject = ? AND loop_id = ? AND status = 'open'",
+            (subject, loop_id),
+        ).fetchone()
+        return LoopSession.model_validate_json(row[0]) if row else None
+
+    def create_loop_session(self, session: LoopSession) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO loop_sessions VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    session.session_id,
+                    session.subject,
+                    session.definition.id,
+                    session.revision,
+                    session.status,
+                    session.model_dump_json(),
+                ),
+            )
+
+    def commit_loop_step(
+        self, session: LoopSession, expected_revision: int, captures: list[Capture]
+    ) -> None:
+        """CAS and captures are one transaction: stale confirmations cannot write."""
+        if any(c.store not in session.definition.writes for c in captures):
+            raise ValueError("loop attempted an undeclared store")
+        if any(
+            c.subject != session.subject or c.session_id != session.session_id for c in captures
+        ):
+            raise ValueError("capture scope does not match session")
+        with self._conn:
+            cursor = self._conn.execute(
+                "UPDATE loop_sessions SET revision = ?, status = ?, payload = ? "
+                "WHERE session_id = ? AND subject = ? AND revision = ?",
+                (
+                    session.revision,
+                    session.status,
+                    session.model_dump_json(),
+                    session.session_id,
+                    session.subject,
+                    expected_revision,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("session changed; resume and review the current card")
+            self._conn.executemany(
+                "INSERT INTO goals_plan VALUES (?, ?, ?, ?, ?)",
+                [
+                    (c.capture_id, c.subject, c.session_id, c.card_id, c.model_dump_json())
+                    for c in captures
+                ],
+            )
+
+    def list_goals_plan(self, subject: str) -> list[Capture]:
+        return [
+            Capture.model_validate_json(row[0])
+            for row in self._conn.execute(
+                "SELECT payload FROM goals_plan WHERE subject = ? ORDER BY rowid", (subject,)
+            )
+        ]
 
     def close(self) -> None:
         self._conn.close()

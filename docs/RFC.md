@@ -1684,3 +1684,36 @@ privileged (operator-gated, owner-approved 2026-10-16) read-only accounting exce
 It checks operator_only_refusal before registry or workspace access, reads no
 prompts, credentials or responses, and cannot migrate or modify another tenant's
 DB. The same CLI --all-tenants gate applies. This grants no provisioning authority.
+
+## RFC-085: Data-driven interview cards with confirmed local captures (#652) — Durable decision
+
+**Decision.** Interview loop files are strict markdown/YAML data, served as
+one decision at a time by `loop_list`, `loop_start`, and `loop_answer`, alongside
+existing interviews. The engine controls exits, repeat bounds, scoped storage
+and write confirmation; a loop cannot supply executable tool calls. The first
+rollout is Goals & Friction 0.3.0 only. See [INTERVIEW-LOOPS.md](INTERVIEW-LOOPS.md).
+
+Definitions and hashes are pinned per session. Captures belong to a dedicated
+`goals_plan` table, not evidence or job criteria. An answer call returns a
+signed exact-write preview without persisting the answer; explicit confirmation
+commits captures and card position atomically using a session revision. The
+preview token carries the draft, so loop telemetry withholds all content.
+An unconfirmed draft resumes only when the client retains its token; otherwise
+the same question is asked again. This deliberately prioritizes no silent
+capture over server-side recovery of unapproved words.
+
+The pilot lets the person choose and confirm classifications, records them as
+inference, and uses no model or network calls. Coaching uses existing persona
+scope and authorship; rescue notes are confirmed local coach inferences.
+Dossier flows, reviewed-community distribution/revocation, contribution CI,
+and migration of old interview entry points remain separate rollout stages.
+
+
+**RFC-085 privacy clarification (PR #653; maintainer-confirmed).** Loop capture
+confirmation also governs Wingman's diagnostic copies. Transcript harvesting
+pre-scans for loop activity and imports only content-free event metadata for
+the entire transcript when found, including messages before the first loop
+call and unrelated tool arguments that might repeat an answer. Wrapped MCP/CLI
+loop events are also redacted at the journal write boundary. This is a
+conservative import rule, not encryption of chat archives; existing harvested
+events and the host's original conversation files are not rewritten.

@@ -169,6 +169,12 @@ public signup is not supported. Setup for the local and capability paths:
 claude mcp add wingman -- wingman-mcp    # Claude Code, one line
 ```
 
+**Interview loops (pilot).** Goals & Friction 0.3.0 helps you name what matters,
+what gets in the way, and one next step. `loop_list`, `loop_start`, and
+`loop_answer` (CLI: `wingman loop`) serve one card at a time with confirmed
+local captures and resume. It runs alongside existing interviews; see
+[docs/INTERVIEW-LOOPS.md](docs/INTERVIEW-LOOPS.md).
+
 ## Repository Guide
 
 - [`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md): introduction and guided first session

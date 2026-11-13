@@ -155,6 +155,7 @@ from wingman.application.triage import (
     snooze_action,
     unmute_action,
 )
+from wingman.cli.loops import loop_app
 from wingman.domain.model_usage import Payer
 from wingman.domain.outreach import OutreachPurpose
 from wingman.domain.person import Person
@@ -231,6 +232,8 @@ from wingman.reporting.export import (
 from wingman.version import wingman_version
 
 app = typer.Typer(help="Wingman: local-first career intelligence.")
+
+app.add_typer(loop_app, name="loop")
 corpus_app = typer.Typer(help="Manage the corpus: your writing as citable evidence.")
 app.add_typer(corpus_app, name="corpus")
 opportunities_app = typer.Typer(help="Inspect assessed opportunities.")
@@ -4496,7 +4499,8 @@ def telemetry_harvest(
 
     Harvests conversation text (user and assistant messages), every Bash
     invocation mentioning wingman, and every wingman MCP tool call — with
-    their original timestamps. Requires telemetry to be on.
+    their original timestamps. Transcripts containing interview loops retain
+    only event metadata. Requires telemetry to be on.
     """
     configure_logging()
     config = load_config()
@@ -4507,6 +4511,10 @@ def telemetry_harvest(
         typer.echo(f"harvest failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Harvested {report.imported} events from {report.source}")
+    if report.content_withheld:
+        typer.echo(
+            "  Interview loop detected: conversation and tool content withheld; metadata only."
+        )
     for kind, count in sorted(report.by_kind.items()):
         typer.echo(f"  {kind}: {count}")
     if report.skipped_lines:
