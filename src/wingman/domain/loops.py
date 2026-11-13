@@ -52,8 +52,8 @@ class Card(LoopData):
             raise ValueError(f"{self.id}: a question is required")
         if self.type == "free_text" and self.anchoring != "none":
             raise ValueError(f"{self.id}: free text requires anchoring: none")
-        if self.type == "free_text" and (self.options or self.options_from):
-            raise ValueError(f"{self.id}: free text cannot supply preset answers")
+        if self.type != "options" and (self.options or self.options_from):
+            raise ValueError(f"{self.id}: only options cards can supply preset answers")
         if self.type == "options" and not (self.options or self.options_from):
             raise ValueError(f"{self.id}: options require a source")
         return self

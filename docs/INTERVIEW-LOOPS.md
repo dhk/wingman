@@ -87,7 +87,10 @@ Bundled files live at `src/wingman/loops/*.md`, separate from the corpus.
 Local files may be placed in `DATA_DIR/loops/*.md`; they are labelled
 **local**, cannot shadow a bundled id, and pass the same schema checks.
 Validation is an admission gate: only passing files enter the runnable
-catalogue. `loop_list` returns `invalid_loops` separately, with filename and
+catalogue. Preset `options` and `options_from` sources are allowed only on
+`type: options` cards;
+free-text, scale, felt and commitment cards cannot replace their required
+inputs with preset menus. `loop_list` returns `invalid_loops` separately, with filename and
 field/syntax problems. One rejected file cannot block valid loops; starting
 that draft returns its own error without creating a session. Open sessions
 continue from their pinned definitions, even if a source becomes invalid.

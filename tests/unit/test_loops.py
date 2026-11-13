@@ -485,3 +485,14 @@ def test_invalid_schema_reports_field_without_echoing_card_text(ws: Config) -> N
     assert "PRIVATE_DRAFT_TEXT" not in json.dumps(listing["invalid_loops"])
     with Storage(ws.db_path) as storage:
         assert start_loop(ws, storage, "good")["tier"] == "local"
+
+
+@pytest.mark.parametrize(
+    "card_type", ["free_text", "scale", "scale_then_free_text", "commit_action"]
+)
+@pytest.mark.parametrize("option_field", ["options: [Bypass]", "options_from: ladder.goals"])
+def test_non_options_cards_cannot_accept_preset_sources(card_type: str, option_field: str) -> None:
+    raw = (BUNDLED / "goals-friction.md").read_text()
+    raw = raw.replace("type: commit_action", f"type: {card_type}\nanchoring: none\n{option_field}")
+    with pytest.raises(ValueError):
+        parse_loop(raw, "goals-friction.md")
