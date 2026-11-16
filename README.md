@@ -183,6 +183,7 @@ claude mcp add wingman -- wingman-mcp    # Claude Code, one line
 - [`docs/RFC.md`](docs/RFC.md): the decision ledger — why it is this way
 - [`docs/EVALUATION.md`](docs/EVALUATION.md): how we measure that it's getting better
 - [`docs/RESEARCH-BRIEFING.md`](docs/RESEARCH-BRIEFING.md): competitive-landscape research brief
+- [`docs/OSS-REVIEW.md`](docs/OSS-REVIEW.md): whole-repository code review with an open-weight model
 
 ## Quick Start (development checkout)
 

@@ -1684,3 +1684,13 @@ privileged (operator-gated, owner-approved 2026-10-16) read-only accounting exce
 It checks operator_only_refusal before registry or workspace access, reads no
 prompts, credentials or responses, and cannot migrate or modify another tenant's
 DB. The same CLI --all-tenants gate applies. This grants no provisioning authority.
+
+## RFC-085: Open-weight whole-repository code review (pilot)
+
+**Decision (pilot, not durable).** `scripts/oss_review.py` reviews the repository, or a branch's changes, with an open-weight model over any OpenAI-compatible endpoint. The default is DeepSeek V4.1 Flash on Vercel AI Gateway. `.github/workflows/oss-review.yml` runs it on demand, or on PRs labelled `oss-review`. The design and setup are in [`OSS-REVIEW.md`](OSS-REVIEW.md).
+
+**Why a standalone script, not a Wingman provider.** This is build tooling, not product behaviour. Routing it through the capability classes of RFC-004 would put a code reviewer into the product's model policy. A stdlib-only script also runs without `uv sync`, on any machine, against any gateway or self-hosted server.
+
+**Why the models only propose.** This applies invariant 5, as RFC-083 does. A finding reaches the report only if it cites a file and a line the model was shown. Its quoted evidence is then located in the file, and the finding is marked verified, relocated or unverified. Nothing in the workflow approves, blocks or merges. Token counts are stored raw and priced at read time (RFC-084).
+
+**Open until used.** How useful the findings are in practice, measured by the share a human accepts. Whether a second model family as cross-check is worth its cost. Whether this should become an open-weight reviewer option in the RFC-083 loop. Promote this to a durable decision, or remove it, after a few full reviews.

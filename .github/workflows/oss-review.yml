@@ -1,0 +1,141 @@
+# Code review with an open-weight model. Design and setup: docs/OSS-REVIEW.md.
+#
+# Two ways in:
+# - Actions -> "Open-weight review" -> Run workflow: reviews the whole repository
+#   (or the --include glob you give) and attaches report.md as an artifact and job
+#   summary.
+# - Add the `oss-review` label to a pull request: reviews only the files the PR
+#   changes, and posts or updates one comment. Later pushes re-run it while the
+#   label stays on. Remove the label to stop.
+#
+# The job does nothing, successfully, when no API key secret is set, and on PRs
+# from forks (GitHub does not give them secrets). The model only proposes
+# findings; scripts/oss_review.py checks each one against the code before it is
+# reported, and nothing here can approve, block or merge a PR.
+name: Open-weight review
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model id on the gateway"
+        default: "deepseek/deepseek-v4.1-flash-1017"
+        required: true
+        type: string
+      include:
+        description: "Optional glob to restrict the review, e.g. src/wingman/application/**"
+        default: ""
+        required: false
+        type: string
+      max_cost:
+        description: "Refuse to start above this estimated USD cost"
+        default: "5"
+        required: true
+        type: string
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oss-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'oss-review')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+      OSS_REVIEW_API_KEY: ${{ secrets.OSS_REVIEW_API_KEY }}
+      # Repository variables (Settings -> Secrets and variables -> Variables) override
+      # the defaults for every run; empty means "use the script's default".
+      OSS_REVIEW_BASE_URL: ${{ vars.OSS_REVIEW_BASE_URL }}
+      OSS_REVIEW_MODEL: ${{ inputs.model || vars.OSS_REVIEW_MODEL }}
+    steps:
+      - name: Check for an API key
+        id: key
+        run: |
+          if [ -z "${AI_GATEWAY_API_KEY}${OSS_REVIEW_API_KEY}" ]; then
+            echo "::notice::No AI_GATEWAY_API_KEY or OSS_REVIEW_API_KEY secret, so no review ran. Setup: docs/OSS-REVIEW.md."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.key.outputs.present == 'true'
+        with:
+          fetch-depth: 0 # diff mode needs the merge base
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        if: steps.key.outputs.present == 'true'
+        with:
+          python-version: "3.12"
+
+      # Per-batch results are keyed by model, prompt version and exact code, so a
+      # re-run only pays for batches whose code changed.
+      - uses: actions/cache@v4
+        if: steps.key.outputs.present == 'true'
+        with:
+          path: reports/oss-review/cache
+          key: oss-review-${{ env.OSS_REVIEW_MODEL || 'default' }}-${{ github.sha }}
+          restore-keys: oss-review-${{ env.OSS_REVIEW_MODEL || 'default' }}-
+
+      - name: Review
+        id: review
+        if: steps.key.outputs.present == 'true'
+        env:
+          INCLUDE: ${{ inputs.include }}
+          MAX_COST: ${{ inputs.max_cost || '2' }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -uo pipefail
+          args=(run --max-cost "$MAX_COST")
+          if [ -n "$BASE_REF" ]; then
+            args+=(--diff-base "origin/$BASE_REF")
+          fi
+          if [ -n "${INCLUDE:-}" ]; then
+            args+=(--include "$INCLUDE")
+          fi
+          status=0
+          python3 scripts/oss_review.py "${args[@]}" || status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [ -f reports/oss-review/report.md ]; then
+            head -c 900000 reports/oss-review/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # 2 = some batches failed: the report says which; keep going so it is posted.
+          if [ "$status" != "0" ] && [ "$status" != "2" ]; then exit "$status"; fi
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.key.outputs.present == 'true'
+        with:
+          name: oss-review
+          path: |
+            reports/oss-review/report.md
+            reports/oss-review/findings.json
+          if-no-files-found: ignore
+
+      - name: Comment on the pull request
+        if: github.event_name == 'pull_request' && steps.key.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          [ -f reports/oss-review/report.md ] || exit 0
+          {
+            head -c 60000 reports/oss-review/report.md
+            echo
+            echo "Full findings.json is in the run's \`oss-review\` artifact: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > comment.md
+          gh pr comment "$PR" --body-file comment.md --edit-last --create-if-none
