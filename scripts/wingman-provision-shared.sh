@@ -337,7 +337,7 @@ say "7/8 tailscale mount (stripping proxy — the shared process itself runs wit
 # /.well-known/oauth-protected-resource/shared/mcp). A client that computes
 # that path instead of following the 401's resource_metadata URL never
 # reaches a mount under /shared. The app serves the path itself
-# (_metadata_paths in oauth_bearer.py); the target carries the path because
+# (_metadata_paths in oauth_resource.py); the target carries the path because
 # --set-path strips the matched prefix before proxying. It was added by hand
 # on lobster during the 2026-10-08 connector debugging and would have been
 # lost on the next rebuild.
