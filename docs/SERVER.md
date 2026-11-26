@@ -1471,6 +1471,31 @@ would leave you believing you had granted — or revoked — something you
 had not. Write the bare boolean `true`/`false`, unquoted; `"true"` is
 refused rather than guessed at.
 
+**Super user — tenant administration from an MCP session** (#658, RFC-085).
+A tenant may run the `tenant_admin` tool only when their own registry entry
+says so, a grant separate from `privileged`:
+
+```toml
+[[tenant]]
+slug = "dhk"
+data_dir = "/home/wingman-shared/tenants/dhk"
+super_user = true          # may administer invites from chat; everyone else may not
+```
+
+`tenant_admin` works against the invite queue of an OAuth-enabled shared
+service: `list` (reserved invites and the references of verified sign-ins
+waiting), `reserve <slug>` and `revoke <slug>` (preview first; they write only
+with `confirmed=true`), and `approve <slug> <ref>`, which **prints** the exact
+`sudo wingman tenant oauth-approve ...` command and never runs it. Creating
+the tenant writes `/etc/wingman/tenants.toml`, which stays root-owned
+(`750 root:wingman`); the tool cannot and must not write it, so that last step
+is still yours, on the host. Everyone who is not a super user, including a
+`privileged` tenant, is refused by every action and nothing changes.
+
+`super_user` follows `privileged`'s rules: per tenant only, refused in
+`[defaults]` and at the top level, bare boolean only, absent means false, and a
+solo install is always its own super user. Apply a change with `wg reload`.
+
 **Operator-funded inference** (#514, RFC-080). A tenant on the shared
 process has `strict_provider_keys` set, which means the three metered
 keys — `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `VOYAGE_API_KEY` —
