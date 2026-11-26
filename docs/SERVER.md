@@ -1485,12 +1485,15 @@ super_user = true          # may administer invites from chat; everyone else may
 `tenant_admin` works against the invite queue of an OAuth-enabled shared
 service: `list` (reserved invites and the references of verified sign-ins
 waiting), `reserve <slug>` and `revoke <slug>` (preview first; they write only
-with `confirmed=true`), and `approve <slug> <ref>`, which **prints** the exact
-`sudo wingman tenant oauth-approve ...` command and never runs it. Creating
-the tenant writes `/etc/wingman/tenants.toml`, which stays root-owned
-(`750 root:wingman`); the tool cannot and must not write it, so that last step
-is still yours, on the host. Everyone who is not a super user, including a
-`privileged` tenant, is refused by every action and nothing changes.
+with `confirmed=true`), and `approve <slug> <ref>`. With the optional
+registration helper installed (RFC-086, OAuth runbook "Approving from chat")
+`approve` previews, then admits the person on `confirmed=true`. Without it,
+`approve` **prints** the exact `sudo wingman tenant oauth-approve ...` command
+and never runs it. Either way the registry stays root-owned
+(`750 root:wingman`) and this process never writes it: the helper is a separate
+root-owned program that can only add an unprivileged, unfunded tenant. Everyone
+who is not a super user, including a `privileged` tenant, is refused by every
+action and nothing changes.
 
 `super_user` follows `privileged`'s rules: per tenant only, refused in
 `[defaults]` and at the top level, bare boolean only, absent means false, and a

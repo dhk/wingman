@@ -5567,10 +5567,11 @@ def tenant_admin(
     sign-ins waiting for approval. 'reserve' holds a slug for one trusted
     person and 'revoke' withdraws an unclaimed one; both preview first and
     only write with confirmed=true. 'approve' takes the slug and the ref of
-    the waiting sign-in and returns the exact `sudo wingman tenant
-    oauth-approve` command to run on the host. It never runs it: creating the
-    tenant writes the root-owned registry, which this process cannot and must
-    not write.
+    the waiting sign-in. With the root registration helper installed
+    (RFC-086) it previews, then admits that person with confirmed=true; the
+    tenant is isolated, not privileged and not funded. Without the helper it
+    returns the exact `sudo wingman tenant oauth-approve` command to run on
+    the host. This process never writes the root-owned registry itself.
 
     Super-user only. Every other workspace, tenant or not, gets a plain
     refusal from every action, including the read-only ones. Grant is per
@@ -5617,13 +5618,26 @@ def tenant_admin(
     if action == "revoke":
         return admin.revoke_invite(store, slug, confirmed=confirmed)
     if action == "approve":
-        return admin.approve_command(
+        import getpass
+
+        from wingman.infrastructure import register_helper
+        from wingman.infrastructure.tenant_process import signal_reload
+
+        conf = register_helper.read_conf()
+        return admin.approve(
             store,
             slug,
             ref,
+            confirmed=confirmed,
             identities_path=_OAUTH_IDENTITY_PATH,
             registry_path=registry_path,
             tenants=tenants,
+            trusted_issuers=_OAUTH_TRUSTED_ISSUERS,
+            service_user=getpass.getuser(),
+            helper_available=register_helper.available(),
+            data_root=conf.data_root if conf is not None else None,
+            register=register_helper.register_via_helper,
+            reload_service=signal_reload,
         )
     return f"unknown action {action!r}; use list, reserve, revoke, or approve. Nothing was changed."
 
@@ -5978,6 +5992,9 @@ def _probe_bind(host: str, port: int) -> None:
 #: 'tenant_admin' needs it to find the onboarding state beside it; None means
 #: this process is not OAuth-enabled and the tool says so (#658).
 _OAUTH_IDENTITY_PATH: Path | None = None
+#: The issuers this process trusts, set beside it; 'tenant_admin approve' binds
+#: a new person's subject under every one of them (#658).
+_OAUTH_TRUSTED_ISSUERS: tuple[str, ...] = ()
 
 
 def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> tuple[Any, Path]:
@@ -6038,6 +6055,10 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
             sys.exit(1)
     # Email-bound invites (#585): the two issuers this process trusts are the
     # only ones a claim binds under — one WorkOS user, one subject, both surfaces.
+    global _OAUTH_TRUSTED_ISSUERS
+    _OAUTH_TRUSTED_ISSUERS = tuple(
+        [settings.issuer] + ([browser_settings.session_issuer] if browser_settings else [])
+    )
     invite_claimer = EmailInviteClaimer(
         identity_path,
         onboarding_store,

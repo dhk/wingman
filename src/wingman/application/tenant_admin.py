@@ -1,12 +1,14 @@
 """Tenant administration from an MCP session, for a super user (issue #658).
 
-What this module does is exactly the part of onboarding a person that the
-shared service's own account can already do: look at the invite and
-pending-sign-in queue, reserve a slug, withdraw one. What it deliberately
-does NOT do is create the tenant. That writes `/etc/wingman/tenants.toml`,
-which is root-owned (RFC-047, `750 root:wingman`); the shared process can
-read it and cannot write it, and nothing here loosens that. The last step is
-therefore a command for the operator to run, printed exactly, never run.
+What this module does is the part of onboarding a person that the shared
+service's own account can do: look at the invite and pending-sign-in queue,
+reserve a slug, withdraw one, and approve a waiting sign-in. The one step
+that account cannot do is write `/etc/wingman/tenants.toml`, which is
+root-owned (RFC-047, `750 root:wingman`) and stays that way. Approval does it
+through a standalone root-owned helper the operator installs on purpose
+(RFC-086); with no helper installed, approval falls back to printing the exact
+command for the operator to run (RFC-085). This module never writes the
+registry itself.
 
 Everything a person typed or a token carried is data. Slugs are validated
 before they appear in a command; issuer and subject come from a verified
@@ -17,7 +19,7 @@ can cause a pending row to exist.
 from __future__ import annotations
 
 import shlex
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,8 +27,10 @@ from wingman.infrastructure.oauth_onboarding import (
     OAuthOnboardingError,
     OAuthOnboardingStore,
     PendingIdentity,
+    approve_pending_tenant,
     pending_reference,
 )
+from wingman.infrastructure.tenant_process import TenantProcessSignalError
 from wingman.infrastructure.tenants import Tenant
 
 _DEFAULT_DATA_ROOT_PLACEHOLDER = "<data-root>"
@@ -123,16 +127,8 @@ def _common_data_root(tenants: Sequence[Tenant]) -> str:
     return parents.pop() if len(parents) == 1 else _DEFAULT_DATA_ROOT_PLACEHOLDER
 
 
-def approve_command(
-    store: OAuthOnboardingStore,
-    slug: str,
-    ref: str,
-    *,
-    identities_path: Path,
-    registry_path: Path,
-    tenants: Sequence[Tenant],
-) -> str:
-    """The exact `sudo wingman tenant oauth-approve` to run. Never runs it."""
+def _resolve_waiting(store: OAuthOnboardingStore, slug: str, ref: str) -> PendingIdentity | str:
+    """The one waiting sign-in this slug and ref name, or the refusal text."""
     slug = slug.strip()
     ref = ref.strip().upper()
     try:
@@ -142,12 +138,9 @@ def approve_command(
         reserved = any(invite.slug == slug for invite in store.invites())
         pending = store.pending()
     except OAuthOnboardingError as exc:
-        return f"No command produced: {exc}. Nothing was changed."
+        return f"{exc}"
     if not reserved:
-        return (
-            f"No command produced: {slug!r} is not a reserved invite. Reserve it first. "
-            "Nothing was changed."
-        )
+        return f"{slug!r} is not a reserved invite. Reserve it first"
     matches: list[PendingIdentity] = [
         identity
         for identity in pending
@@ -155,10 +148,20 @@ def approve_command(
     ]
     if len(matches) != 1:
         return (
-            f"No command produced: {len(matches)} waiting sign-ins match ref {ref!r}. "
-            "Use action 'list' for the references. Nothing was changed."
+            f"{len(matches)} waiting sign-ins match ref {ref!r}. "
+            "Use action 'list' for the references"
         )
-    identity = matches[0]
+    return matches[0]
+
+
+def _render_command(
+    identity: PendingIdentity,
+    slug: str,
+    *,
+    identities_path: Path,
+    registry_path: Path,
+    tenants: Sequence[Tenant],
+) -> str:
     data_root = _common_data_root(tenants)
     command = " ".join(
         [
@@ -183,4 +186,107 @@ def approve_command(
         f"{command}{note}\n\n"
         "Approving binds that sign-in to the reserved slug, so check the reference with the "
         "person first."
+    )
+
+
+def approve_command(
+    store: OAuthOnboardingStore,
+    slug: str,
+    ref: str,
+    *,
+    identities_path: Path,
+    registry_path: Path,
+    tenants: Sequence[Tenant],
+) -> str:
+    """The exact `sudo wingman tenant oauth-approve` to run. Never runs it."""
+    slug = slug.strip()
+    found = _resolve_waiting(store, slug, ref)
+    if isinstance(found, str):
+        return f"No command produced: {found}. Nothing was changed."
+    return _render_command(
+        found, slug, identities_path=identities_path, registry_path=registry_path, tenants=tenants
+    )
+
+
+def approve(
+    store: OAuthOnboardingStore,
+    slug: str,
+    ref: str,
+    *,
+    confirmed: bool,
+    identities_path: Path,
+    registry_path: Path,
+    tenants: Sequence[Tenant],
+    trusted_issuers: Sequence[str],
+    service_user: str,
+    helper_available: bool,
+    data_root: Path | None,
+    register: Callable[[Path, str, Path], object],
+    reload_service: Callable[[Path], int | None],
+) -> str:
+    """Admit one waiting sign-in as the reserved slug, through the root helper.
+
+    Falls back to the printed command (never silently) when the helper is not
+    installed. Previews unless `confirmed`, because approving binds that
+    person's identity to a workspace and cannot be taken back from chat.
+    """
+    slug = slug.strip()
+    found = _resolve_waiting(store, slug, ref)
+    if not helper_available or data_root is None:
+        return (
+            approve_command(
+                store,
+                slug,
+                ref,
+                identities_path=identities_path,
+                registry_path=registry_path,
+                tenants=tenants,
+            )
+            + "\n\nThe registration helper is not installed on this host, so approval from "
+            "chat is not available. See the OAuth runbook, 'Approving from chat'."
+            if not isinstance(found, str)
+            else f"No command produced: {found}. Nothing was changed."
+        )
+    if isinstance(found, str):
+        return f"Not approved: {found}. Nothing was changed."
+    identity = found
+    if not confirmed:
+        return (
+            f"Preview: would admit sign-in ref {pending_reference(identity.issuer, identity.subject)} "
+            f"as tenant {slug!r}: an isolated workspace, not privileged, not funded, bound on "
+            "every surface this service trusts. Confirm the reference with the person first. "
+            "Call again with confirmed=true to approve."
+        )
+    try:
+        data_dir = approve_pending_tenant(
+            identity_path=identities_path,
+            registry_path=registry_path,
+            data_root=data_root,
+            slug=slug,
+            issuer=identity.issuer,
+            subject=identity.subject,
+            service_user=service_user,
+            trusted_issuers=trusted_issuers,
+            register=register,
+        )
+    except OAuthOnboardingError as exc:
+        return (
+            f"Not approved: {exc}. No access was granted. A partly prepared workspace, if any, "
+            "is unreachable and the same approval can be retried."
+        )
+    try:
+        pid = reload_service(registry_path)
+    except TenantProcessSignalError as exc:  # best effort; the approval itself stands
+        return (
+            f"Approved {slug!r} (workspace {data_dir}; not privileged, not funded), but the "
+            f"service reload failed ({exc}). It will pick the tenant up at its next reload."
+        )
+    reloaded = (
+        "The running service was signaled to reload."
+        if pid is not None
+        else "No running service was found to signal; it loads at next start."
+    )
+    return (
+        f"Approved {slug!r}: isolated workspace {data_dir}; not privileged, not funded. "
+        f"{reloaded} Ask the person to reconnect."
     )

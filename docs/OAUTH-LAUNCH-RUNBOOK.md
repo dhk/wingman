@@ -296,6 +296,39 @@ operator separately approved those grants. Absence of a model key is expected:
 model-free tools work, and model-backed tools must refuse until BYOK setup or an
 explicit per-tenant funding decision succeeds.
 
+### Approving from chat (opt-in, #658, RFC-086)
+
+A super user (`super_user = true` on their own registry entry; see
+[SERVER.md](SERVER.md)) can reserve an invite and approve the sign-in from the
+`tenant_admin` tool instead of a shell. Creating the tenant writes the
+root-owned registry, so this needs one small root-owned helper that you install
+on purpose. Without it, `tenant_admin approve` still works: it prints the exact
+`oauth-approve` command above for you to run.
+
+```bash
+# From a checkout the service account cannot write (the copy is what root runs):
+sudo scripts/wingman-install-register-helper.sh \
+  --service-user wingman-shared \
+  --data-root /home/wingman-shared/tenants --dry-run    # shows exactly what it will write
+sudo scripts/wingman-install-register-helper.sh \
+  --service-user wingman-shared --data-root /home/wingman-shared/tenants
+```
+
+It installs `/usr/local/libexec/wingman/register-tenant` (root:root), its
+config `/etc/wingman/register-helper.conf`, and **one** sudoers rule,
+`wingman-shared ALL=(root) NOPASSWD: /usr/local/libexec/wingman/register-tenant`,
+checked with `visudo` before it takes effect. The helper takes a slug and
+nothing else. It adds a tenant with no `privileged`, `funded` or `super_user`,
+only for a workspace directory the service account already created, and
+refuses links, bad slugs and anything already registered differently. Then, in
+chat: `tenant_admin` `list`, `reserve` (confirm), `approve` with the person's
+reference (preview, then confirm), and ask them to reconnect.
+
+Roll back by deleting `/etc/sudoers.d/wingman-register-tenant`; the helper is
+then unreachable and `approve` falls back to printing the command. The helper
+cannot grant `super_user`, `privileged` or `funded`; those stay hand edits of
+the registry, followed by `wg reload`.
+
 ## 5. One-person launch canary
 
 Use one real invited Google identity as canary A and a different identity as
