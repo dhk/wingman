@@ -170,7 +170,7 @@ counterpart. Both filing surfaces require the reviewed content hash.
 | cli | `tenant form` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
 | cli | `tenant ingest-form` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
 | cli | `tenant keys` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
-| cli | `tenant oauth-approve` |  | Deliberately local: it writes the root-owned tenant registry. `tenant_admin` approve only prints this exact command and never runs it (#658). |
+| cli | `tenant oauth-approve` |  | Deliberately local: it runs as root and writes the root-owned tenant registry. `tenant_admin` approve prints this command, or with the optional root helper (RFC-086) does the same approval without a shell (#658). |
 | cli | `tenant migration` |  | Deliberately local operator migration inventory across tenants; no tenant tool may inspect other tenants. |
 | cli | `tenant retire-url` |  | Deliberately local operator credential retirement; tenant tools cannot change authentication policy. |
 | cli | `tenant oauth-bind` |  | Deliberately local operator administration across tenants; tenant tools cannot grant this authority. |
@@ -278,7 +278,7 @@ counterpart. Both filing surfaces require the reviewed content hash.
 | mcp | `status` | `status` |  |
 | mcp | `sync` | `sync` |  |
 | mcp | `telemetry` | `telemetry show`, `telemetry status`, `telemetry summary` |  |
-| mcp | `tenant_admin` | `tenant oauth-invite`, `tenant oauth-invite-revoke`, `tenant oauth-invites`, `tenant oauth-pending` | Super-user only (`super_user_refusal`, #658): lists, reserves and revokes invites with preview/confirm, and prints the `tenant oauth-approve` command. Never writes the registry. |
+| mcp | `tenant_admin` | `tenant oauth-invite`, `tenant oauth-invite-revoke`, `tenant oauth-invites`, `tenant oauth-pending` | Super-user only (`super_user_refusal`, #658): lists, reserves and revokes invites with preview/confirm; `approve` previews then admits via the optional root helper (RFC-086), else prints the `tenant oauth-approve` command. Never writes the registry itself. |
 | mcp | `tenant_url` | `tenant url` |  |
 | mcp | `tenant_urls` | `tenant urls` |  |
 | mcp | `usage` | `usage` | Tenant-scoped accounting read. |

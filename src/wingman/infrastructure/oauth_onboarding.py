@@ -1024,8 +1024,14 @@ def approve_pending_tenant(
     subject: str,
     service_user: str,
     trusted_issuers: Sequence[str],
+    register: Callable[[Path, str, Path], object] | None = None,
 ) -> Path:
     """Consume one invite and create its isolated, unfunded tenant.
+
+    `register` is the one step that writes the root-owned registry. The CLI
+    runs as root and leaves it None (the in-process writer). The MCP tool runs
+    as the service account, which cannot write that file, and passes the
+    narrow root helper instead (RFC-086, #658); every other step is identical.
 
     The onboarding and identity claims serialize competing approvals.  Each
     durable step is idempotent, so interruption leaves a safe inaccessible
@@ -1089,7 +1095,7 @@ def approve_pending_tenant(
                 )
                 marker.chmod(0o600)
             _create_workspace(data_dir, "OAuth invite approval")
-        _register_unprivileged_tenant(registry_path, slug, data_dir)
+        (register or _register_unprivileged_tenant)(registry_path, slug, data_dir)
         with _as_service_user(service_user):
             # Identity map first, then onboarding: the same lock order as
             # the pending recorder and the email-invite claim.

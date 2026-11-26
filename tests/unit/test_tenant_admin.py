@@ -263,16 +263,176 @@ def test_the_tool_never_writes_the_registry(box: dict[str, Tenant], tmp_path: Pa
     assert (tmp_path / "tenants.toml").read_bytes() == before
 
 
-def test_the_admin_module_does_not_reach_for_the_registry_writer() -> None:
-    """The registry is root-owned on purpose. This module must stay on the
-    read side: a future 'convenience' import of the writer would be the first
-    step toward loosening RFC-047's tier, and should arrive as its own decision."""
+def test_the_admin_module_never_writes_the_registry_itself() -> None:
+    """The registry is root-owned on purpose. This module may only reach it
+    through an injected `register` step (the root helper); importing the
+    in-process writer would be the first step toward loosening RFC-047's tier,
+    and should arrive as its own decision."""
     source = Path(admin.__file__).read_text(encoding="utf-8")
     assert "_register_unprivileged_tenant" not in source
-    assert "approve_pending_tenant" not in source
     assert "prepare_email_invites" not in source
+    assert source.count("approve_pending_tenant(") == 1
+    assert "register=register," in source
 
 
 def test_the_gate_has_one_call_site_for_the_tool() -> None:
     source = Path(mcp_server.__file__).read_text(encoding="utf-8")
     assert source.count('super_user_refusal(config, "tenant_admin")') == 1
+
+
+# --- approve from chat, through the root helper (RFC-086) ----------------
+
+
+@pytest.fixture
+def helper_box(
+    box: dict[str, Tenant], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, object]:
+    """The same box with the registration helper 'installed': its registration
+    step runs the real helper script's logic against the temp registry."""
+    import importlib.util
+    import os
+    import pwd
+
+    from wingman.infrastructure import register_helper
+
+    script = Path(__file__).parents[2] / "scripts" / "wingman-register-tenant.py"
+    spec = importlib.util.spec_from_file_location("register_tenant_helper_t", script)
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    me = pwd.getpwuid(os.getuid()).pw_name
+    registry = tmp_path / "tenants.toml"
+    conf = tmp_path / "register-helper.conf"
+    conf.write_text(
+        f"REGISTRY={registry}\nDATA_ROOT={tmp_path / 'tenants'}\nSERVICE_USER={me}\n",
+        encoding="utf-8",
+    )
+    conf.chmod(0o644)
+    reloads: list[Path] = []
+    calls: list[str] = []
+
+    def fake_register(_registry: Path, slug: str, _data_dir: Path) -> None:
+        calls.append(slug)
+        try:
+            helper.register(slug, str(conf), trusted_uid=os.getuid())
+        except helper.Refused as exc:
+            from wingman.infrastructure.oauth_onboarding import OAuthOnboardingError
+
+            raise OAuthOnboardingError(f"the registration helper refused: {exc}") from exc
+
+    monkeypatch.setattr(register_helper, "CONF_PATH", conf)
+    monkeypatch.setattr(register_helper, "available", lambda helper=None: True)
+    monkeypatch.setattr(register_helper, "register_via_helper", fake_register)
+    monkeypatch.setattr(
+        "wingman.infrastructure.tenant_process.signal_reload",
+        lambda path, **_kw: reloads.append(path) or None,
+    )
+    monkeypatch.setattr(mcp_server, "_OAUTH_TRUSTED_ISSUERS", (ISSUER,))
+    return {"calls": calls, "reloads": reloads, "registry": registry}
+
+
+def _waiting(tmp_path: Path, subject: str = "user_01ABC", slug: str = "newcomer") -> str:
+    store = _store(tmp_path)
+    store.record_pending(ISSUER, subject)
+    return pending_reference(ISSUER, subject)
+
+
+def test_approve_from_chat_previews_before_it_admits_anyone(
+    box: dict[str, Tenant], helper_box: dict[str, object], tmp_path: Path
+) -> None:
+    ref = _waiting(tmp_path)
+    _call(box["dhk"], action="reserve", slug="newcomer", confirmed=True)
+    before = (tmp_path / "tenants.toml").read_bytes()
+
+    result = _call(box["dhk"], action="approve", slug="newcomer", ref=ref)
+
+    assert result.startswith("Preview:") and "confirmed=true" in result
+    assert "not privileged, not funded" in result
+    assert (tmp_path / "tenants.toml").read_bytes() == before
+    assert helper_box["calls"] == [] and [i.slug for i in _store(tmp_path).invites()] == [
+        "newcomer"
+    ]
+
+
+def test_approve_from_chat_admits_an_isolated_unprivileged_tenant(
+    box: dict[str, Tenant], helper_box: dict[str, object], tmp_path: Path
+) -> None:
+    ref = _waiting(tmp_path)
+    _call(box["dhk"], action="reserve", slug="newcomer", confirmed=True)
+
+    result = _call(box["dhk"], action="approve", slug="newcomer", ref=ref, confirmed=True)
+
+    assert result.startswith("Approved 'newcomer'") and "reconnect" in result
+    tenants = {t.slug: t for t in load_registry(tmp_path / "tenants.toml")}
+    assert (tenants["newcomer"].privileged, tenants["newcomer"].funded) == (False, False)
+    assert tenants["newcomer"].super_user is False
+    assert (tmp_path / "tenants" / "newcomer" / "wingman.db").is_file()
+    assert helper_box["calls"] == ["newcomer"]
+    assert helper_box["reloads"] == [tmp_path / "tenants.toml"]
+    store = _store(tmp_path)
+    assert store.invites() == [] and store.pending() == []
+    assert "user_01ABC" in (tmp_path / "oauth-identities.toml").read_text(encoding="utf-8")
+
+
+def test_a_hostile_subject_reaches_the_helper_as_nothing_at_all(
+    box: dict[str, Tenant], helper_box: dict[str, object], tmp_path: Path
+) -> None:
+    """Only the slug ever crosses to the root side, so what a token says
+    cannot become an argument, let alone a command."""
+    hostile = "x'; touch /tmp/pwned; echo '"
+    ref = _waiting(tmp_path, hostile)
+    _call(box["dhk"], action="reserve", slug="newcomer", confirmed=True)
+    _call(box["dhk"], action="approve", slug="newcomer", ref=ref, confirmed=True)
+    assert helper_box["calls"] == ["newcomer"]
+    assert not Path("/tmp/pwned").exists()
+
+
+def test_a_helper_refusal_grants_nothing(
+    box: dict[str, Tenant],
+    helper_box: dict[str, object],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from wingman.infrastructure import register_helper
+    from wingman.infrastructure.oauth_onboarding import OAuthOnboardingError
+
+    def refuse(*_args: object) -> None:
+        raise OAuthOnboardingError("the registration helper refused: no wingman.db")
+
+    monkeypatch.setattr(register_helper, "register_via_helper", refuse)
+    ref = _waiting(tmp_path)
+    _call(box["dhk"], action="reserve", slug="newcomer", confirmed=True)
+    before = (tmp_path / "tenants.toml").read_bytes()
+
+    result = _call(box["dhk"], action="approve", slug="newcomer", ref=ref, confirmed=True)
+
+    assert result.startswith("Not approved") and "No access was granted" in result
+    assert (tmp_path / "tenants.toml").read_bytes() == before
+    assert "user_01ABC" not in (tmp_path / "oauth-identities.toml").read_text(encoding="utf-8")
+    assert helper_box["reloads"] == []
+
+
+@pytest.mark.parametrize("who", ["coach", "riley"])
+def test_approve_from_chat_is_still_a_super_user_only_action(
+    box: dict[str, Tenant], helper_box: dict[str, object], tmp_path: Path, who: str
+) -> None:
+    ref = _waiting(tmp_path)
+    _store(tmp_path).reserve_invite("newcomer", existing_slugs=set())
+    result = _call(box[who], action="approve", slug="newcomer", ref=ref, confirmed=True)
+    assert "isn't available in this workspace" in result
+    assert helper_box["calls"] == []
+
+
+def test_without_the_helper_approve_falls_back_to_the_printed_command(
+    box: dict[str, Tenant], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wingman.infrastructure import register_helper
+
+    monkeypatch.setattr(register_helper, "CONF_PATH", tmp_path / "absent.conf")
+    ref = _waiting(tmp_path)
+    _call(box["dhk"], action="reserve", slug="newcomer", confirmed=True)
+    result = _call(box["dhk"], action="approve", slug="newcomer", ref=ref, confirmed=True)
+    assert "sudo wingman tenant oauth-approve newcomer" in result
+    assert "helper is not installed" in result
+    assert "newcomer" not in {t.slug for t in load_registry(tmp_path / "tenants.toml")}
