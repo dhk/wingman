@@ -128,6 +128,7 @@ def test_all_tools_are_registered() -> None:
         "carve_off_persona",
         "tenant_url",
         "tenant_urls",
+        "tenant_admin",
         "drive_auth",
     }
 

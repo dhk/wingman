@@ -107,6 +107,9 @@ class Tenant:
 
     #: Operator retirement disables capability authentication only (#616).
     capability_url_retired: bool = False
+    #: May this tenant administer tenants from an MCP session (#658)? A
+    #: separate grant from 'privileged' and, like it, per tenant only.
+    super_user: bool = False
 
     def token_path(self) -> Path:
         return self.data_dir / _TOKEN_FILENAME
@@ -192,6 +195,7 @@ class Tenant:
             github_shared_issues_key=workspace_keys.get(KNOWN_KEYS["github"]),
             strict_provider_keys=True,
             privileged=self.privileged,
+            super_user=self.super_user,
             funded=self.funded,
             # One shared PAT means GitHub's own 'opened by' says the
             # operator for every tenant, and the WINGMAN_OPERATOR_NAME
@@ -282,6 +286,16 @@ def _refuse_funded_default(data: dict[str, object], path: Path) -> None:
     )
 
 
+def _refuse_super_user_default(data: dict[str, object], path: Path) -> None:
+    _refuse_shared_flag(
+        data,
+        path,
+        "super_user",
+        "tenant administration is granted one tenant at a time, on that tenant's own "
+        "[[tenant]] entry, never to everybody at once.",
+    )
+
+
 def _registry_default_feature_repo(data: dict[str, object], path: Path) -> str | None:
     """The all-tenant destination: '[defaults] feature_repo'.
 
@@ -358,6 +372,7 @@ def load_registry(path: Path) -> list[Tenant]:
     default_feature_repo = _registry_default_feature_repo(data, path)
     _refuse_privileged_default(data, path)
     _refuse_funded_default(data, path)
+    _refuse_super_user_default(data, path)
     _refuse_shared_flag(data, path, "capability_url_retired", "retire one tenant at a time.")
     tenants: list[Tenant] = []
     seen_slugs: set[str] = set()
@@ -382,6 +397,7 @@ def load_registry(path: Path) -> list[Tenant]:
                 default_feature_repo=default_feature_repo,
                 privileged=_bool_flag(entry.get("privileged"), "privileged", slug, path),
                 funded=_bool_flag(entry.get("funded"), "funded", slug, path),
+                super_user=_bool_flag(entry.get("super_user"), "super_user", slug, path),
                 capability_url_retired=_bool_flag(
                     entry.get("capability_url_retired"), "capability_url_retired", slug, path
                 ),

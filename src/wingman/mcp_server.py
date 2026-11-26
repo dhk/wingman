@@ -197,7 +197,7 @@ from wingman.infrastructure.mcp_process import (
     write_pidfile,
 )
 from wingman.infrastructure.model_health import describe as describe_model_rejection
-from wingman.infrastructure.privilege import operator_only_refusal
+from wingman.infrastructure.privilege import operator_only_refusal, super_user_refusal
 from wingman.infrastructure.storage import CorpusSearchError, Storage
 from wingman.infrastructure.telemetry import (
     count_events as telemetry_count,
@@ -5554,6 +5554,80 @@ def tenant_urls(
     return "\n".join(lines)
 
 
+@server.tool()
+def tenant_admin(
+    action: str = "list",
+    slug: str = "",
+    ref: str = "",
+    confirmed: bool = False,
+) -> str:
+    """Super-user tenant administration (issue #658): who may be let in.
+
+    action 'list' shows reserved invites and the references of verified
+    sign-ins waiting for approval. 'reserve' holds a slug for one trusted
+    person and 'revoke' withdraws an unclaimed one; both preview first and
+    only write with confirmed=true. 'approve' takes the slug and the ref of
+    the waiting sign-in and returns the exact `sudo wingman tenant
+    oauth-approve` command to run on the host. It never runs it: creating the
+    tenant writes the root-owned registry, which this process cannot and must
+    not write.
+
+    Super-user only. Every other workspace, tenant or not, gets a plain
+    refusal from every action, including the read-only ones. Grant is per
+    tenant ('super_user = true' on that [[tenant]] entry) and never box-wide.
+    """
+    from wingman.application import tenant_admin as admin
+    from wingman.infrastructure.oauth_onboarding import OAuthOnboardingStore, onboarding_path_for
+    from wingman.infrastructure.tenants import (
+        TenantRegistryError,
+        TenantRegistryUnreadable,
+        load_registry,
+        tenant_registry_path,
+    )
+
+    config = _ready_config()
+    if config is None:
+        return _NOT_INITIALIZED
+    refusal = super_user_refusal(config, "tenant_admin")
+    if refusal is not None:
+        return refusal
+    if _OAUTH_IDENTITY_PATH is None:
+        return (
+            "tenant_admin works with the shared OAuth service's invite queue, and this "
+            "process was not started with OAuth. Nothing was changed."
+        )
+    registry_path = tenant_registry_path()
+    try:
+        tenants = load_registry(registry_path)
+    except TenantRegistryUnreadable as exc:
+        return (
+            f"Could not read the tenant registry ({registry_path}): {exc}. "
+            "Nothing was changed. Fix permissions and retry."
+        )
+    except TenantRegistryError as exc:
+        return f"Malformed tenant registry ({registry_path}): {exc}. Nothing was changed."
+    store = OAuthOnboardingStore(onboarding_path_for(_OAUTH_IDENTITY_PATH))
+    action = action.strip().lower()
+    if action == "list":
+        return admin.render_overview(store)
+    if action == "reserve":
+        return admin.reserve_invite(
+            store, slug, {tenant.slug for tenant in tenants}, confirmed=confirmed
+        )
+    if action == "revoke":
+        return admin.revoke_invite(store, slug, confirmed=confirmed)
+    if action == "approve":
+        return admin.approve_command(
+            store,
+            slug,
+            ref,
+            identities_path=_OAUTH_IDENTITY_PATH,
+            registry_path=registry_path,
+            tenants=tenants,
+        )
+    return f"unknown action {action!r}; use list, reserve, revoke, or approve. Nothing was changed."
+
+
 def _instrument_tools() -> None:
     """Wrap every registered tool so calls land in the opt-in journal (RFC-023).
 
@@ -5900,6 +5974,12 @@ def _probe_bind(host: str, port: int) -> None:
             sys.exit(1)
 
 
+#: The OAuth identity map this process was started with, set by '_bind_oauth'.
+#: 'tenant_admin' needs it to find the onboarding state beside it; None means
+#: this process is not OAuth-enabled and the tool says so (#658).
+_OAUTH_IDENTITY_PATH: Path | None = None
+
+
 def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> tuple[Any, Path]:
     """Add the bearer-authenticated route beside the capability-token one
     (RFC-081). Any misconfiguration refuses to start: a server
@@ -5927,6 +6007,8 @@ def _bind_oauth(app: Any, args: argparse.Namespace, prefix: str, index: Any) -> 
     except (OAuthConfigError, IdentityMapError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
+    global _OAUTH_IDENTITY_PATH
+    _OAUTH_IDENTITY_PATH = identity_path
     unknown = sorted({slug for slug in identities.slugs() if index.by_slug(slug) is None})
     if unknown:
         print(

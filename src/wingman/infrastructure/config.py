@@ -88,6 +88,14 @@ class Config(BaseModel):
     # machine, their own workspace), and 'Tenant.config()' from the
     # registry's own 'privileged' flag.
     privileged: bool = False
+    # Whether this workspace may administer tenants — reserve and revoke
+    # invites, see who is waiting to be approved (issue #658). A distinct
+    # grant from 'privileged' above: coaching somebody is not the power to
+    # decide who gets a workspace on this box (RFC-068's "revisit if a
+    # second kind of privilege appears"). False at the class level for the
+    # same reason as 'privileged': forgetting to think about it costs a
+    # refusal. Set per tenant in the registry, never in '[defaults]'.
+    super_user: bool = False
     # Whether the OPERATOR pays for this workspace's metered inference
     # (#514). False means strict_provider_keys is absolute: no key of your
     # own, no model calls. True lets the three metered keys fall back to
@@ -201,6 +209,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             data_dir=Path(override).expanduser(),
             data_dir_source=f"{ENV_DATA_DIR} environment variable",
             privileged=True,
+            super_user=True,
             # A solo install: their machine, their exports, their keys.
             # The ambient ladder is the point here, not a leak (#532).
             strict_provider_keys=False,
@@ -209,5 +218,6 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         data_dir=Path(user_data_dir(APP_NAME)),
         data_dir_source="platform user data directory",
         privileged=True,
+        super_user=True,
         strict_provider_keys=False,  # solo install — see above (#532)
     )

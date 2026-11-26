@@ -391,6 +391,15 @@ class OAuthOnboardingStore:
         if slug in existing_slugs:
             raise OAuthOnboardingError(f"tenant slug {slug!r} already exists")
 
+    @classmethod
+    def check_slug(cls, slug: str, existing_slugs: set[str]) -> None:
+        """Raise OAuthOnboardingError unless `slug` could be reserved now.
+
+        The same check `reserve_invite` applies, exposed so a caller can
+        preview a reservation without making one.
+        """
+        cls._check_slug(slug, existing_slugs)
+
     def reserve_invite(
         self,
         slug: str,

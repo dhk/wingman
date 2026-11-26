@@ -55,3 +55,22 @@ def operator_only_refusal(config: Config, tool: str) -> str | None:
         "other people's data rather than your own — so it belongs to whoever runs this "
         "Wingman. Nothing was changed, and no other tool is affected."
     )
+
+
+def super_user_refusal(config: Config, tool: str) -> str | None:
+    """The message to return instead of running 'tool', or None to run it.
+
+    The gate for tenant administration (issue #658): deciding who gets a
+    workspace on this box. A grant of its own, not 'privileged' — somebody
+    who may coach another person is not thereby somebody who may admit one.
+    Same shape and same discipline as 'operator_only_refusal': returned
+    text, no file, flag or registry path named, and an explicit statement
+    that nothing changed.
+    """
+    if config.super_user:
+        return None
+    return (
+        f"{tool} isn't available in this workspace. It manages who has access to this "
+        "Wingman, so it belongs to whoever runs it. Nothing was changed, and no other "
+        "tool is affected."
+    )
