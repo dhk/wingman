@@ -33,7 +33,7 @@ def test_a_dry_run_shows_the_one_sudoers_rule_and_writes_nothing() -> None:
     assert out.count("NOPASSWD") == 1
     assert "DATA_ROOT=/home/wingman-shared/tenants" in out
     assert "REGISTRY=/etc/wingman/tenants.toml" in out
-    assert not Path("/etc/sudoers.d/wingman-register-tenant").exists()
+    assert not os.path.exists("/etc/sudoers.d/wingman-register-tenant")
 
 
 @pytest.mark.parametrize(
